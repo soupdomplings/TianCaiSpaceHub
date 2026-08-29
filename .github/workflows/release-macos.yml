@@ -28,6 +28,7 @@ jobs:
       MACOS_SPARKLE_KEY: ${{ matrix.sparkle_key }}
       MACOS_MANIFEST_NAME: ${{ matrix.manifest_name }}
       MACOS_INTEL_MANIFEST_NAME: ${{ matrix.intel_manifest_name }}
+      HAS_APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 != '' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -48,6 +49,7 @@ jobs:
           rm -rf target/release/wxdragon_sys_cmake_build
 
       - name: Import Developer ID Certificate
+        if: env.HAS_APPLE_CERTIFICATE == 'true'
         env:
           APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -126,6 +128,7 @@ jobs:
           chmod +x "$MACOS/$EXECUTABLE_NAME"
 
       - name: Sign And Notarize
+        if: env.HAS_APPLE_CERTIFICATE == 'true'
         timeout-minutes: 75
         env:
           APPLE_CODESIGN_IDENTITY: ${{ secrets.APPLE_CODESIGN_IDENTITY }}
@@ -262,6 +265,40 @@ jobs:
           spctl --assess --type execute --verbose=4 "$APP"
           spctl --assess --type open --context context:primary-signature --verbose=4 "$DMG"
 
+      - name: Package Unsigned Test Build
+        if: env.HAS_APPLE_CERTIFICATE != 'true'
+        run: |
+          set -euo pipefail
+          APP="target/dist/TianCaiSpace Hub.app"
+          DMG="target/dist/TianCaiSpace Hub.dmg"
+          DMG_STAGING="target/dist/dmg"
+          ZIP="target/dist/${MACOS_APP_ZIP_NAME}"
+
+          # Apple Silicon requires executable code to carry at least an ad-hoc
+          # signature. This is not a Developer ID signature or notarization.
+          codesign --force --deep --sign - "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          ditto -c -k --keepParent "$APP" "$ZIP"
+
+          # Universal builds leave two complete Rust/wxWidgets trees behind.
+          # Remove them before hdiutil creates its temporary disk image.
+          echo "Disk usage before removing build intermediates:"
+          df -h
+          rm -rf \
+            target/aarch64-apple-darwin \
+            target/x86_64-apple-darwin \
+            target/release
+          echo "Disk usage before creating unsigned DMG:"
+          df -h
+
+          rm -rf "$DMG_STAGING"
+          mkdir -p "$DMG_STAGING"
+          ditto "$APP" "$DMG_STAGING/TianCaiSpace Hub.app"
+          ln -s /Applications "$DMG_STAGING/Applications"
+
+          hdiutil create -volname "TianCaiSpace Hub" -srcfolder "$DMG_STAGING" -ov -format UDZO "$DMG"
+          mv "$DMG" "target/dist/${MACOS_DMG_NAME}"
+
       - name: Write macOS Update Metadata
         if: startsWith(github.ref, 'refs/tags/')
         env:
@@ -289,6 +326,7 @@ jobs:
           release_url = f"https://github.com/{repository}/releases/tag/{release_tag}"
           download_base_url = f"https://github.com/{repository}/releases/download/{release_tag}"
           update_notes = Path("UPDATE_NOTES.md").read_text(encoding="utf-8").strip()
+          signed_and_notarized = os.environ.get("HAS_APPLE_CERTIFICATE") == "true"
 
           def sha256(path: Path) -> str:
               digest = hashlib.sha256()
@@ -307,16 +345,16 @@ jobs:
                       "url": f"{download_base_url}/{dmg_name}",
                       "sha256": sha256(dmg_path),
                       "size": dmg_path.stat().st_size,
-                      "signed": True,
-                      "notarized": True,
+                      "signed": signed_and_notarized,
+                      "notarized": signed_and_notarized,
                   },
                   sparkle_key: {
                       "type": "app-zip",
                       "url": f"{download_base_url}/{app_zip_name}",
                       "sha256": sha256(app_zip_path),
                       "size": app_zip_path.stat().st_size,
-                      "signed": True,
-                      "notarized": True,
+                      "signed": signed_and_notarized,
+                      "notarized": signed_and_notarized,
                   },
               },
           }
