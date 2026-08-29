@@ -5,7 +5,7 @@
     processorArchitecture="*"
     name="codexhub"
     type="win32" />
-  <description>CodexHub</description>
+  <description>TianCaiSpace Hub</description>
   <dependency>
     <dependentAssembly>
       <assemblyIdentity

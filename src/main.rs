@@ -22,6 +22,7 @@ mod store;
 mod types;
 mod vscode_extension_patch;
 mod web;
+mod workbuddy_config;
 
 use std::{
     env,

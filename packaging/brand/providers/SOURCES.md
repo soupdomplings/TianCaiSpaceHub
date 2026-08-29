@@ -1,4 +1,4 @@
-﻿# Brand Assets
+# Brand Assets
 
 Brand SVGs are copied from `@lobehub/icons` version `5.8.0` when the package contains a matching icon. The package is distributed under the MIT license.
 
@@ -21,7 +21,7 @@ Fallback local assets:
 - WeChat: `packaging/brand/wechat-logo.svg`; from Simple Icons (https://simpleicons.org), CC0 1.0 Universal
 - Feishu: `packaging/brand/feishu-logo.png`; official GitHub avatar from https://avatars.githubusercontent.com/u/54944174?s=200&v=4
 - VS Code: `packaging/brand/vscode-logo.svg`; custom SVG using official VS Code brand colors (#007ACC)
-- App icon: `packaging/icons/dolphin-rounded-256.png`; this is the CodexHub application icon.
+- App icon: `assets/tci-hub-icon.png`; this is the TianCaiSpace Hub application icon used by the GUI and release packages. The original user-provided `assets/6.png` remains unchanged.
 
 The `references/` directory is intentionally ignored by git, so extracted and fallback assets live under `packaging/brand/` or `packaging/icons/` for compile-time embedding in the GUI.
 

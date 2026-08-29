@@ -39,6 +39,14 @@ pub fn router(state: SharedState) -> Router {
         .route("/api/shutdown", post(shutdown))
         .route("/api/config", get(get_config).post(save_config))
         .route(
+            "/api/workbuddy/config",
+            get(workbuddy_config).post(save_workbuddy_config),
+        )
+        .route(
+            "/api/workbuddy/config/restore",
+            post(restore_workbuddy_config),
+        )
+        .route(
             "/api/codex-app/configure",
             post(codex_app::configure_codex_app),
         )
@@ -299,6 +307,68 @@ async fn save_config(
         .push_event("info", "config_saved", "configuration saved")
         .await;
     (StatusCode::OK, Json(json!({ "ok": true })))
+}
+
+async fn workbuddy_config() -> impl IntoResponse {
+    match crate::workbuddy_config::load() {
+        Ok(status) => (StatusCode::OK, Json(status)).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": error.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn save_workbuddy_config(
+    Json(model): Json<crate::workbuddy_config::WorkBuddyModelConfig>,
+) -> impl IntoResponse {
+    match crate::workbuddy_config::save(&model) {
+        Ok(status) => (StatusCode::OK, Json(status)).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": error.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn restore_workbuddy_config(State(state): State<SharedState>) -> impl IntoResponse {
+    let status = match crate::workbuddy_config::restore_backup() {
+        Ok(status) => status,
+        Err(error) => {
+            let message = error.to_string();
+            let status = if message.contains("no WorkBuddy backup") {
+                StatusCode::NOT_FOUND
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            return (status, Json(json!({ "error": message }))).into_response();
+        }
+    };
+
+    let mut config = state.config.lock().await.clone();
+    crate::workbuddy_config::apply_provider(&mut config, &status.model);
+    if let Err(error) = config.save(&state.config_path) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "error": format!(
+                    "WorkBuddy config restored, but TianCaiSpace Hub provider update failed: {error}"
+                )
+            })),
+        )
+            .into_response();
+    }
+    *state.config.lock().await = config;
+    state
+        .push_event(
+            "info",
+            "workbuddy_config_restored",
+            "WorkBuddy configuration restored",
+        )
+        .await;
+    (StatusCode::OK, Json(status)).into_response()
 }
 
 #[derive(Serialize)]

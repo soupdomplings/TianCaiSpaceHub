@@ -34,7 +34,9 @@ pub fn resolve_provider_with_state<'a>(
     state: &mut GatewayRoutingState,
     now: Instant,
 ) -> Result<(&'a ProviderConfig, String), GatewayError> {
-    resolve_provider_with_state_matching(model, session_id, config, state, now, |_| true)
+    resolve_provider_with_state_matching(model, session_id, config, state, now, |provider| {
+        !provider.is_workbuddy()
+    })
 }
 
 /// 与普通状态路由相同，但只在指定 provider 类型中选择。
@@ -47,7 +49,20 @@ pub fn resolve_provider_with_state_for_type<'a>(
     provider_type: &ProviderType,
 ) -> Result<(&'a ProviderConfig, String), GatewayError> {
     resolve_provider_with_state_matching(model, session_id, config, state, now, |provider| {
-        &provider.provider_type == provider_type
+        !provider.is_workbuddy() && &provider.provider_type == provider_type
+    })
+}
+
+/// Selects the provider reserved for the WorkBuddy compatibility endpoint.
+pub fn resolve_workbuddy_provider_with_state<'a>(
+    model: &str,
+    session_id: Option<&str>,
+    config: &'a AiGatewayConfig,
+    state: &mut GatewayRoutingState,
+    now: Instant,
+) -> Result<(&'a ProviderConfig, String), GatewayError> {
+    resolve_provider_with_state_matching(model, session_id, config, state, now, |provider| {
+        provider.is_workbuddy()
     })
 }
 
@@ -231,5 +246,46 @@ mod tests {
         .unwrap();
 
         assert_eq!(selected.name, "openai");
+    }
+
+    #[test]
+    fn codex_and_workbuddy_routes_are_isolated_for_the_same_model() {
+        let codex = provider("codex-provider", 1, "gpt-5.6-sol");
+        let workbuddy = provider("workbuddy", 10_000, "gpt-5.6-sol");
+        let cfg = config(vec![codex, workbuddy]);
+        let mut state = GatewayRoutingState::default();
+        let now = Instant::now();
+
+        let (codex_selected, _) =
+            resolve_provider_with_state("gpt-5.6-sol", Some("shared"), &cfg, &mut state, now)
+                .unwrap();
+        assert_eq!(codex_selected.name, "codex-provider");
+
+        let (workbuddy_selected, _) = resolve_workbuddy_provider_with_state(
+            "gpt-5.6-sol",
+            Some("workbuddy:shared"),
+            &cfg,
+            &mut state,
+            now,
+        )
+        .unwrap();
+        assert_eq!(workbuddy_selected.name, "workbuddy");
+    }
+
+    #[test]
+    fn workbuddy_route_does_not_fall_back_to_codex_provider() {
+        let cfg = config(vec![provider("codex-provider", 100, "gpt-5.6-sol")]);
+        let mut state = GatewayRoutingState::default();
+
+        assert!(
+            resolve_workbuddy_provider_with_state(
+                "gpt-5.6-sol",
+                Some("workbuddy:session"),
+                &cfg,
+                &mut state,
+                Instant::now(),
+            )
+            .is_err()
+        );
     }
 }

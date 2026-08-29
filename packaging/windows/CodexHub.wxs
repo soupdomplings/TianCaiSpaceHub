@@ -1,48 +1,50 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
   <Package
-    Name="CodexHub"
-    Manufacturer="CodexHub"
+    Name="TianCaiSpace Hub"
+    Manufacturer="TianCaiSpace Hub"
     Version="$(var.ProductVersion)"
     UpgradeCode="{42B4BF3C-E660-4C83-96AA-56A4426B96A2}"
     Scope="perMachine"
     Compressed="yes">
-    <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+    <MajorUpgrade
+      AllowSameVersionUpgrades="yes"
+      DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
     <Icon Id="CodexHubIcon" SourceFile="$(var.SourceDir)\AppIcon.ico" />
     <Property Id="ARPPRODUCTICON" Value="CodexHubIcon" />
 
     <StandardDirectory Id="ProgramFiles6432Folder">
-      <Directory Id="INSTALLFOLDER" Name="CodexHub">
-        <Component Id="CodexHubExecutable" Guid="{12277B76-8F43-441F-AFFD-63FB150BB29E}">
+      <Directory Id="INSTALLFOLDER" Name="TianCaiSpace Hub">
+        <Component Id="CodexHubExecutable" Guid="{0DE4FE9A-3D6C-4F0C-A61B-F07C1B6FD96A}">
           <File Id="CodexHubExe" Source="$(var.SourceDir)\CodexHub.exe" KeyPath="yes" />
         </Component>
-        <Component Id="CodexHubReadme" Guid="{E92E4DFB-DB47-4059-AC08-2BFA1E8FFF4C}">
+        <Component Id="CodexHubReadme" Guid="{14C8BE1C-E8C1-4121-90C6-7CB96B842049}">
           <File Id="ReadmeMd" Source="$(var.SourceDir)\README.md" KeyPath="yes" />
         </Component>
-        <Component Id="CodexHubReadmeEn" Guid="{6859DAFC-B8CA-4F9E-B320-3B44494CD1D3}">
+        <Component Id="CodexHubReadmeEn" Guid="{4DAEFCFF-E587-4B99-B5CD-C0CB186A1C3F}">
           <File Id="ReadmeEnMd" Source="$(var.SourceDir)\README.en.md" KeyPath="yes" />
         </Component>
-        <Component Id="CodexHubConfigExample" Guid="{0C195660-3D69-4675-A47D-2B2F97B01084}">
+        <Component Id="CodexHubConfigExample" Guid="{15D53774-B316-43E0-B875-D05BBEA50DEB}">
           <File Id="ConfigExampleToml" Source="$(var.SourceDir)\config.example.toml" KeyPath="yes" />
         </Component>
       </Directory>
     </StandardDirectory>
 
     <StandardDirectory Id="ProgramMenuFolder">
-      <Directory Id="ApplicationProgramsFolder" Name="CodexHub">
-        <Component Id="CodexHubStartMenuShortcut" Guid="{7F8F4957-5919-4CD2-8B22-7598FB648600}">
+      <Directory Id="ApplicationProgramsFolder" Name="TianCaiSpace Hub">
+        <Component Id="CodexHubStartMenuShortcut" Guid="{C3D91DEF-A966-478A-B292-4574DE3D2675}">
           <Shortcut
             Id="CodexHubStartMenuShortcut"
-            Name="CodexHub"
-            Description="Open CodexHub"
+            Name="TianCaiSpace Hub"
+            Description="Open TianCaiSpace Hub"
             Target="[INSTALLFOLDER]CodexHub.exe"
             WorkingDirectory="INSTALLFOLDER"
             Icon="CodexHubIcon" />
           <RemoveFolder Id="RemoveApplicationProgramsFolder" On="uninstall" />
           <RegistryValue
-            Root="HKLM"
+            Root="HKCU"
             Key="Software\CodexHub"
             Name="StartMenuShortcut"
             Type="integer"
@@ -53,16 +55,16 @@
     </StandardDirectory>
 
     <StandardDirectory Id="DesktopFolder">
-      <Component Id="CodexHubDesktopShortcut" Guid="{807CD976-6CCB-49F8-B0D2-E01493319A63}">
+      <Component Id="CodexHubDesktopShortcut" Guid="{ACF736CD-48FE-45BB-8C19-103ABFFABE83}">
         <Shortcut
           Id="CodexHubDesktopShortcut"
-          Name="CodexHub"
-          Description="Open CodexHub"
+          Name="TianCaiSpace Hub"
+          Description="Open TianCaiSpace Hub"
           Target="[INSTALLFOLDER]CodexHub.exe"
           WorkingDirectory="INSTALLFOLDER"
           Icon="CodexHubIcon" />
         <RegistryValue
-          Root="HKLM"
+          Root="HKCU"
           Key="Software\CodexHub"
           Name="DesktopShortcut"
           Type="integer"
@@ -71,7 +73,7 @@
       </Component>
     </StandardDirectory>
 
-    <Feature Id="MainFeature" Title="CodexHub" Level="1">
+    <Feature Id="MainFeature" Title="TianCaiSpace Hub" Level="1">
       <ComponentRef Id="CodexHubExecutable" />
       <ComponentRef Id="CodexHubReadme" />
       <ComponentRef Id="CodexHubReadmeEn" />

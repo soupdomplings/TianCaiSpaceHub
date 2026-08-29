@@ -20,3 +20,9 @@ reference/
 *.pem
 *.p8
 app_show*
+.build-tools/
+.tools/
+assets/tci-hub-icon.icns
+ai-gateway-request-logs.sqlite
+*.sqlite-shm
+*.sqlite-wal

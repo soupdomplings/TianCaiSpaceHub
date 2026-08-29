@@ -237,6 +237,12 @@ fn convert_usage(usage_val: Option<&Value>) -> Option<Usage> {
         .and_then(|v| v.as_i64())
         .or_else(|| first_i64(u, &["cached_tokens", "prompt_cache_hit_tokens"]))
         .unwrap_or(0);
+    let cache_write = u
+        .get("prompt_tokens_details")
+        .and_then(|d| d.get("cache_write_tokens"))
+        .and_then(|v| v.as_i64())
+        .or_else(|| first_i64(u, &["cache_write_tokens", "cache_write_input_tokens"]))
+        .unwrap_or(0);
     let reasoning = u
         .get("completion_tokens_details")
         .and_then(|d| d.get("reasoning_tokens"))
@@ -249,6 +255,7 @@ fn convert_usage(usage_val: Option<&Value>) -> Option<Usage> {
         total_tokens,
         input_tokens_details: Some(InputTokensDetails {
             cached_tokens: cached,
+            cache_write_tokens: cache_write,
             cache_creation_tokens: 0,
             cache_creation_5m_tokens: 0,
             cache_creation_1h_tokens: 0,

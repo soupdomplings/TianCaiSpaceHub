@@ -1018,6 +1018,7 @@ pub fn usage_from_response_value(response: &Value) -> LogUsage {
                 details,
                 &[
                     "cache_creation_tokens",
+                    "cache_write_tokens",
                     "cache_write_input_tokens",
                     "write_cached_tokens",
                 ],
@@ -1029,6 +1030,7 @@ pub fn usage_from_response_value(response: &Value) -> LogUsage {
                     details,
                     &[
                         "cache_creation_tokens",
+                        "cache_write_tokens",
                         "cache_write_input_tokens",
                         "write_cached_tokens",
                     ],
@@ -1040,6 +1042,7 @@ pub fn usage_from_response_value(response: &Value) -> LogUsage {
                 usage,
                 &[
                     "cache_creation_input_tokens",
+                    "cache_write_tokens",
                     "cache_write_input_tokens",
                     "write_cached_tokens",
                 ],
@@ -1601,6 +1604,26 @@ mod tests {
         assert_eq!(usage.read_cache_tokens, Some(80));
         assert_eq!(usage.write_cache_tokens, Some(5));
         assert_eq!(usage.read_cache_hit_rate, Some(0.8));
+    }
+
+    #[test]
+    fn usage_from_responses_value_extracts_openai_cache_write_tokens() {
+        let value = json!({
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 20,
+                "total_tokens": 120,
+                "input_tokens_details": {
+                    "cached_tokens": 0,
+                    "cache_write_tokens": 100
+                }
+            }
+        });
+
+        let usage = usage_from_response_value(&value);
+        assert_eq!(usage.read_cache_tokens, Some(0));
+        assert_eq!(usage.write_cache_tokens, Some(100));
+        assert_eq!(usage.read_cache_hit_rate, Some(0.0));
     }
 
     #[test]
@@ -2327,7 +2350,7 @@ mod tests {
             &mut ttft_recorded,
         );
 
-        let logs = list_recent(&db_path, 10).unwrap();
+        let logs = context.store.list_recent(10).unwrap();
         assert_eq!(logs.len(), 1);
         assert!(logs[0].ttft_ms.is_some());
         assert!(logs[0].latency_ms.is_some());

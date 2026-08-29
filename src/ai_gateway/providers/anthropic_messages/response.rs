@@ -418,6 +418,7 @@ fn convert_usage_value(usage: &Value) -> Usage {
         total_tokens: input + output,
         input_tokens_details: Some(InputTokensDetails {
             cached_tokens: cached,
+            cache_write_tokens: 0,
             cache_creation_tokens: cache_creation,
             cache_creation_5m_tokens: cache_creation_5m,
             cache_creation_1h_tokens: cache_creation_1h,

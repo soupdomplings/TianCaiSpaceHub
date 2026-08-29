@@ -84,7 +84,7 @@ impl DaemonInstanceLock {
                 })
                 .unwrap_or_else(|| "owner=unknown".to_string());
             return Err(anyhow!(
-                "another CodexHub daemon holds `{}` ({owner}): {err}",
+                "another TianCaiSpace Hub daemon holds `{}` ({owner}): {err}",
                 path.display()
             ));
         }

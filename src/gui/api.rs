@@ -65,7 +65,7 @@ impl ApiClient {
         identity
             .is_codexhub()
             .then_some(identity)
-            .ok_or_else(|| "local service identity does not match CodexHub".to_string())
+            .ok_or_else(|| "local service identity does not match TianCaiSpace Hub".to_string())
     }
 
     pub(super) fn get_quick_json(&self, path: &str) -> Result<Value, String> {
@@ -338,6 +338,12 @@ impl ApiClient {
 
     pub(super) fn save_app_config(&self, config: &AppConfig) -> Result<serde_json::Value, String> {
         self.post_json_with_timeout("/api/config", config, GUI_CONFIG_TIMEOUT)
+    }
+
+    pub(super) fn restore_workbuddy_config(
+        &self,
+    ) -> Result<crate::workbuddy_config::WorkBuddyConfigStatus, String> {
+        self.post_empty_with_timeout("/api/workbuddy/config/restore", GUI_CONFIG_TIMEOUT)
     }
 
     pub(super) fn ai_gateway_request_logs(&self) -> Result<RequestLogsResponse, String> {

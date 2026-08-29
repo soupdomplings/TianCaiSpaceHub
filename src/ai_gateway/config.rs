@@ -6,6 +6,7 @@ use sha2::{Digest, Sha256};
 
 pub(crate) const DEFAULT_PROVIDER_TIMEOUT_SECS: u64 = 600;
 const DEFAULT_PROVIDER_WEIGHT: u32 = 100;
+pub const WORKBUDDY_PROVIDER_NAME: &str = "workbuddy";
 
 /// AI Gateway 顶层配置，对应 config.toml 中 `[aiGateway]` 段。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,7 +73,9 @@ impl AiGatewayConfig {
         let candidates: Vec<&ProviderConfig> = self
             .providers
             .iter()
-            .filter(|provider| provider.enabled && provider.matches_model(model))
+            .filter(|provider| {
+                provider.enabled && !provider.is_workbuddy() && provider.matches_model(model)
+            })
             .collect();
         select_by_priority(&candidates, session_id)
     }
@@ -245,6 +248,10 @@ impl Default for ProviderConfig {
 }
 
 impl ProviderConfig {
+    pub fn is_workbuddy(&self) -> bool {
+        self.name.eq_ignore_ascii_case(WORKBUDDY_PROVIDER_NAME)
+    }
+
     pub fn effective_weight(&self) -> u32 {
         self.weight.max(1)
     }

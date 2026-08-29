@@ -883,7 +883,10 @@ mod update_tests {
 
     #[test]
     fn macos_release_workflow_publishes_intel_compat_manifest() {
-        let workflow = include_str!("../../.github/workflows/release-macos.yml");
+        // Git checks out this repository with CRLF on Windows; normalize it
+        // before asserting against the workflow's shell snippets.
+        let workflow =
+            include_str!("../../.github/workflows/release-macos.yml").replace("\r\n", "\n");
 
         assert!(workflow.contains("asset_key: macos-universal"));
         assert!(workflow.contains("sparkle_key: macos-sparkle-universal"));
@@ -893,7 +896,9 @@ mod update_tests {
         let cleanup = workflow
             .find("rm -rf \\\n            target/aarch64-apple-darwin")
             .expect("universal build cleanup");
-        let create_dmg = workflow.find("hdiutil create").expect("DMG creation");
+        let create_dmg = workflow
+            .find("hdiutil create -volname")
+            .expect("DMG creation");
         assert!(cleanup < create_dmg);
     }
 

@@ -1,4 +1,4 @@
-# codexhub
+# TianCaiSpace Hub
 
 [English](README.en.md)
 
@@ -13,7 +13,7 @@
 | 内置 AI Gateway | 让 Codex App 继续使用原生 Responses 入口，同时可以在本地 GUI 中接入 OpenAI、DeepSeek、Anthropic/Claude、智谱 Anthropic（API / Coding Plan）等模型渠道。 |
 
 <p align="center">
-  <img src="docs/assets/product/main.png" alt="CodexHub GUI 状态和配置界面" width="900">
+  <img src="docs/assets/product/main.png" alt="TianCaiSpace Hub GUI 状态和配置界面" width="900">
 </p>
 <p align="center">
   <img src="docs/assets/product/codex-app-chat.png" alt="Codex App 会话同步和图片结果" width="900">
@@ -47,15 +47,15 @@ Codex App 和 VS Code 插件通常只需要：下载程序 -> 配置 AI Gateway 
 
 ### 1. 安装
 
-从 GitHub Releases 下载 `CodexHub.dmg`，拖到 Applications 后打开。Linux 下载 `CodexHub Linux x86_64.AppImage` 后赋予执行权限即可双击运行。
+从 GitHub Releases 下载 `TianCaiSpaceHub-*-macos-*.dmg`，拖到 Applications 后打开。Linux 下载 `TianCaiSpace Hub Linux x86_64.AppImage` 后赋予执行权限即可双击运行。
 
-第一次打开时，如果 macOS 提示来自互联网，按系统提示确认即可。Windows 直接运行 release 包里的 `codexhub.exe`。Linux 如果桌面环境没有自动赋权，可以先执行 `chmod +x "CodexHub Linux x86_64.AppImage"`。这个 App 不会安装开机启动项，也不会自动常驻后台。
+第一次打开时，如果 macOS 提示来自互联网，按系统提示确认即可。Windows 直接运行 release 包里的 `TianCaiSpace Hub.exe`。Linux 如果桌面环境没有自动赋权，可以先执行 `chmod +x "TianCaiSpace Hub Linux x86_64.AppImage"`。这个 App 不会安装开机启动项，也不会自动常驻后台。
 
 后续可以在菜单 `Help -> Check for Updates` 手动检查 GitHub Releases 是否有新版本。当前 MVP 只引导打开下载页，不会静默替换本机程序。
 
 ### 2. 打开应用
 
-打开 `CodexHub`。GUI 会自动启动本地 backend，并在退出时关闭本次启动的 backend。
+打开 `TianCaiSpace Hub`。GUI 会自动启动本地 backend，并在退出时关闭本次启动的 backend。
 
 状态概览显示本地服务运行后继续下一步。
 
@@ -94,17 +94,17 @@ Codex App 和 VS Code 插件通常只需要：下载程序 -> 配置 AI Gateway 
 
 正常启动 Codex App 或 Codex VS Code 插件，并打开 remote-control / 控制这台电脑。
 
-连接成功后，`CodexHub` 里会看到 Codex 控制通道变为已连接。
+连接成功后，`TianCaiSpace Hub` 里会看到 Codex 控制通道变为已连接。
 
-不需要在 Codex App 的“连接”设置页里看到远程连接设备列表。这个项目走的是本地 backend + IM bridge，只要 `CodexHub` 的状态概览都正常，就可以直接在已接入的 IM 里使用。
+不需要在 Codex App 的“连接”设置页里看到远程连接设备列表。这个项目走的是本地 backend + IM bridge，只要 `TianCaiSpace Hub` 的状态概览都正常，就可以直接在已接入的 IM 里使用。
 
-如果 Codex App、Codex VS Code 插件和 Codex CLI 同时连接到 `CodexHub`，IM 端新建或恢复会话时会按固定优先级选择执行端：Codex App > Codex VS Code 插件 > Codex CLI。会话绑定后，后续消息会继续发给当时选中的执行端，直到该 IM 会话退出或重新绑定。
+如果 Codex App、Codex VS Code 插件和 Codex CLI 同时连接到 `TianCaiSpace Hub`，IM 端新建或恢复会话时会按固定优先级选择执行端：Codex App > Codex VS Code 插件 > Codex CLI。会话绑定后，后续消息会继续发给当时选中的执行端，直到该 IM 会话退出或重新绑定。
 
 ### 7. 使用 Codex CLI
 
 如果希望 Codex CLI 和飞书 / Telegram / 微信交互，不需要替换 `codex` 命令，也不需要安装包装脚本。macOS、Windows 和 Linux 都按下面三步操作。
 
-1. 打开 `CodexHub` 桌面程序，完成 IM 通道和 Codex 接入，并保持程序运行。
+1. 打开 `TianCaiSpace Hub` 桌面程序，完成 IM 通道和 Codex 接入，并保持程序运行。
 
 2. 在要操作的项目目录打开终端，启动 Codex app-server：
 
@@ -130,9 +130,9 @@ codex --remote ws://127.0.0.1:3849
 
 ## 网络与代理
 
-CodexHub 的“网络”菜单提供三种出站模式：跟随系统代理、强制直连、自定义 HTTP/SOCKS5 代理。该设置只影响 CodexHub 访问模型服务、微信、Telegram、飞书 HTTP API 和更新地址，不会修改 macOS `launchctl`、Windows 用户环境变量或其它应用的网络设置。
+TianCaiSpace Hub 的“网络”菜单提供三种出站模式：跟随系统代理、强制直连、自定义 HTTP/SOCKS5 代理。该设置只影响 TianCaiSpace Hub 访问模型服务、微信、Telegram、飞书 HTTP API 和更新地址，不会修改 macOS `launchctl`、Windows 用户环境变量或其它应用的网络设置。
 
-使用 Clash、V2Ray 等本地代理时，可以选择“自定义 HTTP/SOCKS5 代理”，填写 `http://127.0.0.1:7890` 或 `socks5://127.0.0.1:1080`。daemon 正在运行时设置会立即生效。本地 GUI、Codex App、VS Code 与 CodexHub 之间的回环通信不会使用这个出站代理。
+使用 Clash、V2Ray 等本地代理时，可以选择“自定义 HTTP/SOCKS5 代理”，填写 `http://127.0.0.1:7890` 或 `socks5://127.0.0.1:1080`。daemon 正在运行时设置会立即生效。本地 GUI、Codex App、VS Code 与 TianCaiSpace Hub 之间的回环通信不会使用这个出站代理。
 
 TUN / Network Extension 类型的 VPN 工作在 HTTP 代理层以下。如果它拦截回环流量，仍需要在 VPN 软件中排除 `localhost`、`127.0.0.1` 和 `::1`。
 
@@ -258,6 +258,7 @@ GET http://127.0.0.1:3847/api/events
 ## 更多文档
 
 - [架构](docs/architecture.md)
+- [WorkBuddy 接入](docs/workbuddy.md)
 - [微信集成计划](docs/wechat-integration-plan.zh-CN.md)
 - [认证说明](docs/auth-notes.zh-CN.md)
 - [排障](docs/troubleshooting.md)

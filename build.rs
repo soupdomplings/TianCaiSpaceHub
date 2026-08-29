@@ -1,4 +1,5 @@
 fn main() {
+    println!("cargo:rerun-if-changed=assets/tci-hub-icon.png");
     if std::env::var("CARGO_CFG_WINDOWS").is_ok() {
         println!(
             "cargo:rustc-link-arg-bin=codexhub=/MANIFESTINPUT:packaging/windows/codexhub.exe.manifest"

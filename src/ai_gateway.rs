@@ -18,6 +18,7 @@ pub mod router;
 pub mod routing_state;
 pub mod tool_names;
 pub mod transform;
+pub mod workbuddy;
 
 use axum::{
     Router,
@@ -31,6 +32,10 @@ use crate::app_state::SharedState;
 pub fn router() -> Router<SharedState> {
     Router::new()
         .route("/v1/responses", post(handler::handle_responses))
+        .route(
+            "/v1/chat/completions",
+            post(handler::handle_workbuddy_chat_completions),
+        )
         .route(
             "/v1/responses/compact",
             post(handler::handle_responses_compact),

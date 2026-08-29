@@ -114,6 +114,7 @@ enum GuiMessage {
     CodexAction(CodexActionResult),
     ImAction(ImActionResult),
     AiGwAction(AiGwActionResult),
+    WorkBuddy(WorkBuddyActionResult),
     DashboardUpdate,
     DiagnosticsExport,
 }
@@ -148,6 +149,7 @@ mod theme;
 mod tray;
 mod update;
 mod widgets;
+mod workbuddy;
 
 use self::ai_gateway::{
     AiGwActionResult, AiGwChannelToggle, AiGwProviderModel, AiGwProviderRow, AiGwProviderRows,
@@ -188,6 +190,7 @@ use self::widgets::{
     status_icon_bitmap, status_panel, table_cell_attr, text_field_row, topology_connector,
     topology_splitter,
 };
+use self::workbuddy::WorkBuddyActionResult;
 
 #[derive(Clone)]
 struct GuiTimers {
@@ -362,7 +365,7 @@ fn build_ui(app: App, single_instance_guard: GuiSingleInstanceGuard) {
     // forces scrolling to find them).
     let frame_size = initial_frame_size();
     let frame = Frame::builder()
-        .with_title("CodexHub")
+        .with_title("TianCaiSpace Hub")
         // Keep the first launch within smaller laptop work areas. The tab pages
         // own their scrolling, so the frame itself should not exceed the screen.
         .with_size(frame_size)
@@ -1114,6 +1117,10 @@ fn build_ui(app: App, single_instance_guard: GuiSingleInstanceGuard) {
     );
     request_logs_page.set_sizer(request_logs_sizer, true);
 
+    // --- WorkBuddy Tab ---
+    let workbuddy_tab = workbuddy::create(&notebook, text);
+    enable_full_repaint_on_resize(&workbuddy_tab.page);
+
     notebook.add_page(&codex_tab.page, text.codex_tab(), true, tab_icons[0]);
     notebook.add_page(&ai_gw_page, text.ai_gateway_tab(), false, tab_icons[1]);
     notebook.add_page(&feishu_page, text.chat_tab(), false, tab_icons[2]);
@@ -1122,6 +1129,12 @@ fn build_ui(app: App, single_instance_guard: GuiSingleInstanceGuard) {
         text.request_logs_tab(),
         false,
         tab_icons[3],
+    );
+    notebook.add_page(
+        &workbuddy_tab.page,
+        text.workbuddy_tab(),
+        false,
+        tab_icons[4],
     );
 
     root_sizer.add(
@@ -1196,6 +1209,8 @@ fn build_ui(app: App, single_instance_guard: GuiSingleInstanceGuard) {
         &gui_tx,
         &codex_action_in_flight,
     );
+
+    workbuddy::bind_actions(&workbuddy_tab, &api, &frame, text, &gui_tx);
 
     bind_service_connection_settings(&frame, &handles);
 
@@ -1753,6 +1768,7 @@ fn build_ui(app: App, single_instance_guard: GuiSingleInstanceGuard) {
         let request_logs_active = request_logs_active.clone();
         let request_log_clear_old_button = request_log_clear_old_button;
         let request_log_clear_all_button = request_log_clear_all_button;
+        let workbuddy_tab = workbuddy_tab.clone();
         frame.on_idle(move |event| {
             // Kick off any toggles queued from the data views.
             process_pending_im_toggle(
@@ -1825,6 +1841,16 @@ fn build_ui(app: App, single_instance_guard: GuiSingleInstanceGuard) {
                                     needs_dashboard_refresh = true;
                                 }
                                 apply_pending_ai_gw_action(&handles, &frame, result);
+                            }
+                            GuiMessage::WorkBuddy(result) => {
+                                workbuddy::apply_result(
+                                    &workbuddy_tab,
+                                    &frame,
+                                    handles.text,
+                                    &api,
+                                    &gui_tx,
+                                    result,
+                                );
                             }
                             GuiMessage::DashboardUpdate => {
                                 apply_pending_dashboard(
@@ -1997,7 +2023,7 @@ fn screen_work_area_size() -> Option<(i32, i32)> {
     None
 }
 
-fn create_main_tab_icons(notebook: &Notebook) -> [Option<i32>; 4] {
+fn create_main_tab_icons(notebook: &Notebook) -> [Option<i32>; 5] {
     // Use 24x24 for better quality on high-DPI displays
     let size = 24;
     let image_list = ImageList::new(size, size, true, 4);
@@ -2012,6 +2038,7 @@ fn create_main_tab_icons(notebook: &Notebook) -> [Option<i32>; 4] {
             LucideIconKind::ScrollText,
             size as usize,
         )),
+        image_list.add_bitmap(&lucide_icon_bitmap(LucideIconKind::Router, size as usize)),
     ];
     let icons = image_ids.map(|id| (id >= 0).then_some(id));
     if icons.iter().any(Option::is_some) {
@@ -2326,7 +2353,7 @@ fn install_system_menu(
             text.export_connection_diagnostics_help(),
         )
         .append_separator()
-        .append_item(ID_ABOUT, text.about(), "About CodexHub")
+        .append_item(ID_ABOUT, text.about(), "About TianCaiSpace Hub")
         .build();
     let menu_bar = MenuBar::builder()
         .append(file_menu, text.file_menu())
@@ -5760,7 +5787,7 @@ enum EndpointStatusState {
 }
 
 fn show_about_dialog(parent: &Frame) {
-    let dialog = Dialog::builder(parent, "About CodexHub")
+    let dialog = Dialog::builder(parent, "About TianCaiSpace Hub")
         .with_style(DialogStyle::DefaultDialogStyle)
         .with_size(520, 260)
         .build();
@@ -5772,7 +5799,7 @@ fn show_about_dialog(parent: &Frame) {
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
 
     let title = StaticText::builder(&panel)
-        .with_label(&format!("CodexHub {}", env!("CARGO_PKG_VERSION")))
+        .with_label(&format!("TianCaiSpace Hub {}", env!("CARGO_PKG_VERSION")))
         .build();
     title.set_foreground_color(theme::theme().ink_primary);
     title.set_font(&theme::font(theme::TextRole::Title));
@@ -5830,14 +5857,14 @@ fn show_about_dialog(parent: &Frame) {
 }
 
 fn show_info(parent: &dyn WxWidget, message: &str) {
-    MessageDialog::builder(parent, message, "CodexHub")
+    MessageDialog::builder(parent, message, "TianCaiSpace Hub")
         .with_style(MessageDialogStyle::OK | MessageDialogStyle::IconInformation)
         .build()
         .show_modal();
 }
 
 fn show_error(parent: &dyn WxWidget, message: &str) {
-    MessageDialog::builder(parent, message, "CodexHub")
+    MessageDialog::builder(parent, message, "TianCaiSpace Hub")
         .with_style(MessageDialogStyle::OK | MessageDialogStyle::IconError)
         .build()
         .show_modal();

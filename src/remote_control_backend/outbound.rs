@@ -104,7 +104,7 @@ pub(super) async fn send_initialize_for_client_on_connection(
         "params": {
             "clientInfo": {
                 "name": "codexhub",
-                "title": "CodexHub",
+                "title": "TianCaiSpace Hub",
                 "version": env!("CARGO_PKG_VERSION")
             },
             "capabilities": {

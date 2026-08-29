@@ -1667,6 +1667,84 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn workbuddy_gpt56_keeps_provider_default_cache_options() {
+        let (base_url, mut requests, server) = capture_server().await;
+        let provider = ProviderConfig {
+            name: "workbuddy".to_string(),
+            provider_type: ProviderType::OpenAiResponses,
+            base_url,
+            api_key: "secret".to_string(),
+            timeout_secs: 10,
+            ..ProviderConfig::default()
+        };
+        let client = reqwest::Client::new();
+        let context = GatewayContext::extract(&HeaderMap::new(), Some("workbuddy:openai"));
+        let request = json!({
+            "model": "gpt-5.6-sol",
+            "stream": false,
+            "input": [{
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "hello"}]
+            }]
+        });
+
+        let response = passthrough(&client, &context, request, "gpt-5.6-sol", &provider, None)
+            .await
+            .expect("GPT-5.6 Responses request should reach upstream");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let upstream = requests.recv().await.expect("captured upstream request");
+        assert_eq!(upstream["prompt_cache_key"], "workbuddy:openai");
+        assert!(upstream.get("prompt_cache_options").is_none());
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn explicit_prompt_cache_options_are_preserved() {
+        let (base_url, mut requests, server) = capture_server().await;
+        let provider = ProviderConfig {
+            name: "workbuddy".to_string(),
+            provider_type: ProviderType::OpenAiResponses,
+            base_url,
+            api_key: "secret".to_string(),
+            timeout_secs: 10,
+            ..ProviderConfig::default()
+        };
+        let client = reqwest::Client::new();
+        let context = GatewayContext::extract(&HeaderMap::new(), Some("explicit-key"));
+        let request = json!({
+            "model": "gpt-5.6-sol",
+            "stream": false,
+            "prompt_cache_options": {"mode": "explicit"},
+            "input": [{
+                "type": "message",
+                "role": "user",
+                "content": [{
+                    "type": "input_text",
+                    "text": "stable",
+                    "prompt_cache_breakpoint": {"mode": "explicit"}
+                }]
+            }]
+        });
+
+        let response = passthrough(&client, &context, request, "gpt-5.6-sol", &provider, None)
+            .await
+            .expect("explicit cache request should reach upstream");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let upstream = requests.recv().await.expect("captured upstream request");
+        assert_eq!(upstream["prompt_cache_options"]["mode"], "explicit");
+        assert_eq!(
+            upstream["input"][0]["content"][0]["prompt_cache_breakpoint"]["mode"],
+            "explicit"
+        );
+
+        server.abort();
+    }
+
+    #[tokio::test]
     async fn compact_passthrough_uses_unary_compact_endpoint() {
         let (base_url, mut requests, server) = compact_capture_server().await;
         let provider = ProviderConfig {

@@ -67,7 +67,8 @@ jobs:
       - name: Build App Bundle
         run: |
           set -euo pipefail
-          APP_NAME="CodexHub"
+          APP_NAME="TianCaiSpace Hub"
+          EXECUTABLE_NAME="CodexHub"
           APP="target/dist/$APP_NAME.app"
           CONTENTS="$APP/Contents"
           MACOS="$CONTENTS/MacOS"
@@ -102,8 +103,8 @@ jobs:
           fi
           {
             echo "APP_VERSION=$APP_VERSION"
-            echo "MACOS_DMG_NAME=CodexHub-$APP_VERSION-macos-$MACOS_FILE_SLUG.dmg"
-            echo "MACOS_APP_ZIP_NAME=CodexHub-$APP_VERSION-macos-$MACOS_FILE_SLUG.app.zip"
+            echo "MACOS_DMG_NAME=TianCaiSpaceHub-$APP_VERSION-macos-$MACOS_FILE_SLUG.dmg"
+            echo "MACOS_APP_ZIP_NAME=TianCaiSpaceHub-$APP_VERSION-macos-$MACOS_FILE_SLUG.app.zip"
           } >> "$GITHUB_ENV"
 
           rm -rf "$APP"
@@ -111,10 +112,18 @@ jobs:
           cp "packaging/macos/Info.plist" "$CONTENTS/Info.plist"
           /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${CARGO_VERSION%%[-+]*}" "$CONTENTS/Info.plist"
           /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${GITHUB_RUN_NUMBER:-1}" "$CONTENTS/Info.plist"
-          cp "packaging/macos/AppIcon.icns" "$RESOURCES/AppIcon.icns"
+          ICONSET="$RUNNER_TEMP/TianCaiSpace Hub.iconset"
+          rm -rf "$ICONSET"
+          mkdir -p "$ICONSET"
+          for spec in "16:icon_16x16.png" "32:icon_16x16@2x.png" "32:icon_32x32.png" "64:icon_32x32@2x.png" "128:icon_128x128.png" "256:icon_128x128@2x.png" "256:icon_256x256.png" "512:icon_256x256@2x.png" "512:icon_512x512.png" "1024:icon_512x512@2x.png"; do
+            size="${spec%%:*}"
+            name="${spec#*:}"
+            sips -z "$size" "$size" assets/tci-hub-icon.png --out "$ICONSET/$name" >/dev/null
+          done
+          iconutil -c icns "$ICONSET" -o "$RESOURCES/AppIcon.icns"
           cp packaging/brand/*.png "$RESOURCES/brand/"
-          cp "target/release/codexhub" "$MACOS/$APP_NAME"
-          chmod +x "$MACOS/$APP_NAME"
+          cp "target/release/codexhub" "$MACOS/$EXECUTABLE_NAME"
+          chmod +x "$MACOS/$EXECUTABLE_NAME"
 
       - name: Sign And Notarize
         timeout-minutes: 75
@@ -129,11 +138,11 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
         run: |
           set -euo pipefail
-          APP="target/dist/CodexHub.app"
-          DMG="target/dist/CodexHub.dmg"
+          APP="target/dist/TianCaiSpace Hub.app"
+          DMG="target/dist/TianCaiSpace Hub.dmg"
           DMG_STAGING="target/dist/dmg"
           ZIP="target/dist/${MACOS_APP_ZIP_NAME}"
-          NOTARY_ZIP="target/dist/CodexHub-notary.zip"
+          NOTARY_ZIP="target/dist/TianCaiSpaceHub-notary.zip"
           ENTITLEMENTS="packaging/macos/entitlements.plist"
 
           if [ -n "${APPLE_API_KEY_P8:-}" ]; then
@@ -238,10 +247,10 @@ jobs:
 
           rm -rf "$DMG_STAGING"
           mkdir -p "$DMG_STAGING"
-          ditto "$APP" "$DMG_STAGING/CodexHub.app"
+          ditto "$APP" "$DMG_STAGING/TianCaiSpace Hub.app"
           ln -s /Applications "$DMG_STAGING/Applications"
 
-          hdiutil create -volname "CodexHub" -srcfolder "$DMG_STAGING" -ov -format UDZO "$DMG"
+          hdiutil create -volname "TianCaiSpace Hub" -srcfolder "$DMG_STAGING" -ov -format UDZO "$DMG"
           codesign --force --timestamp --sign "$APPLE_CODESIGN_IDENTITY" "$DMG"
           notary_submit "$DMG"
           xcrun stapler staple "$DMG"
@@ -333,10 +342,10 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: CodexHub-macOS-${{ matrix.file_slug }}
+          name: TianCaiSpaceHub-macOS-${{ matrix.file_slug }}
           path: |
-            target/dist/CodexHub-*-macos-${{ matrix.file_slug }}.dmg
-            target/dist/CodexHub-*-macos-${{ matrix.file_slug }}.app.zip
+            target/dist/TianCaiSpaceHub-*-macos-${{ matrix.file_slug }}.dmg
+            target/dist/TianCaiSpaceHub-*-macos-${{ matrix.file_slug }}.app.zip
             target/dist/${{ matrix.manifest_name }}
             target/dist/${{ matrix.intel_manifest_name }}
 
@@ -375,7 +384,7 @@ jobs:
           prerelease: ${{ contains(github.ref_name, '-') }}
           make_latest: ${{ contains(github.ref_name, '-') && 'false' || 'true' }}
           files: |
-            target/dist/CodexHub-*-macos-${{ matrix.file_slug }}.dmg
-            target/dist/CodexHub-*-macos-${{ matrix.file_slug }}.app.zip
+            target/dist/TianCaiSpaceHub-*-macos-${{ matrix.file_slug }}.dmg
+            target/dist/TianCaiSpaceHub-*-macos-${{ matrix.file_slug }}.app.zip
             target/dist/${{ matrix.manifest_name }}
             target/dist/${{ matrix.intel_manifest_name }}

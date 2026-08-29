@@ -610,11 +610,7 @@ fn render_disabled_status_icon_bitmap(kind: StatusIconKind, size: usize) -> Bitm
 
 pub(super) fn app_icon_bitmap(size: usize) -> Bitmap {
     cached_icon(IconCacheKey::App(size), || {
-        png_brand_bitmap(
-            "dolphin-rounded-256.png",
-            include_bytes!("../../packaging/icons/dolphin-rounded-256.png"),
-            size,
-        )
+        png_brand_bitmap(HUB_ICON_FILE_NAME, HUB_ICON_BYTES, size)
     })
 }
 
@@ -764,6 +760,9 @@ fn render_lucide_icon_bitmap(kind: LucideIconKind, size: usize) -> Bitmap {
         .and_then(|bundle| bundle.get_bitmap(Size::new(size, size)))
         .unwrap_or_else(|| panic!("failed to load lucide icon {file_name}"))
 }
+
+const HUB_ICON_FILE_NAME: &str = "assets/tci-hub-icon.png";
+const HUB_ICON_BYTES: &[u8] = include_bytes!("../../assets/tci-hub-icon.png");
 
 pub(super) fn svg_brand_bitmap(file_name: &str, bytes: &[u8], size: usize) -> Bitmap {
     let size = size as i32;

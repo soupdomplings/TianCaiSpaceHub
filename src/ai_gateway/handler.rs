@@ -6,7 +6,7 @@ use std::{
 
 use axum::{
     Json,
-    body::Bytes,
+    body::{Bytes, to_bytes},
     extract::{Path, Query, RawQuery, State},
     http::{
         HeaderMap, HeaderName, HeaderValue,
@@ -32,7 +32,11 @@ use super::request_log::{
     self, RequestLogContext, RequestLogRecord, RequestLogStore, RequestLogUpdate,
 };
 use super::responses_lite_tools::prepare_for_provider;
-use super::router::{resolve_provider_with_state, resolve_provider_with_state_for_type};
+use super::router::{
+    resolve_provider_with_state, resolve_provider_with_state_for_type,
+    resolve_workbuddy_provider_with_state,
+};
+use super::workbuddy;
 
 static AI_GATEWAY_IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
 const MAX_DECOMPRESSED_REQUEST_BODY_BYTES: usize = 512 * 1024 * 1024;
@@ -669,6 +673,290 @@ pub async fn handle_responses(
                     e.into_response()
                 }
             }
+        }
+    }
+}
+
+/// POST /ai-gateway/v1/chat/completions
+///
+/// This is the WorkBuddy-facing compatibility endpoint.  WorkBuddy sends the
+/// familiar Chat Completions shape. The gateway uses the provider reserved for
+/// WorkBuddy so this endpoint cannot change native Codex provider selection.
+pub async fn handle_workbuddy_chat_completions(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let started_at = Instant::now();
+    let created_at_ms = request_log::now_ms();
+    let config = state.config.lock().await;
+    let gw_config = config.ai_gateway.clone();
+    let request_logging_enabled = gw_config.request_logging_enabled;
+    let request_log_details_enabled = gw_config.request_log_details_enabled;
+    let models_etag = configured_models_etag(&gw_config);
+    drop(config);
+    let in_flight = AI_GATEWAY_IN_FLIGHT.fetch_add(1, Ordering::AcqRel) + 1;
+    let _in_flight_guard = AiGatewayInFlightGuard;
+
+    let body = match decode_request_body(&headers, body) {
+        Ok(body) => body,
+        Err(error) => return error.into_response(),
+    };
+    let mut raw_chat: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(value) => value,
+        Err(error) => {
+            return GatewayError::bad_request(format!("invalid JSON: {error}")).into_response();
+        }
+    };
+    let model = match workbuddy::chat_request_model(&raw_chat) {
+        Ok(model) => model,
+        Err(error) => return GatewayError::bad_request(error).into_response(),
+    };
+    let default_effort = crate::workbuddy_config::configured_default_reasoning_effort(&model);
+    workbuddy::apply_default_reasoning_effort(&mut raw_chat, default_effort.as_deref());
+    let stream = workbuddy::chat_request_stream(&raw_chat);
+    let cache_key = workbuddy::chat_request_cache_key(&raw_chat)
+        .or_else(|| {
+            headers
+                .get("x-workbuddy-session-id")
+                .and_then(|value| value.to_str().ok())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        })
+        .or_else(|| crate::workbuddy_config::configured_cache_key(&model))
+        .unwrap_or_else(|| format!("workbuddy:{model}"));
+    let ctx = GatewayContext::extract(&headers, Some(&cache_key));
+    let envelope = GatewayRequestEnvelope {
+        model: model.clone(),
+        stream,
+        prompt_cache_key: Some(cache_key.clone()),
+    };
+    let routing_session_id = ctx
+        .session_id
+        .as_deref()
+        .map(|session_id| format!("workbuddy:{session_id}"));
+    let routing_now = Instant::now();
+    let route_started = Instant::now();
+    let (provider, route_id) = {
+        let mut routing = state.ai_gateway_routing.lock().await;
+        routing.evict_stale(routing_now);
+        match resolve_workbuddy_provider_with_state(
+            &model,
+            routing_session_id.as_deref(),
+            &gw_config,
+            &mut routing,
+            routing_now,
+        ) {
+            Ok(result) => result,
+            Err(error) => {
+                drop(routing);
+                let log_context = request_logging_enabled
+                    .then(|| {
+                        insert_initial_log(
+                            &state.ai_gateway_request_logs,
+                            &ctx,
+                            &headers,
+                            &envelope,
+                            None,
+                            &raw_chat,
+                            started_at,
+                            created_at_ms,
+                            request_log_details_enabled,
+                        )
+                    })
+                    .flatten();
+                update_failed_log(&log_context, &error.message);
+                return error.into_response();
+            }
+        }
+    };
+    let route_ms = request_log::elapsed_ms(route_started);
+    let log_context = request_logging_enabled
+        .then(|| {
+            insert_initial_log(
+                &state.ai_gateway_request_logs,
+                &ctx,
+                &headers,
+                &envelope,
+                Some(provider),
+                &raw_chat,
+                started_at,
+                created_at_ms,
+                request_log_details_enabled,
+            )
+        })
+        .flatten();
+
+    let upstream_model = provider
+        .resolve_upstream_model(&model)
+        .unwrap_or(model.as_str())
+        .to_string();
+    info!(
+        model = %model,
+        upstream_model = %upstream_model,
+        provider = %provider.name,
+        provider_type = ?provider.provider_type,
+        session_id = ?ctx.session_id,
+        prompt_cache_key = %ctx.prompt_cache_key,
+        stream,
+        in_flight,
+        route_ms,
+        "workbuddy chat request routed"
+    );
+
+    let client = crate::outbound_http::get();
+    let result = match provider.provider_type {
+        ProviderType::ChatCompletions => {
+            workbuddy::proxy_chat_completion(
+                &client,
+                &ctx,
+                raw_chat,
+                &model,
+                &upstream_model,
+                provider,
+                log_context.clone(),
+            )
+            .await
+        }
+        ProviderType::OpenAiResponses => {
+            // Keep the WorkBuddy OpenAI wire shape compatible with the
+            // standalone adapter. In particular, ordinary role/content items
+            // remain strings where WorkBuddy supplied strings, and `store`
+            // defaults to false. This avoids changing the serialized prompt
+            // prefix used by compatible upstream cache implementations.
+            let mut raw_responses = match workbuddy::chat_request_to_openai_responses(&raw_chat) {
+                Ok(value) => value,
+                Err(error) => return GatewayError::bad_request(error).into_response(),
+            };
+            raw_responses["prompt_cache_key"] = json!(cache_key);
+            openai_responses::passthrough_with_tool_names(
+                &client,
+                &ctx,
+                raw_responses,
+                &upstream_model,
+                provider,
+                None,
+                log_context.clone(),
+            )
+            .await
+        }
+        ProviderType::DeepSeekResponses | ProviderType::GrokResponses => {
+            let mut raw_responses = match workbuddy::chat_request_to_responses(&raw_chat) {
+                Ok(value) => value,
+                Err(error) => return GatewayError::bad_request(error).into_response(),
+            };
+            raw_responses["prompt_cache_key"] = json!(cache_key);
+            openai_responses::passthrough_with_tool_names(
+                &client,
+                &ctx,
+                raw_responses,
+                &upstream_model,
+                provider,
+                None,
+                log_context.clone(),
+            )
+            .await
+        }
+        ProviderType::AnthropicMessages => {
+            let mut raw_responses = match workbuddy::chat_request_to_responses(&raw_chat) {
+                Ok(value) => value,
+                Err(error) => return GatewayError::bad_request(error).into_response(),
+            };
+            raw_responses["prompt_cache_key"] = json!(cache_key);
+            let request = match deserialize_gateway_request(raw_responses) {
+                Ok(request) => request,
+                Err(error) => {
+                    update_failed_log(&log_context, &format!("invalid converted request: {error}"));
+                    return GatewayError::bad_request(format!(
+                        "invalid converted request: {error}"
+                    ))
+                    .into_response();
+                }
+            };
+            let mut upstream_request = request;
+            upstream_request.model = upstream_model;
+            anthropic_messages::handle(
+                &client,
+                &ctx,
+                &upstream_request,
+                &model,
+                provider,
+                log_context.clone(),
+            )
+            .await
+        }
+    };
+    let outcome = classify_outcome(&result);
+    record_routing_outcome(&state, &route_id, outcome).await;
+
+    match result {
+        Ok(response) if provider.provider_type == ProviderType::ChatCompletions => {
+            let mut response = response;
+            set_models_etag_header(&mut response, &models_etag);
+            response
+        }
+        Ok(response) if stream => {
+            let body = workbuddy::responses_sse_to_chat(response.into_body(), model);
+            let mut converted = Response::new(body);
+            *converted.status_mut() = axum::http::StatusCode::OK;
+            converted.headers_mut().insert(
+                HeaderName::from_static("content-type"),
+                HeaderValue::from_static("text/event-stream"),
+            );
+            converted.headers_mut().insert(
+                HeaderName::from_static("cache-control"),
+                HeaderValue::from_static("no-cache"),
+            );
+            set_models_etag_header(&mut converted, &models_etag);
+            converted
+        }
+        Ok(response) => {
+            let body = match to_bytes(response.into_body(), 64 * 1024 * 1024).await {
+                Ok(body) => body,
+                Err(error) => {
+                    let gateway_error = GatewayError::upstream(
+                        axum::http::StatusCode::BAD_GATEWAY,
+                        format!("read upstream response: {error}"),
+                    );
+                    update_failed_log(&log_context, &gateway_error.message);
+                    return gateway_error.into_response();
+                }
+            };
+            let value: serde_json::Value = match serde_json::from_slice(&body) {
+                Ok(value) => value,
+                Err(error) => {
+                    let gateway_error = GatewayError::upstream(
+                        axum::http::StatusCode::BAD_GATEWAY,
+                        format!("invalid Responses response: {error}"),
+                    );
+                    update_failed_log(&log_context, &gateway_error.message);
+                    return gateway_error.into_response();
+                }
+            };
+            let converted = workbuddy::responses_to_chat(&value, &envelope.model);
+            if let Some(log_context) = &log_context {
+                let update = RequestLogUpdate {
+                    status: Some("completed".to_string()),
+                    usage: Some(request_log::usage_from_response_value(&value)),
+                    latency_ms: Some(request_log::elapsed_ms(log_context.started_at)),
+                    response_json: log_context
+                        .details_enabled
+                        .then(|| serde_json::to_string(&converted).ok())
+                        .flatten(),
+                    ..RequestLogUpdate::default()
+                };
+                if let Err(error) = log_context.store.update_record(log_context.log_id, &update) {
+                    request_log::log_update_error(error);
+                }
+            }
+            let mut converted_response = Json(converted).into_response();
+            set_models_etag_header(&mut converted_response, &models_etag);
+            converted_response
+        }
+        Err(error) => {
+            update_failed_log(&log_context, &error.message);
+            error.into_response()
         }
     }
 }
