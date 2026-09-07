@@ -27,10 +27,7 @@ use crate::ai_gateway::request_log::{
 use crate::ai_gateway::responses_compat::ResponsesCompatSseStream;
 use crate::ai_gateway::tool_names::ToolNameMap;
 
-use super::{
-    apply_total_request_timeout, ensure_success_response, execute_stream_start,
-    execute_upstream_request,
-};
+use super::{apply_total_request_timeout, ensure_success_response, execute_provider_request};
 
 mod citations;
 mod custom_tools;
@@ -140,23 +137,13 @@ pub async fn handle(
         }
     }
 
-    let upstream_resp = if request.stream {
-        execute_stream_start(
-            client,
-            upstream_req,
-            provider.timeout_secs,
-            "anthropic upstream request failed",
-        )
-        .await?
-    } else {
-        execute_upstream_request(
-            client,
-            upstream_req,
-            provider.timeout_secs,
-            "anthropic upstream request failed",
-        )
-        .await?
-    };
+    let upstream_resp = execute_provider_request(
+        client,
+        upstream_req,
+        provider,
+        "anthropic upstream request failed",
+    )
+    .await?;
     let upstream_resp = ensure_success_response(&provider.name, upstream_resp).await?;
 
     if request.stream {
@@ -460,10 +447,10 @@ async fn stream_anthropic_round(
         options,
     )?;
     update_upstream_log(log_context, upstream_req.headers(), anthropic_body);
-    let upstream_resp = execute_stream_start(
+    let upstream_resp = execute_provider_request(
         client,
         upstream_req,
-        provider.timeout_secs,
+        provider,
         "anthropic upstream request failed",
     )
     .await?;
@@ -588,10 +575,10 @@ async fn execute_anthropic_stream_message(
         options,
     )?;
     update_upstream_log(log_context, upstream_req.headers(), anthropic_body);
-    let upstream_resp = execute_stream_start(
+    let upstream_resp = execute_provider_request(
         client,
         upstream_req,
-        provider.timeout_secs,
+        provider,
         "anthropic upstream request failed",
     )
     .await?;
@@ -617,10 +604,10 @@ async fn execute_internal_web_search(
     search_request.stream = true;
     let upstream_req =
         build_anthropic_upstream_request(client, ctx, &search_request, &body, provider, options)?;
-    let upstream_resp = execute_stream_start(
+    let upstream_resp = execute_provider_request(
         client,
         upstream_req,
-        provider.timeout_secs,
+        provider,
         "anthropic internal web search request failed",
     )
     .await?;

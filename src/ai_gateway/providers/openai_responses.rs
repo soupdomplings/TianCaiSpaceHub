@@ -23,8 +23,8 @@ use crate::ai_gateway::responses_compat::{
 use crate::ai_gateway::tool_names::{GROK_READ_FILE_TOOL_NAME, ToolNameMap, VIEW_IMAGE_TOOL_NAME};
 
 use super::{
-    apply_total_request_timeout, ensure_success_response, execute_stream_start,
-    execute_upstream_request, upstream_transport_retry_delay,
+    apply_total_request_timeout, ensure_success_response, execute_provider_request,
+    upstream_transport_retry_delay,
 };
 
 const UPSTREAM_REQUEST_BODY_READ_MAX_RETRIES: usize = 2;
@@ -282,23 +282,9 @@ async fn passthrough_to_endpoint(
             "proxying to openai responses endpoint"
         );
 
-        let upstream_resp = if is_stream {
-            execute_stream_start(
-                client,
-                upstream_req,
-                provider.timeout_secs,
-                "upstream request failed",
-            )
-            .await?
-        } else {
-            execute_upstream_request(
-                client,
-                upstream_req,
-                provider.timeout_secs,
-                "upstream request failed",
-            )
-            .await?
-        };
+        let upstream_resp =
+            execute_provider_request(client, upstream_req, provider, "upstream request failed")
+                .await?;
 
         if upstream_resp.status() == StatusCode::BAD_REQUEST {
             let body_text = upstream_resp.text().await.unwrap_or_default();

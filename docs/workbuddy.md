@@ -27,6 +27,12 @@ TianCaiSpace Hub 提供独立的 WorkBuddy 接入页签。WorkBuddy 调用本机
 - DeepSeek、Grok、Chat Completions 和其他 provider 类型自动按 `openai-chat` 处理。
 - 协议仍可在 WorkBuddy 页签中手动调整，便于第三方兼容服务。
 
+## 502 / 503 自动重试
+
+WorkBuddy 专用渠道收到上游 HTTP `502` 或 `503` 时，Hub 会在返回错误前自动重试，最多额外重试 2 次，分别等待 1 秒、2 秒。重试使用同一上游地址、模型、请求体和缓存键，不会切换提供商；Responses、Chat Completions 和 Anthropic Messages 协议均适用。HTTP 错误和已有的传输错误重试共用次数上限，避免叠加重试。
+
+该规则只针对尚未成功建立响应的上游 HTTP 请求。成功返回流式响应后，即使流中报错或中途断开，也不会重新发送已经开始的请求。持续失败时保留最后一次上游错误；`401`、`403`、`422` 等其他 HTTP 状态不触发这项重试。运行日志中的 `retrying upstream HTTP error` 会记录状态码和重试次数，不记录密钥或请求正文。
+
 ## 配置文件
 
 默认路径：

@@ -20,8 +20,7 @@ use super::context::{GatewayContext, apply_upstream_headers};
 use super::error::GatewayError;
 use super::model::GatewayRequest;
 use super::providers::{
-    apply_total_request_timeout, ensure_success_response, execute_stream_start,
-    execute_upstream_request,
+    apply_total_request_timeout, ensure_success_response, execute_provider_request,
 };
 use super::request_log::{self, RequestLogContext, RequestLogUpdate, UpstreamSseCaptureStream};
 
@@ -465,23 +464,8 @@ pub async fn proxy_chat_completion(
         }
     }
 
-    let upstream = if stream {
-        execute_stream_start(
-            client,
-            request,
-            provider.timeout_secs,
-            "chat upstream request failed",
-        )
-        .await?
-    } else {
-        execute_upstream_request(
-            client,
-            request,
-            provider.timeout_secs,
-            "chat upstream request failed",
-        )
-        .await?
-    };
+    let upstream =
+        execute_provider_request(client, request, provider, "chat upstream request failed").await?;
     let upstream = ensure_success_response(&provider.name, upstream).await?;
     if stream {
         let bytes = upstream.bytes_stream();

@@ -4,14 +4,17 @@ pub mod openai_alpha_search;
 pub mod openai_images;
 pub mod openai_responses;
 
+#[cfg(test)]
+mod retry_tests;
+
 use std::{error::Error as _, time::Duration};
 
 use axum::http::StatusCode;
 use tracing::{error, warn};
 
-use crate::ai_gateway::error::GatewayError;
+use crate::ai_gateway::{config::ProviderConfig, error::GatewayError};
 
-const UPSTREAM_TRANSPORT_MAX_RETRIES: usize = 2;
+const UPSTREAM_MAX_RETRIES: usize = 2;
 
 pub(super) fn apply_total_request_timeout(
     builder: reqwest::RequestBuilder,
@@ -40,6 +43,32 @@ pub(super) async fn execute_upstream_request(
     timeout_secs: u64,
     error_log: &'static str,
 ) -> Result<reqwest::Response, GatewayError> {
+    execute_request_with_retries(client, request, timeout_secs, error_log, false).await
+}
+
+pub(super) async fn execute_provider_request(
+    client: &reqwest::Client,
+    request: reqwest::Request,
+    provider: &ProviderConfig,
+    error_log: &'static str,
+) -> Result<reqwest::Response, GatewayError> {
+    execute_request_with_retries(
+        client,
+        request,
+        provider.timeout_secs,
+        error_log,
+        provider.is_workbuddy(),
+    )
+    .await
+}
+
+async fn execute_request_with_retries(
+    client: &reqwest::Client,
+    request: reqwest::Request,
+    timeout_secs: u64,
+    error_log: &'static str,
+    retry_http_errors: bool,
+) -> Result<reqwest::Response, GatewayError> {
     let retry_template = request.try_clone();
     let mut next_request = Some(request);
     let mut retry_count = 0usize;
@@ -58,10 +87,38 @@ pub(super) async fn execute_upstream_request(
                 .map_err(|_| GatewayError::upstream_timeout())?;
 
         match response {
+            Ok(response)
+                if retry_http_errors
+                    && matches!(
+                        response.status(),
+                        StatusCode::BAD_GATEWAY | StatusCode::SERVICE_UNAVAILABLE
+                    )
+                    && retry_count < UPSTREAM_MAX_RETRIES =>
+            {
+                let Some(retry_request) = retry_template.as_ref().and_then(|r| r.try_clone())
+                else {
+                    return Ok(response);
+                };
+                retry_count += 1;
+                let delay = Duration::from_secs(retry_count as u64);
+                warn!(
+                    provider = "workbuddy",
+                    upstream_status = response.status().as_u16(),
+                    retry_count,
+                    max_retries = UPSTREAM_MAX_RETRIES,
+                    delay_ms = delay.as_millis() as u64,
+                    "{error_log}; retrying upstream HTTP error"
+                );
+                // Retry only explicit HTTP failures before handing a response body to the caller.
+                // Transport and HTTP failures share one budget; successful streams are never replayed.
+                drop(response);
+                tokio::time::sleep(delay).await;
+                next_request = Some(retry_request);
+            }
             Ok(response) => return Ok(response),
             Err(err) => {
                 if should_retry_transport_error(&err)
-                    && retry_count < UPSTREAM_TRANSPORT_MAX_RETRIES
+                    && retry_count < UPSTREAM_MAX_RETRIES
                     && let Some(template) = retry_template.as_ref()
                     && let Some(retry_request) = template.try_clone()
                 {
@@ -69,7 +126,7 @@ pub(super) async fn execute_upstream_request(
                     warn!(
                         error = %reqwest_error_summary(&err),
                         retry_count,
-                        max_retries = UPSTREAM_TRANSPORT_MAX_RETRIES,
+                        max_retries = UPSTREAM_MAX_RETRIES,
                         "{error_log}; retrying upstream transport error"
                     );
                     tokio::time::sleep(upstream_transport_retry_delay(retry_count)).await;
