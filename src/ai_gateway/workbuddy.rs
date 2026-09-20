@@ -423,6 +423,7 @@ pub async fn proxy_chat_completion(
 ) -> Result<Response<Body>, GatewayError> {
     raw_body["model"] = json!(upstream_model);
     apply_chat_cache_controls(&mut raw_body, ctx, provider);
+    super::providers::apply_chat_reasoning_override(&mut raw_body, provider);
     let stream = raw_body
         .get("stream")
         .and_then(Value::as_bool)

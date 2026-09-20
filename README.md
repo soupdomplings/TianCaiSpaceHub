@@ -259,6 +259,7 @@ GET http://127.0.0.1:3847/api/events
 
 - [架构](docs/architecture.md)
 - [WorkBuddy 接入](docs/workbuddy.md)
+- [OpenAI Chat Completions 接入](docs/openai-chat-completions.md)
 - [微信集成计划](docs/wechat-integration-plan.zh-CN.md)
 - [认证说明](docs/auth-notes.zh-CN.md)
 - [排障](docs/troubleshooting.md)

@@ -11,12 +11,145 @@ use axum::{
 use serde_json::{Value, json};
 
 use super::{anthropic_messages, execute_provider_request, openai_responses};
+
+#[tokio::test]
+async fn openai_chat_converts_responses_and_uses_standard_parameters() {
+    for (stream, disable_reasoning) in [(false, false), (true, false), (false, true), (true, true)]
+    {
+        let upstream = TestUpstream::start(vec![StatusCode::OK]).await;
+        let mut provider = upstream.provider("openai-chat", ProviderType::ChatCompletions);
+        provider.compatibility = Some("openai_chat".to_string());
+        provider.chat_disable_reasoning = disable_reasoning;
+        let request = serde_json::from_value(json!({
+            "model":"upstream-model", "stream":stream,
+            "instructions":"Be helpful",
+            "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}],
+            "reasoning":{"effort":"high"}, "max_output_tokens":512,
+            "tools":[{"type":"function","name":"lookup","parameters":{"type":"object","properties":{}}}],
+        })).unwrap();
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let context = GatewayContext::extract(&HeaderMap::new(), Some("chat-session"));
+        let response = super::deepseek_chat::handle(
+            &client,
+            &context,
+            &request,
+            "visible-model",
+            &provider,
+            None,
+        )
+        .await
+        .unwrap();
+        let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let output = String::from_utf8(bytes.to_vec()).unwrap();
+        assert!(output.contains("retry-recovered"));
+        if stream {
+            assert!(output.contains("response.completed"));
+        } else {
+            let output: Value = serde_json::from_str(&output).unwrap();
+            assert_eq!(output["object"], "response");
+            assert_eq!(output["model"], "visible-model");
+        }
+        let captured = upstream.requests();
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].uri.path(), "/v1/chat/completions");
+        assert_eq!(captured[0].headers["authorization"], "Bearer test-key");
+        let body: Value = serde_json::from_slice(&captured[0].body).unwrap();
+        assert_eq!(body["model"], "upstream-model");
+        assert_eq!(body["messages"][0]["role"], "system");
+        assert_eq!(
+            body["reasoning_effort"],
+            if disable_reasoning { "none" } else { "high" }
+        );
+        assert_eq!(body["max_completion_tokens"], 512);
+        assert_eq!(body["prompt_cache_key"], "chat-session");
+        assert_eq!(body["tools"][0]["function"]["name"], "lookup");
+        assert!(body.get("thinking").is_none());
+        assert!(body.get("max_tokens").is_none());
+    }
+}
+
+#[tokio::test]
+async fn legacy_chat_channel_keeps_deepseek_parameters() {
+    let upstream = TestUpstream::start(vec![StatusCode::OK]).await;
+    let provider = upstream.provider("legacy", ProviderType::ChatCompletions);
+    let request = serde_json::from_value(json!({
+        "model":"test-model", "input":[], "reasoning":{"effort":"high"}, "max_output_tokens":512,
+    }))
+    .unwrap();
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let context = GatewayContext::extract(&HeaderMap::new(), None);
+    super::deepseek_chat::handle(&client, &context, &request, "test-model", &provider, None)
+        .await
+        .unwrap();
+    let body: Value = serde_json::from_slice(&upstream.requests()[0].body).unwrap();
+    assert_eq!(body["thinking"]["type"], "enabled");
+    assert_eq!(body["max_tokens"], 512);
+    assert!(body.get("max_completion_tokens").is_none());
+}
 use crate::ai_gateway::{
     config::{ProviderConfig, ProviderType},
     context::GatewayContext,
     error::GatewayError,
     workbuddy,
 };
+
+#[test]
+fn chat_reasoning_setting_defaults_off_and_is_channel_scoped() {
+    let old: ProviderConfig = serde_json::from_value(json!({"name":"old"})).unwrap();
+    assert!(!old.chat_disable_reasoning);
+    for provider_type in [
+        ProviderType::ChatCompletions,
+        ProviderType::OpenAiResponses,
+        ProviderType::AnthropicMessages,
+        ProviderType::DeepSeekResponses,
+        ProviderType::GrokResponses,
+    ] {
+        let provider = ProviderConfig {
+            provider_type: provider_type.clone(),
+            chat_disable_reasoning: true,
+            ..Default::default()
+        };
+        let saved = serde_json::to_value(&provider).unwrap();
+        let restored: ProviderConfig = serde_json::from_value(saved).unwrap();
+        assert!(restored.chat_disable_reasoning);
+        let original = json!({"reasoning_effort":"high", "thinking":{"type":"enabled"}, "reasoning":{"effort":"high"}, "tools":[{"type":"function"}]});
+        let mut body = original.clone();
+        super::apply_chat_reasoning_override(&mut body, &restored);
+        if provider_type == ProviderType::ChatCompletions {
+            assert_eq!(body["reasoning_effort"], "none");
+            assert!(body.get("thinking").is_none());
+            assert!(body.get("reasoning").is_none());
+            assert_eq!(body["tools"], original["tools"]);
+        } else {
+            assert_eq!(body, original);
+        }
+    }
+}
+
+#[tokio::test]
+async fn workbuddy_chat_reasoning_override_keeps_tools() {
+    for disabled in [false, true] {
+        let upstream = TestUpstream::start(vec![StatusCode::OK]).await;
+        let mut provider = upstream.provider("workbuddy", ProviderType::ChatCompletions);
+        provider.chat_disable_reasoning = disabled;
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let context = GatewayContext::extract(&HeaderMap::new(), None);
+        let tools = json!([{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}}]);
+        let body = json!({"model":"test", "messages":[{"role":"user","content":"hello"}], "reasoning_effort":"high", "tools":tools});
+        let response = workbuddy::proxy_chat_completion(
+            &client, &context, body, "test", "test", &provider, None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let captured: Value = serde_json::from_slice(&upstream.requests()[0].body).unwrap();
+        assert_eq!(
+            captured["reasoning_effort"],
+            if disabled { "none" } else { "high" }
+        );
+        assert_eq!(captured["tools"], tools);
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 struct CapturedRequest {

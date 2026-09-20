@@ -2574,9 +2574,9 @@ fn show_ai_gw_channel_dialog(
         &service_panel,
         &service_sizer,
         text.ai_gw_service_deepseek(),
-        Some(ProviderLogoKind::DeepSeek),
+        Some(ProviderLogoKind::OpenAi),
         false,
-        false,
+        true,
     );
     let radio_deepseek_responses = ai_gw_service_option(
         &service_panel,
@@ -2706,6 +2706,18 @@ fn show_ai_gw_channel_dialog(
         text.provider_type_openai_responses(),
     );
     type_input.set_editable(false);
+    let chat_reasoning_spacer = StaticText::builder(&form_panel).with_label("").build();
+    grid.add(&chat_reasoning_spacer, 0, SizerFlag::Right, 0);
+    let chat_disable_reasoning = CheckBox::builder(&form_panel)
+        .with_label(text.ai_gw_chat_disable_reasoning())
+        .with_value(initial.is_some_and(|provider| provider.chat_disable_reasoning))
+        .build();
+    chat_disable_reasoning.set_tooltip(text.ai_gw_chat_disable_reasoning_help());
+    chat_disable_reasoning.set_foreground_color(theme::theme().ink_primary);
+    chat_disable_reasoning.enable(
+        initial.is_some_and(|provider| provider.provider_type == ProviderType::ChatCompletions),
+    );
+    grid.add(&chat_disable_reasoning, 0, SizerFlag::Expand, 0);
     let name_input = text_field_row(&form_panel, &grid, text.ai_gw_provider_name(), "");
     let base_url_input = text_field_row(&form_panel, &grid, text.ai_gw_col_base_url(), "");
     let models_url_input = text_field_row(&form_panel, &grid, text.ai_gw_models_url(), "");
@@ -2897,6 +2909,7 @@ fn show_ai_gw_channel_dialog(
         let current_ai_gw_provider_template = current_ai_gw_provider_template.clone();
         radio_openai.on_selected(move |_| {
             if radio_openai.get_value() && !*service_template_applying.borrow() {
+                chat_disable_reasoning.enable(false);
                 let provider = default_ai_gw_service_provider(ProviderType::OpenAiResponses);
                 apply_ai_gw_service_template(
                     text,
@@ -2937,6 +2950,7 @@ fn show_ai_gw_channel_dialog(
         let current_ai_gw_provider_template = current_ai_gw_provider_template.clone();
         radio_grok.on_selected(move |_| {
             if radio_grok.get_value() && !*service_template_applying.borrow() {
+                chat_disable_reasoning.enable(false);
                 let provider = default_ai_gw_service_provider(ProviderType::GrokResponses);
                 apply_ai_gw_service_template(
                     text,
@@ -2977,6 +2991,7 @@ fn show_ai_gw_channel_dialog(
         let current_ai_gw_provider_template = current_ai_gw_provider_template.clone();
         radio_deepseek.on_selected(move |_| {
             if radio_deepseek.get_value() && !*service_template_applying.borrow() {
+                chat_disable_reasoning.enable(true);
                 let provider = default_ai_gw_service_provider(ProviderType::ChatCompletions);
                 apply_ai_gw_service_template(
                     text,
@@ -3017,6 +3032,7 @@ fn show_ai_gw_channel_dialog(
         let current_ai_gw_provider_template = current_ai_gw_provider_template.clone();
         radio_deepseek_responses.on_selected(move |_| {
             if radio_deepseek_responses.get_value() && !*service_template_applying.borrow() {
+                chat_disable_reasoning.enable(false);
                 let provider = default_ai_gw_service_provider(ProviderType::DeepSeekResponses);
                 apply_ai_gw_service_template(
                     text,
@@ -3057,6 +3073,7 @@ fn show_ai_gw_channel_dialog(
         let current_ai_gw_provider_template = current_ai_gw_provider_template.clone();
         radio_anthropic.on_selected(move |_| {
             if radio_anthropic.get_value() && !*service_template_applying.borrow() {
+                chat_disable_reasoning.enable(false);
                 let provider = default_ai_gw_service_provider(ProviderType::AnthropicMessages);
                 apply_ai_gw_service_template(
                     text,
@@ -3097,6 +3114,7 @@ fn show_ai_gw_channel_dialog(
         let current_ai_gw_provider_template = current_ai_gw_provider_template.clone();
         radio_glm.on_selected(move |_| {
             if radio_glm.get_value() && !*service_template_applying.borrow() {
+                chat_disable_reasoning.enable(false);
                 let provider = default_ai_gw_glm_service_provider();
                 apply_ai_gw_service_template(
                     text,
@@ -3343,9 +3361,11 @@ fn show_ai_gw_channel_dialog(
                         &radio_glm,
                     )
                 });
-            let compatibility = initial
-                .and_then(|provider| provider.compatibility.clone())
-                .or_else(|| selected_ai_gw_dialog_compatibility(&radio_anthropic, &radio_glm));
+            let compatibility = match initial {
+                Some(provider) => provider.compatibility.clone(),
+                None if radio_deepseek.get_value() => Some("openai_chat".to_string()),
+                None => selected_ai_gw_dialog_compatibility(&radio_anthropic, &radio_glm),
+            };
             let is_zai = provider_type == ProviderType::AnthropicMessages
                 && matches!(
                     compatibility.as_deref(),
@@ -3373,6 +3393,8 @@ fn show_ai_gw_channel_dialog(
             Some(ProviderConfig {
                 name,
                 enabled: initial.map(|provider| provider.enabled).unwrap_or(true),
+                chat_disable_reasoning: provider_type == ProviderType::ChatCompletions
+                    && chat_disable_reasoning.get_value(),
                 provider_type,
                 compatibility,
                 zai_access_mode,
@@ -3663,9 +3685,10 @@ fn default_ai_gw_service_provider(provider_type: ProviderType) -> ProviderConfig
             ..Default::default()
         },
         ProviderType::ChatCompletions => ProviderConfig {
-            name: "chat-compatible".to_string(),
+            name: "openai-chat".to_string(),
             provider_type: ProviderType::ChatCompletions,
-            base_url: String::new(),
+            compatibility: Some("openai_chat".to_string()),
+            base_url: "https://api.openai.com/v1".to_string(),
             ..Default::default()
         },
         ProviderType::AnthropicMessages => ProviderConfig {

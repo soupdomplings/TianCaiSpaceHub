@@ -3037,7 +3037,7 @@ impl GuiText {
     }
 
     pub(super) fn ai_gw_service_openai(self) -> &'static str {
-        "OpenAI"
+        "OpenAI Responses"
     }
 
     pub(super) fn ai_gw_service_grok(self) -> &'static str {
@@ -3045,9 +3045,24 @@ impl GuiText {
     }
 
     pub(super) fn ai_gw_service_deepseek(self) -> &'static str {
+        "OpenAI Chat Completions"
+    }
+
+    pub(super) fn ai_gw_chat_disable_reasoning(self) -> &'static str {
         match self.locale {
-            GuiLocale::ZhCn => "Chat Completions（其他厂商）",
-            GuiLocale::EnUs => "Chat Completions (other providers)",
+            GuiLocale::ZhCn => "Chat Completions：关闭推理",
+            GuiLocale::EnUs => "Chat Completions: disable reasoning",
+        }
+    }
+
+    pub(super) fn ai_gw_chat_disable_reasoning_help(self) -> &'static str {
+        match self.locale {
+            GuiLocale::ZhCn => {
+                "仅对当前 Chat Completions 渠道生效：强制 reasoning_effort=none，保留工具调用。默认不勾选。"
+            }
+            GuiLocale::EnUs => {
+                "Only affects this Chat Completions channel: force reasoning_effort=none while keeping tools. Off by default."
+            }
         }
     }
 

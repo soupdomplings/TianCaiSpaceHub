@@ -212,6 +212,9 @@ fn provider_logo_kind(row: &AiGwProviderRow) -> ProviderLogoKind {
         ProviderType::OpenAiResponses => ProviderLogoKind::OpenAi,
         ProviderType::DeepSeekResponses => ProviderLogoKind::DeepSeek,
         ProviderType::GrokResponses => ProviderLogoKind::Grok,
+        ProviderType::ChatCompletions if row.compatibility.as_deref() == Some("openai_chat") => {
+            ProviderLogoKind::OpenAi
+        }
         ProviderType::ChatCompletions => ProviderLogoKind::DeepSeek,
         ProviderType::AnthropicMessages => match row.compatibility.as_deref() {
             Some("glm_anthropic" | "zhipu_anthropic") => ProviderLogoKind::Zhipu,

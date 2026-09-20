@@ -1,4 +1,4 @@
-//! DeepSeek Chat Completions 出站 provider。
+//! OpenAI-compatible / legacy DeepSeek Chat Completions 出站 provider。
 //! 参考 AxonHub `deepseek/outbound.go`。
 
 use axum::{
@@ -35,8 +35,22 @@ pub async fn handle(
     log_context: Option<RequestLogContext>,
 ) -> Result<Response<Body>, GatewayError> {
     // 1. Responses → Chat Completions 请求转换
-    let (chat_body, tool_name_map) = build_chat_request_with_tool_names(request, true)
+    // Existing channels retain DeepSeek compatibility; new OpenAI Chat channels
+    // opt into standard reasoning_effort and completion-token parameters.
+    let openai_chat = provider.compatibility.as_deref() == Some("openai_chat");
+    let (mut chat_body, tool_name_map) = build_chat_request_with_tool_names(request, !openai_chat)
         .map_err(|e| GatewayError::bad_request(format!("transform error: {e}")))?;
+    if openai_chat {
+        if let Some(max_tokens) = chat_body
+            .as_object_mut()
+            .and_then(|body| body.remove("max_tokens"))
+        {
+            chat_body["max_completion_tokens"] = max_tokens;
+        }
+        chat_body["prompt_cache_key"] = serde_json::json!(ctx.prompt_cache_key);
+    }
+
+    super::apply_chat_reasoning_override(&mut chat_body, provider);
 
     let url = format!(
         "{}/v1/chat/completions",

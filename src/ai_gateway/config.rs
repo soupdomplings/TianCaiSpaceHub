@@ -201,6 +201,8 @@ pub struct ProviderConfig {
     /// provider 兼容 profile。Anthropic Messages 兼容厂商优先使用该字段表达差异。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compatibility: Option<String>,
+    /// Force reasoning_effort=none for this Chat Completions channel only.
+    pub chat_disable_reasoning: bool,
     /// 智谱 Anthropic 渠道的服务类型；其它 provider 忽略该字段。
     #[serde(default, skip_serializing_if = "ZaiAccessMode::is_api")]
     pub zai_access_mode: ZaiAccessMode,
@@ -234,6 +236,7 @@ impl Default for ProviderConfig {
             enabled: true,
             provider_type: ProviderType::OpenAiResponses,
             compatibility: None,
+            chat_disable_reasoning: false,
             zai_access_mode: ZaiAccessMode::default(),
             base_url: String::new(),
             models_url: None,

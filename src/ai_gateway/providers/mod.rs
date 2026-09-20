@@ -16,6 +16,22 @@ use crate::ai_gateway::{config::ProviderConfig, error::GatewayError};
 
 const UPSTREAM_MAX_RETRIES: usize = 2;
 
+pub(super) fn apply_chat_reasoning_override(
+    body: &mut serde_json::Value,
+    provider: &ProviderConfig,
+) {
+    if provider.provider_type != crate::ai_gateway::config::ProviderType::ChatCompletions
+        || !provider.chat_disable_reasoning
+    {
+        return;
+    }
+    if let Some(object) = body.as_object_mut() {
+        object.remove("thinking");
+        object.remove("reasoning");
+        object.insert("reasoning_effort".to_string(), serde_json::json!("none"));
+    }
+}
+
 pub(super) fn apply_total_request_timeout(
     builder: reqwest::RequestBuilder,
     timeout_secs: u64,
