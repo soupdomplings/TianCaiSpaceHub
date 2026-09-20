@@ -584,6 +584,7 @@ pub async fn handle_responses(
     match provider.provider_type {
         ProviderType::OpenAiResponses
         | ProviderType::DeepSeekResponses
+        | ProviderType::KimiResponses
         | ProviderType::GrokResponses => {
             let result = openai_responses::passthrough_with_tool_names(
                 &http_client,
@@ -841,12 +842,16 @@ pub async fn handle_workbuddy_chat_completions(
             )
             .await
         }
-        ProviderType::DeepSeekResponses | ProviderType::GrokResponses => {
+        ProviderType::DeepSeekResponses
+        | ProviderType::KimiResponses
+        | ProviderType::GrokResponses => {
             let mut raw_responses = match workbuddy::chat_request_to_responses(&raw_chat) {
                 Ok(value) => value,
                 Err(error) => return GatewayError::bad_request(error).into_response(),
             };
-            raw_responses["prompt_cache_key"] = json!(cache_key);
+            if provider.provider_type != ProviderType::KimiResponses {
+                raw_responses["prompt_cache_key"] = json!(cache_key);
+            }
             openai_responses::passthrough_with_tool_names(
                 &client,
                 &ctx,
@@ -1520,6 +1525,7 @@ fn provider_type_key(provider_type: &ProviderType) -> &'static str {
     match provider_type {
         ProviderType::OpenAiResponses => "responses",
         ProviderType::DeepSeekResponses => "deepseek_responses",
+        ProviderType::KimiResponses => "kimi_responses",
         ProviderType::GrokResponses => "grok_responses",
         ProviderType::ChatCompletions => "chat_completions",
         ProviderType::AnthropicMessages => "anthropic_messages",

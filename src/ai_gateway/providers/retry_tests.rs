@@ -13,6 +13,62 @@ use serde_json::{Value, json};
 use super::{anthropic_messages, execute_provider_request, openai_responses};
 
 #[tokio::test]
+async fn workbuddy_kimi_handler_preserves_mapping_reasoning_and_http_retries() {
+    for stream in [false, true] {
+        let upstream =
+            TestUpstream::start(vec![StatusCode::SERVICE_UNAVAILABLE, StatusCode::OK]).await;
+        let mut provider = upstream.provider("workbuddy", ProviderType::KimiResponses);
+        provider.models = vec!["k3".into()];
+        provider.model_aliases.insert("kimi-k3".into(), "k3".into());
+        // An old Chat-specific setting must not affect the Kimi channel.
+        provider.chat_disable_reasoning = true;
+        let directory = tempfile::tempdir().unwrap();
+        let mut config = crate::config::AppConfig::default();
+        config.state_path = directory.path().join("state.json");
+        config.ai_gateway.enabled = true;
+        config.ai_gateway.providers = vec![provider];
+        let state = crate::app_state::AppState::new(
+            directory.path().join("config.toml"),
+            config,
+            None,
+            None,
+        );
+        let request = json!({
+            "model":"kimi-k3", "stream":stream, "reasoning_effort":"high",
+            "messages":[{"role":"user","content":"hello"}],
+            "tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}}],
+        });
+        let response = crate::ai_gateway::handler::handle_workbuddy_chat_completions(
+            State(state),
+            HeaderMap::new(),
+            Bytes::from(serde_json::to_vec(&request).unwrap()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let output = String::from_utf8(bytes.to_vec()).unwrap();
+        assert!(output.contains("retry-recovered"));
+        if stream {
+            assert!(output.contains("[DONE]"));
+        } else {
+            let output: Value = serde_json::from_str(&output).unwrap();
+            assert_eq!(output["object"], "chat.completion");
+            assert_eq!(output["model"], "kimi-k3");
+        }
+        let captured = upstream.requests();
+        assert_eq!(captured.len(), 2);
+        assert_eq!(captured[0].body, captured[1].body);
+        assert_eq!(captured[0].uri.path(), "/v1/responses");
+        let body: Value = serde_json::from_slice(&captured[0].body).unwrap();
+        assert_eq!(body["model"], "k3");
+        assert_eq!(body["reasoning"]["effort"], "high");
+        assert_eq!(body["tools"][0]["name"], "lookup");
+        assert!(body.get("prompt_cache_key").is_none());
+        assert!(body.get("prompt_cache_retention").is_none());
+    }
+}
+
+#[tokio::test]
 async fn openai_chat_converts_responses_and_uses_standard_parameters() {
     for (stream, disable_reasoning) in [(false, false), (true, false), (false, true), (true, true)]
     {
@@ -102,6 +158,7 @@ fn chat_reasoning_setting_defaults_off_and_is_channel_scoped() {
         ProviderType::OpenAiResponses,
         ProviderType::AnthropicMessages,
         ProviderType::DeepSeekResponses,
+        ProviderType::KimiResponses,
         ProviderType::GrokResponses,
     ] {
         let provider = ProviderConfig {

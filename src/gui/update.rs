@@ -897,8 +897,8 @@ mod update_tests {
             .find("rm -rf \\\n            target/aarch64-apple-darwin")
             .expect("universal build cleanup");
         let create_dmg = workflow
-            .find("hdiutil create -volname")
-            .expect("DMG creation");
+            .find("\n          hdiutil create ")
+            .expect("DMG creation command");
         assert!(cleanup < create_dmg);
     }
 

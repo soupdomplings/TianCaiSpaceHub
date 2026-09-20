@@ -211,6 +211,7 @@ fn provider_logo_kind(row: &AiGwProviderRow) -> ProviderLogoKind {
     match row.provider_type {
         ProviderType::OpenAiResponses => ProviderLogoKind::OpenAi,
         ProviderType::DeepSeekResponses => ProviderLogoKind::DeepSeek,
+        ProviderType::KimiResponses => ProviderLogoKind::Kimi,
         ProviderType::GrokResponses => ProviderLogoKind::Grok,
         ProviderType::ChatCompletions if row.compatibility.as_deref() == Some("openai_chat") => {
             ProviderLogoKind::OpenAi
@@ -230,6 +231,7 @@ pub(super) fn provider_protocol_display(
     match provider_type {
         ProviderType::OpenAiResponses => "OpenAI Responses".to_string(),
         ProviderType::DeepSeekResponses => "DeepSeek Responses".to_string(),
+        ProviderType::KimiResponses => "Kimi Responses".to_string(),
         ProviderType::GrokResponses => "Grok Responses".to_string(),
         ProviderType::ChatCompletions => "Chat Completions".to_string(),
         ProviderType::AnthropicMessages => match compatibility {

@@ -1,3 +1,46 @@
+TianCaiSpace Hub v0.4.28-1
+
+本地整合官方 CodexHub v0.4.28，保留现有二开功能。
+
+- 新增 Kimi K3 原生 Responses 渠道、模型目录、模型映射和搜索兼容。
+- 保留天才空间品牌、WorkBuddy 接入、缓存兼容及 HTTP 502 / 503 自动重试。
+- 合入本地 OpenAI Chat Completions 渠道和按渠道关闭推理选项，保留旧渠道的 DeepSeek 兼容行为。
+- 切换至 Kimi 渠道时禁用仅适用于 Chat Completions 的关闭推理选项。
+
+本地验证：GUI 完整测试 779 passed、0 failed、2 ignored；新增 WorkBuddy → Kimi 模拟 HTTP 上游回归测试通过；Windows release 桌面版编译、格式和差异检查通过。未进行真实上游密钥联网验收。
+
+以下保留历史二开版本及上游发布说明；其中验证结果属于对应原版本。
+
+---
+
+CodexHub v0.4.28
+
+本次版本新增 Kimi K3 原生 Responses 接入。
+
+## Kimi 渠道
+
+- 新增单一 Kimi 创建入口和品牌图标。用户自行填写 Base URL 和 API Key，不额外区分按量 API、Coding Plan 或第三方服务。
+- 支持拉取上游模型和手动模型映射；上游使用 `k3` 时，可将 Codex 中的 `kimi-k3` 映射到 `k3`。
+- 原生转发 Responses 工具声明、图片、推理状态及 JSON/SSE 响应，保留 `apply_patch`、namespace 和动态工具字段。
+- 支持 Kimi 服务端 `web_search`，仅移除其不支持的 `search_context_size` 参数，保留搜索结果及引用。
+- 不额外注入 OpenAI 缓存控制参数，缓存命中由上游管理。
+
+## K3 模型配置
+
+- 新增 `kimi-k3`，默认及最大上下文均为 372,000，支持文本和图片输入。
+- 思考等级为 `low`、`high`、`max`，默认 `high`；基础指令复用内置 DeepSeek 模型的完整内容。
+- 不提供 256K K3 模型选项；用户需选择满足 372K 上下文要求的上游模型。
+- K3 使用普通 Responses，不启用 Responses Lite 或客户端 tool_search。
+
+## 验证范围
+
+- GUI 功能完整测试通过：734 passed，2 ignored；格式和差异检查通过。
+- 新增配置读写、模型目录、模型拉取过滤、搜索参数兼容和原生 JSON/SSE 转发回归测试。
+- 已核查本地 K3 成功会话的工具、搜索和缓存用量日志；不同服务的 Key、模型权限和兼容能力仍以各自上游为准。
+- 修正 macOS 发布检查误匹配脚本注释的问题，不改变打包流程。
+
+---
+
 TianCaiSpace Hub v0.4.27-2
 
 本次修复 WorkBuddy 遇到上游 HTTP 502 / 503 时直接报错、不自动重试的问题。
