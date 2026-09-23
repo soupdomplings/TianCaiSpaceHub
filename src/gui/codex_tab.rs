@@ -1,5 +1,5 @@
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
     rc::Rc,
     sync::{
         Arc,
@@ -41,6 +41,9 @@ pub(super) struct CodexTab {
     enhanced_launch_button: Button,
     save_models_button: Button,
     sync_models_button: Button,
+    fetch_models_button: Button,
+    model_provider: Choice,
+    model_provider_names: Rc<RefCell<Vec<String>>>,
     custom_models_input: TextCtrl,
     model_checks: CodexModelChecks,
     model_slugs: CodexModelSlugs,
@@ -191,6 +194,15 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> CodexTab {
         SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Top,
         6,
     );
+    let model_provider = Choice::builder(&models_box).build();
+    model_provider.append(text.codex_model_no_provider());
+    model_provider.set_selection(0);
+    models_section.add(
+        &model_provider,
+        0,
+        SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Top,
+        6,
+    );
     let custom_models_input = TextCtrl::builder(&models_box)
         .with_value("")
         .with_style(TextCtrlStyle::MultiLine | TextCtrlStyle::Default)
@@ -253,11 +265,16 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> CodexTab {
     let sync_models_button = Button::builder(&models_box)
         .with_label(text.sync_codex_models())
         .build();
+    let fetch_models_button = Button::builder(&models_box)
+        .with_label(text.ai_gw_fetch_models())
+        .build();
+    fetch_models_button.enable(false);
     save_models_button.enable(false);
     sync_models_button.enable(false);
     let models_actions = BoxSizer::builder(Orientation::Horizontal).build();
     models_actions.add_stretch_spacer(1);
     models_actions.add(&sync_models_button, 0, SizerFlag::Right, 8);
+    models_actions.add(&fetch_models_button, 0, SizerFlag::Right, 8);
     models_actions.add(&save_models_button, 0, SizerFlag::Right, 0);
     models_section.add_sizer(
         &models_actions,
@@ -286,6 +303,9 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> CodexTab {
         enhanced_launch_button,
         save_models_button,
         sync_models_button,
+        fetch_models_button,
+        model_provider,
+        model_provider_names: Rc::new(RefCell::new(Vec::new())),
         custom_models_input,
         model_checks,
         model_slugs,
@@ -309,6 +329,7 @@ pub(super) fn bind_actions(
     bind_enhanced_launch_action(api, frame, tab, refresh, gui_tx, in_flight);
     bind_save_models_action(api, frame, tab, refresh, gui_tx, in_flight);
     bind_sync_models_action(api, frame, tab, refresh, gui_tx, in_flight);
+    bind_fetch_models_action(api, frame, tab, refresh, gui_tx, in_flight);
     bind_clear_action(api, frame, tab, refresh, gui_tx, in_flight);
     bind_session_history_action(api, frame, tab, refresh);
 }
@@ -317,6 +338,8 @@ pub(super) fn set_actions_enabled(tab: &CodexTab, enabled: bool) {
     tab.service_enabled.set(enabled);
     tab.save_models_button.enable(enabled);
     tab.sync_models_button.enable(enabled);
+    tab.fetch_models_button.enable(enabled);
+    tab.model_provider.enable(enabled);
     tab.custom_models_input.enable(enabled);
     for checkbox in tab.model_checks.iter() {
         checkbox.enable(enabled);
@@ -342,10 +365,30 @@ pub(super) fn refresh_remote_ready(tab: &CodexTab, remote_ready: bool) {
 }
 
 pub(super) fn initialize_visible_model_checks(tab: &CodexTab, gateway_config: &AiGatewayConfig) {
+    let names: Vec<String> = gateway_config
+        .providers
+        .iter()
+        .filter(|provider| provider.enabled && !provider.is_workbuddy())
+        .map(|provider| provider.name.clone())
+        .collect();
+    if *tab.model_provider_names.borrow() != names {
+        let previous = selected_model_provider(tab);
+        tab.model_provider.clear();
+        tab.model_provider
+            .append(tab.text.codex_model_no_provider());
+        for name in &names {
+            tab.model_provider.append(name);
+        }
+        let index = previous
+            .and_then(|name| names.iter().position(|item| item == &name))
+            .map(|index| index + 1)
+            .unwrap_or(0);
+        tab.model_provider.set_selection(index as u32);
+        *tab.model_provider_names.borrow_mut() = names;
+    }
     if tab.models_initialized.get() {
         return;
     }
-    let use_defaults = gateway_config.codex_visible_models.is_empty();
     let selected = gateway_config
         .codex_visible_models
         .iter()
@@ -353,7 +396,7 @@ pub(super) fn initialize_visible_model_checks(tab: &CodexTab, gateway_config: &A
         .collect::<std::collections::HashSet<_>>();
     for (index, slug) in tab.model_slugs.iter().enumerate() {
         if let Some(checkbox) = tab.model_checks.get(index) {
-            checkbox.set_value(use_defaults || selected.contains(slug.as_str()));
+            checkbox.set_value(selected.contains(slug.as_str()));
         }
     }
     let built_in = visible_catalog_model_options()
@@ -361,15 +404,13 @@ pub(super) fn initialize_visible_model_checks(tab: &CodexTab, gateway_config: &A
         .map(|model| model.slug)
         .collect::<std::collections::HashSet<_>>();
     let mut dynamic = std::collections::BTreeSet::new();
-    if !use_defaults {
-        dynamic.extend(
-            gateway_config
-                .codex_visible_models
-                .iter()
-                .filter(|model| !built_in.contains(model.as_str()))
-                .cloned(),
-        );
-    }
+    dynamic.extend(
+        gateway_config
+            .codex_visible_models
+            .iter()
+            .filter(|model| !built_in.contains(model.as_str()))
+            .cloned(),
+    );
     tab.custom_models_input
         .change_value(&dynamic.into_iter().collect::<Vec<_>>().join("\n"));
     tab.models_initialized.set(true);
@@ -387,12 +428,15 @@ pub(super) fn apply_pending_action(
     tab.clear_button.set_label(text.clear_codex_access());
     tab.save_models_button.set_label(text.save_codex_models());
     tab.sync_models_button.set_label(text.sync_codex_models());
+    tab.fetch_models_button.set_label(text.ai_gw_fetch_models());
     tab.enhanced_launch_button
         .set_label(text.codex_enhanced_launch());
     let service_enabled = tab.service_enabled.get();
     refresh_config_buttons(tab, service_enabled);
     tab.save_models_button.enable(service_enabled);
     tab.sync_models_button.enable(service_enabled);
+    tab.fetch_models_button.enable(service_enabled);
+    tab.model_provider.enable(service_enabled);
 
     match result {
         CodexActionResult::Inject(Ok(_)) => {
@@ -422,7 +466,21 @@ pub(super) fn apply_pending_action(
             force_dashboard_refresh(api, refresh);
         }
         CodexActionResult::SyncModels(Ok(models)) => {
-            tab.custom_models_input.change_value(&models.join("\n"));
+            let mut custom = Vec::new();
+            for model in &models {
+                if let Some(index) = tab
+                    .model_slugs
+                    .iter()
+                    .position(|slug| slug.eq_ignore_ascii_case(model))
+                {
+                    tab.model_checks[index].set_value(true);
+                } else {
+                    custom.push(model.clone());
+                }
+            }
+            let existing = tab.custom_models_input.get_value();
+            let merged = merge_model_ids(&existing, &custom);
+            tab.custom_models_input.change_value(&merged.join("\n"));
             show_info(frame, &text.codex_models_synced(models.len()));
         }
         CodexActionResult::SyncModels(Err(err)) => {
@@ -437,6 +495,24 @@ pub(super) fn apply_pending_action(
             force_dashboard_refresh(api, refresh);
         }
     }
+}
+
+fn merge_model_ids(existing: &str, incoming: &[String]) -> Vec<String> {
+    let mut models = Vec::new();
+    for model in existing
+        .split([',', '\n', '\r'])
+        .chain(incoming.iter().map(String::as_str))
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+    {
+        if !models
+            .iter()
+            .any(|known: &String| known.eq_ignore_ascii_case(model))
+        {
+            models.push(model.to_string());
+        }
+    }
+    models
 }
 
 fn refresh_config_buttons(tab: &CodexTab, service_enabled: bool) {
@@ -484,7 +560,12 @@ fn bind_sync_models_action(
         thread::spawn(move || {
             let outcome = thread_api.get_app_config().map(|config| {
                 let mut models = std::collections::BTreeSet::new();
-                for provider in config.ai_gateway.providers {
+                for provider in config
+                    .ai_gateway
+                    .providers
+                    .into_iter()
+                    .filter(|provider| provider.enabled && !provider.is_workbuddy())
+                {
                     models.extend(provider.models);
                     models.extend(provider.model_aliases.into_keys());
                 }
@@ -755,11 +836,14 @@ fn bind_save_models_action(
             .set_label(tab.text.saving_codex_models());
         tab.save_models_button.enable(false);
         let selected_models = selected_visible_models(&tab);
+        let provider_name = selected_model_provider(&tab);
+        let manual_models = merge_model_ids(&tab.custom_models_input.get_value(), &[]);
         let thread_api = api.clone();
         let gui_tx = gui_tx.clone();
         let in_flight = in_flight.clone();
         thread::spawn(move || {
-            let outcome = save_visible_models(&thread_api, selected_models);
+            let outcome =
+                save_visible_models(&thread_api, selected_models, manual_models, provider_name);
             in_flight.store(false, Ordering::SeqCst);
             let _ = gui_tx.send(super::GuiMessage::CodexAction(
                 CodexActionResult::SaveModels(outcome),
@@ -859,10 +943,192 @@ fn selected_visible_models(tab: &CodexTab) -> Vec<String> {
     selected
 }
 
-fn save_visible_models(api: &ApiClient, models: Vec<String>) -> Result<(), String> {
+fn save_visible_models(
+    api: &ApiClient,
+    models: Vec<String>,
+    manual_models: Vec<String>,
+    provider_name: Option<String>,
+) -> Result<(), String> {
     let mut config = api.get_app_config()?;
+    bind_unrouted_models(
+        &mut config.ai_gateway,
+        &manual_models,
+        provider_name.as_deref(),
+    )?;
     config.ai_gateway.codex_visible_models = models;
     api.save_app_config(&config)?;
     let _ = api.refresh_codex_app_models();
     Ok(())
+}
+
+fn selected_model_provider(tab: &CodexTab) -> Option<String> {
+    let index = tab.model_provider.get_selection()? as usize;
+    index
+        .checked_sub(1)
+        .and_then(|index| tab.model_provider_names.borrow().get(index).cloned())
+}
+
+fn bind_unrouted_models(
+    config: &mut AiGatewayConfig,
+    models: &[String],
+    provider_name: Option<&str>,
+) -> Result<(), String> {
+    let missing: Vec<String> = models
+        .iter()
+        .filter(|model| {
+            !config.providers.iter().any(|provider| {
+                provider.enabled && !provider.is_workbuddy() && provider.matches_model(model)
+            })
+        })
+        .cloned()
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    let Some(provider) = config.providers.iter_mut().find(|provider| {
+        provider.enabled
+            && !provider.is_workbuddy()
+            && Some(provider.name.as_str()) == provider_name
+    }) else {
+        return Err(format!(
+            "请选择一个已启用的渠道，为以下模型建立路由 / Select a provider for: {}",
+            missing.join(", ")
+        ));
+    };
+    provider.models.extend(missing);
+    Ok(())
+}
+
+fn bind_fetch_models_action(
+    api: &ApiClient,
+    frame: &Frame,
+    tab: &CodexTab,
+    refresh: &DashboardRefresh,
+    gui_tx: &UnboundedSender<super::GuiMessage>,
+    in_flight: &Arc<AtomicBool>,
+) {
+    let api = api.clone();
+    let frame = *frame;
+    let tab = tab.clone();
+    let refresh = refresh.clone();
+    let gui_tx = gui_tx.clone();
+    let in_flight = in_flight.clone();
+    let button = tab.fetch_models_button;
+    button.on_click(move |_| {
+        let Some(provider_name) = selected_model_provider(&tab) else {
+            show_error(&frame, tab.text.codex_model_choose_provider());
+            return;
+        };
+        if in_flight.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        if !ensure_service_ready_for_action(&api, &frame, &refresh) {
+            in_flight.store(false, Ordering::SeqCst);
+            return;
+        }
+        tab.fetch_models_button.enable(false);
+        tab.model_provider.enable(false);
+        tab.fetch_models_button
+            .set_label(tab.text.ai_gw_fetching_models());
+        let api = api.clone();
+        let gui_tx = gui_tx.clone();
+        let in_flight = in_flight.clone();
+        thread::spawn(move || {
+            let outcome = (|| {
+                let config = api.get_app_config()?;
+                let provider = config
+                    .ai_gateway
+                    .providers
+                    .iter()
+                    .find(|provider| {
+                        provider.enabled
+                            && !provider.is_workbuddy()
+                            && provider.name == provider_name
+                    })
+                    .ok_or_else(|| "Selected provider is unavailable".to_string())?;
+                let (models, _) = super::fetch_remote_models(
+                    &provider.base_url,
+                    provider.models_url.as_deref(),
+                    &super::known_models_urls_for_provider(provider),
+                    &provider.api_key,
+                    super::GUI_MODEL_LIST_FETCH_TIMEOUT_SECS,
+                )?;
+                Ok(super::filter_fetched_models_for_provider(
+                    &provider.provider_type,
+                    models,
+                ))
+            })();
+            in_flight.store(false, Ordering::SeqCst);
+            let _ = gui_tx.send(super::GuiMessage::CodexAction(
+                CodexActionResult::SyncModels(outcome),
+            ));
+            wxdragon::wake_up_idle();
+        });
+    });
+}
+
+#[cfg(test)]
+mod dynamic_model_tests {
+    use super::*;
+    use crate::ai_gateway::config::ProviderConfig;
+
+    #[test]
+    fn sync_preserves_manual_entries_and_deduplicates() {
+        assert_eq!(
+            merge_model_ids(
+                " custom-one\nGPT-new,custom-two ",
+                &["gpt-new".into(), "vendor/new".into()]
+            ),
+            ["custom-one", "GPT-new", "custom-two", "vendor/new"]
+        );
+    }
+
+    #[test]
+    fn manual_models_gain_routes_without_changing_existing_aliases() {
+        let mut config = AiGatewayConfig::default();
+        config.providers.push(ProviderConfig {
+            name: "selected".into(),
+            ..Default::default()
+        });
+        config.providers.push(ProviderConfig {
+            name: "other".into(),
+            model_aliases: [("existing".into(), "actual-upstream".into())].into(),
+            ..Default::default()
+        });
+        bind_unrouted_models(
+            &mut config,
+            &["existing".into(), "new-model".into()],
+            Some("selected"),
+        )
+        .unwrap();
+        assert_eq!(config.providers[0].models, ["new-model"]);
+        assert_eq!(
+            config.providers[1].resolve_upstream_model("existing"),
+            Some("actual-upstream")
+        );
+        assert_eq!(
+            config.select_provider("new-model").unwrap().name,
+            "selected"
+        );
+        bind_unrouted_models(&mut config, &["NEW-MODEL".into()], Some("selected")).unwrap();
+        assert_eq!(config.providers[0].models, ["new-model"]);
+    }
+
+    #[test]
+    fn unrouted_model_requires_enabled_non_workbuddy_provider() {
+        let mut config = AiGatewayConfig::default();
+        config.providers.push(ProviderConfig {
+            name: "workbuddy".into(),
+            ..Default::default()
+        });
+        config.providers.push(ProviderConfig {
+            name: "disabled".into(),
+            enabled: false,
+            ..Default::default()
+        });
+        for name in [None, Some("workbuddy"), Some("disabled")] {
+            assert!(bind_unrouted_models(&mut config, &["new-model".into()], name).is_err());
+        }
+        assert!(config.providers.iter().all(|p| p.models.is_empty()));
+    }
 }

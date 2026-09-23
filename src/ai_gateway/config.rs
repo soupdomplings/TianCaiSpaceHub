@@ -64,8 +64,6 @@ impl Default for AiGatewayConfig {
 pub struct CodexModelProfile {
     pub id: String,
     pub display_name: String,
-    pub provider: Option<String>,
-    pub upstream_model: Option<String>,
     pub capability_profile: Option<String>,
     pub context_window: Option<u64>,
     pub max_context_window: Option<u64>,
@@ -78,8 +76,6 @@ impl Default for CodexModelProfile {
         Self {
             id: String::new(),
             display_name: String::new(),
-            provider: None,
-            upstream_model: None,
             capability_profile: None,
             context_window: None,
             max_context_window: None,

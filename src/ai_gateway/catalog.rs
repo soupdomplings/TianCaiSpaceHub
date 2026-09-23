@@ -94,7 +94,7 @@ fn build_configured_models_response(config: &AiGatewayConfig) -> Value {
     let mut priority = 0;
 
     for model_id in selected_codex_model_ids(config) {
-        if !emitted.insert(model_id.clone()) {
+        if !emitted.insert(model_id.to_ascii_lowercase()) {
             continue;
         }
 
@@ -102,7 +102,9 @@ fn build_configured_models_response(config: &AiGatewayConfig) -> Value {
         let Some(mut model) = model else {
             continue;
         };
-        normalize_deepseek_model(&mut model);
+        if matches!(model_id.as_str(), "deepseek-v4-pro" | "deepseek-v4-flash") {
+            normalize_deepseek_model(&mut model);
+        }
         if let Some(object) = model.as_object_mut() {
             object.insert("priority".to_string(), json!(priority));
         }
@@ -128,7 +130,11 @@ fn dynamic_model_ids(config: &AiGatewayConfig) -> Vec<String> {
             ids.push(id.to_string());
         }
     }
-    for provider in &config.providers {
+    for provider in config
+        .providers
+        .iter()
+        .filter(|p| p.enabled && !p.is_workbuddy())
+    {
         for id in provider.models.iter().chain(provider.model_aliases.keys()) {
             let id = id.trim();
             if !id.is_empty() && !ids.iter().any(|known| known == id) {
@@ -142,25 +148,29 @@ fn dynamic_model_ids(config: &AiGatewayConfig) -> Vec<String> {
 fn model_for_id(config: &AiGatewayConfig, id: &str) -> Option<Value> {
     if let Some(model) = catalog_models()
         .iter()
-        .find(|model| model_slug(model) == Some(id) && is_catalog_model_visible(model))
+        .find(|model| model_slug(model) == Some(id))
     {
-        return Some(model.clone());
+        return is_catalog_model_visible(model).then(|| model.clone());
     }
 
     let profile = config
         .codex_model_profiles
         .iter()
         .find(|profile| profile.id.eq_ignore_ascii_case(id));
-    let provider = config.providers.iter().find(|provider| {
-        provider
-            .models
-            .iter()
-            .any(|model| model.eq_ignore_ascii_case(id))
-            || provider
-                .model_aliases
-                .keys()
+    let provider = config
+        .providers
+        .iter()
+        .filter(|p| p.enabled && !p.is_workbuddy())
+        .find(|provider| {
+            provider
+                .models
+                .iter()
                 .any(|model| model.eq_ignore_ascii_case(id))
-    });
+                || provider
+                    .model_aliases
+                    .keys()
+                    .any(|model| model.eq_ignore_ascii_case(id))
+        });
     let template = profile
         .and_then(|profile| profile.capability_profile.as_deref())
         .and_then(template_slug)
@@ -191,11 +201,35 @@ fn model_for_id(config: &AiGatewayConfig, id: &str) -> Option<Value> {
     object.insert("supported_in_api".to_string(), Value::Bool(true));
     object.insert("visibility".to_string(), json!("list"));
     object.insert("comp_hash".to_string(), json!("codexhub-dynamic-v1"));
+    // A model ID does not prove capabilities. Do not advertise donor-only
+    // transports, code mode, speed tiers or multimodal support for a new model.
+    object.insert("prefer_websockets".to_string(), json!(false));
+    object.insert("use_responses_lite".to_string(), json!(false));
+    object.insert("tool_mode".to_string(), Value::Null);
+    object.insert("multi_agent_version".to_string(), Value::Null);
+    object.insert("service_tiers".to_string(), json!([]));
+    object.insert("additional_speed_tiers".to_string(), json!([]));
+    object.insert("default_service_tier".to_string(), Value::Null);
+    object.insert("context_window".to_string(), json!(32768));
+    object.insert("max_context_window".to_string(), json!(32768));
+    object.insert("input_modalities".to_string(), json!(["text"]));
+    object.insert("supports_image_detail_original".to_string(), json!(false));
+    object.insert("supports_search_tool".to_string(), json!(false));
+    object.insert("support_verbosity".to_string(), json!(false));
+    object.insert("supported_reasoning_levels".to_string(), json!([]));
+    object.insert("default_reasoning_level".to_string(), Value::Null);
+    object.insert("supports_reasoning_summaries".to_string(), json!(false));
+    object.insert(
+        "supports_reasoning_summary_parameter".to_string(),
+        json!(false),
+    );
     if let Some(profile) = profile {
-        if let Some(value) = profile.context_window {
+        if let Some(value) = profile.context_window.filter(|v| *v > 0) {
             object.insert("context_window".to_string(), json!(value));
+            object.insert("max_context_window".to_string(), json!(value));
         }
-        if let Some(value) = profile.max_context_window {
+        if let Some(value) = profile.max_context_window.filter(|v| *v > 0) {
+            let value = value.max(object["context_window"].as_u64().unwrap_or(32768));
             object.insert("max_context_window".to_string(), json!(value));
         }
         if let Some(value) = profile.supports_images {
@@ -217,6 +251,21 @@ fn model_for_id(config: &AiGatewayConfig, id: &str) -> Option<Value> {
                 "supports_reasoning_summaries".to_string(),
                 Value::Bool(value),
             );
+            object.insert(
+                "supports_reasoning_summary_parameter".to_string(),
+                json!(value),
+            );
+            if value {
+                object.insert(
+                    "supported_reasoning_levels".to_string(),
+                    json!([
+                        {"effort":"low", "description":"Low"},
+                        {"effort":"medium", "description":"Medium"},
+                        {"effort":"high", "description":"High"}
+                    ]),
+                );
+                object.insert("default_reasoning_level".to_string(), json!("medium"));
+            }
         }
     }
     Some(model)
@@ -341,8 +390,21 @@ mod tests {
             .map(|model| model["slug"].as_str().unwrap())
             .collect();
 
-        assert!(slugs.contains(&"custom-model"));
-        assert!(slugs.contains(&"codex-auto-review"));
+        assert_eq!(
+            slugs,
+            vec![
+                "gpt-5.6-sol",
+                "gpt-5.6-terra",
+                "gpt-5.6-luna",
+                "grok-4.6",
+                "gpt-5.5",
+                "deepseek-v4-pro",
+                "deepseek-v4-flash",
+                "GLM-5.3",
+                "GLM-5.3-Flash",
+                "custom-model"
+            ]
+        );
         assert_eq!(response["models"][3]["display_name"], "Grok-4.6");
         assert_eq!(
             response["models"][3]["comp_hash"],
@@ -412,11 +474,11 @@ mod tests {
     }
 
     #[test]
-    fn configured_models_response_exposes_hidden_model_when_selected() {
+    fn configured_models_response_skips_hidden_catalog_model() {
         let config = config(&["codex-auto-review"]);
 
         let response = configured_models_response(&config);
-        assert_eq!(response["models"][0]["slug"], "codex-auto-review");
+        assert!(response["models"].as_array().unwrap().is_empty());
     }
 
     #[test]
@@ -436,6 +498,41 @@ mod tests {
         assert_eq!(model["supported_in_api"], true);
         assert_eq!(model["visibility"], "list");
         assert_eq!(model["comp_hash"], "codexhub-dynamic-v1");
+        assert_eq!(model["use_responses_lite"], false);
+        assert_eq!(model["prefer_websockets"], false);
+        assert_eq!(model["context_window"], 32768);
+        assert_eq!(model["input_modalities"], json!(["text"]));
+        assert_eq!(model["supported_reasoning_levels"], json!([]));
+    }
+
+    #[test]
+    fn dynamic_profiles_roundtrip_and_refresh_etag() {
+        let mut config = config(&["new-model"]);
+        let before = configured_models_etag(&config);
+        config
+            .codex_model_profiles
+            .push(super::super::config::CodexModelProfile {
+                id: "new-model".into(),
+                display_name: "New Model".into(),
+                context_window: Some(64000),
+                max_context_window: Some(128000),
+                supports_images: Some(true),
+                supports_reasoning: Some(true),
+                ..Default::default()
+            });
+        let encoded = toml::to_string(&config).unwrap();
+        let decoded: AiGatewayConfig = toml::from_str(&encoded).unwrap();
+        assert_eq!(decoded.codex_model_profiles, config.codex_model_profiles);
+        assert_ne!(before, configured_models_etag(&decoded));
+        let response = configured_models_response(&decoded);
+        assert_eq!(response["models"][0]["display_name"], "New Model");
+        assert_eq!(response["models"][0]["context_window"], 64000);
+        assert_eq!(response["models"][0]["max_context_window"], 128000);
+        assert_eq!(
+            response["models"][0]["input_modalities"],
+            json!(["text", "image"])
+        );
+        assert_eq!(response["models"][0]["default_reasoning_level"], "medium");
     }
 
     #[test]

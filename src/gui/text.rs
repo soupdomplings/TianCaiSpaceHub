@@ -656,11 +656,25 @@ impl GuiText {
     pub(super) fn codex_custom_models_help(self) -> &'static str {
         match self.locale {
             GuiLocale::ZhCn => {
-                "厂商模型和手动模型（每行一个模型 ID；点击“同步渠道模型”获取已配置渠道的模型）"
+                "每行一个模型 ID，可手动增删。同步渠道模型读取已保存列表；选择渠道后可直接获取远端模型。保存时，尚无可用路由的模型会加入所选渠道，已有模型映射保持不变。新模型使用兼容模板，能力参数可在配置中调整。"
             }
             GuiLocale::EnUs => {
-                "Provider and manual models (one model ID per line; use Sync provider models to fetch configured channels)"
+                "Enter one model ID per line. Sync reads saved channels; choose a channel to fetch remote models. Saving adds unrouted models to the selected channel and preserves existing mappings. New models use compatibility templates with configurable capabilities."
             }
+        }
+    }
+
+    pub(super) fn codex_model_no_provider(self) -> &'static str {
+        match self.locale {
+            GuiLocale::ZhCn => "选择渠道（获取远端模型 / 绑定尚无路由的模型）",
+            GuiLocale::EnUs => "Select provider (fetch models / route new models)",
+        }
+    }
+
+    pub(super) fn codex_model_choose_provider(self) -> &'static str {
+        match self.locale {
+            GuiLocale::ZhCn => "请先选择一个已启用的大模型渠道。",
+            GuiLocale::EnUs => "Select an enabled model provider first.",
         }
     }
 
