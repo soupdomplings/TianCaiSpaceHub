@@ -656,10 +656,10 @@ impl GuiText {
     pub(super) fn codex_custom_models_help(self) -> &'static str {
         match self.locale {
             GuiLocale::ZhCn => {
-                "每行一个模型 ID，可手动增删。同步渠道模型读取已保存列表；选择渠道后可直接获取远端模型。保存时，尚无可用路由的模型会加入所选渠道，已有模型映射保持不变。新模型使用兼容模板，能力参数可在配置中调整。"
+                "每行一个模型 ID，可手动增删。同步渠道模型读取已保存列表；选择渠道后可直接获取远端模型。保存时，尚无可用路由的模型会加入所选渠道，已有模型映射保持不变。新模型继承同前缀最高版本内置模型的能力及高级参数，手动配置优先。"
             }
             GuiLocale::EnUs => {
-                "Enter one model ID per line. Sync reads saved channels; choose a channel to fetch remote models. Saving adds unrouted models to the selected channel and preserves existing mappings. New models use compatibility templates with configurable capabilities."
+                "Enter one model ID per line. Sync reads saved channels; choose a channel to fetch remote models. Saving adds unrouted models to the selected channel and preserves existing mappings. New models inherit capabilities and advanced settings from the latest built-in model with the closest prefix. Manual settings take precedence."
             }
         }
     }

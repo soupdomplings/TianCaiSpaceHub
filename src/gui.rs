@@ -41,18 +41,21 @@ const DEFAULT_BASE_URL: &str = "http://127.0.0.1:3847";
 const DEFAULT_BASE_URL: &str = "http://127.0.0.1:3847";
 const CODEX_APP_GUI_UNSUPPORTED: bool = !(cfg!(target_os = "macos") || cfg!(target_os = "windows"));
 const PROJECT_HOME_URL: &str = "https://github.com/happy-loki/codexhub";
-#[cfg(target_os = "windows")]
+#[cfg(all(test, target_os = "windows"))]
 const UPDATE_MANIFEST_URL: &str =
     "https://github.com/happy-loki/codexhub/releases/latest/download/latest-windows.json";
+#[cfg(test)]
 const MACOS_UPDATE_MANIFEST_URL: &str =
     "https://github.com/happy-loki/codexhub/releases/latest/download/latest-macos.json";
-#[cfg(target_os = "macos")]
+#[cfg(all(test, target_os = "macos"))]
 const UPDATE_MANIFEST_URL: &str = MACOS_UPDATE_MANIFEST_URL;
-#[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+#[cfg(all(test, not(target_os = "windows"), not(target_os = "macos")))]
 const UPDATE_MANIFEST_URL: &str =
     "https://github.com/happy-loki/codexhub/releases/latest/download/latest-linux.json";
+#[cfg(test)]
 const LEGACY_UPDATE_MANIFEST_URL: &str =
     "https://github.com/happy-loki/codexhub/releases/latest/download/latest.json";
+#[cfg(test)]
 const UPDATE_RELEASE_PAGE_URL: &str = "https://github.com/happy-loki/codexhub/releases/latest";
 const DASHBOARD_REFRESH_INTERVAL_MS: i32 = 10_000;
 const REQUEST_LOG_REFRESH_INTERVAL_MS: i32 = 5_000;
@@ -69,12 +72,12 @@ const GUI_STARTUP_WATCHDOG_TIMEOUT: Duration = Duration::from_secs(30);
 const DAEMON_AUTO_RESTART_FAILURE_THRESHOLD: u64 = 3;
 const DAEMON_AUTO_RESTART_COOLDOWN_MS: u64 = 60_000;
 const GUI_MODEL_LIST_FETCH_TIMEOUT_SECS: u64 = 30;
+#[cfg(test)]
 const UPDATE_CHECK_TIMEOUT: Duration = Duration::from_secs(8);
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 const ID_MENU_CLOSE_WINDOW: i32 = 10_001;
 const ID_MENU_MINIMIZE: i32 = 10_002;
-const ID_MENU_CHECK_UPDATE: i32 = 10_003;
 const ID_MENU_LANGUAGE_ZH_CN: i32 = 10_004;
 const ID_MENU_LANGUAGE_EN_US: i32 = 10_005;
 const ID_MENU_THEME_SYSTEM: i32 = 10_006;
@@ -147,6 +150,7 @@ mod session_history;
 mod text;
 mod theme;
 mod tray;
+#[cfg(test)]
 mod update;
 mod widgets;
 mod workbuddy;
@@ -375,7 +379,6 @@ fn build_ui(app: App, single_instance_guard: GuiSingleInstanceGuard) {
     frame.set_min_size(min_frame_size(frame_size));
     app.set_top_window(&frame);
     frame.set_icon(&app_icon_bitmap(48));
-    let update_check_in_flight = Arc::new(AtomicBool::new(false));
     let quitting = Rc::new(AtomicBool::new(false));
     let diagnostics_export_result: DiagnosticsExportResultStore = Arc::new(Mutex::new(None));
     install_system_menu(
@@ -383,18 +386,11 @@ fn build_ui(app: App, single_instance_guard: GuiSingleInstanceGuard) {
         &gui_timers,
         text,
         api.clone(),
-        update_check_in_flight.clone(),
         quitting.clone(),
         gui_tx.clone(),
         diagnostics_export_result.clone(),
     );
-    let tray_controller = tray::install(
-        &frame,
-        &gui_timers,
-        text,
-        update_check_in_flight.clone(),
-        quitting.clone(),
-    );
+    let tray_controller = tray::install(&frame, &gui_timers, text, quitting.clone());
     #[cfg(target_os = "macos")]
     {
         let frame = frame;
@@ -1928,22 +1924,11 @@ fn build_ui(app: App, single_instance_guard: GuiSingleInstanceGuard) {
     }
 
     frame.centre();
-    // On displays too small to show the preferred size, open maximized so the
-    // whole first screen (status overview + active tab actions) is visible
-    // without manual resizing.
-    if let Some((work_w, work_h)) = screen_work_area_size()
-        && (work_w < PREFERRED_FRAME_WIDTH || work_h < PREFERRED_FRAME_HEIGHT)
-    {
-        frame.maximize(true);
-    }
+    // Use the complete desktop work area on every launch. This keeps the
+    // model controls and action buttons reachable without requiring a manual
+    // resize after each start, while still respecting the OS taskbar area.
+    frame.maximize(true);
     frame.show(true);
-    update::check_for_updates_silent_async(
-        &frame,
-        &gui_timers,
-        text,
-        &update_check_in_flight,
-        &quitting,
-    );
 }
 
 /// Enable `wxFULL_REPAINT_ON_RESIZE` (0x00010000) on a window so its whole
@@ -2261,7 +2246,6 @@ fn install_system_menu(
     gui_timers: &GuiTimers,
     text: GuiText,
     api: ApiClient,
-    update_check_in_flight: Arc<AtomicBool>,
     quitting: Rc<AtomicBool>,
     gui_tx: tokio_mpsc::UnboundedSender<GuiMessage>,
     diagnostics_export_result: DiagnosticsExportResultStore,
@@ -2343,11 +2327,6 @@ fn install_system_menu(
     );
     let help_menu = Menu::builder()
         .append_item(
-            ID_MENU_CHECK_UPDATE,
-            text.check_updates(),
-            text.check_updates_help(),
-        )
-        .append_item(
             ID_MENU_EXPORT_CONNECTION_DIAGNOSTICS,
             text.export_connection_diagnostics(),
             text.export_connection_diagnostics_help(),
@@ -2370,15 +2349,6 @@ fn install_system_menu(
         ID_MENU_CLOSE_WINDOW => tray::hide_main_window(&frame, text, &gui_timers),
         ID_MENU_QUIT | ID_EXIT => tray::request_app_quit(&frame, &quitting),
         ID_MENU_MINIMIZE => frame.iconize(true),
-        ID_MENU_CHECK_UPDATE => {
-            update::check_for_updates_async(
-                &frame,
-                &gui_timers,
-                text,
-                &update_check_in_flight,
-                &quitting,
-            );
-        }
         ID_MENU_EXPORT_CONNECTION_DIAGNOSTICS => {
             if let Some(output_path) = prompt_diagnostics_export_path(&frame, text) {
                 export_connection_diagnostics_async(

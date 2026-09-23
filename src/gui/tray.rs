@@ -1,10 +1,7 @@
 use std::{
     cell::RefCell,
     rc::Rc,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 use wxdragon::prelude::*;
@@ -12,7 +9,7 @@ use wxdragon::prelude::*;
 #[cfg(not(target_os = "macos"))]
 use super::show_info;
 use super::text::GuiText;
-use super::{GuiTimers, ID_MENU_CHECK_UPDATE, ID_MENU_QUIT, update, widgets::app_icon_bitmap};
+use super::{GuiTimers, ID_MENU_QUIT, widgets::app_icon_bitmap};
 
 const ID_TRAY_SHOW_WINDOW: i32 = 11_001;
 
@@ -31,7 +28,6 @@ pub(super) fn install(
     frame: &Frame,
     gui_timers: &GuiTimers,
     text: GuiText,
-    update_check_in_flight: Arc<AtomicBool>,
     quitting: Rc<AtomicBool>,
 ) -> TrayController {
     let icon_type = platform_icon_type();
@@ -44,11 +40,6 @@ pub(super) fn install(
     let menu = Rc::new(RefCell::new(
         Menu::builder()
             .append_item(ID_TRAY_SHOW_WINDOW, text.tray_open(), text.tray_open_help())
-            .append_item(
-                ID_MENU_CHECK_UPDATE,
-                text.check_updates(),
-                text.check_updates_help(),
-            )
             .append_separator()
             .append_item(ID_MENU_QUIT, text.quit(), text.quit_help())
             .build(),
@@ -67,20 +58,9 @@ pub(super) fn install(
     {
         let frame = *frame;
         let gui_timers = gui_timers.clone();
-        let update_check_in_flight = update_check_in_flight.clone();
         let quitting = quitting.clone();
         taskbar.on_menu(move |event: Event| match event.get_id() {
             ID_TRAY_SHOW_WINDOW => show_main_window(&frame, &gui_timers),
-            ID_MENU_CHECK_UPDATE => {
-                show_main_window(&frame, &gui_timers);
-                update::check_for_updates_async(
-                    &frame,
-                    &gui_timers,
-                    text,
-                    &update_check_in_flight,
-                    &quitting,
-                );
-            }
             ID_MENU_QUIT => request_app_quit(&frame, &quitting),
             _ => event.skip(true),
         });

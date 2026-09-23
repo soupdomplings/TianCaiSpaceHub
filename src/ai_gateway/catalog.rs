@@ -171,16 +171,40 @@ fn model_for_id(config: &AiGatewayConfig, id: &str) -> Option<Value> {
                     .keys()
                     .any(|model| model.eq_ignore_ascii_case(id))
         });
-    let template = profile
+    let explicit_template = profile
         .and_then(|profile| profile.capability_profile.as_deref())
-        .and_then(template_slug)
-        .or_else(|| provider.and_then(provider_template_slug))
+        .and_then(|name| {
+            catalog_models()
+                .iter()
+                .find(|model| {
+                    is_catalog_model_visible(model)
+                        && model_slug(model).is_some_and(|slug| slug.eq_ignore_ascii_case(name))
+                })
+                .or_else(|| {
+                    template_slug(name).and_then(|slug| {
+                        catalog_models()
+                            .iter()
+                            .find(|model| model_slug(model) == Some(slug))
+                    })
+                })
+        });
+    let inherited = explicit_template
+        .or_else(|| family_template(catalog_models(), id))
+        .or_else(|| {
+            provider
+                .and_then(|provider| provider.resolve_upstream_model(id))
+                .and_then(|upstream| family_template(catalog_models(), upstream))
+        });
+    let fallback = provider
+        .and_then(provider_template_slug)
         .unwrap_or("gpt-5.5");
-    let mut model = catalog_models()
-        .iter()
-        .find(|model| model_slug(model) == Some(template))
-        .cloned()
-        .unwrap_or_else(|| json!({}));
+    let mut model = inherited
+        .or_else(|| {
+            catalog_models()
+                .iter()
+                .find(|model| model_slug(model) == Some(fallback))
+        })
+        .cloned()?;
     let Some(object) = model.as_object_mut() else {
         return None;
     };
@@ -200,33 +224,39 @@ fn model_for_id(config: &AiGatewayConfig, id: &str) -> Option<Value> {
     );
     object.insert("supported_in_api".to_string(), Value::Bool(true));
     object.insert("visibility".to_string(), json!("list"));
-    object.insert("comp_hash".to_string(), json!("codexhub-dynamic-v1"));
-    // A model ID does not prove capabilities. Do not advertise donor-only
-    // transports, code mode, speed tiers or multimodal support for a new model.
-    object.insert("prefer_websockets".to_string(), json!(false));
-    object.insert("use_responses_lite".to_string(), json!(false));
-    object.insert("tool_mode".to_string(), Value::Null);
-    object.insert("multi_agent_version".to_string(), Value::Null);
-    object.insert("service_tiers".to_string(), json!([]));
-    object.insert("additional_speed_tiers".to_string(), json!([]));
-    object.insert("default_service_tier".to_string(), Value::Null);
-    object.insert("context_window".to_string(), json!(32768));
-    object.insert("max_context_window".to_string(), json!(32768));
-    object.insert("input_modalities".to_string(), json!(["text"]));
-    object.insert("supports_image_detail_original".to_string(), json!(false));
-    object.insert("supports_search_tool".to_string(), json!(false));
-    object.insert("support_verbosity".to_string(), json!(false));
-    object.insert("supported_reasoning_levels".to_string(), json!([]));
-    object.insert("default_reasoning_level".to_string(), Value::Null);
-    object.insert("supports_reasoning_summaries".to_string(), json!(false));
-    object.insert(
-        "supports_reasoning_summary_parameter".to_string(),
-        json!(false),
-    );
+    if inherited.is_none() {
+        object.insert("comp_hash".to_string(), json!("codexhub-dynamic-v1"));
+        // A model ID does not prove capabilities. Do not advertise donor-only
+        // transports, code mode, speed tiers or multimodal support for a new model.
+        object.insert("prefer_websockets".to_string(), json!(false));
+        object.insert("use_responses_lite".to_string(), json!(false));
+        object.insert("tool_mode".to_string(), Value::Null);
+        object.insert("multi_agent_version".to_string(), Value::Null);
+        object.insert("service_tiers".to_string(), json!([]));
+        object.insert("additional_speed_tiers".to_string(), json!([]));
+        object.insert("default_service_tier".to_string(), Value::Null);
+        object.insert("context_window".to_string(), json!(32768));
+        object.insert("max_context_window".to_string(), json!(32768));
+        object.insert("input_modalities".to_string(), json!(["text"]));
+        object.insert("supports_image_detail_original".to_string(), json!(false));
+        object.insert("supports_search_tool".to_string(), json!(false));
+        object.insert("support_verbosity".to_string(), json!(false));
+        object.insert("supported_reasoning_levels".to_string(), json!([]));
+        object.insert("default_reasoning_level".to_string(), Value::Null);
+        object.insert("supports_reasoning_summaries".to_string(), json!(false));
+        object.insert(
+            "supports_reasoning_summary_parameter".to_string(),
+            json!(false),
+        );
+    }
     if let Some(profile) = profile {
         if let Some(value) = profile.context_window.filter(|v| *v > 0) {
             object.insert("context_window".to_string(), json!(value));
-            object.insert("max_context_window".to_string(), json!(value));
+            let maximum = object["max_context_window"]
+                .as_u64()
+                .unwrap_or(value)
+                .max(value);
+            object.insert("max_context_window".to_string(), json!(maximum));
         }
         if let Some(value) = profile.max_context_window.filter(|v| *v > 0) {
             let value = value.max(object["context_window"].as_u64().unwrap_or(32768));
@@ -255,7 +285,14 @@ fn model_for_id(config: &AiGatewayConfig, id: &str) -> Option<Value> {
                 "supports_reasoning_summary_parameter".to_string(),
                 json!(value),
             );
-            if value {
+            if !value {
+                object.insert("supported_reasoning_levels".to_string(), json!([]));
+                object.insert("default_reasoning_level".to_string(), Value::Null);
+            } else if object
+                .get("supported_reasoning_levels")
+                .and_then(Value::as_array)
+                .is_none_or(Vec::is_empty)
+            {
                 object.insert(
                     "supported_reasoning_levels".to_string(),
                     json!([
@@ -269,6 +306,53 @@ fn model_for_id(config: &AiGatewayConfig, id: &str) -> Option<Value> {
         }
     }
     Some(model)
+}
+
+// Match complete name components, so gpt-6 never matches gpt-60. Prefer
+// the closest series, then its highest numeric version, then catalog order.
+fn family_template<'a>(catalog: &'a [Value], id: &str) -> Option<&'a Value> {
+    fn parts(id: &str) -> Vec<String> {
+        id.rsplit('/')
+            .next()
+            .unwrap_or(id)
+            .to_ascii_lowercase()
+            .split(['-', '.', '_'])
+            .filter(|part| !part.is_empty())
+            .map(str::to_string)
+            .collect()
+    }
+    fn version(parts: &[String]) -> Vec<u64> {
+        parts
+            .iter()
+            .skip(1)
+            .map(|part| part.strip_prefix('v').unwrap_or(part))
+            .take_while(|part| part.chars().all(|ch| ch.is_ascii_digit()))
+            .filter_map(|part| part.parse().ok())
+            .collect()
+    }
+    let requested = parts(id);
+    let family = requested.first()?;
+    catalog
+        .iter()
+        .enumerate()
+        .filter(|(_, model)| is_catalog_model_visible(model))
+        .filter_map(|(index, model)| {
+            let candidate = parts(model_slug(model)?);
+            if candidate.first() != Some(family) {
+                return None;
+            }
+            let common = requested
+                .iter()
+                .zip(&candidate)
+                .take_while(|(a, b)| a == b)
+                .count();
+            Some((
+                (common, version(&candidate), std::cmp::Reverse(index)),
+                model,
+            ))
+        })
+        .max_by(|(a, _), (b, _)| a.cmp(b))
+        .map(|(_, model)| model)
 }
 
 fn template_slug(profile: &str) -> Option<&'static str> {
@@ -497,12 +581,114 @@ mod tests {
         assert_eq!(model["display_name"], "gpt-6-luna");
         assert_eq!(model["supported_in_api"], true);
         assert_eq!(model["visibility"], "list");
-        assert_eq!(model["comp_hash"], "codexhub-dynamic-v1");
-        assert_eq!(model["use_responses_lite"], false);
-        assert_eq!(model["prefer_websockets"], false);
-        assert_eq!(model["context_window"], 32768);
-        assert_eq!(model["input_modalities"], json!(["text"]));
-        assert_eq!(model["supported_reasoning_levels"], json!([]));
+        assert_eq!(model["use_responses_lite"], true);
+        assert_eq!(model["context_window"], 272000);
+        assert_eq!(model["max_context_window"], 872000);
+        assert_inherits_all_capabilities(model, "gpt-6-astra");
+    }
+
+    fn assert_inherits_all_capabilities(model: &Value, source: &str) {
+        let donor = catalog_models()
+            .iter()
+            .find(|m| model_slug(m) == Some(source))
+            .unwrap();
+        for (key, value) in donor.as_object().unwrap() {
+            if matches!(
+                key.as_str(),
+                "slug" | "display_name" | "description" | "priority"
+            ) {
+                continue;
+            }
+            assert_eq!(
+                model.get(key),
+                Some(value),
+                "inherited field {key} from {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn model_families_inherit_complete_advanced_capabilities() {
+        for (id, donor) in [
+            ("GPT-6-LUNA", "gpt-6-astra"),
+            ("vendor/gpt-6-luna", "gpt-6-astra"),
+            ("gpt-5-new", "gpt-5.6-sol"),
+            ("deepseek-v4-new", "deepseek-v4-pro"),
+            ("deepseek-v4-flash-next", "deepseek-v4-flash"),
+            ("deepseek-v5-next", "deepseek-v4-pro"),
+        ] {
+            let response = configured_models_response(&config(&[id]));
+            assert_eq!(response["models"][0]["slug"], id);
+            assert_inherits_all_capabilities(&response["models"][0], donor);
+        }
+    }
+
+    #[test]
+    fn family_versions_sort_numerically_and_respect_component_boundaries() {
+        let catalog: Vec<Value> = ["gpt-6.9-pro", "gpt-6.10-pro", "gpt-60-pro", "gpt-7-pro"]
+            .into_iter()
+            .map(|id| json!({"slug":id, "visibility":"list", "supported_in_api":true}))
+            .collect();
+        assert_eq!(
+            family_template(&catalog, "gpt-6-luna").unwrap()["slug"],
+            "gpt-6.10-pro"
+        );
+        assert!(family_template(&catalog, "gptish-new").is_none());
+    }
+
+    #[test]
+    fn aliases_inherit_upstream_family_and_explicit_templates_take_precedence() {
+        let mut config = config(&["my-coding-model"]);
+        config.providers.push(ProviderConfig {
+            model_aliases: [("my-coding-model".into(), "gpt-6-luna".into())].into(),
+            ..Default::default()
+        });
+        let response = configured_models_response(&config);
+        assert_inherits_all_capabilities(&response["models"][0], "gpt-6-astra");
+        let original_etag = configured_models_etag(&config);
+        config
+            .codex_model_profiles
+            .push(super::super::config::CodexModelProfile {
+                id: "my-coding-model".into(),
+                capability_profile: Some("deepseek-v4-flash".into()),
+                ..Default::default()
+            });
+        let response = configured_models_response(&config);
+        assert_inherits_all_capabilities(&response["models"][0], "deepseek-v4-flash");
+        assert_ne!(original_etag, configured_models_etag(&config));
+    }
+
+    #[test]
+    fn explicit_overrides_preserve_other_inherited_fields() {
+        let mut config = config(&["gpt-6-luna"]);
+        config
+            .codex_model_profiles
+            .push(super::super::config::CodexModelProfile {
+                id: "gpt-6-luna".into(),
+                context_window: Some(64000),
+                supports_reasoning: Some(false),
+                ..Default::default()
+            });
+        let before = configured_models_etag(&config);
+        let response = configured_models_response(&config);
+        assert_eq!(response["models"][0]["context_window"], 64000);
+        assert_eq!(response["models"][0]["max_context_window"], 872000);
+        assert_eq!(
+            response["models"][0]["supported_reasoning_levels"],
+            json!([])
+        );
+        config.codex_model_profiles[0].supports_reasoning = Some(true);
+        let response = configured_models_response(&config);
+        let donor = family_template(catalog_models(), "gpt-6-luna").unwrap();
+        assert_eq!(
+            response["models"][0]["supported_reasoning_levels"],
+            donor["supported_reasoning_levels"]
+        );
+        assert_eq!(
+            response["models"][0]["default_reasoning_level"],
+            donor["default_reasoning_level"]
+        );
+        assert_ne!(before, configured_models_etag(&config));
     }
 
     #[test]
