@@ -40,6 +40,8 @@ pub(super) struct CodexTab {
     session_history_button: Button,
     enhanced_launch_button: Button,
     save_models_button: Button,
+    sync_models_button: Button,
+    custom_models_input: TextCtrl,
     model_checks: CodexModelChecks,
     model_slugs: CodexModelSlugs,
     models_initialized: CodexModelsInitialized,
@@ -178,6 +180,30 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> CodexTab {
         6,
     );
 
+    let custom_models_hint = StaticText::builder(&models_box)
+        .with_label(text.codex_custom_models_help())
+        .build();
+    custom_models_hint.set_foreground_color(theme::theme().ink_muted);
+    custom_models_hint.wrap(980);
+    models_section.add(
+        &custom_models_hint,
+        0,
+        SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Top,
+        6,
+    );
+    let custom_models_input = TextCtrl::builder(&models_box)
+        .with_value("")
+        .with_style(TextCtrlStyle::MultiLine | TextCtrlStyle::Default)
+        .build();
+    custom_models_input.set_min_size(Size::new(760, 90));
+    custom_models_input.set_foreground_color(theme::theme().ink_primary);
+    models_section.add(
+        &custom_models_input,
+        0,
+        SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Top,
+        6,
+    );
+
     let model_options = visible_catalog_model_options();
     let model_slugs: CodexModelSlugs = Rc::new(
         model_options
@@ -224,9 +250,14 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> CodexTab {
     let save_models_button = Button::builder(&models_box)
         .with_label(text.save_codex_models())
         .build();
+    let sync_models_button = Button::builder(&models_box)
+        .with_label(text.sync_codex_models())
+        .build();
     save_models_button.enable(false);
+    sync_models_button.enable(false);
     let models_actions = BoxSizer::builder(Orientation::Horizontal).build();
     models_actions.add_stretch_spacer(1);
+    models_actions.add(&sync_models_button, 0, SizerFlag::Right, 8);
     models_actions.add(&save_models_button, 0, SizerFlag::Right, 0);
     models_section.add_sizer(
         &models_actions,
@@ -254,6 +285,8 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> CodexTab {
         session_history_button,
         enhanced_launch_button,
         save_models_button,
+        sync_models_button,
+        custom_models_input,
         model_checks,
         model_slugs,
         models_initialized: Rc::new(Cell::new(false)),
@@ -275,6 +308,7 @@ pub(super) fn bind_actions(
     bind_inject_action(api, frame, tab, refresh, gui_tx, in_flight);
     bind_enhanced_launch_action(api, frame, tab, refresh, gui_tx, in_flight);
     bind_save_models_action(api, frame, tab, refresh, gui_tx, in_flight);
+    bind_sync_models_action(api, frame, tab, refresh, gui_tx, in_flight);
     bind_clear_action(api, frame, tab, refresh, gui_tx, in_flight);
     bind_session_history_action(api, frame, tab, refresh);
 }
@@ -282,6 +316,8 @@ pub(super) fn bind_actions(
 pub(super) fn set_actions_enabled(tab: &CodexTab, enabled: bool) {
     tab.service_enabled.set(enabled);
     tab.save_models_button.enable(enabled);
+    tab.sync_models_button.enable(enabled);
+    tab.custom_models_input.enable(enabled);
     for checkbox in tab.model_checks.iter() {
         checkbox.enable(enabled);
     }
@@ -320,6 +356,22 @@ pub(super) fn initialize_visible_model_checks(tab: &CodexTab, gateway_config: &A
             checkbox.set_value(use_defaults || selected.contains(slug.as_str()));
         }
     }
+    let built_in = visible_catalog_model_options()
+        .into_iter()
+        .map(|model| model.slug)
+        .collect::<std::collections::HashSet<_>>();
+    let mut dynamic = std::collections::BTreeSet::new();
+    if !use_defaults {
+        dynamic.extend(
+            gateway_config
+                .codex_visible_models
+                .iter()
+                .filter(|model| !built_in.contains(model.as_str()))
+                .cloned(),
+        );
+    }
+    tab.custom_models_input
+        .change_value(&dynamic.into_iter().collect::<Vec<_>>().join("\n"));
     tab.models_initialized.set(true);
 }
 
@@ -334,11 +386,13 @@ pub(super) fn apply_pending_action(
     tab.inject_button.set_label(text.inject_codex_access());
     tab.clear_button.set_label(text.clear_codex_access());
     tab.save_models_button.set_label(text.save_codex_models());
+    tab.sync_models_button.set_label(text.sync_codex_models());
     tab.enhanced_launch_button
         .set_label(text.codex_enhanced_launch());
     let service_enabled = tab.service_enabled.get();
     refresh_config_buttons(tab, service_enabled);
     tab.save_models_button.enable(service_enabled);
+    tab.sync_models_button.enable(service_enabled);
 
     match result {
         CodexActionResult::Inject(Ok(_)) => {
@@ -367,6 +421,13 @@ pub(super) fn apply_pending_action(
             show_error(frame, &err);
             force_dashboard_refresh(api, refresh);
         }
+        CodexActionResult::SyncModels(Ok(models)) => {
+            tab.custom_models_input.change_value(&models.join("\n"));
+            show_info(frame, &text.codex_models_synced(models.len()));
+        }
+        CodexActionResult::SyncModels(Err(err)) => {
+            show_error(frame, &err);
+        }
         CodexActionResult::EnhancedLaunch(Ok(_)) => {
             show_info(frame, text.codex_enhanced_launch_ready());
             force_dashboard_refresh(api, refresh);
@@ -390,7 +451,52 @@ pub(super) enum CodexActionResult {
     Inject(Result<serde_json::Value, String>),
     Clear(Result<serde_json::Value, String>),
     SaveModels(Result<(), String>),
+    SyncModels(Result<Vec<String>, String>),
     EnhancedLaunch(Result<serde_json::Value, String>),
+}
+
+fn bind_sync_models_action(
+    api: &ApiClient,
+    frame: &Frame,
+    tab: &CodexTab,
+    refresh: &DashboardRefresh,
+    gui_tx: &UnboundedSender<super::GuiMessage>,
+    in_flight: &Arc<AtomicBool>,
+) {
+    let api = api.clone();
+    let refresh = refresh.clone();
+    let frame = *frame;
+    let tab = tab.clone();
+    let gui_tx = gui_tx.clone();
+    let in_flight = in_flight.clone();
+    tab.sync_models_button.on_click(move |_| {
+        if in_flight.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        if !ensure_service_ready_for_action(&api, &frame, &refresh) {
+            in_flight.store(false, Ordering::SeqCst);
+            return;
+        }
+        tab.sync_models_button.enable(false);
+        let thread_api = api.clone();
+        let gui_tx = gui_tx.clone();
+        let in_flight = in_flight.clone();
+        thread::spawn(move || {
+            let outcome = thread_api.get_app_config().map(|config| {
+                let mut models = std::collections::BTreeSet::new();
+                for provider in config.ai_gateway.providers {
+                    models.extend(provider.models);
+                    models.extend(provider.model_aliases.into_keys());
+                }
+                models.into_iter().collect::<Vec<_>>()
+            });
+            in_flight.store(false, Ordering::SeqCst);
+            let _ = gui_tx.send(super::GuiMessage::CodexAction(
+                CodexActionResult::SyncModels(outcome),
+            ));
+            wxdragon::wake_up_idle();
+        });
+    });
 }
 
 fn bind_inject_action(
@@ -728,7 +834,8 @@ fn bind_session_history_action(
 }
 
 fn selected_visible_models(tab: &CodexTab) -> Vec<String> {
-    tab.model_slugs
+    let mut selected = tab
+        .model_slugs
         .iter()
         .enumerate()
         .filter_map(|(index, slug)| {
@@ -737,7 +844,19 @@ fn selected_visible_models(tab: &CodexTab) -> Vec<String> {
                 .is_some_and(CheckBox::is_checked)
                 .then(|| slug.clone())
         })
-        .collect()
+        .collect::<Vec<_>>();
+    for model in tab
+        .custom_models_input
+        .get_value()
+        .split(|ch: char| ch == ',' || ch == '\n' || ch == '\r')
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+    {
+        if !selected.iter().any(|known| known == model) {
+            selected.push(model.to_string());
+        }
+    }
+    selected
 }
 
 fn save_visible_models(api: &ApiClient, models: Vec<String>) -> Result<(), String> {

@@ -653,6 +653,17 @@ impl GuiText {
         }
     }
 
+    pub(super) fn codex_custom_models_help(self) -> &'static str {
+        match self.locale {
+            GuiLocale::ZhCn => {
+                "厂商模型和手动模型（每行一个模型 ID；点击“同步渠道模型”获取已配置渠道的模型）"
+            }
+            GuiLocale::EnUs => {
+                "Provider and manual models (one model ID per line; use Sync provider models to fetch configured channels)"
+            }
+        }
+    }
+
     pub(super) fn codex_session_history(self) -> &'static str {
         match self.locale {
             GuiLocale::ZhCn => "会话历史管理",
@@ -849,6 +860,20 @@ impl GuiText {
         match self.locale {
             GuiLocale::ZhCn => "保存模型列表",
             GuiLocale::EnUs => "Save model list",
+        }
+    }
+
+    pub(super) fn sync_codex_models(self) -> &'static str {
+        match self.locale {
+            GuiLocale::ZhCn => "同步渠道模型",
+            GuiLocale::EnUs => "Sync provider models",
+        }
+    }
+
+    pub(super) fn codex_models_synced(self, count: usize) -> String {
+        match self.locale {
+            GuiLocale::ZhCn => format!("已读取 {count} 个渠道模型，请确认后保存。"),
+            GuiLocale::EnUs => format!("Read {count} provider models. Review and save them."),
         }
     }
 

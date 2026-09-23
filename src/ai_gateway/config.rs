@@ -25,6 +25,9 @@ pub struct AiGatewayConfig {
     ///
     /// 该列表只控制 `/models` 暴露给 Codex App 的 catalog 模型，不参与上游 provider 路由。
     pub codex_visible_models: Vec<String>,
+    /// User-defined metadata for models discovered from providers or entered manually.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub codex_model_profiles: Vec<CodexModelProfile>,
     /// 是否过滤 Codex 请求中的 image_generation tool。
     pub filter_image_generation_tool: bool,
     /// 是否启用请求日志记录。
@@ -47,9 +50,41 @@ impl Default for AiGatewayConfig {
             prompt_cache_retention: None,
             providers: Vec::new(),
             codex_visible_models: Vec::new(),
+            codex_model_profiles: Vec::new(),
             filter_image_generation_tool: false,
             request_logging_enabled: false,
             request_log_details_enabled: false,
+        }
+    }
+}
+
+/// Metadata for a Codex-visible model that is not part of the embedded catalog.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct CodexModelProfile {
+    pub id: String,
+    pub display_name: String,
+    pub provider: Option<String>,
+    pub upstream_model: Option<String>,
+    pub capability_profile: Option<String>,
+    pub context_window: Option<u64>,
+    pub max_context_window: Option<u64>,
+    pub supports_images: Option<bool>,
+    pub supports_reasoning: Option<bool>,
+}
+
+impl Default for CodexModelProfile {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            display_name: String::new(),
+            provider: None,
+            upstream_model: None,
+            capability_profile: None,
+            context_window: None,
+            max_context_window: None,
+            supports_images: None,
+            supports_reasoning: None,
         }
     }
 }

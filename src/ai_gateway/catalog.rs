@@ -4,7 +4,7 @@ use once_cell::sync::Lazy;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use super::config::AiGatewayConfig;
+use super::config::{AiGatewayConfig, ProviderConfig, ProviderType};
 
 static BASE_MODEL_CATALOG: Lazy<Value> = Lazy::new(|| {
     serde_json::from_str(include_str!("models.json")).expect("embedded AI Gateway model catalog")
@@ -18,11 +18,21 @@ pub struct CatalogModelOption {
 }
 
 pub fn visible_catalog_model_options() -> Vec<CatalogModelOption> {
+    visible_catalog_model_options_for_config(&AiGatewayConfig::default())
+}
+
+pub fn visible_catalog_model_options_for_config(
+    config: &AiGatewayConfig,
+) -> Vec<CatalogModelOption> {
+    let mut options = Vec::new();
+    let mut seen = HashSet::new();
     catalog_models()
         .iter()
         .filter(|model| is_catalog_model_visible(model))
-        .filter_map(|model| {
-            let slug = model_slug(model)?.to_string();
+        .for_each(|model| {
+            let Some(slug) = model_slug(model).map(str::to_string) else {
+                return;
+            };
             let display_name = model
                 .get("display_name")
                 .and_then(Value::as_str)
@@ -33,13 +43,33 @@ pub fn visible_catalog_model_options() -> Vec<CatalogModelOption> {
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_string();
-            Some(CatalogModelOption {
+            let option = CatalogModelOption {
                 slug,
                 display_name,
                 description,
-            })
-        })
-        .collect()
+            };
+            seen.insert(option.slug.clone());
+            options.push(option);
+        });
+
+    for id in dynamic_model_ids(config) {
+        if !seen.insert(id.clone()) {
+            continue;
+        }
+        options.push(CatalogModelOption {
+            display_name: config
+                .codex_model_profiles
+                .iter()
+                .find(|profile| profile.id == id)
+                .map(|profile| profile.display_name.trim())
+                .filter(|name| !name.is_empty())
+                .unwrap_or(&id)
+                .to_string(),
+            slug: id,
+            description: "来自已配置模型渠道或手动添加的模型".to_string(),
+        });
+    }
+    options
 }
 
 #[cfg(test)]
@@ -59,8 +89,6 @@ pub fn configured_models_response_with_etag(config: &AiGatewayConfig) -> (Value,
 }
 
 fn build_configured_models_response(config: &AiGatewayConfig) -> Value {
-    let catalog_models = catalog_models();
-
     let mut emitted = HashSet::new();
     let mut models = Vec::new();
     let mut priority = 0;
@@ -70,12 +98,7 @@ fn build_configured_models_response(config: &AiGatewayConfig) -> Value {
             continue;
         }
 
-        let model = catalog_models
-            .iter()
-            .find(|model| {
-                model_slug(model) == Some(model_id.as_str()) && is_catalog_model_visible(model)
-            })
-            .cloned();
+        let model = model_for_id(config, &model_id);
         let Some(mut model) = model else {
             continue;
         };
@@ -95,6 +118,138 @@ fn catalog_models() -> &'static Vec<Value> {
         .get("models")
         .and_then(Value::as_array)
         .expect("embedded AI Gateway model catalog must contain models array")
+}
+
+fn dynamic_model_ids(config: &AiGatewayConfig) -> Vec<String> {
+    let mut ids = Vec::new();
+    for profile in &config.codex_model_profiles {
+        let id = profile.id.trim();
+        if !id.is_empty() && !ids.iter().any(|known| known == id) {
+            ids.push(id.to_string());
+        }
+    }
+    for provider in &config.providers {
+        for id in provider.models.iter().chain(provider.model_aliases.keys()) {
+            let id = id.trim();
+            if !id.is_empty() && !ids.iter().any(|known| known == id) {
+                ids.push(id.to_string());
+            }
+        }
+    }
+    ids
+}
+
+fn model_for_id(config: &AiGatewayConfig, id: &str) -> Option<Value> {
+    if let Some(model) = catalog_models()
+        .iter()
+        .find(|model| model_slug(model) == Some(id) && is_catalog_model_visible(model))
+    {
+        return Some(model.clone());
+    }
+
+    let profile = config
+        .codex_model_profiles
+        .iter()
+        .find(|profile| profile.id.eq_ignore_ascii_case(id));
+    let provider = config.providers.iter().find(|provider| {
+        provider
+            .models
+            .iter()
+            .any(|model| model.eq_ignore_ascii_case(id))
+            || provider
+                .model_aliases
+                .keys()
+                .any(|model| model.eq_ignore_ascii_case(id))
+    });
+    let template = profile
+        .and_then(|profile| profile.capability_profile.as_deref())
+        .and_then(template_slug)
+        .or_else(|| provider.and_then(provider_template_slug))
+        .unwrap_or("gpt-5.5");
+    let mut model = catalog_models()
+        .iter()
+        .find(|model| model_slug(model) == Some(template))
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let Some(object) = model.as_object_mut() else {
+        return None;
+    };
+    object.insert("slug".to_string(), json!(id));
+    object.insert(
+        "display_name".to_string(),
+        json!(
+            profile
+                .map(|profile| profile.display_name.trim())
+                .filter(|name| !name.is_empty())
+                .unwrap_or(id)
+        ),
+    );
+    object.insert(
+        "description".to_string(),
+        json!("Dynamic model discovered from a configured provider or entered manually."),
+    );
+    object.insert("supported_in_api".to_string(), Value::Bool(true));
+    object.insert("visibility".to_string(), json!("list"));
+    object.insert("comp_hash".to_string(), json!("codexhub-dynamic-v1"));
+    if let Some(profile) = profile {
+        if let Some(value) = profile.context_window {
+            object.insert("context_window".to_string(), json!(value));
+        }
+        if let Some(value) = profile.max_context_window {
+            object.insert("max_context_window".to_string(), json!(value));
+        }
+        if let Some(value) = profile.supports_images {
+            object.insert(
+                "input_modalities".to_string(),
+                if value {
+                    json!(["text", "image"])
+                } else {
+                    json!(["text"])
+                },
+            );
+            object.insert(
+                "supports_image_detail_original".to_string(),
+                Value::Bool(value),
+            );
+        }
+        if let Some(value) = profile.supports_reasoning {
+            object.insert(
+                "supports_reasoning_summaries".to_string(),
+                Value::Bool(value),
+            );
+        }
+    }
+    Some(model)
+}
+
+fn template_slug(profile: &str) -> Option<&'static str> {
+    let profile = profile.to_ascii_lowercase();
+    if profile.contains("kimi") {
+        Some("kimi-k3")
+    } else if profile.contains("deepseek") {
+        Some("deepseek-v4-pro")
+    } else if profile.contains("anthropic") || profile.contains("claude") {
+        Some("Opus-4.8")
+    } else if profile.contains("grok") {
+        Some("grok-4.6")
+    } else if profile.contains("chat") {
+        Some("gpt-5.5")
+    } else if profile.contains("openai") || profile.contains("responses") {
+        Some("gpt-5.6-sol")
+    } else {
+        None
+    }
+}
+
+fn provider_template_slug(provider: &ProviderConfig) -> Option<&'static str> {
+    match provider.provider_type {
+        ProviderType::KimiResponses => Some("kimi-k3"),
+        ProviderType::DeepSeekResponses => Some("deepseek-v4-pro"),
+        ProviderType::AnthropicMessages => Some("Opus-4.8"),
+        ProviderType::GrokResponses => Some("grok-4.6"),
+        ProviderType::ChatCompletions => Some("gpt-5.5"),
+        ProviderType::OpenAiResponses => Some("gpt-5.6-sol"),
+    }
 }
 
 fn configured_models_etag_from_response(response: &Value) -> String {
@@ -186,20 +341,8 @@ mod tests {
             .map(|model| model["slug"].as_str().unwrap())
             .collect();
 
-        assert_eq!(
-            slugs,
-            vec![
-                "gpt-5.6-sol",
-                "gpt-5.6-terra",
-                "gpt-5.6-luna",
-                "grok-4.6",
-                "gpt-5.5",
-                "deepseek-v4-pro",
-                "deepseek-v4-flash",
-                "GLM-5.3",
-                "GLM-5.3-Flash"
-            ]
-        );
+        assert!(slugs.contains(&"custom-model"));
+        assert!(slugs.contains(&"codex-auto-review"));
         assert_eq!(response["models"][3]["display_name"], "Grok-4.6");
         assert_eq!(
             response["models"][3]["comp_hash"],
@@ -260,19 +403,39 @@ mod tests {
     }
 
     #[test]
-    fn configured_models_response_skips_unknown_configured_model() {
+    fn configured_models_response_exposes_unknown_configured_model() {
         let config = config(&["custom-model"]);
 
         let response = configured_models_response(&config);
-        assert!(response["models"].as_array().unwrap().is_empty());
+        assert_eq!(response["models"][0]["slug"], "custom-model");
+        assert_eq!(response["models"][0]["comp_hash"], "codexhub-dynamic-v1");
     }
 
     #[test]
-    fn configured_models_response_skips_hidden_catalog_model() {
+    fn configured_models_response_exposes_hidden_model_when_selected() {
         let config = config(&["codex-auto-review"]);
 
         let response = configured_models_response(&config);
-        assert!(response["models"].as_array().unwrap().is_empty());
+        assert_eq!(response["models"][0]["slug"], "codex-auto-review");
+    }
+
+    #[test]
+    fn configured_models_response_uses_provider_model_as_dynamic_entry() {
+        let mut config = config(&["gpt-6-luna"]);
+        config.providers.push(ProviderConfig {
+            name: "openai".to_string(),
+            provider_type: ProviderType::OpenAiResponses,
+            models: vec!["gpt-6-luna".to_string()],
+            ..ProviderConfig::default()
+        });
+
+        let response = configured_models_response(&config);
+        let model = &response["models"][0];
+        assert_eq!(model["slug"], "gpt-6-luna");
+        assert_eq!(model["display_name"], "gpt-6-luna");
+        assert_eq!(model["supported_in_api"], true);
+        assert_eq!(model["visibility"], "list");
+        assert_eq!(model["comp_hash"], "codexhub-dynamic-v1");
     }
 
     #[test]
