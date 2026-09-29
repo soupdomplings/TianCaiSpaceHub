@@ -1,5 +1,6 @@
 use std::{
     cell::RefCell,
+    collections::BTreeMap,
     rc::Rc,
     sync::{
         Arc,
@@ -35,6 +36,8 @@ pub(super) struct WorkBuddyProviderOption {
     upstream_api_key: String,
     upstream_protocol: String,
     models: Vec<String>,
+    model_aliases: BTreeMap<String, String>,
+    compatibility: Option<String>,
 }
 
 type WorkBuddyProviderOptions = Rc<RefCell<Vec<WorkBuddyProviderOption>>>;
@@ -49,9 +52,11 @@ pub(super) struct WorkBuddyTab {
     upstream_api_key: TextCtrl,
     model: ComboBox,
     protocol: Choice,
-    default_effort: TextCtrl,
+    default_effort: Choice,
     supported_efforts: TextCtrl,
     cache_key: TextCtrl,
+    cache_hint: StaticText,
+    text: GuiText,
     save_button: Button,
     restore_button: Button,
     reload_button: Button,
@@ -209,18 +214,23 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> WorkBuddyTab {
         .with_hgap(14)
         .build();
     reasoning_grid.add_growable_col(1, 1);
-    let default_effort = text_field_row(
-        &reasoning_box,
-        &reasoning_grid,
-        text.workbuddy_default_effort(),
-        &existing.reasoning.default_effort,
-    );
+    let effort_label = StaticText::builder(&reasoning_box)
+        .with_label(text.workbuddy_default_effort())
+        .build();
+    effort_label.set_foreground_color(theme::theme().ink_secondary);
+    reasoning_grid.add(&effort_label, 0, SizerFlag::AlignCenterVertical, 0);
+    let default_effort = Choice::builder(&reasoning_box)
+        .with_size(Size::new(420, -1))
+        .build();
+    reasoning_grid.add(&default_effort, 1, SizerFlag::Expand, 0);
     let supported_efforts = text_field_row(
         &reasoning_box,
         &reasoning_grid,
         text.workbuddy_supported_efforts(),
         &existing.reasoning.supported_efforts.join(", "),
     );
+    supported_efforts.set_editable(false);
+    supported_efforts.set_tooltip(text.workbuddy_efforts_help());
     let cache_key = text_field_row(
         &reasoning_box,
         &reasoning_grid,
@@ -235,6 +245,9 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> WorkBuddyTab {
         SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Top | SizerFlag::Bottom,
         10,
     );
+    let cache_hint = StaticText::builder(&reasoning_box).with_label("").build();
+    cache_hint.set_foreground_color(theme::theme().ink_muted);
+    reasoning_section.add(&cache_hint, 0, SizerFlag::Expand | SizerFlag::All, 10);
     root.add(
         &reasoning_box,
         0,
@@ -295,7 +308,7 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> WorkBuddyTab {
     page.layout();
     page.fit_inside();
 
-    WorkBuddyTab {
+    let tab = WorkBuddyTab {
         page,
         local_url,
         local_api_key,
@@ -307,13 +320,17 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> WorkBuddyTab {
         default_effort,
         supported_efforts,
         cache_key,
+        cache_hint,
+        text,
         save_button,
         restore_button,
         reload_button,
         status,
         in_flight: Arc::new(AtomicBool::new(false)),
         provider_options: Rc::new(RefCell::new(Vec::new())),
-    }
+    };
+    apply_model(&tab, &existing);
+    tab
 }
 
 pub(super) fn bind_actions(
@@ -330,6 +347,12 @@ pub(super) fn bind_actions(
         };
         apply_provider_option(&provider_tab, index as usize);
     });
+    let model_tab = tab.clone();
+    tab.model
+        .on_selection_changed(move |_| refresh_model_settings(&model_tab));
+    let protocol_tab = tab.clone();
+    tab.protocol
+        .on_selection_changed(move |_| refresh_model_settings(&protocol_tab));
 
     let save_button = tab.save_button;
     let tab_for_save = tab.clone();
@@ -521,6 +544,8 @@ fn provider_option(provider: &ProviderConfig) -> Option<WorkBuddyProviderOption>
         }
         .to_string(),
         models,
+        model_aliases: provider.model_aliases.clone(),
+        compatibility: provider.compatibility.clone(),
     })
 }
 
@@ -571,6 +596,16 @@ fn apply_provider_options(tab: &WorkBuddyTab, options: Vec<WorkBuddyProviderOpti
     if let Some(index) = selected {
         tab.provider.set_selection(index as u32);
         apply_provider_option_for_model(tab, index, Some(preferred_model));
+        if let Some(saved) = saved_status.as_ref().map(|status| &status.model)
+            && tab.provider_options.borrow()[index].name == saved.upstream_provider
+            && tab
+                .model
+                .get_value()
+                .eq_ignore_ascii_case(&saved.provider_model)
+        {
+            // A manually selected protocol must survive reopening and refresh.
+            apply_saved_model_settings(tab, saved);
+        }
     } else {
         tab.model.clear();
         tab.model.set_value(preferred_model);
@@ -614,10 +649,101 @@ fn apply_provider_option_for_model(
     } else {
         tab.model.set_value(&current_model);
     }
-    tab.cache_key
-        .set_value(&workbuddy_config::default_cache_key_for_provider(
-            &option.name,
-        ));
+    refresh_model_settings(tab);
+}
+
+fn selected_protocol(tab: &WorkBuddyTab) -> &'static str {
+    match tab.protocol.get_selection() {
+        Some(1) => "openai-chat",
+        Some(2) => "anthropic-messages",
+        _ => "openai-responses",
+    }
+}
+
+fn reasoning_for_selection(
+    provider: Option<&WorkBuddyProviderOption>,
+    protocol: &str,
+    model: &str,
+    preferred: &str,
+) -> WorkBuddyReasoningConfig {
+    let upstream_model = provider
+        .and_then(|provider| {
+            provider
+                .model_aliases
+                .get(model)
+                .or_else(|| {
+                    provider
+                        .model_aliases
+                        .iter()
+                        .find(|(alias, _)| alias.eq_ignore_ascii_case(model))
+                        .map(|(_, upstream)| upstream)
+                })
+                .map(String::as_str)
+        })
+        .unwrap_or(model);
+    WorkBuddyReasoningConfig::for_model(
+        protocol,
+        upstream_model,
+        provider.and_then(|p| p.compatibility.as_deref()),
+        preferred,
+    )
+}
+
+fn apply_reasoning(tab: &WorkBuddyTab, reasoning: &WorkBuddyReasoningConfig) {
+    tab.default_effort.clear();
+    for effort in &reasoning.supported_efforts {
+        tab.default_effort.append(effort);
+    }
+    let index = reasoning
+        .supported_efforts
+        .iter()
+        .position(|effort| effort == &reasoning.default_effort)
+        .unwrap_or(0);
+    tab.default_effort.set_selection(index as u32);
+    tab.supported_efforts
+        .set_value(&reasoning.supported_efforts.join(", "));
+}
+
+fn apply_cache_settings(tab: &WorkBuddyTab, protocol: &str, provider: &str) {
+    let uses_key = workbuddy_config::uses_prompt_cache_key(protocol);
+    tab.cache_key.enable(uses_key);
+    let hint = if uses_key {
+        tab.cache_key
+            .set_value(&workbuddy_config::default_cache_key_for_provider(provider));
+        tab.text.workbuddy_cache_key_help()
+    } else {
+        tab.cache_key
+            .set_value(tab.text.workbuddy_cache_key_not_needed());
+        tab.text.workbuddy_anthropic_cache_help()
+    };
+    tab.cache_key.set_tooltip(hint);
+    tab.cache_hint.set_label(hint);
+    tab.cache_hint.wrap(920);
+    tab.page.layout();
+    tab.page.fit_inside();
+}
+
+fn refresh_model_settings(tab: &WorkBuddyTab) {
+    let options = tab.provider_options.borrow();
+    let provider = tab
+        .provider
+        .get_selection()
+        .and_then(|i| options.get(i as usize));
+    let protocol = selected_protocol(tab);
+    let reasoning = reasoning_for_selection(
+        provider,
+        protocol,
+        &tab.model.get_value(),
+        &tab.default_effort
+            .get_string_selection()
+            .unwrap_or_default(),
+    );
+    apply_reasoning(tab, &reasoning);
+    apply_cache_settings(
+        tab,
+        protocol,
+        provider.map(|p| p.name.as_str()).unwrap_or(""),
+    );
 }
 
 fn build_model(tab: &WorkBuddyTab) -> Result<WorkBuddyModelConfig, String> {
@@ -642,48 +768,26 @@ fn build_model(tab: &WorkBuddyTab) -> Result<WorkBuddyModelConfig, String> {
     }
     model.id = model.provider_model.clone();
     model.name = model.provider_model.clone();
-    model.upstream_protocol = tab
-        .protocol
-        .get_selection()
-        .and_then(|index| match index {
-            0 => Some("openai-responses"),
-            1 => Some("openai-chat"),
-            2 => Some("anthropic-messages"),
-            _ => None,
-        })
-        .unwrap_or("openai-responses")
-        .to_string();
-    model.upstream_default_reasoning_effort = clean(&tab.default_effort.get_value());
-    if model.upstream_default_reasoning_effort.is_empty() {
-        return Err("default effort cannot be empty".to_string());
-    }
-    let efforts = clean(&tab.supported_efforts.get_value())
-        .split(',')
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-    if efforts.is_empty() {
-        return Err("supported efforts cannot be empty".to_string());
-    }
-    if !efforts
-        .iter()
-        .any(|effort| effort == &model.upstream_default_reasoning_effort)
-    {
-        return Err("default effort must be included in supported efforts".to_string());
-    }
+    model.upstream_protocol = selected_protocol(tab).to_string();
+    model.reasoning = reasoning_for_selection(
+        Some(&provider),
+        &model.upstream_protocol,
+        &model.provider_model,
+        &tab.default_effort
+            .get_string_selection()
+            .unwrap_or_default(),
+    );
+    model.upstream_default_reasoning_effort = model.reasoning.default_effort.clone();
     if model.provider_model.is_empty() || model.upstream_url.is_empty() {
         return Err("upstream URL and model are required".to_string());
     }
-    model.reasoning = WorkBuddyReasoningConfig {
-        default_effort: model.upstream_default_reasoning_effort.clone(),
-        supported_efforts: efforts,
-        can_disable_thinking: false,
-    };
-    let cache_key = workbuddy_config::default_cache_key_for_provider(&provider.name);
-    model
-        .extra
-        .insert("cacheKey".to_string(), serde_json::Value::String(cache_key));
+    model.extra.remove("cacheKey");
+    if workbuddy_config::uses_prompt_cache_key(&model.upstream_protocol) {
+        let cache_key = workbuddy_config::default_cache_key_for_provider(&provider.name);
+        model
+            .extra
+            .insert("cacheKey".to_string(), serde_json::Value::String(cache_key));
+    }
     Ok(model)
 }
 
@@ -713,16 +817,24 @@ fn apply_model(tab: &WorkBuddyTab, model: &WorkBuddyModelConfig) {
     tab.upstream_url.set_value(&model.upstream_url);
     tab.upstream_api_key.set_value(&model.upstream_api_key);
     tab.model.set_value(&model.provider_model);
+    apply_saved_model_settings(tab, model);
+}
+
+fn apply_saved_model_settings(tab: &WorkBuddyTab, model: &WorkBuddyModelConfig) {
     tab.protocol
         .set_selection(protocol_index(&model.upstream_protocol));
-    tab.default_effort
-        .set_value(&model.reasoning.default_effort);
-    tab.supported_efforts
-        .set_value(&model.reasoning.supported_efforts.join(", "));
-    tab.cache_key
-        .set_value(&workbuddy_config::default_cache_key_for_provider(
-            &model.upstream_provider,
-        ));
+    let options = tab.provider_options.borrow();
+    let provider = options
+        .iter()
+        .find(|p| p.name.eq_ignore_ascii_case(&model.upstream_provider));
+    let reasoning = reasoning_for_selection(
+        provider,
+        &model.upstream_protocol,
+        &model.provider_model,
+        &model.reasoning.default_effort,
+    );
+    apply_reasoning(tab, &reasoning);
+    apply_cache_settings(tab, &model.upstream_protocol, &model.upstream_provider);
 }
 
 fn clean(value: &str) -> String {
@@ -796,5 +908,37 @@ mod tests {
         };
 
         assert!(provider_options_from_config(&config).is_empty());
+    }
+
+    #[test]
+    fn mixed_provider_aliases_select_the_actual_models_efforts() {
+        let mut source = provider("mixed", ProviderType::ChatCompletions);
+        source
+            .model_aliases
+            .insert("writing".into(), "claude-opus-new".into());
+        source
+            .model_aliases
+            .insert("coding".into(), "gpt-6-luna".into());
+        let option = provider_option(&source).unwrap();
+        let claude = reasoning_for_selection(Some(&option), "openai-chat", "WRITING", "max");
+        assert_eq!(
+            claude.supported_efforts,
+            ["low", "medium", "high", "xhigh", "max"]
+        );
+        assert_eq!(claude.default_effort, "max");
+        let gpt = reasoning_for_selection(
+            Some(&option),
+            "openai-chat",
+            "coding",
+            &claude.default_effort,
+        );
+        assert_eq!(gpt.default_effort, "high");
+        assert!(!gpt.supported_efforts.iter().any(|v| v == "max"));
+        let native = reasoning_for_selection(Some(&option), "anthropic-messages", "coding", "max");
+        assert_eq!(native.default_effort, "max");
+        source.compatibility = Some("glm_anthropic".into());
+        let option = provider_option(&source).unwrap();
+        let glm = reasoning_for_selection(Some(&option), "anthropic-messages", "model-a", "max");
+        assert_eq!(glm.supported_efforts, ["high", "max"]);
     }
 }

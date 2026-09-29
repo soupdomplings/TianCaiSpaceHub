@@ -545,9 +545,9 @@ fn apply_chat_cache_controls(
     // OpenAI-compatible Chat providers can use the same cache controls as
     // Responses. Preserve an explicit request value and fill in the stable
     // key selected by the gateway when WorkBuddy omitted one.
-    if raw_body.get("prompt_cache_key").is_none() {
-        raw_body["prompt_cache_key"] = json!(ctx.prompt_cache_key);
-    }
+    let cache_key =
+        chat_request_cache_key(raw_body).unwrap_or_else(|| ctx.prompt_cache_key.clone());
+    raw_body["prompt_cache_key"] = json!(cache_key);
     if raw_body.get("prompt_cache_retention").is_none()
         && let Some(retention) = &provider.prompt_cache_retention
     {
@@ -1342,8 +1342,17 @@ mod tests {
         assert_eq!(generated["prompt_cache_key"], "stable-session");
         assert_eq!(generated["prompt_cache_retention"], "24h");
 
+        for empty in [Value::Null, json!(""), json!("  \t "), json!(false)] {
+            let mut request = json!({"prompt_cache_key": empty});
+            apply_chat_cache_controls(&mut request, &ctx, &provider);
+            assert_eq!(request["prompt_cache_key"], "stable-session");
+        }
+
         let mut explicit = json!({"prompt_cache_key": "request-key"});
         apply_chat_cache_controls(&mut explicit, &ctx, &provider);
         assert_eq!(explicit["prompt_cache_key"], "request-key");
+        let mut spaced = json!({"prompt_cache_key": "  request-key  "});
+        apply_chat_cache_controls(&mut spaced, &ctx, &provider);
+        assert_eq!(spaced["prompt_cache_key"], "request-key");
     }
 }

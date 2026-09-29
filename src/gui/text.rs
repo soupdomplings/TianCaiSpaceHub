@@ -2892,13 +2892,42 @@ impl GuiText {
         }
     }
 
+    pub(super) fn workbuddy_efforts_help(self) -> &'static str {
+        match self.locale {
+            GuiLocale::ZhCn => {
+                "随模型和协议自动更新。Claude 统一提供 low、medium、high、xhigh、max 五档；默认强度不适用于新模型时回退为 high。"
+            }
+            GuiLocale::EnUs => {
+                "Follows the model and protocol. Claude offers low, medium, high, xhigh, max. An unsupported default falls back to high."
+            }
+        }
+    }
+
+    pub(super) fn workbuddy_cache_key_not_needed(self) -> &'static str {
+        match self.locale {
+            GuiLocale::ZhCn => "不需要（使用原生缓存）",
+            GuiLocale::EnUs => "Not required (native caching)",
+        }
+    }
+
+    pub(super) fn workbuddy_anthropic_cache_help(self) -> &'static str {
+        match self.locale {
+            GuiLocale::ZhCn => {
+                "Anthropic 协议无需固定缓存键，Hub 自动添加 cache_control 缓存标记。请求有无缓存键均可；实际命中由上游和重复前缀决定。"
+            }
+            GuiLocale::EnUs => {
+                "Anthropic needs no cache key. Hub adds native cache_control markers with or without a request key. Cache hits depend on the upstream and repeated prefix."
+            }
+        }
+    }
+
     pub(super) fn workbuddy_cache_key_help(self) -> &'static str {
         match self.locale {
             GuiLocale::ZhCn => {
-                "由所选 provider 自动生成 workbuddy:<provider>。同一 provider 的不同模型共用缓存命名空间，切换 provider 会自动更新。"
+                "由所选 provider 自动生成 workbuddy:<provider>。请求未携带有效缓存键时自动补充；键不保证缓存命中，实际命中由上游和重复前缀决定。"
             }
             GuiLocale::EnUs => {
-                "Generated as workbuddy:<provider>. Models under one provider share a cache namespace; changing provider updates it automatically."
+                "Generated as workbuddy:<provider> when the request has no valid key. A key does not guarantee a cache hit; hits depend on the upstream and repeated prefix."
             }
         }
     }

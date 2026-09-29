@@ -43,6 +43,54 @@ impl Default for WorkBuddyReasoningConfig {
     }
 }
 
+impl WorkBuddyReasoningConfig {
+    /// WorkBuddy exposes the same five effort levels for current Claude models.
+    /// Resolve provider aliases before calling this so mixed-model providers work.
+    pub fn for_model(
+        protocol: &str,
+        model: &str,
+        compatibility: Option<&str>,
+        preferred_effort: &str,
+    ) -> Self {
+        let name = model
+            .trim()
+            .rsplit('/')
+            .next()
+            .unwrap_or(model)
+            .to_ascii_lowercase();
+        let glm = protocol == "anthropic-messages"
+            && matches!(
+                compatibility.map(str::trim),
+                Some("glm_anthropic" | "zhipu_anthropic")
+            );
+        let claude = protocol == "anthropic-messages"
+            || ["claude", "opus", "sonnet", "haiku"]
+                .iter()
+                .any(|prefix| name == *prefix || name.starts_with(&format!("{prefix}-")));
+        let efforts = if glm {
+            vec!["high", "max"]
+        } else if claude {
+            vec!["low", "medium", "high", "xhigh", "max"]
+        } else {
+            vec!["low", "medium", "high", "xhigh"]
+        };
+        let preferred = preferred_effort.trim().to_ascii_lowercase();
+        Self {
+            default_effort: if efforts.contains(&preferred.as_str()) {
+                preferred
+            } else {
+                "high".to_string()
+            },
+            supported_efforts: efforts.into_iter().map(String::from).collect(),
+            can_disable_thinking: false,
+        }
+    }
+}
+
+pub fn uses_prompt_cache_key(protocol: &str) -> bool {
+    protocol != "anthropic-messages"
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct WorkBuddyModelConfig {
@@ -193,6 +241,11 @@ fn parse_config_text(text: &str) -> Result<WorkBuddyModelConfig> {
 }
 
 fn serialize_config(model: &WorkBuddyModelConfig) -> Result<String> {
+    let mut model = model.clone();
+    if !uses_prompt_cache_key(&model.upstream_protocol) {
+        model.extra.remove("cacheKey");
+        model.extra.remove("cache_key");
+    }
     serde_json::to_string_pretty(&[model]).context("serialize WorkBuddy config")
 }
 
@@ -249,7 +302,9 @@ fn write_file_atomically(path: &Path, contents: &[u8]) -> Result<()> {
 /// WorkBuddy currently stores one model object, but matching by all three
 /// common identifiers keeps this compatible with hand-edited files and future
 /// multi-model layouts. A configured provider is authoritative so older
-/// model-based cache keys are migrated automatically.
+/// model-based cache keys are migrated automatically. Anthropic also uses this
+/// namespace internally for session context, but never sends it as an OpenAI
+/// prompt_cache_key or requires a cacheKey in models.json.
 pub fn configured_cache_key(model: &str) -> Option<String> {
     let status = load().ok()?;
     let configured = &status.model;
@@ -382,7 +437,7 @@ fn save_at(path: &Path, model: &WorkBuddyModelConfig) -> Result<WorkBuddyConfigS
     }
     write_file_atomically(path, contents.as_bytes())
         .with_context(|| format!("write WorkBuddy config {}", path.display()))?;
-    Ok(status_for(path, true, model.clone()))
+    Ok(status_for(path, true, parse_config_text(&json)?))
 }
 
 pub fn restore_backup() -> Result<WorkBuddyConfigStatus> {
@@ -595,6 +650,77 @@ mod tests {
             json!(["low", "medium", "high", "xhigh"])
         );
         assert_eq!(value[0]["cacheKey"], "stable-cache");
+    }
+
+    #[test]
+    fn workbuddy_reasoning_follows_model_and_protocol_without_stale_max() {
+        let claude =
+            WorkBuddyReasoningConfig::for_model("anthropic-messages", "custom", None, "max");
+        assert_eq!(
+            claude.supported_efforts,
+            ["low", "medium", "high", "xhigh", "max"]
+        );
+        assert_eq!(claude.default_effort, "max");
+        let gpt = WorkBuddyReasoningConfig::for_model(
+            "openai-responses",
+            "gpt-6-luna",
+            None,
+            &claude.default_effort,
+        );
+        assert_eq!(gpt.default_effort, "high");
+        assert_eq!(gpt.supported_efforts, ["low", "medium", "high", "xhigh"]);
+        for name in ["claude-opus-4-8", "vendor/Claude-Sonnet-new", "opus-4-8"] {
+            let config = WorkBuddyReasoningConfig::for_model("openai-chat", name, None, "xhigh");
+            assert_eq!(config.supported_efforts, claude.supported_efforts);
+            assert_eq!(config.default_effort, "xhigh");
+        }
+        for profile in ["glm_anthropic", "zhipu_anthropic"] {
+            let glm = WorkBuddyReasoningConfig::for_model(
+                "anthropic-messages",
+                "glm-5",
+                Some(profile),
+                "xhigh",
+            );
+            assert_eq!(glm.supported_efforts, ["high", "max"]);
+            assert_eq!(glm.default_effort, "high");
+        }
+    }
+
+    #[test]
+    fn workbuddy_anthropic_save_removes_legacy_cache_keys_and_preserves_five_efforts() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("models.json");
+        let mut model = WorkBuddyModelConfig {
+            upstream_provider: "anthropic".to_string(),
+            upstream_protocol: "anthropic-messages".to_string(),
+            provider_model: "claude-opus-new".to_string(),
+            upstream_default_reasoning_effort: "max".to_string(),
+            reasoning: WorkBuddyReasoningConfig::for_model(
+                "anthropic-messages",
+                "claude-opus-new",
+                None,
+                "max",
+            ),
+            ..Default::default()
+        };
+        model.extra.insert("cache_key".into(), json!("old-key"));
+        model.extra.insert("customField".into(), json!("keep"));
+        let saved = save_at(&path, &model).unwrap();
+        let value: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(value[0].get("cacheKey").is_none());
+        assert!(value[0].get("cache_key").is_none());
+        assert_eq!(value[0]["customField"], "keep");
+        assert_eq!(saved.model.reasoning.default_effort, "max");
+        let loaded = load_at(&path).unwrap().model;
+        assert_eq!(
+            loaded.reasoning.supported_efforts,
+            ["low", "medium", "high", "xhigh", "max"]
+        );
+        assert!(!loaded.extra.contains_key("cacheKey"));
+        assert_eq!(loaded.upstream_default_reasoning_effort, "max");
+        assert!(!uses_prompt_cache_key(&loaded.upstream_protocol));
+        assert!(uses_prompt_cache_key("openai-chat"));
+        assert!(uses_prompt_cache_key("openai-responses"));
     }
 
     #[test]

@@ -13,6 +13,120 @@ use serde_json::{Value, json};
 use super::{anthropic_messages, execute_provider_request, openai_responses};
 
 #[tokio::test]
+async fn workbuddy_model_settings_forward_efforts_and_protocol_specific_cache_controls() {
+    for provider_type in [
+        ProviderType::AnthropicMessages,
+        ProviderType::OpenAiResponses,
+        ProviderType::ChatCompletions,
+    ] {
+        let efforts = if provider_type == ProviderType::AnthropicMessages {
+            vec!["low", "medium", "high", "xhigh", "max"]
+        } else {
+            vec!["high", "xhigh"]
+        };
+        for stream in [false, true] {
+            for effort in &efforts {
+                for key in [
+                    None,
+                    Some(Value::Null),
+                    Some(json!("")),
+                    Some(json!(" \t ")),
+                    Some(json!("explicit-session")),
+                ] {
+                    let upstream = TestUpstream::start(vec![StatusCode::OK]).await;
+                    let mut provider = upstream.provider("workbuddy", provider_type.clone());
+                    provider.models = vec!["workbuddy-settings-test-model".into()];
+                    provider.model_aliases.insert(
+                        "workbuddy-settings-test-alias".into(),
+                        "workbuddy-settings-test-model".into(),
+                    );
+                    provider.prompt_cache_retention = Some("24h".into());
+                    let directory = tempfile::tempdir().unwrap();
+                    let mut config = crate::config::AppConfig::default();
+                    config.state_path = directory.path().join("state.json");
+                    config.ai_gateway.enabled = true;
+                    config.ai_gateway.providers = vec![provider];
+                    let state = crate::app_state::AppState::new(
+                        directory.path().join("config.toml"),
+                        config,
+                        None,
+                        None,
+                    );
+                    let mut request = json!({
+                        "model":"workbuddy-settings-test-alias", "stream":stream, "reasoning_effort":effort,
+                        "messages":[{"role":"system","content":"Be helpful"},{"role":"user","content":"hello"}],
+                        "tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}}],
+                    });
+                    let explicit = key
+                        .as_ref()
+                        .and_then(Value::as_str)
+                        .is_some_and(|s| !s.trim().is_empty());
+                    if let Some(key) = key {
+                        request["prompt_cache_key"] = key;
+                    }
+                    // Exercise the header fallback as well as the generated model fallback.
+                    let mut headers = HeaderMap::new();
+                    if stream {
+                        headers.insert("x-workbuddy-session-id", "header-session".parse().unwrap());
+                    }
+                    let response = crate::ai_gateway::handler::handle_workbuddy_chat_completions(
+                        State(state),
+                        headers,
+                        Bytes::from(serde_json::to_vec(&request).unwrap()),
+                    )
+                    .await;
+                    assert_eq!(
+                        response.status(),
+                        StatusCode::OK,
+                        "{provider_type:?}, {effort}, {key:?}",
+                        key = request.get("prompt_cache_key")
+                    );
+                    let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+                    let output = String::from_utf8(bytes.to_vec()).unwrap();
+                    assert!(output.contains("retry-recovered"));
+                    if stream {
+                        assert!(output.contains("[DONE]"));
+                    }
+                    let captured = upstream.requests();
+                    assert_eq!(captured.len(), 1);
+                    let body: Value = serde_json::from_slice(&captured[0].body).unwrap();
+                    assert_eq!(body["model"], "workbuddy-settings-test-model");
+                    if provider_type == ProviderType::AnthropicMessages {
+                        assert_eq!(captured[0].uri.path(), "/v1/messages");
+                        assert_eq!(body["thinking"]["type"], "adaptive");
+                        assert_eq!(body["output_config"]["effort"], *effort);
+                        assert!(body.get("reasoning_effort").is_none());
+                        assert!(body.get("prompt_cache_key").is_none());
+                        assert!(body.get("prompt_cache_retention").is_none());
+                        assert_eq!(body["tools"][0]["cache_control"]["type"], "ephemeral");
+                        assert_eq!(body["system"][0]["cache_control"]["type"], "ephemeral");
+                        assert_eq!(
+                            body["messages"][0]["content"][0]["cache_control"]["type"],
+                            "ephemeral"
+                        );
+                    } else {
+                        let expected_key = if explicit {
+                            "explicit-session"
+                        } else if stream {
+                            "header-session"
+                        } else {
+                            "workbuddy:workbuddy-settings-test-alias"
+                        };
+                        assert_eq!(body["prompt_cache_key"], expected_key);
+                        assert_eq!(body["prompt_cache_retention"], "24h");
+                        if provider_type == ProviderType::OpenAiResponses {
+                            assert_eq!(body["reasoning"]["effort"], *effort);
+                        } else {
+                            assert_eq!(body["reasoning_effort"], *effort);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[tokio::test]
 async fn workbuddy_kimi_handler_preserves_mapping_reasoning_and_http_retries() {
     for stream in [false, true] {
         let upstream =
