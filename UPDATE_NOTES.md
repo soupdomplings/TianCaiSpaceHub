@@ -1,3 +1,3 @@
-- 整合官方 v0.4.28，新增 Kimi K3 Responses 渠道、模型映射和 372K 上下文模型目录。
-- 保留天才空间品牌、WorkBuddy 接入、缓存兼容及 HTTP 502 / 503 自动重试。
-- 新增 OpenAI Chat Completions 渠道及按渠道关闭推理选项，兼容已有 DeepSeek 渠道。
+- WorkBuddy 思考强度随模型、别名及协议切换，Claude 统一支持 low、medium、high、xhigh、max 五档。
+- Anthropic 原生协议无需 OpenAI 缓存键，自动使用 cache_control；OpenAI 缓存键缺失或为空时自动补充。
+- 修复刷新配置时丢失手动协议选择的问题。升级后请重新保存 WorkBuddy 配置，并重启 WorkBuddy。
