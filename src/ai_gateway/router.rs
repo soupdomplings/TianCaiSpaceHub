@@ -49,7 +49,10 @@ pub fn resolve_provider_with_state_for_type<'a>(
     provider_type: &ProviderType,
 ) -> Result<(&'a ProviderConfig, String), GatewayError> {
     resolve_provider_with_state_matching(model, session_id, config, state, now, |provider| {
-        !provider.is_workbuddy() && &provider.provider_type == provider_type
+        !provider.is_workbuddy()
+            && (&provider.provider_type == provider_type
+                || (provider_type == &ProviderType::OpenAiResponses
+                    && provider.provider_type.is_openai()))
     })
 }
 
@@ -270,6 +273,37 @@ mod tests {
         )
         .unwrap();
         assert_eq!(workbuddy_selected.name, "workbuddy");
+    }
+
+    #[test]
+    fn responses_type_filter_keeps_account_and_workbuddy_routes_isolated() {
+        let mut account = provider("account", 1, "gpt-6-luna");
+        account.provider_type = ProviderType::ChatGptResponses;
+        let mut workbuddy = provider("workbuddy", 10_000, "gpt-6-luna");
+        workbuddy.provider_type = ProviderType::ChatGptResponses;
+        let cfg = config(vec![account, workbuddy]);
+        let mut state = GatewayRoutingState::default();
+        let now = Instant::now();
+        state.bind("shared", &provider_route_id(&cfg.providers[1]), now);
+        let (selected, _) = resolve_provider_with_state_for_type(
+            "gpt-6-luna",
+            Some("shared"),
+            &cfg,
+            &mut state,
+            now,
+            &ProviderType::OpenAiResponses,
+        )
+        .unwrap();
+        assert_eq!(selected.name, "account");
+        let (selected, _) = resolve_workbuddy_provider_with_state(
+            "gpt-6-luna",
+            Some("workbuddy:shared"),
+            &cfg,
+            &mut state,
+            now,
+        )
+        .unwrap();
+        assert_eq!(selected.name, "workbuddy");
     }
 
     #[test]

@@ -535,10 +535,14 @@ fn provider_option(provider: &ProviderConfig) -> Option<WorkBuddyProviderOption>
     Some(WorkBuddyProviderOption {
         name: provider.name.clone(),
         display_name: format!("{}{}", provider.name, disabled_suffix),
-        upstream_url: provider_display_base_url(&provider.base_url),
+        upstream_url: if provider.provider_type == ProviderType::ChatGptResponses {
+            crate::ai_gateway::chatgpt_auth::BASE_URL.to_string()
+        } else {
+            provider_display_base_url(&provider.base_url)
+        },
         upstream_api_key: provider.api_key.clone(),
         upstream_protocol: match &provider.provider_type {
-            ProviderType::OpenAiResponses => "openai-responses",
+            ProviderType::OpenAiResponses | ProviderType::ChatGptResponses => "openai-responses",
             ProviderType::AnthropicMessages => "anthropic-messages",
             _ => "openai-chat",
         }
@@ -875,6 +879,7 @@ mod tests {
                     provider("openai", ProviderType::OpenAiResponses),
                     provider("claude", ProviderType::AnthropicMessages),
                     provider("compatible", ProviderType::ChatCompletions),
+                    provider("account", ProviderType::ChatGptResponses),
                     workbuddy,
                 ],
                 ..AiGatewayConfig::default()
@@ -884,10 +889,15 @@ mod tests {
 
         let options = provider_options_from_config(&config);
 
-        assert_eq!(options.len(), 3);
+        assert_eq!(options.len(), 4);
         assert_eq!(options[0].upstream_protocol, "openai-responses");
         assert_eq!(options[1].upstream_protocol, "anthropic-messages");
         assert_eq!(options[2].upstream_protocol, "openai-chat");
+        assert_eq!(options[3].upstream_protocol, "openai-responses");
+        assert_eq!(
+            options[3].upstream_url,
+            crate::ai_gateway::chatgpt_auth::BASE_URL
+        );
         assert_eq!(options[0].upstream_url, "https://provider.example/v1");
         assert_eq!(options[0].upstream_api_key, "secret");
         assert_eq!(options[0].models, vec!["model-a", "model-b"]);

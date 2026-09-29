@@ -467,6 +467,7 @@ pub async fn proxy_chat_completion(
 
     let upstream =
         execute_provider_request(client, request, provider, "chat upstream request failed").await?;
+    request_log::record_upstream_response_headers(log_context.as_ref(), upstream.headers());
     let upstream = ensure_success_response(&provider.name, upstream).await?;
     if stream {
         let bytes = upstream.bytes_stream();

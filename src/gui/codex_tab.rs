@@ -39,6 +39,9 @@ pub(super) struct CodexTab {
     clear_button: Button,
     session_history_button: Button,
     enhanced_launch_button: Button,
+    websocket_checkbox: CheckBox,
+    websocket_enabled: Rc<Cell<bool>>,
+    websocket_saving: Rc<Cell<bool>>,
     save_models_button: Button,
     sync_models_button: Button,
     fetch_models_button: Button,
@@ -49,6 +52,8 @@ pub(super) struct CodexTab {
     model_slugs: CodexModelSlugs,
     models_initialized: CodexModelsInitialized,
     configured: CodexConfigured,
+    config_up_to_date: Rc<Cell<bool>>,
+    config_saving: Rc<Cell<bool>>,
     remote_ready: CodexHubReady,
     service_enabled: CodexServiceEnabled,
     local_connection_mode: Rc<Cell<LocalConnectionMode>>,
@@ -87,6 +92,19 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> CodexTab {
         &local_config_hint,
         0,
         SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Top,
+        10,
+    );
+    let websocket_checkbox = CheckBox::builder(&local_config_box)
+        .with_label(text.provider_websocket())
+        .with_value(false)
+        .build();
+    websocket_checkbox.set_tooltip(text.provider_websocket_help());
+    websocket_checkbox.set_foreground_color(theme::theme().ink_primary);
+    websocket_checkbox.enable(false);
+    local_config_section.add(
+        &websocket_checkbox,
+        0,
+        SizerFlag::Left | SizerFlag::Right | SizerFlag::Top,
         10,
     );
     let local_config_actions = BoxSizer::builder(Orientation::Horizontal).build();
@@ -301,6 +319,9 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> CodexTab {
         clear_button,
         session_history_button,
         enhanced_launch_button,
+        websocket_checkbox,
+        websocket_enabled: Rc::new(Cell::new(false)),
+        websocket_saving: Rc::new(Cell::new(false)),
         save_models_button,
         sync_models_button,
         fetch_models_button,
@@ -311,6 +332,8 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> CodexTab {
         model_slugs,
         models_initialized: Rc::new(Cell::new(false)),
         configured: Rc::new(Cell::new(false)),
+        config_up_to_date: Rc::new(Cell::new(false)),
+        config_saving: Rc::new(Cell::new(false)),
         remote_ready: Rc::new(Cell::new(false)),
         service_enabled: Rc::new(Cell::new(false)),
         local_connection_mode: Rc::new(Cell::new(LocalConnectionMode::Standard)),
@@ -326,6 +349,7 @@ pub(super) fn bind_actions(
     in_flight: &Arc<AtomicBool>,
 ) {
     bind_inject_action(api, frame, tab, refresh, gui_tx, in_flight);
+    bind_websocket_action(api, frame, tab, refresh, gui_tx, in_flight);
     bind_enhanced_launch_action(api, frame, tab, refresh, gui_tx, in_flight);
     bind_save_models_action(api, frame, tab, refresh, gui_tx, in_flight);
     bind_sync_models_action(api, frame, tab, refresh, gui_tx, in_flight);
@@ -349,9 +373,17 @@ pub(super) fn set_actions_enabled(tab: &CodexTab, enabled: bool) {
         .enable(enabled && tab.remote_ready.get());
 }
 
-pub(super) fn refresh_configured(tab: &CodexTab, configured: bool) {
+pub(super) fn refresh_configured(tab: &CodexTab, configured: bool, config_up_to_date: bool) {
     tab.configured.set(configured);
+    tab.config_up_to_date.set(configured && config_up_to_date);
     refresh_config_buttons(tab, tab.service_enabled.get());
+}
+
+pub(super) fn refresh_websocket(tab: &CodexTab, enabled: bool) {
+    if !tab.websocket_saving.get() {
+        tab.websocket_enabled.set(enabled);
+        tab.websocket_checkbox.set_value(enabled);
+    }
 }
 
 pub(super) fn refresh_local_connection_mode(tab: &CodexTab, mode: LocalConnectionMode) {
@@ -424,6 +456,12 @@ pub(super) fn apply_pending_action(
     refresh: &DashboardRefresh,
     result: CodexActionResult,
 ) {
+    if matches!(
+        &result,
+        CodexActionResult::Inject(_) | CodexActionResult::Clear(_)
+    ) {
+        tab.config_saving.set(false);
+    }
     tab.inject_button.set_label(text.inject_codex_access());
     tab.clear_button.set_label(text.clear_codex_access());
     tab.save_models_button.set_label(text.save_codex_models());
@@ -439,8 +477,24 @@ pub(super) fn apply_pending_action(
     tab.model_provider.enable(service_enabled);
 
     match result {
+        CodexActionResult::WebSocket(result) => {
+            tab.websocket_saving.set(false);
+            match result {
+                Ok(enabled) => {
+                    refresh_websocket(tab, enabled);
+                    show_info(frame, text.provider_websocket_saved());
+                }
+                Err(error) => {
+                    tab.websocket_checkbox
+                        .set_value(tab.websocket_enabled.get());
+                    show_error(frame, &error);
+                }
+            }
+            refresh_config_buttons(tab, service_enabled);
+            force_dashboard_refresh(api, refresh);
+        }
         CodexActionResult::Inject(Ok(_)) => {
-            refresh_configured(tab, true);
+            refresh_configured(tab, true, true);
             show_info(frame, text.codex_app_config_injected());
             force_dashboard_refresh(api, refresh);
         }
@@ -449,7 +503,7 @@ pub(super) fn apply_pending_action(
             force_dashboard_refresh(api, refresh);
         }
         CodexActionResult::Clear(Ok(_)) => {
-            refresh_configured(tab, false);
+            refresh_configured(tab, false, false);
             show_info(frame, text.codex_app_config_uninstalled());
             force_dashboard_refresh(api, refresh);
         }
@@ -517,13 +571,33 @@ fn merge_model_ids(existing: &str, incoming: &[String]) -> Vec<String> {
 
 fn refresh_config_buttons(tab: &CodexTab, service_enabled: bool) {
     let configured = tab.configured.get();
-    tab.inject_button.enable(service_enabled && !configured);
+    if !tab.config_saving.get() {
+        tab.inject_button.set_label(if tab.config_up_to_date.get() {
+            tab.text.codex_config_up_to_date()
+        } else if configured {
+            tab.text.update_codex_access()
+        } else {
+            tab.text.inject_codex_access()
+        });
+    }
+    tab.inject_button.enable(config_update_enabled(
+        service_enabled,
+        tab.config_up_to_date.get(),
+        tab.config_saving.get(),
+    ));
     tab.enhanced_launch_button
         .enable(service_enabled && configured);
     tab.clear_button.enable(service_enabled && configured);
+    tab.websocket_checkbox
+        .enable(service_enabled && configured && !tab.websocket_saving.get());
+}
+
+fn config_update_enabled(service_enabled: bool, up_to_date: bool, saving: bool) -> bool {
+    service_enabled && !up_to_date && !saving
 }
 
 pub(super) enum CodexActionResult {
+    WebSocket(Result<bool, String>),
     Inject(Result<serde_json::Value, String>),
     Clear(Result<serde_json::Value, String>),
     SaveModels(Result<(), String>),
@@ -603,6 +677,7 @@ fn bind_inject_action(
             in_flight.store(false, Ordering::SeqCst);
             return;
         }
+        tab.config_saving.set(true);
         tab.inject_button
             .set_label(tab.text.injecting_codex_access());
         tab.inject_button.enable(false);
@@ -613,7 +688,7 @@ fn bind_inject_action(
             provider_key: None,
             activate: true,
             image_generation_enabled: None,
-            supports_websockets: false,
+            supports_websockets: None,
         };
         let thread_api = api.clone();
         let gui_tx = gui_tx.clone();
@@ -627,6 +702,51 @@ fn bind_inject_action(
             wxdragon::wake_up_idle();
         });
         schedule_dashboard_refresh(&api, &refresh);
+    });
+}
+
+fn bind_websocket_action(
+    api: &ApiClient,
+    frame: &Frame,
+    tab: &CodexTab,
+    refresh: &DashboardRefresh,
+    gui_tx: &UnboundedSender<super::GuiMessage>,
+    in_flight: &Arc<AtomicBool>,
+) {
+    let api = api.clone();
+    let frame = *frame;
+    let tab = tab.clone();
+    let refresh = refresh.clone();
+    let gui_tx = gui_tx.clone();
+    let in_flight = in_flight.clone();
+    let checkbox = tab.websocket_checkbox;
+    checkbox.on_toggled(move |_| {
+        let enabled = checkbox.get_value();
+        if !tab.configured.get()
+            || tab.websocket_saving.get()
+            || in_flight.swap(true, Ordering::SeqCst)
+        {
+            checkbox.set_value(tab.websocket_enabled.get());
+            return;
+        }
+        if !ensure_service_ready_for_action(&api, &frame, &refresh) {
+            checkbox.set_value(tab.websocket_enabled.get());
+            in_flight.store(false, Ordering::SeqCst);
+            return;
+        }
+        tab.websocket_saving.set(true);
+        checkbox.enable(false);
+        let api = api.clone();
+        let gui_tx = gui_tx.clone();
+        let in_flight = in_flight.clone();
+        thread::spawn(move || {
+            let outcome = api.set_codex_websocket(enabled);
+            in_flight.store(false, Ordering::SeqCst);
+            let _ = gui_tx.send(super::GuiMessage::CodexAction(
+                CodexActionResult::WebSocket(outcome),
+            ));
+            wxdragon::wake_up_idle();
+        });
     });
 }
 
@@ -881,6 +1001,7 @@ fn bind_clear_action(
             in_flight.store(false, Ordering::SeqCst);
             return;
         }
+        tab.config_saving.set(true);
         tab.clear_button.set_label(tab.text.clearing_codex_access());
         tab.clear_button.enable(false);
         let thread_api = api.clone();
@@ -1046,6 +1167,18 @@ fn bind_fetch_models_action(
                             && provider.name == provider_name
                     })
                     .ok_or_else(|| "Selected provider is unavailable".to_string())?;
+                if provider.provider_type
+                    == crate::ai_gateway::config::ProviderType::ChatGptResponses
+                {
+                    let id = provider.chatgpt_auth_id.as_deref().ok_or_else(|| {
+                        "Sign in to the selected ChatGPT channel first".to_string()
+                    })?;
+                    return api.post_json_with_timeout::<_, Vec<String>>(
+                        "/api/chatgpt/account/models",
+                        &serde_json::json!({"id": id}),
+                        std::time::Duration::from_secs(75),
+                    );
+                }
                 let (models, _) = super::fetch_remote_models(
                     &provider.base_url,
                     provider.models_url.as_deref(),
@@ -1130,5 +1263,20 @@ mod dynamic_model_tests {
             assert!(bind_unrouted_models(&mut config, &["new-model".into()], name).is_err());
         }
         assert!(config.providers.iter().all(|p| p.models.is_empty()));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::config_update_enabled;
+
+    #[test]
+    fn config_update_button_only_enables_for_pending_changes() {
+        assert!(config_update_enabled(true, false, false));
+        assert!(!config_update_enabled(true, true, false));
+        assert!(!config_update_enabled(true, false, true));
+        assert!(!config_update_enabled(true, true, true));
+        assert!(!config_update_enabled(false, false, false));
+        assert!(!config_update_enabled(false, true, false));
     }
 }

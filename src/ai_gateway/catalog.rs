@@ -72,6 +72,29 @@ pub fn visible_catalog_model_options_for_config(
     options
 }
 
+/// The model-list protocol version follows the embedded official GPT catalog,
+/// independently of CodexHub's application version.
+pub(crate) fn codex_compatibility_version() -> String {
+    catalog_models()
+        .iter()
+        .filter(|model| model_slug(model).is_some_and(|slug| slug.starts_with("gpt-")))
+        .filter_map(|model| model.get("minimal_client_version").and_then(Value::as_str))
+        .filter_map(|value| {
+            let segments = value
+                .split('.')
+                .map(str::parse::<u64>)
+                .collect::<Result<Vec<_>, _>>()
+                .ok()?;
+            let [major, minor, patch] = segments.as_slice() else {
+                return None;
+            };
+            Some((*major, *minor, *patch))
+        })
+        .max()
+        .map(|(major, minor, patch)| format!("{major}.{minor}.{patch}"))
+        .expect("official GPT catalog must include a minimum Codex version")
+}
+
 #[cfg(test)]
 pub fn configured_models_response(config: &AiGatewayConfig) -> Value {
     build_configured_models_response(config)
@@ -381,7 +404,7 @@ fn provider_template_slug(provider: &ProviderConfig) -> Option<&'static str> {
         ProviderType::AnthropicMessages => Some("Opus-4.8"),
         ProviderType::GrokResponses => Some("grok-4.6"),
         ProviderType::ChatCompletions => Some("gpt-5.5"),
-        ProviderType::OpenAiResponses => Some("gpt-5.6-sol"),
+        ProviderType::OpenAiResponses | ProviderType::ChatGptResponses => Some("gpt-5.6-sol"),
     }
 }
 
@@ -462,6 +485,8 @@ mod tests {
             "deepseek-v4-flash",
             "GLM-5.3",
             "GLM-5.3-Flash",
+            "gpt-6-sol",
+            "gpt-6-luna",
             "custom-model",
             "codex-auto-review",
         ]);
@@ -486,6 +511,8 @@ mod tests {
                 "deepseek-v4-flash",
                 "GLM-5.3",
                 "GLM-5.3-Flash",
+                "gpt-6-sol",
+                "gpt-6-luna",
                 "custom-model"
             ]
         );
@@ -567,18 +594,18 @@ mod tests {
 
     #[test]
     fn configured_models_response_uses_provider_model_as_dynamic_entry() {
-        let mut config = config(&["gpt-6-luna"]);
+        let mut config = config(&["gpt-6-next"]);
         config.providers.push(ProviderConfig {
             name: "openai".to_string(),
             provider_type: ProviderType::OpenAiResponses,
-            models: vec!["gpt-6-luna".to_string()],
+            models: vec!["gpt-6-next".to_string()],
             ..ProviderConfig::default()
         });
 
         let response = configured_models_response(&config);
         let model = &response["models"][0];
-        assert_eq!(model["slug"], "gpt-6-luna");
-        assert_eq!(model["display_name"], "gpt-6-luna");
+        assert_eq!(model["slug"], "gpt-6-next");
+        assert_eq!(model["display_name"], "gpt-6-next");
         assert_eq!(model["supported_in_api"], true);
         assert_eq!(model["visibility"], "list");
         assert_eq!(model["use_responses_lite"], true);
@@ -610,8 +637,10 @@ mod tests {
     #[test]
     fn model_families_inherit_complete_advanced_capabilities() {
         for (id, donor) in [
-            ("GPT-6-LUNA", "gpt-6-astra"),
-            ("vendor/gpt-6-luna", "gpt-6-astra"),
+            ("GPT-6-NEXT", "gpt-6-astra"),
+            ("vendor/gpt-6-next", "gpt-6-astra"),
+            ("GPT-6-LUNA", "gpt-6-luna"),
+            ("vendor/gpt-6-luna", "gpt-6-luna"),
             ("gpt-5-new", "gpt-5.6-sol"),
             ("deepseek-v4-new", "deepseek-v4-pro"),
             ("deepseek-v4-flash-next", "deepseek-v4-flash"),
@@ -644,7 +673,7 @@ mod tests {
             ..Default::default()
         });
         let response = configured_models_response(&config);
-        assert_inherits_all_capabilities(&response["models"][0], "gpt-6-astra");
+        assert_inherits_all_capabilities(&response["models"][0], "gpt-6-luna");
         let original_etag = configured_models_etag(&config);
         config
             .codex_model_profiles
@@ -660,11 +689,11 @@ mod tests {
 
     #[test]
     fn explicit_overrides_preserve_other_inherited_fields() {
-        let mut config = config(&["gpt-6-luna"]);
+        let mut config = config(&["gpt-6-next"]);
         config
             .codex_model_profiles
             .push(super::super::config::CodexModelProfile {
-                id: "gpt-6-luna".into(),
+                id: "gpt-6-next".into(),
                 context_window: Some(64000),
                 supports_reasoning: Some(false),
                 ..Default::default()
@@ -679,7 +708,7 @@ mod tests {
         );
         config.codex_model_profiles[0].supports_reasoning = Some(true);
         let response = configured_models_response(&config);
-        let donor = family_template(catalog_models(), "gpt-6-luna").unwrap();
+        let donor = family_template(catalog_models(), "gpt-6-next").unwrap();
         assert_eq!(
             response["models"][0]["supported_reasoning_levels"],
             donor["supported_reasoning_levels"]
@@ -955,7 +984,9 @@ mod tests {
     fn gpt_lite_models_use_current_official_capabilities() {
         for (slug, priority) in [
             ("gpt-6-astra", 1),
-            ("gpt-5.6-sol", 6),
+            ("gpt-6-sol", 2),
+            ("gpt-6-luna", 3),
+            ("gpt-5.6-sol", 4),
             ("gpt-5.6-terra", 7),
             ("gpt-5.6-luna", 8),
         ] {
@@ -967,6 +998,7 @@ mod tests {
             assert_eq!(model["context_window"], 272_000, "model {slug}");
             assert_eq!(model["max_context_window"], 872_000, "model {slug}");
             assert_eq!(model["use_responses_lite"], true, "model {slug}");
+            assert_eq!(model["shell_type"], "shell_command", "model {slug}");
             assert_eq!(
                 model["supports_reasoning_summary_parameter"], true,
                 "model {slug}"
@@ -983,6 +1015,7 @@ mod tests {
             .find(|model| model_slug(model) == Some("gpt-5.5"))
             .expect("gpt-5.5 should exist");
         assert_eq!(gpt_5_5["visibility"], "list");
+        assert_eq!(gpt_5_5["shell_type"], "shell_command");
         assert_eq!(gpt_5_5["supports_reasoning_summary_parameter"], true);
         assert_eq!(gpt_5_5.get("availability_nux"), Some(&Value::Null));
 
@@ -1009,6 +1042,8 @@ mod tests {
             "grok-4.6",
             "gpt-5.5",
             "gpt-6-astra",
+            "gpt-6-sol",
+            "gpt-6-luna",
             "GLM-5.3",
             "GLM-5.3-Flash",
         ] {

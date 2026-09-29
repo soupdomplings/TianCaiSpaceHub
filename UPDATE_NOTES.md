@@ -1,3 +1,4 @@
-- WorkBuddy 思考强度随模型、别名及协议切换，Claude 统一支持 low、medium、high、xhigh、max 五档。
-- Anthropic 原生协议无需 OpenAI 缓存键，自动使用 cache_control；OpenAI 缓存键缺失或为空时自动补充。
-- 修复刷新配置时丢失手动协议选择的问题。升级后请重新保存 WorkBuddy 配置，并重启 WorkBuddy。
+- 整合官方 v0.4.29：新增 ChatGPT 账号登录、账号用量查询及 Responses WebSocket。
+- 同步 GPT-6 Sol/Luna 模型目录，保留动态模型选择、厂商模型获取和同系列能力继承。
+- 保留 WorkBuddy Claude 五档思考强度、原生缓存处理和 502 / 503 自动重试。
+- 保留窗口自动最大化及关闭更新检查的定制，合入 Linux 下载文件名修复。

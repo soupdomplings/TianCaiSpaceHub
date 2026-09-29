@@ -144,6 +144,7 @@ pub async fn handle(
         "anthropic upstream request failed",
     )
     .await?;
+    request_log::record_upstream_response_headers(log_context.as_ref(), upstream_resp.headers());
     let upstream_resp = ensure_success_response(&provider.name, upstream_resp).await?;
 
     if request.stream {
@@ -454,6 +455,7 @@ async fn stream_anthropic_round(
         "anthropic upstream request failed",
     )
     .await?;
+    request_log::record_upstream_response_headers(log_context.as_ref(), upstream_resp.headers());
     let upstream_resp = ensure_success_response(&provider.name, upstream_resp).await?;
 
     envelope.ensure_started(tx).await?;
@@ -582,6 +584,7 @@ async fn execute_anthropic_stream_message(
         "anthropic upstream request failed",
     )
     .await?;
+    request_log::record_upstream_response_headers(log_context.as_ref(), upstream_resp.headers());
     let upstream_resp = ensure_success_response(&provider.name, upstream_resp).await?;
     // This buffered path serves the main answer stream, so the first upstream
     // content token here is what TTFT should measure. The internal web-search
@@ -611,6 +614,7 @@ async fn execute_internal_web_search(
         "anthropic internal web search request failed",
     )
     .await?;
+    request_log::record_upstream_response_headers(log_context.as_ref(), upstream_resp.headers());
     let upstream_resp = ensure_success_response(&provider.name, upstream_resp).await?;
     let raw = read_sse_to_string(upstream_resp, log_context, false).await?;
     Ok(search_results_to_tool_text(query, &raw))

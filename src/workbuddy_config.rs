@@ -381,8 +381,21 @@ pub fn apply_provider(config: &mut AppConfig, model: &WorkBuddyModelConfig) {
         .unwrap_or_default();
     provider.name = WORKBUDDY_PROVIDER_NAME.to_string();
     provider.enabled = true;
-    provider.provider_type = provider_type;
-    provider.base_url = provider_display_base_url(&model.upstream_url);
+    // Account channels use the Responses wire format but must retain their
+    // credential reference and OAuth refresh behavior when cloned for WorkBuddy.
+    provider.provider_type = if provider_type == ProviderType::OpenAiResponses
+        && provider.provider_type == ProviderType::ChatGptResponses
+    {
+        ProviderType::ChatGptResponses
+    } else {
+        provider_type
+    };
+    provider.base_url = if provider.provider_type == ProviderType::ChatGptResponses {
+        crate::ai_gateway::chatgpt_auth::BASE_URL.to_string()
+    } else {
+        provider.chatgpt_auth_id = None;
+        provider_display_base_url(&model.upstream_url)
+    };
     provider.api_key = model.upstream_api_key.clone();
     provider.models = vec![model.provider_model.clone()];
     if !matches!(&provider.provider_type, ProviderType::AnthropicMessages) {
@@ -630,6 +643,59 @@ mod tests {
         assert_eq!(workbuddy.timeout_secs, 321);
         assert_eq!(workbuddy.models, vec!["model-b"]);
         assert_eq!(config.ai_gateway.providers[0].name, "claude-compatible");
+    }
+
+    #[test]
+    fn account_provider_survives_workbuddy_roundtrip_and_protocol_switch() {
+        let source = ProviderConfig {
+            name: "signed-in-account".into(),
+            provider_type: ProviderType::ChatGptResponses,
+            chatgpt_auth_id: Some("test-credential-reference".into()),
+            base_url: crate::ai_gateway::chatgpt_auth::BASE_URL.into(),
+            models: vec!["gpt-6-luna".into()],
+            model_aliases: [("coding".into(), "gpt-6-luna".into())].into(),
+            ..Default::default()
+        };
+        let source_json = serde_json::to_value(&source).unwrap();
+        let mut config = AppConfig::default();
+        config.ai_gateway.providers.push(source);
+        let model = WorkBuddyModelConfig {
+            upstream_provider: "signed-in-account".into(),
+            upstream_protocol: "openai-responses".into(),
+            upstream_url: "https://ignored.example/v1".into(),
+            provider_model: "coding".into(),
+            ..Default::default()
+        };
+        let mut restored = parse_config_text(&serialize_config(&model).unwrap()).unwrap();
+        apply_provider(&mut config, &restored);
+        let workbuddy = &config.ai_gateway.providers[1];
+        assert!(workbuddy.is_workbuddy());
+        assert_eq!(workbuddy.provider_type, ProviderType::ChatGptResponses);
+        assert_eq!(
+            workbuddy.chatgpt_auth_id.as_deref(),
+            Some("test-credential-reference")
+        );
+        assert_eq!(
+            workbuddy.base_url,
+            crate::ai_gateway::chatgpt_auth::BASE_URL
+        );
+        assert_eq!(workbuddy.models, ["coding"]);
+        assert_eq!(workbuddy.model_aliases["coding"], "gpt-6-luna");
+
+        restored.upstream_protocol = "openai-chat".into();
+        restored.upstream_url = "https://api.example".into();
+        restored.upstream_api_key = "api-key".into();
+        apply_provider(&mut config, &restored);
+        assert_eq!(config.ai_gateway.providers.len(), 2);
+        let workbuddy = &config.ai_gateway.providers[1];
+        assert_eq!(workbuddy.provider_type, ProviderType::ChatCompletions);
+        assert!(workbuddy.chatgpt_auth_id.is_none());
+        assert_eq!(workbuddy.base_url, "https://api.example/v1");
+        assert_eq!(workbuddy.api_key, "api-key");
+        assert_eq!(
+            serde_json::to_value(&config.ai_gateway.providers[0]).unwrap(),
+            source_json
+        );
     }
 
     #[test]

@@ -19,6 +19,7 @@ use sha2::{Digest, Sha256};
 use url::Url;
 use wxdragon::{prelude::*, timer::Timer};
 
+use super::browser::open_url_in_browser;
 #[cfg(target_os = "windows")]
 use super::daemon::hide_command_window;
 use super::text::GuiText;
@@ -835,6 +836,16 @@ mod update_tests {
         assert!(macos.contains("\"notes\": update_notes"));
         assert!(linux.contains("Path(\"UPDATE_NOTES.md\").read_text"));
         assert!(linux.contains("target/dist/latest-linux.json"));
+        for name in [
+            "TianCaiSpaceHub.Linux.x86_64.AppImage",
+            "TianCaiSpaceHub.Linux.x86_64.tar.gz",
+        ] {
+            assert!(linux.contains(&format!("dist / \"{name}\"")));
+            assert!(linux.contains(&format!("target/dist/{name}")));
+            assert!(
+                !linux.contains(&name.replace("TianCaiSpaceHub.Linux.", "TianCaiSpace Hub Linux "))
+            );
+        }
         assert!(windows.contains("make_latest: false"));
         assert!(linux.contains("make_latest: false"));
         assert!(macos.contains("make_latest: ${{ contains(github.ref_name, '-')"));
@@ -958,36 +969,4 @@ mod update_tests {
         assert!(script.contains("'C:\\Temp\\CodexHub Update''s.msi'"));
         assert!(script.contains("'msiexec.exe'"));
     }
-}
-
-fn open_url_in_browser(text: GuiText, url: &str) -> Result<(), String> {
-    let url = url.trim();
-    if url.is_empty() {
-        return Err(text.empty_download_url().to_string());
-    }
-
-    #[cfg(target_os = "windows")]
-    let mut command = {
-        let mut command = Command::new("cmd");
-        command.args(["/C", "start", "", url]);
-        hide_command_window(&mut command);
-        command
-    };
-    #[cfg(target_os = "macos")]
-    let mut command = {
-        let mut command = Command::new("open");
-        command.arg(url);
-        command
-    };
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let mut command = {
-        let mut command = Command::new("xdg-open");
-        command.arg(url);
-        command
-    };
-
-    command
-        .spawn()
-        .map(|_| ())
-        .map_err(|err| text.open_browser_failed(&err.to_string(), url))
 }

@@ -1,5 +1,6 @@
 pub mod apply_patch_tool;
 pub mod catalog;
+pub mod chatgpt_auth;
 #[allow(dead_code)]
 pub mod codec;
 pub mod config;
@@ -18,6 +19,7 @@ pub mod router;
 pub mod routing_state;
 pub mod tool_names;
 pub mod transform;
+mod websocket;
 pub mod workbuddy;
 
 use axum::{
@@ -31,7 +33,10 @@ use crate::app_state::SharedState;
 /// 构建 AI Gateway 子路由（state 由父 Router 提供）。
 pub fn router() -> Router<SharedState> {
     Router::new()
-        .route("/v1/responses", post(handler::handle_responses))
+        .route(
+            "/v1/responses",
+            post(handler::handle_responses).get(websocket::handle_upgrade),
+        )
         .route(
             "/v1/chat/completions",
             post(handler::handle_workbuddy_chat_completions),

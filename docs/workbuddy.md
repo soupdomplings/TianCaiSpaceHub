@@ -23,6 +23,7 @@ TianCaiSpace Hub 提供独立的 WorkBuddy 接入页签。WorkBuddy 调用本机
 ## 协议规则
 
 - AI Gateway 的 `OpenAiResponses` provider 自动映射为 `openai-responses`。
+- ChatGPT 账号登录渠道同样使用 `openai-responses`。先在“大模型接入”完成登录并配置模型，WorkBuddy 会复用账号凭证引用和自动刷新能力，无需填写账号令牌；上游固定使用官方账号接口。
 - `AnthropicMessages` provider 自动映射为 `anthropic-messages`。
 - DeepSeek、Grok、Chat Completions 和其他 provider 类型自动按 `openai-chat` 处理。
 - 协议仍可在 WorkBuddy 页签中手动调整，便于第三方兼容服务。

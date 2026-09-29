@@ -270,6 +270,7 @@ fn chat_reasoning_setting_defaults_off_and_is_channel_scoped() {
     for provider_type in [
         ProviderType::ChatCompletions,
         ProviderType::OpenAiResponses,
+        ProviderType::ChatGptResponses,
         ProviderType::AnthropicMessages,
         ProviderType::DeepSeekResponses,
         ProviderType::KimiResponses,
