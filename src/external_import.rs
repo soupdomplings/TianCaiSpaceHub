@@ -17,6 +17,7 @@ mod tests;
 
 pub const MAX_LINK_BYTES: usize = 8192;
 pub const MAX_MODELS: usize = 2048;
+#[cfg(test)]
 pub const OFFICIAL_ORIGIN: &str = "https://tiancai.yc99.space";
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -29,10 +30,6 @@ impl std::fmt::Debug for ImportLink {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("ImportLink(<redacted>)")
     }
-}
-
-pub fn allow_local_development() -> bool {
-    std::env::var("TIANCAISPACE_IMPORT_ALLOW_LOCALHOST").as_deref() == Ok("1")
 }
 
 fn valid_percent_encoding(raw: &str) -> bool {
@@ -55,7 +52,7 @@ fn valid_percent_encoding(raw: &str) -> bool {
 }
 
 impl ImportLink {
-    pub fn parse(raw: &str, local: bool) -> Result<Self, String> {
+    pub fn parse(raw: &str) -> Result<Self, String> {
         if raw.len() > MAX_LINK_BYTES
             || !raw.is_ascii()
             || raw.bytes().any(|c| c <= 32 || c == 127)
@@ -102,7 +99,7 @@ impl ImportLink {
             return Err("导入码格式无效 / Invalid ticket".into());
         }
         Ok(Self {
-            origin: validate_origin(&origin, local)?,
+            origin: validate_origin(&origin)?,
             ticket,
         })
     }
@@ -112,7 +109,7 @@ impl ImportLink {
     }
 }
 
-pub fn validate_endpoint(raw: &str, local: bool) -> Result<Url, String> {
+pub fn validate_endpoint(raw: &str) -> Result<Url, String> {
     if raw.len() > 2048
         || raw.trim() != raw
         || raw.chars().any(char::is_control)
@@ -122,26 +119,27 @@ pub fn validate_endpoint(raw: &str, local: bool) -> Result<Url, String> {
         return Err("接口地址格式无效 / Invalid endpoint".into());
     }
     let url = Url::parse(raw).map_err(|_| "接口地址格式无效 / Invalid endpoint")?;
-    let is_loopback = matches!(
-        url.host_str(),
-        Some("localhost" | "127.0.0.1" | "[::1]" | "::1")
-    );
-    if (url.scheme() != "https" && !(local && is_loopback && url.scheme() == "http"))
-        || url.host_str().is_none()
-        || !url.username().is_empty()
+    // Compatible sites may use local, LAN, or custom HTTP endpoints. Address
+    // policy must be identical in every process, with no domain allowlist.
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+        return Err(
+            "接口地址须为有效的 HTTP 或 HTTPS URL / Expected an HTTP or HTTPS endpoint".into(),
+        );
+    }
+    if !url.username().is_empty()
         || url.password().is_some()
         || url.fragment().is_some()
         || url.query().is_some()
     {
         return Err(
-            "接口须使用 HTTPS，且不能包含凭据、查询参数或片段 / Invalid endpoint security settings"
+            "接口地址不能包含用户名密码、查询参数或片段 / Endpoint credentials, query and fragment are not allowed"
                 .into(),
         );
     }
     Ok(url)
 }
 
-pub fn validate_origin(raw: &str, local: bool) -> Result<String, String> {
+pub fn validate_origin(raw: &str) -> Result<String, String> {
     if raw.split_once("://").is_none_or(|(_, authority)| {
         authority
             .split_once('/')
@@ -149,7 +147,7 @@ pub fn validate_origin(raw: &str, local: bool) -> Result<String, String> {
     }) {
         return Err("站点来源不能包含路径 / Origin must not contain a path".into());
     }
-    let url = validate_endpoint(raw, local)?;
+    let url = validate_endpoint(raw)?;
     if url.path() != "/" {
         return Err("站点来源不能包含路径 / Origin must not contain a path".into());
     }
@@ -231,12 +229,12 @@ pub fn normalized_models(models: &[String]) -> Result<Vec<String>, String> {
 }
 
 impl ResolveData {
-    pub(super) fn into_draft(self, link: &ImportLink, local: bool) -> Result<ImportDraft, String> {
+    pub(super) fn into_draft(self, link: &ImportLink) -> Result<ImportDraft, String> {
         if self.schema_version != 1 || self.target != "tiancaispace-hub" {
             return Err("导入协议版本不支持，请升级 Hub / Unsupported import schema".into());
         }
         let mut source = self.source;
-        source.origin = validate_origin(&source.origin, local)?;
+        source.origin = validate_origin(&source.origin)?;
         if source.origin != link.origin
             || !text_valid(&source.key_id, 256)
             || !text_valid(&source.site_name, 256)
@@ -252,9 +250,9 @@ impl ResolveData {
             "grok_responses" => (ProviderType::GrokResponses, None),
             _ => return Err("渠道协议不支持，请升级 Hub / Unsupported provider protocol".into()),
         };
-        validate_endpoint(&wire.base_url, local)?;
+        validate_endpoint(&wire.base_url)?;
         if let Some(url) = &wire.models_url {
-            validate_endpoint(url, local)?;
+            validate_endpoint(url)?;
         }
         if !text_valid(&wire.name, 256)
             || wire.name.eq_ignore_ascii_case("workbuddy")
@@ -391,7 +389,7 @@ pub fn merge_import(config: &mut AppConfig, request: &CommitImport) -> Result<()
     Ok(())
 }
 
-pub fn validate_draft(draft: &ImportDraft, local: bool) -> Result<(), String> {
+pub fn validate_draft(draft: &ImportDraft) -> Result<(), String> {
     if draft.provider.model_aliases.len() > MAX_MODELS
         || draft
             .provider
@@ -425,13 +423,10 @@ pub fn validate_draft(draft: &ImportDraft, local: bool) -> Result<(), String> {
             model_aliases: wire_aliases,
         },
     };
-    let normalized = data.into_draft(
-        &ImportLink {
-            origin: draft.source.origin.clone(),
-            ticket: String::new(),
-        },
-        local,
-    )?;
+    let normalized = data.into_draft(&ImportLink {
+        origin: draft.source.origin.clone(),
+        ticket: String::new(),
+    })?;
     if normalized.provider.compatibility != draft.provider.compatibility {
         return Err("导入兼容配置无效 / Invalid import compatibility".into());
     }

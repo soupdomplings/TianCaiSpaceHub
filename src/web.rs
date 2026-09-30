@@ -363,10 +363,7 @@ async fn commit_external_import(
 ) -> impl IntoResponse {
     let mut current = state.config.lock().await;
     let outcome = (|| -> Result<AppConfig, String> {
-        crate::external_import::validate_draft(
-            &request.draft,
-            crate::external_import::allow_local_development(),
-        )?;
+        crate::external_import::validate_draft(&request.draft)?;
         let mut config = AppConfig::load_or_default(&state.config_path)
             .map_err(|_| "无法读取当前配置 / Cannot read current configuration")?;
         crate::external_import::merge_import(&mut config, &request)?;

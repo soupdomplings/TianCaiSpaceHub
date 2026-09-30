@@ -62,11 +62,8 @@ impl Cli {
                     anyhow::bail!("import-url requires one import link");
                 }
                 Command::Import(
-                    crate::external_import::ImportLink::parse(
-                        &remaining[1],
-                        crate::external_import::allow_local_development(),
-                    )
-                    .map_err(anyhow::Error::msg)?,
+                    crate::external_import::ImportLink::parse(&remaining[1])
+                        .map_err(anyhow::Error::msg)?,
                 )
             }
             Some("register-web-import") => Command::RegisterImport,
@@ -76,11 +73,7 @@ impl Cli {
                     anyhow::bail!("invalid import arguments");
                 }
                 Command::Import(
-                    crate::external_import::ImportLink::parse(
-                        link,
-                        crate::external_import::allow_local_development(),
-                    )
-                    .map_err(anyhow::Error::msg)?,
+                    crate::external_import::ImportLink::parse(link).map_err(anyhow::Error::msg)?,
                 )
             }
             Some("daemon") | Some("run") => Command::Daemon,

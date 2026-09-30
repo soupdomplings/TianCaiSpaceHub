@@ -5,7 +5,7 @@ use crate::{
 };
 use std::{
     cell::{Cell, RefCell},
-    collections::{HashSet, VecDeque},
+    collections::VecDeque,
     rc::Rc,
     sync::mpsc,
     thread,
@@ -19,8 +19,6 @@ enum Work {
 }
 enum Action {
     Overflow,
-    Origin(ImportLink),
-    Destination(ImportDraft),
     Preview(ImportDraft),
     Error(String),
 }
@@ -55,19 +53,16 @@ fn run_network<T>(
 
 fn resolve(link: ImportLink, sender: mpsc::Sender<Work>) {
     thread::spawn(move || {
-        let outcome = run_network(async move |client| {
-            import::client::resolve(&client, &link, import::allow_local_development()).await
-        });
+        let outcome =
+            run_network(async move |client| import::client::resolve(&client, &link).await);
         let _ = sender.send(Work::Resolved(outcome));
     });
 }
 
 fn fetch(mut draft: ImportDraft, sender: mpsc::Sender<Work>) {
     thread::spawn(move || {
-        let outcome = run_network(async |client| {
-            import::client::fetch_models(&client, &mut draft, import::allow_local_development())
-                .await
-        });
+        let outcome =
+            run_network(async |client| import::client::fetch_models(&client, &mut draft).await);
         if let Err(error) = outcome {
             draft.provider.models.clear();
             draft.model_warning = Some(error);
@@ -94,9 +89,6 @@ pub(super) fn install(
         actions.borrow_mut().push_back(Action::Error(error));
     }
     let seen = Rc::new(RefCell::new(VecDeque::<String>::new()));
-    let trusted = Rc::new(RefCell::new(HashSet::from([
-        import::OFFICIAL_ORIGIN.to_string()
-    ])));
     let active = Rc::new(Cell::new(0usize));
     let frame = *frame;
     let api = api.clone();
@@ -111,76 +103,84 @@ pub(super) fn install(
     let presenter = Rc::new(Timer::new(&presenter_owner));
     let receive_actions = actions.clone();
     let receive_active = active.clone();
-    let receive_trusted = trusted.clone();
-    let receive_tx = tx.clone();
+    let receive_tx = tx;
     timer.on_tick(move |_| {
         let actions = &receive_actions;
         let active = &receive_active;
-        let trusted = &receive_trusted;
         let tx = &receive_tx;
         if let Some(inbox) = &inbox {
-            while let Ok(link) = inbox.receiver.try_recv() { pending_links.borrow_mut().push_back(link); }
+            while let Ok(link) = inbox.receiver.try_recv() {
+                pending_links.borrow_mut().push_back(link);
+            }
         }
         loop {
             let link = pending_links.borrow_mut().pop_front();
-            let Some(link) = link else { break; };
+            let Some(link) = link else {
+                break;
+            };
             let id = link.identity();
-            if seen.borrow().contains(&id) { continue; }
+            if seen.borrow().contains(&id) {
+                continue;
+            }
             if active.get() >= 8 {
-                if !actions.borrow().iter().any(|a| matches!(a, Action::Overflow)) { actions.borrow_mut().push_back(Action::Overflow); }
+                if !actions
+                    .borrow()
+                    .iter()
+                    .any(|a| matches!(a, Action::Overflow))
+                {
+                    actions.borrow_mut().push_back(Action::Overflow);
+                }
                 continue;
             }
             active.set(active.get() + 1);
-            { let mut seen = seen.borrow_mut(); seen.push_back(id); if seen.len() > 256 { seen.pop_front(); } }
+            {
+                let mut seen = seen.borrow_mut();
+                seen.push_back(id);
+                if seen.len() > 256 {
+                    seen.pop_front();
+                }
+            }
             super::tray::show_main_window(&frame, &timers_clone);
-            if trusted.borrow().contains(&link.origin) { resolve(link, tx.clone()); }
-            else { actions.borrow_mut().push_back(Action::Origin(link)); }
+            resolve(link, tx.clone());
         }
         while let Ok(result) = rx.try_recv() {
             match result {
-                Work::Resolved(Ok(draft)) => {
-                    let same_origin = import::client::models_endpoint(&draft, import::allow_local_development()).is_ok_and(|url| url.origin().ascii_serialization() == draft.source.origin);
-                    if same_origin { fetch(draft, tx.clone()); }
-                    else { actions.borrow_mut().push_back(Action::Destination(draft)); }
-                }
+                Work::Resolved(Ok(draft)) => fetch(draft, tx.clone()),
                 Work::Resolved(Err(error)) => actions.borrow_mut().push_back(Action::Error(error)),
                 Work::Ready(draft) => actions.borrow_mut().push_back(Action::Preview(draft)),
             }
-        }
-        // Redeem already-approved origins without waiting for the next preview.
-        let mut waiting = actions.borrow_mut();
-        let mut i = 0;
-        while i < waiting.len() {
-            if matches!(&waiting[i], Action::Origin(link) if trusted.borrow().contains(&link.origin)) {
-                if let Some(Action::Origin(link)) = waiting.remove(i) { resolve(link, tx.clone()); }
-            } else { i += 1; }
         }
     });
     let present_timer = Rc::downgrade(&presenter);
     presenter.on_tick(move |_| {
         let action = actions.borrow_mut().pop_front();
-        let Some(action) = action else { return; };
-        let Some(timer) = present_timer.upgrade() else { return; };
+        let Some(action) = action else {
+            return;
+        };
+        let Some(timer) = present_timer.upgrade() else {
+            return;
+        };
         timer.stop(); // FnMut callbacks must not be re-entered by modal wx loops.
         let finished = match action {
-            Action::Origin(link) => {
-                let yes = confirm(&frame, &format!("是否从以下站点接收渠道配置？\n{}\n\n确认后会兑换导入码并查询模型列表。\nAccept channel settings from this site?", link.origin));
-                if yes { trusted.borrow_mut().insert(link.origin.clone()); resolve(link, tx.clone()); }
-                !yes
+            Action::Preview(draft) => {
+                preview(&frame, &api, draft);
+                true
             }
-            Action::Destination(mut draft) => {
-                let endpoint = import::client::models_endpoint(&draft, import::allow_local_development());
-                if let Ok(endpoint) = endpoint {
-                    if confirm(&frame, &format!("模型列表地址与来源站点不同。是否将本次 Key 用于查询此地址？\n来源：{}\n模型列表：{}\n\nSend this key to the model-list address above?", draft.source.origin, endpoint)) { fetch(draft, tx.clone()); }
-                    else { draft.provider.models.clear(); draft.model_warning = Some("未查询模型列表，可禁用保存 / Model discovery skipped".into()); actions.borrow_mut().push_back(Action::Preview(draft)); }
-                } else { actions.borrow_mut().push_back(Action::Error("模型列表地址无效 / Invalid model endpoint".into())); }
+            Action::Error(error) => {
+                super::show_error(&frame, &error);
+                true
+            }
+            Action::Overflow => {
+                super::show_info(
+                    &frame,
+                    "待处理导入过多，请完成当前导入后从网页重试 / Too many pending imports",
+                );
                 false
             }
-            Action::Preview(draft) => { preview(&frame, &api, draft); true }
-            Action::Error(error) => { super::show_error(&frame, &error); true }
-            Action::Overflow => { super::show_info(&frame, "待处理导入过多，请完成当前导入后从网页重试 / Too many pending imports"); false }
         };
-        if finished { active.set(active.get().saturating_sub(1)); }
+        if finished {
+            active.set(active.get().saturating_sub(1));
+        }
         timer.start(250, false);
     });
     timer.start(250, false);

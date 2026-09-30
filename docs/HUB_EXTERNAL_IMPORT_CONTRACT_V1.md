@@ -4,7 +4,7 @@
 
 日期：2026-09-29。供 Hub 开发者实施；当前 Sub2API 第一项工作仅整合官方 v0.2.9，下面的主站接口将在第二项实现，现阶段不得假定已可调用。Hub 可用模拟响应独立开发。协议字段如需调整，请在两端联调前同步。
 
-本轮确认：优先交付 Windows 安装版及便携版，macOS 为后续阶段，Linux 不纳入；支持兼容 Sub2API 站点，先以官方站点联调。一次导入一个渠道，主站确定协议和模型范围。导入预览阶段获取远端模型列表，默认禁用保存，启用及追加 Codex 可见模型均由用户勾选。空模型或获取失败允许禁用保存，之后获取或手填模型再启用。
+本轮确认：优先交付 Windows 安装版及便携版，macOS 为后续阶段，Linux 不纳入；支持兼容 Sub2API 站点，先以官方站点联调。2026-09-30 补充：地址不限定官方主站，符合接口契约的 HTTP/HTTPS 本机、局域网及自定义域名站点均可导入，Hub 自 `0.4.29-3` 起无需本地开发开关。一次导入一个渠道，主站确定协议和模型范围。导入预览阶段获取远端模型列表，默认禁用保存，启用及追加 Codex 可见模型均由用户勾选。空模型或获取失败允许禁用保存，之后获取或手填模型再启用。
 
 ## 目标与范围
 
@@ -27,11 +27,11 @@
 tiancaispacehub://import/v1?origin=<URL编码的主站origin>&ticket=<随机导入码>
 ```
 
-- `origin` 示例 `https://tiancai.yc99.space`；它是主站管理 API 来源，不等同于模型请求 Base URL。
+- `origin` 示例 `https://tiancai.yc99.space` 或 `http://127.0.0.1:8080`；它是发起导入站点的管理 API 来源，不等同于模型请求 Base URL。它使用 `scheme://host[:port]`，必须能从 Hub 所在电脑访问。
 - `ticket` 为至少 256 bit 随机的 base64url 字符串，主站保存 120 秒，只能兑换一次。链接不包含长期 API Key。
 - 严格校验协议、host=`import`、path=`/v1`、字段重复、长度和编码；拒绝未知协议版本。
-- 正式来源只接受 HTTPS，不允许 URL 用户名密码、fragment 或路径。HTTP 仅允许显式本地开发的 localhost / 127.0.0.1 / [::1]。不跟随兑换接口重定向，不绕过 TLS 验证。
-- 不执行 URL 中的命令、脚本或任意文件路径。确认保存前不持久化渠道或 API Key；允许预览阶段携带该 Key 查询模型列表，不发起推理。非官方来源先确认来源；模型列表地址与来源站点不同则在发送 Key 前确认目标地址。
+- 来源接受 HTTP 或 HTTPS，不设域名白名单，也不要求环境变量；不允许 URL 用户名密码、查询参数、fragment 或业务路径（允许结尾 `/`）。`base_url` 和 `models_url` 同样接受 HTTP/HTTPS，可包含合法业务路径。不跟随兑换或模型发现接口重定向，不绕过 TLS 验证。
+- 不执行 URL 中的命令、脚本或任意文件路径。确认保存前不持久化渠道或 API Key；预览阶段携带该 Key 查询模型列表，不发起推理。按用户 2026-09-30 的流程调整，自 Hub `0.4.29-4` 起，所有兼容来源直接兑换并查询模型，不再弹出来源、跨站模型查询或 HTTP 确认；用户仍在最终预览中确认保存。
 
 ## 主站将提供的接口
 
@@ -90,7 +90,7 @@ tiancaispacehub://import/v1?origin=<URL编码的主站origin>&ticket=<随机导�
 }
 ```
 
-- 来源身份使用 `source.origin + source.key_id`，不以可变的名称唯一识别；来源相同再次导入优先提示更新。
+- 响应的 `source.origin` 规范化后必须与链接中的 `origin` 相同。来源身份使用 `source.origin + source.key_id`，不以可变的名称唯一识别；来源相同再次导入优先提示更新。
 - `protocol` v1 枚举：`openai_responses`、`anthropic_messages`、`chat_completions`、`grok_responses`。这是接口兼容协议，不直接等于上游平台名称。Hub 将其映射到自己的 ProviderType。
 - `base_url` 保留合法路径前缀（例如 `/antigravity/v1`），Hub 按现有 URL 规范化函数处理，不能重复追加 `/v1`。
 - `models` 必须来自该 Key 可用范围。空列表时要求用户获取／填写模型，不能宣称已可调用；未知协议直接提示需要升级 Hub，不回退为 OpenAI。

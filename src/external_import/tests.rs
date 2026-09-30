@@ -35,7 +35,7 @@ fn wire(protocol: &str) -> ResolveData {
     }
 }
 fn request() -> CommitImport {
-    let draft = wire("openai_responses").into_draft(&link(), false).unwrap();
+    let draft = wire("openai_responses").into_draft(&link()).unwrap();
     CommitImport {
         name: draft.provider.name.clone(),
         models: draft.provider.models.clone(),
@@ -49,7 +49,7 @@ fn request() -> CommitImport {
 
 #[test]
 fn parses_canonical_origins_and_redacts_debug() {
-    let parsed = ImportLink::parse(&raw_link("https://tiancai.yc99.space/"), false).unwrap();
+    let parsed = ImportLink::parse(&raw_link("https://tiancai.yc99.space/")).unwrap();
     assert_eq!(parsed, link());
     assert!(!format!("{parsed:?}").contains(&parsed.ticket));
     assert!(!format!("{parsed:?}").contains(&parsed.origin));
@@ -70,27 +70,63 @@ fn rejects_malformed_links_without_reflecting_ticket() {
         format!("{valid}\n"),
         format!("{valid}&origin=x"),
     ] {
-        let error = ImportLink::parse(&bad, false).unwrap_err();
+        let error = ImportLink::parse(&bad).unwrap_err();
         assert!(!error.contains(&link().ticket));
     }
 }
 
 #[test]
-fn only_explicit_loopback_development_allows_http() {
-    for host in ["localhost", "127.0.0.1", "[::1]"] {
-        let raw = raw_link(&format!("http://{host}:9876"));
-        assert!(ImportLink::parse(&raw, false).is_err());
-        assert!(ImportLink::parse(&raw, true).is_ok());
-    }
+fn accepts_compatible_http_and_https_sites_without_environment_switches() {
     for origin in [
+        "http://localhost:9876",
+        "http://127.0.0.1:9876",
+        "http://[::1]:9876",
+        "http://192.168.1.10:8080",
+        "http://sub2api.local:8080",
         "http://example.com",
+        "https://other.example",
+        OFFICIAL_ORIGIN,
+    ] {
+        let parsed = ImportLink::parse(&raw_link(origin)).unwrap();
+        assert_eq!(parsed.origin, origin);
+        let mut data = wire("openai_responses");
+        data.source.origin = origin.into();
+        data.provider.base_url = format!("{origin}/antigravity/v1");
+        data.provider.models_url = Some(format!("{origin}/v1/models"));
+        let draft = data.into_draft(&parsed).unwrap();
+        validate_draft(&draft).unwrap();
+        assert_eq!(
+            client::models_endpoint(&draft)
+                .unwrap()
+                .origin()
+                .ascii_serialization(),
+            origin
+        );
+        assert!(!draft.provider.enabled);
+    }
+}
+
+#[test]
+fn rejects_invalid_origins_and_endpoint_schemes() {
+    for origin in [
+        "http://u:p@localhost:9876",
         "https://u:p@example.com",
         "https://example.com/sub",
         "https://example.com/?x=1",
         "file:///tmp",
+        "ftp://example.com",
         "https://example.com/#x",
     ] {
-        assert!(ImportLink::parse(&raw_link(origin), true).is_err());
+        assert!(ImportLink::parse(&raw_link(origin)).is_err());
+    }
+    for endpoint in [
+        "http://user:pass@127.0.0.1:9876/v1",
+        "http://localhost:9876/v1?secret=x",
+        "http://192.168.1.10:8080/v1#fragment",
+        "ftp://example.com/v1/models",
+        "file:///tmp/models",
+    ] {
+        assert!(validate_endpoint(endpoint).is_err());
     }
 }
 
@@ -102,7 +138,7 @@ fn maps_four_protocols_and_preserves_path_prefix() {
         ("chat_completions", ProviderType::ChatCompletions),
         ("grok_responses", ProviderType::GrokResponses),
     ] {
-        let draft = wire(protocol).into_draft(&link(), false).unwrap();
+        let draft = wire(protocol).into_draft(&link()).unwrap();
         assert_eq!(draft.provider.provider_type, expected);
         assert_eq!(
             draft.provider.base_url,
@@ -113,17 +149,17 @@ fn maps_four_protocols_and_preserves_path_prefix() {
             assert_eq!(draft.provider.compatibility.as_deref(), Some("openai_chat"));
         }
     }
-    assert!(wire("new_protocol").into_draft(&link(), false).is_err());
+    assert!(wire("new_protocol").into_draft(&link()).is_err());
 }
 
 #[test]
 fn rejects_mismatched_source_and_invalid_endpoint() {
     let mut data = wire("openai_responses");
     data.source.origin = "https://other.example".into();
-    assert!(data.into_draft(&link(), false).is_err());
+    assert!(data.into_draft(&link()).is_err());
     let mut data = wire("openai_responses");
     data.provider.models_url = Some("https://user:secret@example.com/models".into());
-    assert!(data.into_draft(&link(), false).is_err());
+    assert!(data.into_draft(&link()).is_err());
 }
 
 #[test]
@@ -301,6 +337,10 @@ async fn commit_api_merges_latest_settings_and_rejects_stale_updates() {
     latest.theme = Some("dark".into());
     latest.save(&path).unwrap();
     let mut req = request();
+    req.draft.source.origin = "http://192.168.1.10:8080".into();
+    req.draft.provider.import_source = Some(req.draft.source.clone());
+    req.draft.provider.base_url = "http://192.168.1.10:8080/v1".into();
+    req.draft.provider.models_url = Some("http://192.168.1.10:8080/v1/models".into());
     assert_eq!(
         client
             .post(format!("{origin}/api/external-import/commit"))
@@ -377,7 +417,6 @@ async fn upstream_errors_never_reflect_response_credentials() {
             origin,
             ticket: "a".repeat(43),
         },
-        true,
     )
     .await
     .err()
@@ -429,21 +468,14 @@ async fn resolves_ticket_once_discovers_models_and_does_not_follow_redirects() {
             origin: origin.clone(),
             ticket: "a".repeat(43),
         },
-        true,
     )
     .await
     .unwrap();
-    client::fetch_models(&client, &mut draft, true)
-        .await
-        .unwrap();
+    client::fetch_models(&client, &mut draft).await.unwrap();
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(draft.provider.models, ["model-a"]);
     draft.provider.models_url = Some(format!("{origin}/redirect"));
-    assert!(
-        client::fetch_models(&client, &mut draft, true)
-            .await
-            .is_err()
-    );
+    assert!(client::fetch_models(&client, &mut draft).await.is_err());
     server.abort();
 }
 

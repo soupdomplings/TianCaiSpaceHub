@@ -102,7 +102,7 @@ async fn receive(
     // Parse a canonical link again rather than trusting the sending process.
     let accepted = std::str::from_utf8(&data)
         .ok()
-        .and_then(|raw| ImportLink::parse(raw, super::allow_local_development()).ok())
+        .and_then(|raw| ImportLink::parse(raw).ok())
         .is_some_and(|link| sender.try_send(link).is_ok());
     pipe.write_u8(u8::from(accepted)).await?;
     Ok(())

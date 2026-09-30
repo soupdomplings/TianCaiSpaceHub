@@ -1,6 +1,6 @@
 # TianCaiSpace Hub 文档总入口
 
-维护日期：2026-09-30。当前工作区版本：`0.4.29-2`；上游整合基线：CodexHub `v0.4.29`。本目录统一维护二开现状、使用说明、设计依据和开发记录。
+维护日期：2026-09-30。当前工作区版本：`0.4.29-4`（本地交付版，未发布）；上游整合基线：CodexHub `v0.4.29`。本目录统一维护二开现状、使用说明、设计依据和开发记录。
 
 ## 从哪里开始
 
@@ -14,6 +14,8 @@
 | 从 Sub2API 网页导入渠道 | [网页导入](hub-external-import.md)、[两端接口约定](HUB_EXTERNAL_IMPORT_CONTRACT_V1.md) |
 | 查看品牌、桌面行为和打包约定 | [品牌、桌面与交付](customizations/desktop-and-packaging.md) |
 | 了解最新上游合并 | [v0.4.29 整合记录](upstream-v0.4.29-integration.md) |
+| 获取最新导入流程调整的本地交付信息 | [v0.4.29-4 Windows 交付版](releases/v0.4.29-4.md) |
+| 查看前一版本 HTTP 导入修复及验收记录 | [v0.4.29-3 Windows 修复版](releases/v0.4.29-3.md) |
 | 获取当前 GitHub 版本交付信息 | [v0.4.29-2 Windows 预发布](releases/v0.4.29-2.md) |
 | 查看过时文档及分支清理结果 | [仓库清理记录](development/repository-cleanup.md) |
 

@@ -41,11 +41,7 @@ async fn body(mut response: Response) -> Result<Vec<u8>, String> {
     Ok(result)
 }
 
-pub async fn resolve(
-    client: &Client,
-    link: &ImportLink,
-    local: bool,
-) -> Result<ImportDraft, String> {
+pub async fn resolve(client: &Client, link: &ImportLink) -> Result<ImportDraft, String> {
     // No automatic retries: the server consumes the ticket exactly once.
     let response = client.post(format!("{}/api/v1/external-import/resolve", link.origin))
         .json(&serde_json::json!({"target":"tiancaispace-hub", "schema_version":1, "ticket":link.ticket}))
@@ -69,27 +65,20 @@ pub async fn resolve(
     envelope
         .data
         .ok_or("站点未返回导入数据 / Missing import data")?
-        .into_draft(link, local)
+        .into_draft(link)
 }
 
-pub fn models_endpoint(draft: &ImportDraft, local: bool) -> Result<Url, String> {
-    validate_endpoint(
-        draft.provider.models_url.as_deref().unwrap_or(&format!(
-            "{}/models",
-            draft.provider.base_url.trim_end_matches('/')
-        )),
-        local,
-    )
+pub fn models_endpoint(draft: &ImportDraft) -> Result<Url, String> {
+    validate_endpoint(draft.provider.models_url.as_deref().unwrap_or(&format!(
+        "{}/models",
+        draft.provider.base_url.trim_end_matches('/')
+    )))
 }
 
-/// Check destination consent before calling: the model endpoint may differ from
-/// the issuing site. Never send the credential to fallback/redirect destinations.
-pub async fn fetch_models(
-    client: &Client,
-    draft: &mut ImportDraft,
-    local: bool,
-) -> Result<(), String> {
-    let destination = models_endpoint(draft, local)?;
+/// Discover models at the validated endpoint supplied by the issuing site,
+/// including cross-origin URLs. Never send the key to fallback/redirect targets.
+pub async fn fetch_models(client: &Client, draft: &mut ImportDraft) -> Result<(), String> {
+    let destination = models_endpoint(draft)?;
     let response = client
         .get(destination)
         .bearer_auth(&draft.provider.api_key)

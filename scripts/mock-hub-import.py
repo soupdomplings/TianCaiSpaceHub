@@ -1,8 +1,8 @@
 """Local import-contract fixture. No real credentials, inference, or request logging.
 
 Run: python scripts/mock-hub-import.py --port 18765
-Open http://127.0.0.1:18765 in a browser. Start Hub with
-TIANCAISPACE_IMPORT_ALLOW_LOCALHOST=1 and an isolated CODEXHUB_HOME.
+Open http://127.0.0.1:18765 in a browser. HTTP imports need no environment
+switch. Use an isolated CODEXHUB_HOME when testing with a separate Hub instance.
 """
 import argparse
 import html
