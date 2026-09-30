@@ -81,10 +81,10 @@ jobs:
 
           # Build wxWidgets as universal (arm64 + x86_64) and compile for native arch
           export WX_OSX_ARCHITECTURES="arm64;x86_64"
-          PATH="$(brew --prefix)/bin:$PATH" cargo build --release --features gui --bin codexhub --target aarch64-apple-darwin
+          PATH="$(brew --prefix)/bin:$PATH" cargo build --locked --release --features gui --bin codexhub --target aarch64-apple-darwin
 
           # Compile for Intel (wxWidgets libs are already fat, no rebuild needed)
-          PATH="$(brew --prefix)/bin:$PATH" cargo build --release --features gui --bin codexhub --target x86_64-apple-darwin
+          PATH="$(brew --prefix)/bin:$PATH" cargo build --locked --release --features gui --bin codexhub --target x86_64-apple-darwin
 
           # Create universal binary
           mkdir -p target/release
@@ -114,6 +114,8 @@ jobs:
           cp "packaging/macos/Info.plist" "$CONTENTS/Info.plist"
           /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${CARGO_VERSION%%[-+]*}" "$CONTENTS/Info.plist"
           /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${GITHUB_RUN_NUMBER:-1}" "$CONTENTS/Info.plist"
+          plutil -lint "$CONTENTS/Info.plist"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleURLTypes:0:CFBundleURLSchemes:0' "$CONTENTS/Info.plist")" = "tiancaispacehub"
           ICONSET="$RUNNER_TEMP/TianCaiSpace Hub.iconset"
           rm -rf "$ICONSET"
           mkdir -p "$ICONSET"
@@ -124,8 +126,10 @@ jobs:
           done
           iconutil -c icns "$ICONSET" -o "$RESOURCES/AppIcon.icns"
           cp packaging/brand/*.png "$RESOURCES/brand/"
+          cp docs/hub-external-import.md "$RESOURCES/WEB-IMPORT.md"
           cp "target/release/codexhub" "$MACOS/$EXECUTABLE_NAME"
           chmod +x "$MACOS/$EXECUTABLE_NAME"
+          lipo -verify_arch arm64 x86_64 "$MACOS/$EXECUTABLE_NAME"
 
       - name: Sign And Notarize
         if: env.HAS_APPLE_CERTIFICATE == 'true'

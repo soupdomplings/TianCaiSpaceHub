@@ -353,11 +353,14 @@ pub fn run_with_import(initial: Option<crate::external_import::ImportLink>) {
     if single_instance_guard.is_another_running() {
         if let Some(link) = initial {
             if let Err(error) = crate::external_import::ipc::forward(&link) {
-                #[cfg(windows)]
+                #[cfg(any(windows, target_os = "macos"))]
                 crate::external_import::registration::show_startup_error(&error);
-                #[cfg(not(windows))]
+                #[cfg(not(any(windows, target_os = "macos")))]
                 eprintln!("{error}");
             }
+        } else {
+            #[cfg(target_os = "macos")]
+            external_import::macos::relay_to_running_instance();
         }
         return;
     }
@@ -1958,7 +1961,7 @@ fn build_ui(
     // resize after each start, while still respecting the OS taskbar area.
     frame.maximize(true);
     frame.show(true);
-    external_import::install(&frame, &api, &gui_timers, inbox, initial);
+    external_import::install(app, &frame, &api, &gui_timers, inbox, initial);
 }
 
 /// Enable `wxFULL_REPAINT_ON_RESIZE` (0x00010000) on a window so its whole
@@ -2280,25 +2283,28 @@ fn install_system_menu(
     gui_tx: tokio_mpsc::UnboundedSender<GuiMessage>,
     diagnostics_export_result: DiagnosticsExportResultStore,
 ) {
-    let file_menu = Menu::builder()
-        .append_item(
-            ID_MENU_REGISTER_IMPORT,
-            if text.locale == GuiLocale::ZhCn {
-                "注册网页导入…"
-            } else {
-                "Register web import…"
-            },
-            "Windows",
-        )
-        .append_item(
-            ID_MENU_UNREGISTER_IMPORT,
-            if text.locale == GuiLocale::ZhCn {
-                "解除网页导入注册"
-            } else {
-                "Unregister web import"
-            },
-            "Windows",
-        )
+    let file_menu = Menu::builder();
+    #[cfg(any(windows, target_os = "macos"))]
+    let file_menu = file_menu.append_item(
+        ID_MENU_REGISTER_IMPORT,
+        if text.locale == GuiLocale::ZhCn {
+            "注册网页导入…"
+        } else {
+            "Register web import…"
+        },
+        "Windows / macOS",
+    );
+    #[cfg(windows)]
+    let file_menu = file_menu.append_item(
+        ID_MENU_UNREGISTER_IMPORT,
+        if text.locale == GuiLocale::ZhCn {
+            "解除网页导入注册"
+        } else {
+            "Unregister web import"
+        },
+        "Windows",
+    );
+    let file_menu = file_menu
         .append_separator()
         .append_item(
             ID_MENU_CLOSE_WINDOW,
@@ -2397,7 +2403,7 @@ fn install_system_menu(
     frame.on_menu_selected(move |event| match event.get_id() {
         ID_MENU_REGISTER_IMPORT | ID_MENU_UNREGISTER_IMPORT => {
             let register = event.get_id() == ID_MENU_REGISTER_IMPORT;
-            let message = if register { "将网页导入关联到当前 Hub 程序位置？移动便携版后需重新注册。\nAssociate web imports with this executable? Register again after moving it." } else { "解除当前程序的网页导入关联？\nRemove this executable's web import association?" };
+            let message = if register { "将当前 Hub 注册为网页导入应用？移动程序后可重新注册。\nRegister this Hub installation for web imports?" } else { "解除当前程序的网页导入关联？\nRemove this executable's web import association?" };
             if external_import::confirm(&frame, message) {
                 let result = if register { crate::external_import::registration::register() } else { crate::external_import::registration::unregister() };
                 match result { Ok(()) => show_info(&frame, "网页导入关联已更新 / Web import association updated"), Err(e) => show_error(&frame, &e) }

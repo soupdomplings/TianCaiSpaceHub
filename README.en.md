@@ -4,7 +4,7 @@
 
 [Documentation index](docs/README.md) · [Customization inventory](docs/customizations/README.md) · [Customization changelog](docs/customizations/CHANGELOG.md) (maintained in Chinese)
 
-The current workspace version is `0.4.29-4` (an unpublished local build), supporting imports from compatible Sub2API HTTP/HTTPS sites, including localhost, LAN addresses, and custom domains. Imports redeem the ticket and fetch models directly, then open the preview for saving; channels are disabled by default. See the [import guide](docs/hub-external-import.md). New development prioritizes Windows, followed by macOS; inherited Linux documentation does not imply support or acceptance of the new features on Linux.
+The current workspace version is `0.4.29-5` (in development, unpublished). macOS App URL registration, native URL events, and instance handoff are implemented in source, pending a macOS build and user acceptance. Imports share the Windows HTTP/HTTPS flow, fetch models before preview, and save channels disabled by default. See the [import guide](docs/hub-external-import.md). New development prioritizes Windows, followed by macOS; inherited Linux documentation does not imply support or acceptance of the new features on Linux.
 
 ## Product Preview
 

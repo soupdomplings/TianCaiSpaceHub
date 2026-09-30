@@ -1,6 +1,6 @@
 # TianCaiSpace Hub 文档总入口
 
-维护日期：2026-09-30。当前工作区版本：`0.4.29-4`（本地交付版，未发布）；上游整合基线：CodexHub `v0.4.29`。本目录统一维护二开现状、使用说明、设计依据和开发记录。
+维护日期：2026-09-30。当前工作区版本：`0.4.29-5`（开发中，未发布）；上游整合基线：CodexHub `v0.4.29`。本目录统一维护二开现状、使用说明、设计依据和开发记录。
 
 ## 从哪里开始
 
@@ -14,7 +14,8 @@
 | 从 Sub2API 网页导入渠道 | [网页导入](hub-external-import.md)、[两端接口约定](HUB_EXTERNAL_IMPORT_CONTRACT_V1.md) |
 | 查看品牌、桌面行为和打包约定 | [品牌、桌面与交付](customizations/desktop-and-packaging.md) |
 | 了解最新上游合并 | [v0.4.29 整合记录](upstream-v0.4.29-integration.md) |
-| 获取最新导入流程调整的本地交付信息 | [v0.4.29-4 Windows 交付版](releases/v0.4.29-4.md) |
+| 查看 macOS 网页导入接入与验证边界 | [0.4.29-5 开发状态](releases/v0.4.29-5.md) |
+| 获取上一版 Windows 导入流程调整的本地包信息 | [v0.4.29-4 Windows 交付版](releases/v0.4.29-4.md) |
 | 查看前一版本 HTTP 导入修复及验收记录 | [v0.4.29-3 Windows 修复版](releases/v0.4.29-3.md) |
 | 获取当前 GitHub 版本交付信息 | [v0.4.29-2 Windows 预发布](releases/v0.4.29-2.md) |
 | 查看过时文档及分支清理结果 | [仓库清理记录](development/repository-cleanup.md) |
@@ -30,7 +31,7 @@
 | [WorkBuddy](workbuddy.md) | 独立接入、备份还原、协议、重试、思考强度和缓存；已实现 |
 | [OpenAI Chat Completions](openai-chat-completions.md) | 通用兼容渠道与按渠道关闭推理；已实现 |
 | [动态模型](dynamic-codex-models.zh-CN.md) | 手填、远端获取、路由补齐和能力继承；已实现 |
-| [网页导入](hub-external-import.md) | Windows 导入实现与交付；待用户端到端验收 |
+| [网页导入](hub-external-import.md) | Windows 已有交付；macOS 系统接入代码已补齐，待 Mac 构建及验收 |
 | [导入协议 v1](HUB_EXTERNAL_IMPORT_CONTRACT_V1.md) | Hub 与 Sub2API 联调契约；不表示主站已上线 |
 | [品牌、桌面与交付](customizations/desktop-and-packaging.md) | 天才空间品牌、窗口最大化、取消检查更新、平台和产物规则 |
 | [v0.4.28 整合](upstream-v0.4.28-integration.md) | 历史上游整合记录 |

@@ -49,7 +49,7 @@ fn main() -> anyhow::Result<()> {
     let cli = match Cli::parse() {
         Ok(cli) => cli,
         Err(error) => {
-            #[cfg(all(windows, feature = "gui"))]
+            #[cfg(all(any(windows, target_os = "macos"), feature = "gui"))]
             if std::env::args().any(|arg| arg == "import-url" || arg.contains("://")) {
                 external_import::registration::show_startup_error(&error.to_string());
             }

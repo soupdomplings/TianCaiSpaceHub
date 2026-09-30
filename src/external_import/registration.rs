@@ -1,3 +1,6 @@
+#[cfg(target_os = "macos")]
+mod macos;
+
 #[cfg(windows)]
 pub fn show_startup_error(message: &str) {
     use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
@@ -13,6 +16,21 @@ pub fn show_startup_error(message: &str) {
     }
 }
 
+#[cfg(target_os = "macos")]
+pub fn show_startup_error(message: &str) {
+    // The message is an argument, never interpolated into AppleScript source.
+    // Callers pass only redacted local errors, never URLs or remote response text.
+    let result = std::process::Command::new("/usr/bin/osascript")
+        .arg("-e")
+        .arg("on run argv\n display alert \"TianCaiSpace Hub\" message (item 1 of argv) as critical\nend run")
+        .arg(message)
+        .output();
+    if !result.is_ok_and(|output| output.status.success()) {
+        eprintln!("{message}");
+    }
+}
+
+#[cfg(any(windows, test))]
 pub fn command_for(executable: &std::path::Path) -> Result<String, String> {
     let path = executable
         .to_str()
@@ -48,7 +66,11 @@ pub fn register() -> Result<(), String> {
         };
         return write().map_err(|_| "无法写入网页导入注册项 / Registration failed".into());
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        macos::register()
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     Err("当前仅支持 Windows 网页导入注册 / Windows registration only".into())
 }
 
@@ -77,6 +99,10 @@ pub fn unregister() -> Result<(), String> {
             .delete_subkey_all(r"Software\Classes\tiancaispacehub")
             .map_err(|_| "无法解除注册 / Unregistration failed".into());
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        Err("macOS 由系统管理 App 的协议关联；退出并移除不再使用的 App 副本，或在保留的版本中重新注册 / macOS manages app URL associations".into())
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     Err("当前仅支持 Windows 网页导入注册 / Windows registration only".into())
 }

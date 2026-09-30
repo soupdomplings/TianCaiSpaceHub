@@ -62,6 +62,10 @@ public:
         std::vector<std::pair<wxd_MacReopenAppCallback, void*>> reopenApp;
         std::vector<std::pair<wxd_MacPrintFilesCallback, void*>> printFiles;
     } m_macCallbacks;
+    // Launch Services can deliver an URL before Rust has installed its handler.
+    // Keep a bounded in-memory queue; never log or persist these credential URLs.
+    std::vector<wxString> m_pendingOpenURLs;
+    bool m_pendingOpenURLOverflow = false;
 #endif
 };
 
@@ -120,6 +124,10 @@ WxdApp::OnIdle(wxIdleEvent& event)
 int
 WxdApp::OnExit()
 {
+#ifdef __WXOSX__
+    m_pendingOpenURLs.clear();
+    m_pendingOpenURLOverflow = false;
+#endif
     wxd_IPC_CleanupAll();
     return wxApp::OnExit();
 }
@@ -538,14 +546,21 @@ void
 WxdApp::MacOpenURL(const wxString& url)
 {
     if (m_macCallbacks.openURL.empty()) {
-        wxApp::MacOpenURL(url);
+        if (m_pendingOpenURLs.size() < 16 && url.length() <= 8192) {
+            m_pendingOpenURLs.push_back(url);
+        } else {
+            m_pendingOpenURLOverflow = true;
+        }
         return;
     }
 
-    std::string urlStr = url.ToStdString();
+    // Empty input tells the consumer to report an invalid/oversized URL, without
+    // copying an unbounded OS event into Rust or reflecting its contents.
+    std::string urlStr = url.length() <= 8192 ? url.ToStdString(wxConvUTF8) : std::string();
 
     // Call ALL registered Rust callbacks
-    for (const auto& pair : m_macCallbacks.openURL) {
+    const auto callbacks = m_macCallbacks.openURL;
+    for (const auto& pair : callbacks) {
         if (pair.first) {
             pair.first(pair.second, urlStr.c_str());
         }
@@ -637,6 +652,16 @@ wxd_App_AddMacOpenURLHandler(wxd_App_t* app, wxd_MacOpenURLCallback callback, vo
         return;
     WxdApp* wx_app = reinterpret_cast<WxdApp*>(app);
     wx_app->m_macCallbacks.openURL.push_back(std::make_pair(callback, userData));
+    std::vector<wxString> pending;
+    pending.swap(wx_app->m_pendingOpenURLs);
+    const bool overflow = wx_app->m_pendingOpenURLOverflow;
+    wx_app->m_pendingOpenURLOverflow = false;
+    for (const auto& url : pending) {
+        wx_app->MacOpenURL(url);
+    }
+    if (overflow) {
+        wx_app->MacOpenURL(wxString());
+    }
 #endif
 }
 

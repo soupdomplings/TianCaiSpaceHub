@@ -13,6 +13,11 @@ use std::{
 };
 use wxdragon::{prelude::*, timer::Timer};
 
+// The event bridge uses portable wxDragon APIs, so Windows test compilation can
+// type-check it too. Native delivery and Unix IPC still require macOS acceptance.
+#[cfg(any(target_os = "macos", all(test, windows)))]
+pub(super) mod macos;
+
 enum Work {
     Resolved(Result<ImportDraft, String>),
     Ready(ImportDraft),
@@ -20,6 +25,7 @@ enum Work {
 enum Action {
     Overflow,
     Preview(ImportDraft),
+    ImportFailed(String),
     Error(String),
 }
 
@@ -72,12 +78,17 @@ fn fetch(mut draft: ImportDraft, sender: mpsc::Sender<Work>) {
 }
 
 pub(super) fn install(
+    app: App,
     frame: &Frame,
     api: &ApiClient,
     timers: &GuiTimers,
     inbox: Result<import::ipc::Inbox, String>,
     initial: Option<ImportLink>,
 ) {
+    #[cfg(target_os = "macos")]
+    let native = macos::NativeEvents::attach(app);
+    #[cfg(not(target_os = "macos"))]
+    let _ = app;
     let (tx, rx) = mpsc::channel::<Work>();
     let (inbox, startup_error) = match inbox {
         Ok(i) => (Some(i), None),
@@ -108,6 +119,27 @@ pub(super) fn install(
         let actions = &receive_actions;
         let active = &receive_active;
         let tx = &receive_tx;
+        #[cfg(target_os = "macos")]
+        {
+            while let Ok(result) = native.receiver.try_recv() {
+                match result {
+                    Ok(link) => pending_links.borrow_mut().push_back(link),
+                    Err(error) => {
+                        if actions.borrow().len() < 16 {
+                            actions.borrow_mut().push_back(Action::Error(error));
+                        }
+                    }
+                }
+            }
+            if native.take_overflow()
+                && !actions
+                    .borrow()
+                    .iter()
+                    .any(|a| matches!(a, Action::Overflow))
+            {
+                actions.borrow_mut().push_back(Action::Overflow);
+            }
+        }
         if let Some(inbox) = &inbox {
             while let Ok(link) = inbox.receiver.try_recv() {
                 pending_links.borrow_mut().push_back(link);
@@ -146,7 +178,9 @@ pub(super) fn install(
         while let Ok(result) = rx.try_recv() {
             match result {
                 Work::Resolved(Ok(draft)) => fetch(draft, tx.clone()),
-                Work::Resolved(Err(error)) => actions.borrow_mut().push_back(Action::Error(error)),
+                Work::Resolved(Err(error)) => {
+                    actions.borrow_mut().push_back(Action::ImportFailed(error));
+                }
                 Work::Ready(draft) => actions.borrow_mut().push_back(Action::Preview(draft)),
             }
         }
@@ -161,23 +195,22 @@ pub(super) fn install(
             return;
         };
         timer.stop(); // FnMut callbacks must not be re-entered by modal wx loops.
-        let finished = match action {
+        // Receiver/startup errors have not reserved an import slot.
+        let finished = matches!(&action, Action::Preview(_) | Action::ImportFailed(_));
+        match action {
             Action::Preview(draft) => {
                 preview(&frame, &api, draft);
-                true
             }
-            Action::Error(error) => {
+            Action::ImportFailed(error) | Action::Error(error) => {
                 super::show_error(&frame, &error);
-                true
             }
             Action::Overflow => {
                 super::show_info(
                     &frame,
                     "待处理导入过多，请完成当前导入后从网页重试 / Too many pending imports",
                 );
-                false
             }
-        };
+        }
         if finished {
             active.set(active.get().saturating_sub(1));
         }

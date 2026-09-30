@@ -73,6 +73,8 @@ pub(super) fn install(
 }
 
 pub(super) fn show_main_window(frame: &Frame, gui_timers: &GuiTimers) {
+    #[cfg(target_os = "macos")]
+    wxdragon::app::activate_app();
     frame.iconize(false);
     frame.show(true);
     frame.raise();

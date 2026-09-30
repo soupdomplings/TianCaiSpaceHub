@@ -30,7 +30,15 @@ pub struct Cli {
 
 impl Cli {
     pub fn parse() -> anyhow::Result<Self> {
-        Self::parse_args(std::env::args().skip(1).collect())
+        Self::parse_args(
+            std::env::args()
+                .skip(1)
+                .filter(|arg| {
+                    // Legacy Finder launches may include a process serial number.
+                    !cfg!(target_os = "macos") || !arg.starts_with("-psn_")
+                })
+                .collect(),
+        )
     }
 
     fn parse_args(args: Vec<String>) -> anyhow::Result<Self> {

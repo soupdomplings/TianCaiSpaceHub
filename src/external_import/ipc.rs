@@ -9,6 +9,8 @@ pub struct Inbox {
     pub receiver: Receiver<ImportLink>,
 }
 
+#[cfg(target_os = "macos")]
+mod macos;
 #[cfg(windows)]
 mod security;
 
@@ -31,7 +33,9 @@ pub fn start() -> Result<Inbox, String> {
     let (sender, receiver) = sync_channel(16);
     #[cfg(windows)]
     start_windows(sender)?;
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    macos::start(sender)?;
+    #[cfg(not(any(windows, target_os = "macos")))]
     drop(sender);
     Ok(Inbox { receiver })
 }
@@ -140,14 +144,18 @@ pub fn forward(link: &ImportLink) -> Result<(), String> {
             }).await.map_err(|_| ())?
         }).map_err(|_| "现有 Hub 未接收导入请求：请关闭旧版或等待启动完成，再从网页重新发起 / Existing Hub did not accept the import".into());
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        macos::forward(link)
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = link;
         Err("此平台的网页导入尚未发布 / Web import is not released on this platform".into())
     }
 }
 
-#[cfg(all(test, windows))]
+#[cfg(all(test, any(windows, target_os = "macos")))]
 mod tests {
     #[test]
     fn transfers_to_existing_instance_without_disk_spool() {

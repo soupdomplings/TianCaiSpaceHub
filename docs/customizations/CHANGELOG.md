@@ -4,6 +4,21 @@
 
 追溯依据为本地 Git 历史、现有专题和发布说明。历史条目的版本、提交可定位，不补造发布或验收结论；测试数量只属于原记录对应的代码。
 
+## 未发布 · 0.4.29-5 · macOS 网页导入系统接入（2026-09-30）
+
+关联 TC-009、TC-001、TC-007；基于 `16eab07` 加本次未提交变更。
+
+- 用户授权提交 GitHub 并创建本版本 Release，所有安装包统一通过 GitHub Actions 生成。Windows 工作流补充锁文件构建和 ZIP 导入说明，Windows/macOS 分别构建，不扩展 Linux；发布结果与运行记录见版本交付页。
+
+- 用户要求补齐 Hub macOS 接入。App 声明 `tiancaispacehub` 协议，接收系统 URL 事件并交给原有校验、兑换、模型查询和预览；隐藏/最小化窗口自动恢复置前。Sub2API 链接和接口字段无需变化。
+- 复用 wxDragon `on_open_url`，补充回调安装前有界内存暂存；CLI/重复 App 通过双向 UID 校验的 Unix socket 交给现有 GUI，空锁文件及 socket 不存票据。重复进程只维持短时事件转交循环，避免单实例检查直接丢掉系统传入的 URL。
+- macOS 菜单/CLI 通过 `LSRegisterURL` 注册当前完整 App，支持含空格路径；裸程序提示使用 App，解除关联由 macOS 管理，界面不展示 Windows 专用解除入口。Windows 原有流程保留。
+- macOS 打包工作流继续生成 Apple Silicon/Intel universal App，增加 plist 协议检查、双架构检查及包内导入说明；使用锁文件构建。未执行远端工作流或发布 Release。
+- 不迁移渠道配置、不增加导入开关。回退 `0.4.29-4` 会失去 macOS 网页唤起；旧 Windows 包及其已记录验收结果保留。
+- 修正共享队列计数：启动/无效链接错误不扣减在途导入数量。记录 wxWidgets 极早初始化阶段单 URL 暂存的边界，首次启动应等待窗口出现后继续导入。
+- Windows GUI 及测试代码编译核对通过，格式、plist、工作流脚本语法与文档链接核对通过；更新已有 IPC 用例的 macOS 编译范围，并补充目录权限/符号链接、畸形/超长输入及 App 路径用例，按用户安排未执行测试。macOS 原生构建、启动与安装/升级/卸载待用户验收。
+- 文档：[网页导入](../hub-external-import.md)、[契约 v1](../HUB_EXTERNAL_IMPORT_CONTRACT_V1.md)、[GUI 维护](../gui-runtime-maintenance.zh-CN.md)、[开发状态](../releases/v0.4.29-5.md)。
+
 ## 2026-09-30 · 0.4.29-4 源码提交 GitHub
 
 - 用户要求先提交 GitHub。本次将 `0.4.29-3` HTTP 兼容修复、`0.4.29-4` 前置确认精简及对应文档合为一次源码提交，目标为 `soupdomplings/TianCaiSpaceHub` 的 `main`，父提交为 `e25ecd9`。

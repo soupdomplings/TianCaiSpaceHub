@@ -2,7 +2,7 @@
 
 维护日期：2026-09-30。范围：TianCaiSpace Hub 相对于 CodexHub 上游的定制，以及上游升级时必须保留的兼容衔接。
 
-当前源码版本 `0.4.29-4`（本地包已交付，尚无对应 GitHub Release），在 `e25ecd9`（发布标签 `v0.4.29-2`）之后加入 HTTP 兼容修复及导入流程精简，随本次提交归档到 `soupdomplings/TianCaiSpaceHub` 的 `main`。以下“已实现”仅指代码存在；构建与验收记录见 [变更记录](CHANGELOG.md) 和 [本地交付说明](../releases/v0.4.29-4.md)，已发布版本见 [v0.4.29-2](../releases/v0.4.29-2.md)。
+当前源码版本 `0.4.29-5`（开发中，未发布），基于 `16eab07`（`0.4.29-4` 源码提交）补齐 macOS 网页导入系统接入。以下“已实现”仅指代码存在；构建与验收边界见 [变更记录](CHANGELOG.md) 和 [开发状态](../releases/v0.4.29-5.md)。上一版本本地包见 [0.4.29-4](../releases/v0.4.29-4.md)，已发布版本见 [v0.4.29-2](../releases/v0.4.29-2.md)。
 
 ## 已实现的二开能力
 
@@ -18,7 +18,7 @@
 | TC-006 | 动态 Codex 模型 | 手动新增、同步渠道、远端获取、补齐选定渠道路由；未知模型按家族继承能力，手工覆盖优先；可见模型与路由分开管理 | [动态模型](../dynamic-codex-models.zh-CN.md) |
 | TC-007 | 桌面启动与升级方式 | 启动自动最大化；帮助菜单、托盘及启动自动检查更新均取消；保留主动安装新版的打包能力 | [品牌、桌面与交付](desktop-and-packaging.md) |
 | TC-008 | 上游升级的二开衔接 | 保留品牌、WorkBuddy、动态模型和桌面行为；衔接 Kimi、ChatGPT 账号凭证、账号模型发现及 OAuth 浏览器启动 | [v0.4.28](../upstream-v0.4.28-integration.md)、[v0.4.29](../upstream-v0.4.29-integration.md) |
-| TC-009 | Sub2API 网页渠道导入 | Windows 协议唤起、单实例内存转交、一次性码兑换、预览前模型查询；任意兼容 HTTP/HTTPS 站点直接进入预览准备，无环境开关或来源/跨站查询确认；预览中确认保存，默认禁用，一次一个渠道；同名处理及明确更新选择 | [网页导入](../hub-external-import.md)、[契约 v1](../HUB_EXTERNAL_IMPORT_CONTRACT_V1.md) |
+| TC-009 | Sub2API 网页渠道导入 | Windows 协议唤起；macOS App 协议声明、URL 事件与同用户 Unix socket 转交代码已补齐，待 Mac 构建验收；共用一次性码兑换、模型查询、HTTP/HTTPS 兼容和预览保存；默认禁用，一次一个渠道 | [网页导入](../hub-external-import.md)、[契约 v1](../HUB_EXTERNAL_IMPORT_CONTRACT_V1.md) |
 | TC-010 | 导入带来的配置并发保护 | 保存重读最新配置，只合并目标；目标指纹防止覆盖预览期间修改；全量 API 保存带版本，文件锁及原子替换；空模型导入渠道不能事后直接启用 | [网页导入](../hub-external-import.md)、[配置](../configuration.md) |
 
 ## 代码与配置定位
@@ -31,7 +31,7 @@
 | TC-005 | [渠道配置](../../src/ai_gateway/config.rs)、[Chat 转换](../../src/ai_gateway/providers/deepseek_chat.rs)、[GUI](../../src/gui.rs) | `providerType=chat_completions`、`compatibility=openai_chat`、`chatDisableReasoning` |
 | TC-006 | [模型目录](../../src/ai_gateway/model.rs)、[网关配置](../../src/ai_gateway/config.rs)、[Codex 页签](../../src/gui/codex_tab.rs)、[GUI](../../src/gui.rs) | `codexVisibleModels`、`codexModelProfiles`、`modelAliases`；继承不证明上游真实能力 |
 | TC-008 | [账号登录](../../src/ai_gateway/chatgpt_auth.rs)、[WorkBuddy 配置](../../src/workbuddy_config.rs)、[浏览器启动](../../src/gui/browser.rs) | 保留账号引用和刷新，不把账号令牌变成普通 API Key；不能因移除更新入口破坏 OAuth |
-| TC-009 | [导入模块](../../src/external_import.rs)、[网络](../../src/external_import/client.rs)、[IPC](../../src/external_import/ipc.rs)、[关联注册](../../src/external_import/registration.rs)、[导入 UI](../../src/gui/external_import.rs)、[CLI](../../src/cli.rs) | `tiancaispacehub://import/v1`；`importSource` 持久保存来源；ticket 和待确认 Key 仅在内存 |
+| TC-009 | [导入模块](../../src/external_import.rs)、[网络](../../src/external_import/client.rs)、[IPC](../../src/external_import/ipc.rs)、[关联注册](../../src/external_import/registration.rs)、[导入 UI](../../src/gui/external_import.rs)、[macOS 事件](../../src/gui/external_import/macos.rs)、[macOS IPC](../../src/external_import/ipc/macos.rs)、[CLI](../../src/cli.rs) | `tiancaispacehub://import/v1`；`importSource` 持久保存来源；ticket 和待保存 Key 仅在内存；macOS 关联由 App 与 Launch Services 管理 |
 | TC-010 | [配置读写](../../src/config.rs)、[本地 API](../../src/web.rs) | `_revision` 仅用于 API，不写 TOML；导入更新保留用户权重、超时、缓存及默认原有映射 |
 
 ## 沿用的上游能力
@@ -43,7 +43,7 @@
 ## 当前边界与后续衔接
 
 - Windows 优先，macOS 次之；Linux 不纳入新增需求。保留上游 Linux 工作流不代表本次开发和验收覆盖 Linux。
-- 网页导入 Hub 侧已实现，`0.4.29-3` 用户反馈本地导入正常；当前 `0.4.29-4` 流程精简、其他站点及安装/升级/卸载待用户验收；macOS 网页唤起尚未开发。
+- `0.4.29-3` 用户反馈 Windows 本地导入正常；后续流程调整、其他站点及安装/升级/卸载待用户验收。`0.4.29-5` macOS 系统接入已写入源码，尚未在 Mac 构建/验收，不把 Windows 编译结果计为 macOS 通过。
 - 模型发现与推理调用分开；远端返回模型 ID 不等于证明所有协议和能力可用。导入不发起计费模型测试。
 - Chrome 插件完整兼容、按模型选择 Remote Compact V2、Agent Manager 等研究资料不属于本表已交付功能。用户授权新任务后再更新状态。
 - 当前测试由用户负责；已有历史测试数量仅属于对应版本，不能用于宣称后续变更已通过测试。

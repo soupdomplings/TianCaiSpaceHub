@@ -4,7 +4,7 @@
 
 [文档总入口](docs/README.md) · [二开功能总表](docs/customizations/README.md) · [二开变更记录](docs/customizations/CHANGELOG.md)
 
-当前工作区版本为 `0.4.29-4`（本地交付版，未发布），支持兼容 Sub2API 的 HTTP/HTTPS 站点导入，包括本机、局域网和自定义域名；直接兑换并获取模型后进入预览，确认保存时默认禁用。使用方式见 [导入说明](docs/hub-external-import.md)。新开发优先 Windows、其次 macOS；下文沿用的 Linux 资料不代表本轮新增功能已在 Linux 实现或验收。
+当前工作区版本为 `0.4.29-5`（开发中，未发布），已补齐 macOS 网页导入的 App 协议声明、URL 事件接收和实例转交代码，待 macOS 构建及用户验收。与 Windows 共用 HTTP/HTTPS 兼容站点导入，获取模型后进入预览，保存时默认禁用。使用方式见 [导入说明](docs/hub-external-import.md)。新开发优先 Windows、其次 macOS；下文沿用的 Linux 资料不代表本轮新增功能已在 Linux 实现或验收。
 
 ## 产品预览
 
