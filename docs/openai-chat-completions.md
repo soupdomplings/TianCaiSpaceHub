@@ -1,5 +1,7 @@
 # OpenAI Chat Completions 接入
 
+维护日期：2026-09-30。适用版本：`0.4.29-2`。关联 TC-005，最初本地定制快照为 `18621b0`。
+
 在“大模型接入”中新增大模型厂商，选择 **OpenAI Chat Completions**，填写上游 Base URL（例如 `https://tiancai.yc99.space/v1`）和自己的 API Key，获取远端模型列表后保存并启用。
 
 Base URL 填到 `/v1` 即可，Hub 自动追加 `/chat/completions`。请选用上游明确支持该接口的模型；模型列表中可见不代表支持所有协议。
@@ -17,3 +19,9 @@ WorkBuddy 可在其接入页选择此渠道并保存，协议使用 `openai-chat
 若上游提示函数工具不能与推理同时使用，可编辑对应 Chat Completions 渠道，勾选“Chat Completions：关闭推理”并保存。Hub 会覆盖客户端传入的推理强度，发送 `reasoning_effort: "none"`，保留工具调用，并移除冲突的 `thinking` / `reasoning` 字段。
 
 此开关默认关闭，配置字段为 `chatDisableReasoning`。只作用于勾选的 Chat Completions 渠道，不改变其他渠道或全局推理设置。取消勾选即可恢复原有行为。WorkBuddy 若使用该渠道的配置副本，需要在 WorkBuddy 接入页重新选择渠道并保存，以同步此开关。
+
+## 网页导入与维护
+
+主站指定 `chat_completions` 时，网页导入创建相同的通用 `openai_chat` 兼容渠道；默认禁用保存，不默认关闭推理。普通渠道编辑锁定协议的规则不等于导入更新不能改变协议：导入预览展示主站协议，用户明确选择更新后才替换目标的协议字段。详见 [导入说明](hub-external-import.md)。
+
+代码入口：[渠道配置](../src/ai_gateway/config.rs)、[协议转换](../src/ai_gateway/providers/deepseek_chat.rs)、[GUI](../src/gui.rs)。迁移旧 Chat 渠道时不可批量补 `openai_chat`，否则会改变原 DeepSeek 行为；保存前备份，回滚时恢复对应渠道配置。当前测试由用户安排，历史验证记录见 [二开变更记录](customizations/CHANGELOG.md)。

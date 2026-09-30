@@ -4,6 +4,12 @@ Thanks for considering contributing to `codexhub`.
 
 This project sits between Codex App remote-control and Feishu IM, so small protocol changes can affect message routing and approval behavior. Please keep changes conservative and easy to review.
 
+## TianCaiSpace Customization Documentation
+
+Read [AGENTS.md](AGENTS.md), the [documentation index](docs/README.md), and the [customization inventory](docs/customizations/README.md) before development. Every feature, fix, removal, and upstream merge must update the relevant `docs/` topic and [customization changelog](docs/customizations/CHANGELOG.md) in the same delivery. Update the inventory and index when behavior, scope, or document locations change. See the [documentation policy](docs/development/documentation.md) for templates and cleanup rules.
+
+The user currently handles testing. Build as needed, but do not launch application, interactive, or real-provider tests unless the user changes that arrangement. Record unverified behavior explicitly. The commands below are references for an agreed validation scope, not automatic requirements to override that arrangement.
+
 ## Development Setup
 
 ```powershell
@@ -23,14 +29,14 @@ cargo test approval
 - Keep Codex as the source of truth.
 - Do not change Codex cwd, model, sandbox, approval policy, or environment from the bridge.
 - Prefer forwarding official app-server protocol payloads instead of inventing bridge-specific semantics.
-- Keep Codex App launch clean: configuration should point it at the local backend, but `codexhub` should not wrap or launch Codex.
+- Keep ordinary Codex startup unchanged. Existing enhanced launch is an explicit user action; do not introduce automatic launch or wrapper behavior.
 - Feishu UI should be compact and stateful; avoid repeated explanatory messages when card state can show the result.
 
 ## Pull Request Checklist
 
 - Explain the user-facing behavior change.
 - Include verification steps.
-- Add or update docs for command/config/protocol changes.
+- Update the relevant docs topic and customization changelog for every development change; update inventory, index, and release summaries when applicable.
 - Avoid committing local config, credentials, state files, logs, or build outputs.
 
 ## Security

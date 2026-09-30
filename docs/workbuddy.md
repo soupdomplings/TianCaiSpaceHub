@@ -1,5 +1,7 @@
 # WorkBuddy 接入
 
+维护日期：2026-09-30。适用版本：`0.4.29-2`。关联 TC-002、TC-003、TC-004；本页维护当前行为，历史开发和验证结果见 [二开变更记录](customizations/CHANGELOG.md)。
+
 TianCaiSpace Hub 提供独立的 WorkBuddy 接入页签。WorkBuddy 调用本机的 Chat Completions 兼容地址，Hub 再将请求转发到 AI Gateway 中选择的上游 provider，并按上游协议处理思考强度和缓存参数。
 
 ## 推荐配置
@@ -52,3 +54,11 @@ OpenAI 协议的缓存键优先级为：请求体中的有效 `prompt_cache_key`
 Anthropic Messages provider 会按 Claude 的 `cache_control` 规则标记 system、tools 和消息尾部，使用原生默认缓存期限。WorkBuddy 请求有无缓存键都能使用这些标记；上游 Messages 请求不发送 OpenAI 的 `prompt_cache_key` 或 `prompt_cache_retention`。Hub 内部仍保留稳定的会话标识。
 
 OpenAI Responses / Chat Completions provider 会发送 `prompt_cache_key`，并沿用 AI Gateway provider 的缓存保留时间设置。缓存键或缓存标记均不保证命中，实际取决于上游支持、前缀长度和前缀是否相同。可通过响应 usage 中的缓存读取 token 统计判断；OpenAI 通常对应 `cached_tokens`，Anthropic 原生对应 `cache_read_input_tokens`。
+
+## 维护与关联功能
+
+代码入口：[界面及选择联动](../src/gui/workbuddy.rs)、[配置与备份](../src/workbuddy_config.rs)、[请求转换](../src/ai_gateway/workbuddy.rs)、[上游重试](../src/ai_gateway/providers/mod.rs)、[请求分发](../src/ai_gateway/handler.rs)。普通 Codex 模型路由排除保留名称 `workbuddy`，避免两种客户端相互抢占路由。
+
+网页导入创建的是普通渠道，不自动写 WorkBuddy 配置；导入并启用后，可在本页主动选择并保存。网页导入禁止创建或覆盖保留名称 `workbuddy`。修改来源渠道的 Key、协议或关闭推理选项后，需要重新保存 WorkBuddy 配置以同步副本。
+
+本轮仅整理文档，未重新验证 WorkBuddy 或真实上游调用。当前用户负责测试；已有模拟回归结果按原版本登记，不代表所有兼容站点均已验收。

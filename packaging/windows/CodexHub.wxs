@@ -20,6 +20,19 @@
         <Component Id="CodexHubExecutable" Guid="{0DE4FE9A-3D6C-4F0C-A61B-F07C1B6FD96A}">
           <File Id="CodexHubExe" Source="$(var.SourceDir)\CodexHub.exe" KeyPath="yes" />
         </Component>
+        <Component Id="HubWebImportProtocol" Guid="{E62F8A91-CF58-4BCC-BDA4-D0C65BFEFB24}">
+          <RegistryKey Root="HKLM" Key="Software\Classes\tiancaispacehub">
+            <RegistryValue Type="string" Value="URL:TianCaiSpace Hub Import" />
+            <RegistryValue Name="URL Protocol" Type="string" Value="" KeyPath="yes" />
+            <RegistryValue Name="TianCaiSpaceHubOwner" Type="string" Value="&quot;[INSTALLFOLDER]CodexHub.exe&quot; import-url &quot;%1&quot;" />
+            <RegistryKey Key="DefaultIcon">
+              <RegistryValue Type="string" Value="&quot;[INSTALLFOLDER]CodexHub.exe&quot;,0" />
+            </RegistryKey>
+            <RegistryKey Key="shell\open\command">
+              <RegistryValue Type="string" Value="&quot;[INSTALLFOLDER]CodexHub.exe&quot; import-url &quot;%1&quot;" />
+            </RegistryKey>
+          </RegistryKey>
+        </Component>
         <Component Id="CodexHubReadme" Guid="{14C8BE1C-E8C1-4121-90C6-7CB96B842049}">
           <File Id="ReadmeMd" Source="$(var.SourceDir)\README.md" KeyPath="yes" />
         </Component>
@@ -75,6 +88,7 @@
 
     <Feature Id="MainFeature" Title="TianCaiSpace Hub" Level="1">
       <ComponentRef Id="CodexHubExecutable" />
+      <ComponentRef Id="HubWebImportProtocol" />
       <ComponentRef Id="CodexHubReadme" />
       <ComponentRef Id="CodexHubReadmeEn" />
       <ComponentRef Id="CodexHubConfigExample" />

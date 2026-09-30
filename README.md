@@ -2,6 +2,10 @@
 
 [English](README.en.md)
 
+[文档总入口](docs/README.md) · [二开功能总表](docs/customizations/README.md) · [二开变更记录](docs/customizations/CHANGELOG.md)
+
+当前二开版本为 `0.4.29-2`，新增 Windows 网页渠道导入，使用方式见 [导入说明](docs/hub-external-import.md)。新开发优先 Windows、其次 macOS；下文沿用的 Linux 资料不代表本轮新增功能已在 Linux 实现或验收。
+
 ## 产品预览
 
 | 功能 | 说明 |
@@ -51,7 +55,7 @@ Codex App 和 VS Code 插件通常只需要：下载程序 -> 配置 AI Gateway 
 
 第一次打开时，如果 macOS 提示来自互联网，按系统提示确认即可。Windows 直接运行 release 包里的 `TianCaiSpace Hub.exe`。Linux 如果桌面环境没有自动赋权，可以先执行 `chmod +x "TianCaiSpace Hub Linux x86_64.AppImage"`。这个 App 不会安装开机启动项，也不会自动常驻后台。
 
-后续可以在菜单 `Help -> Check for Updates` 手动检查 GitHub Releases 是否有新版本。当前 MVP 只引导打开下载页，不会静默替换本机程序。
+当前二开版已取消帮助菜单、托盘和启动时的更新检查。升级时使用指定版本的安装包或便携包，先退出旧 Hub 并备份配置；详见 [桌面与交付说明](docs/customizations/desktop-and-packaging.md)。
 
 ### 2. 打开应用
 

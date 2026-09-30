@@ -2,6 +2,10 @@
 
 [中文说明](README.md)
 
+[Documentation index](docs/README.md) · [Customization inventory](docs/customizations/README.md) · [Customization changelog](docs/customizations/CHANGELOG.md) (maintained in Chinese)
+
+The current customization version is `0.4.29-2`, adding Windows web channel import. See the [import guide](docs/hub-external-import.md). New development prioritizes Windows, followed by macOS; inherited Linux documentation does not imply support or acceptance of the new features on Linux.
+
 ## Product Preview
 
 | Feature | Description |
@@ -50,7 +54,7 @@ Download `TianCaiSpaceHub-*-macos-*.dmg` from GitHub Releases, drag it to Applic
 
 If macOS warns that the app was downloaded from the internet, confirm the system prompt. If your Linux desktop does not mark the AppImage as executable automatically, run `chmod +x "TianCaiSpace Hub Linux x86_64.AppImage"` once. The app does not install startup items and does not run in the background automatically.
 
-Later, use `Help -> Check for Updates` to manually check GitHub Releases for a newer version. The MVP only opens the download page; it does not silently replace the local app.
+This customization removes update checks from Help, the tray, and startup. Upgrade using the chosen version's installer or portable package after exiting the old Hub and backing up configuration. See [desktop and packaging](docs/customizations/desktop-and-packaging.md).
 
 ### 2. Open The App
 

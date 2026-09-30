@@ -1,8 +1,11 @@
-﻿use std::path::PathBuf;
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     Gui,
+    Import(crate::external_import::ImportLink),
+    RegisterImport,
+    UnregisterImport,
     Daemon,
     On,
     Off,
@@ -27,9 +30,12 @@ pub struct Cli {
 
 impl Cli {
     pub fn parse() -> anyhow::Result<Self> {
+        Self::parse_args(std::env::args().skip(1).collect())
+    }
+
+    fn parse_args(args: Vec<String>) -> anyhow::Result<Self> {
         let mut config_path = None;
         let mut remaining = Vec::new();
-        let args = std::env::args().skip(1).collect::<Vec<_>>();
         let mut index = 0;
 
         while index < args.len() {
@@ -51,6 +57,32 @@ impl Cli {
         let command = match remaining.first().map(String::as_str) {
             None => default_command(),
             Some("gui") => Command::Gui,
+            Some("import-url") => {
+                if remaining.len() != 2 {
+                    anyhow::bail!("import-url requires one import link");
+                }
+                Command::Import(
+                    crate::external_import::ImportLink::parse(
+                        &remaining[1],
+                        crate::external_import::allow_local_development(),
+                    )
+                    .map_err(anyhow::Error::msg)?,
+                )
+            }
+            Some("register-web-import") => Command::RegisterImport,
+            Some("unregister-web-import") => Command::UnregisterImport,
+            Some(link) if link.contains("://") => {
+                if remaining.len() != 1 {
+                    anyhow::bail!("invalid import arguments");
+                }
+                Command::Import(
+                    crate::external_import::ImportLink::parse(
+                        link,
+                        crate::external_import::allow_local_development(),
+                    )
+                    .map_err(anyhow::Error::msg)?,
+                )
+            }
             Some("daemon") | Some("run") => Command::Daemon,
             Some("on") => Command::On,
             Some("off") => Command::Off,
@@ -64,7 +96,7 @@ impl Cli {
                 print_help();
                 std::process::exit(0);
             }
-            Some(other) => anyhow::bail!("unknown command `{other}`. Run `codexhub help`."),
+            Some(_) => anyhow::bail!("unknown command. Run `codexhub help`."),
         };
 
         Ok(Self {
@@ -156,6 +188,9 @@ pub fn print_help() {
 
 Usage:
   codexhub [--config PATH] gui
+  codexhub import-url "tiancaispacehub://import/v1?..."
+  codexhub register-web-import
+  codexhub unregister-web-import
   codexhub [--config PATH] daemon
   codexhub [--config PATH] on
   codexhub [--config PATH] off
@@ -166,4 +201,29 @@ Usage:
 Default command is gui when built with the gui feature, otherwise daemon.
 "#
     );
+}
+
+#[cfg(test)]
+mod import_tests {
+    use super::*;
+    #[test]
+    fn external_import_entrypoints_preserve_link_and_redact_diagnostics() {
+        let link = format!(
+            "tiancaispacehub://import/v1?origin=https%3A%2F%2Ftiancai.yc99.space&ticket={}",
+            "x".repeat(43)
+        );
+        for args in [vec![link.clone()], vec!["import-url".into(), link.clone()]] {
+            let cli = Cli::parse_args(args).unwrap();
+            assert!(matches!(&cli.command, Command::Import(_)));
+            assert!(!format!("{cli:?}").contains(&"x".repeat(43)));
+        }
+        for args in [
+            vec!["import-url".into()],
+            vec!["import-url".into(), link.clone(), "extra".into()],
+            vec![format!("{link}#fragment")],
+        ] {
+            let error = Cli::parse_args(args).unwrap_err().to_string();
+            assert!(!error.contains(&"x".repeat(43)));
+        }
+    }
 }

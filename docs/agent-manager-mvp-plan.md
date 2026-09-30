@@ -1,5 +1,7 @@
 # CodexHub Agent Manager 实施计划
 
+状态校正（2026-09-30）：保留的未排期设计，未纳入当前二开交付；下文排期和开发建议是旧设想，不是已授权任务。仓库当前不存在原文提到的 TreeCtrl POC 工程，也无该方案的完整验收记录。当前已实现功能见 [二开总表](customizations/README.md)。
+
 ## 项目概述
 
 ### 目标
@@ -252,7 +254,7 @@ writer 序列化 + 本地校验
 
 ## 实施时间表
 
-时间为估算，按个人开发者节奏，可按实际调整。阶段一务必先完成再进入阶段二。
+以下为原设计阶段的工作量估算，未排入当前开发日程。若用户重新提出此需求，应重新评估 Codex 与 wxDragon 当前能力及验收安排。
 
 ### 阶段一（约 3-4 周）
 
@@ -371,7 +373,7 @@ remote-control 侧在观测到 sub-agent 事件时 `send + wake_up_idle()`，GUI
 
 ### TreeCtrl：需 POC 验证，有备选
 
-`DataViewTreeCtrl` 在 wxdragon 中存在（`vendor/wxdragon/rust/wxdragon/src/widgets/dataview/tree_ctrl.rs`），提供 `append_container` / `append_item` 等 API，但项目中尚无实际使用先例。阶段二开工先跑一个 POC（`tests/tree_ctrl_poc/` 已备好骨架）验证：创建节点、展开/折叠、选择、动态添加、状态更新。
+`DataViewTreeCtrl` 的接口以当前 vendored wxDragon 为准。旧文档引用的 `tests/tree_ctrl_poc/` 工程并不存在，不能视为已经准备或验证完成。若重新推进阶段二，需在当次任务中明确创建节点、展开/折叠、选择、动态添加及状态更新的验证范围和负责人。
 
 备选方案（若 TreeCtrl 不达标）：用 `DataViewCtrl` + 缩进字符模拟树形，对 2-3 层调用链足够：
 

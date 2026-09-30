@@ -38,6 +38,7 @@ pub fn router(state: SharedState) -> Router {
         .route("/api/gui/dashboard", get(gui_dashboard))
         .route("/api/shutdown", post(shutdown))
         .route("/api/config", get(get_config).post(save_config))
+        .route("/api/external-import/commit", post(commit_external_import))
         .route(
             "/api/workbuddy/config",
             get(workbuddy_config).post(save_workbuddy_config),
@@ -305,13 +306,27 @@ async fn shutdown(State(state): State<SharedState>) -> impl IntoResponse {
 }
 
 async fn get_config(State(state): State<SharedState>) -> Json<AppConfig> {
-    Json(state.config.lock().await.clone())
+    let mut current = state.config.lock().await;
+    if let Ok(mut latest) = AppConfig::load_or_default(&state.config_path) {
+        crate::normalize_config_paths(&mut latest, &state.config_path);
+        *current = latest;
+    }
+    Json(current.clone())
 }
 
 async fn save_config(
     State(state): State<SharedState>,
-    Json(config): Json<AppConfig>,
+    Json(mut config): Json<AppConfig>,
 ) -> impl IntoResponse {
+    let mut current = state.config.lock().await;
+    if config.revision.is_none() {
+        return (
+            StatusCode::CONFLICT,
+            Json(
+                json!({"error":"配置缺少版本，请刷新后重试 / Reload configuration before saving"}),
+            ),
+        );
+    }
     if let Err(err) = crate::outbound_http::validate_for_local_port(
         &config.outbound_proxy,
         config.local_listen_port(),
@@ -323,7 +338,7 @@ async fn save_config(
     }
     if let Err(err) = config.save(&state.config_path) {
         return (
-            StatusCode::INTERNAL_SERVER_ERROR,
+            StatusCode::CONFLICT,
             Json(json!({ "error": err.to_string() })),
         );
     }
@@ -334,11 +349,40 @@ async fn save_config(
             Json(json!({ "error": err.to_string() })),
         );
     }
-    *state.config.lock().await = config;
+    *current = config;
+    drop(current);
     state
         .push_event("info", "config_saved", "configuration saved")
         .await;
     (StatusCode::OK, Json(json!({ "ok": true })))
+}
+
+async fn commit_external_import(
+    State(state): State<SharedState>,
+    Json(request): Json<crate::external_import::CommitImport>,
+) -> impl IntoResponse {
+    let mut current = state.config.lock().await;
+    let outcome = (|| -> Result<AppConfig, String> {
+        crate::external_import::validate_draft(
+            &request.draft,
+            crate::external_import::allow_local_development(),
+        )?;
+        let mut config = AppConfig::load_or_default(&state.config_path)
+            .map_err(|_| "无法读取当前配置 / Cannot read current configuration")?;
+        crate::external_import::merge_import(&mut config, &request)?;
+        crate::normalize_config_paths(&mut config, &state.config_path);
+        config.save(&state.config_path).map_err(
+            |_| "配置已变化或保存失败，请刷新后重试 / Configuration changed or could not be saved",
+        )?;
+        Ok(config)
+    })();
+    match outcome {
+        Ok(config) => {
+            *current = config;
+            (StatusCode::OK, Json(json!({"ok":true})))
+        }
+        Err(error) => (StatusCode::CONFLICT, Json(json!({"error":error}))),
+    }
 }
 
 async fn workbuddy_config() -> impl IntoResponse {

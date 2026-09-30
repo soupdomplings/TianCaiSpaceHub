@@ -2,7 +2,7 @@
 
 更新时间：2026-06-20
 
-状态：路线设计稿，用于指导后续实现。
+状态：历史路线设计稿。2026-09-30 归档定位：保留当时的协议取舍，不作为当前唯一出站路线或自动开发任务；当前同时支持多种 Responses、Anthropic 和通用 Chat Completions 渠道，参见 [文档索引](README.md) 和 [二开总表](customizations/README.md)。
 
 本文记录 `codexhub` AI Gateway 后续演进方向：入口继续兼容 Codex 使用的 OpenAI Responses 协议，出站主线转向 Anthropic Messages 协议。Chat Completions 保留为历史兼容路径，不再作为新 provider 接入的主要抽象。
 

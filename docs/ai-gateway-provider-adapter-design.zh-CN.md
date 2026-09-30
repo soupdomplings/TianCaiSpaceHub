@@ -2,7 +2,7 @@
 
 更新时间：2026-06-19
 
-状态：设计草案，可修订。
+状态：历史设计草案。2026-09-30 归档定位：保留协议取舍依据；下文以当时实现为背景，不代表当前仍需重做适配器。现行功能入口见 [文档索引](README.md) 和 [二开总表](customizations/README.md)。
 
 本文档记录 `codexhub` AI Gateway 从“Responses 到 Chat Completions 的点对点转换”升级为“Codex Responses 入口协议 + Gateway IR + 多 Provider Adapter”的设计。它用于指导后续实现，但不是唯一真实来源；落地过程中如果发现 Codex、DeepSeek、Anthropic 或其它 provider 的协议细节与本文不一致，应优先修正实现并同步更新本文档。
 

@@ -3,6 +3,7 @@
 /outputs
 .DS_Store
 config.toml
+config.toml.lock
 chatgpt-auth/
 codexhub-state.json
 *.log

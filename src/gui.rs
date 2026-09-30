@@ -89,6 +89,8 @@ const ID_MENU_EXPORT_CONNECTION_DIAGNOSTICS: i32 = 10_011;
 const ID_MENU_PROXY_SYSTEM: i32 = 10_012;
 const ID_MENU_PROXY_DIRECT: i32 = 10_013;
 const ID_MENU_PROXY_CUSTOM: i32 = 10_014;
+const ID_MENU_REGISTER_IMPORT: i32 = 10_015;
+const ID_MENU_UNREGISTER_IMPORT: i32 = 10_016;
 
 type ImAccountRows = Rc<RefCell<Vec<[String; 5]>>>;
 type ImAccountModel = Rc<RefCell<CustomDataViewVirtualListModel>>;
@@ -143,6 +145,7 @@ mod browser;
 mod chatgpt;
 mod codex_tab;
 mod daemon;
+mod external_import;
 mod im_accounts;
 mod onboarding;
 mod provider;
@@ -201,6 +204,7 @@ use self::workbuddy::WorkBuddyActionResult;
 #[derive(Clone)]
 struct GuiTimers {
     timers: Rc<RefCell<Vec<TrackedGuiTimer>>>,
+    panel_timers: Rc<RefCell<Vec<Rc<Timer<Panel>>>>>,
 }
 
 struct TrackedGuiTimer {
@@ -213,6 +217,7 @@ impl GuiTimers {
     fn new() -> Self {
         Self {
             timers: Rc::new(RefCell::new(Vec::new())),
+            panel_timers: Rc::new(RefCell::new(Vec::new())),
         }
     }
 
@@ -269,6 +274,9 @@ impl GuiTimers {
     }
 
     fn stop_all(&self) {
+        for timer in self.panel_timers.borrow().iter() {
+            timer.stop();
+        }
         let mut timers = self.timers.borrow_mut();
         for tracked in timers.iter() {
             if let Some(timer) = tracked.store.borrow().as_ref() {
@@ -334,20 +342,37 @@ impl GuiSingleInstanceGuard {
 }
 
 pub fn run() {
+    run_with_import(None);
+}
+
+pub fn run_with_import(initial: Option<crate::external_import::ImportLink>) {
     let Some(single_instance_guard) = GuiSingleInstanceGuard::acquire() else {
         eprintln!("failed to create CodexHub GUI single instance checker");
         return;
     };
     if single_instance_guard.is_another_running() {
+        if let Some(link) = initial {
+            if let Err(error) = crate::external_import::ipc::forward(&link) {
+                #[cfg(windows)]
+                crate::external_import::registration::show_startup_error(&error);
+                #[cfg(not(windows))]
+                eprintln!("{error}");
+            }
+        }
         return;
     }
-
-    if let Err(err) = wxdragon::main(|app| build_ui(app, single_instance_guard)) {
+    let inbox = crate::external_import::ipc::start();
+    if let Err(err) = wxdragon::main(|app| build_ui(app, single_instance_guard, inbox, initial)) {
         eprintln!("failed to start CodexHub GUI: {err:?}");
     }
 }
 
-fn build_ui(app: App, single_instance_guard: GuiSingleInstanceGuard) {
+fn build_ui(
+    app: App,
+    single_instance_guard: GuiSingleInstanceGuard,
+    inbox: Result<crate::external_import::ipc::Inbox, String>,
+    initial: Option<crate::external_import::ImportLink>,
+) {
     // Apply the saved appearance and install the matching design tokens *before*
     // any window is built: `set_appearance` returns `CannotChange` once a window
     // exists, so this ordering is required.
@@ -1933,6 +1958,7 @@ fn build_ui(app: App, single_instance_guard: GuiSingleInstanceGuard) {
     // resize after each start, while still respecting the OS taskbar area.
     frame.maximize(true);
     frame.show(true);
+    external_import::install(&frame, &api, &gui_timers, inbox, initial);
 }
 
 /// Enable `wxFULL_REPAINT_ON_RESIZE` (0x00010000) on a window so its whole
@@ -2256,6 +2282,25 @@ fn install_system_menu(
 ) {
     let file_menu = Menu::builder()
         .append_item(
+            ID_MENU_REGISTER_IMPORT,
+            if text.locale == GuiLocale::ZhCn {
+                "注册网页导入…"
+            } else {
+                "Register web import…"
+            },
+            "Windows",
+        )
+        .append_item(
+            ID_MENU_UNREGISTER_IMPORT,
+            if text.locale == GuiLocale::ZhCn {
+                "解除网页导入注册"
+            } else {
+                "Unregister web import"
+            },
+            "Windows",
+        )
+        .append_separator()
+        .append_item(
             ID_MENU_CLOSE_WINDOW,
             text.close_window(),
             text.close_window_help(),
@@ -2350,6 +2395,14 @@ fn install_system_menu(
     let frame = *frame;
     let gui_timers = gui_timers.clone();
     frame.on_menu_selected(move |event| match event.get_id() {
+        ID_MENU_REGISTER_IMPORT | ID_MENU_UNREGISTER_IMPORT => {
+            let register = event.get_id() == ID_MENU_REGISTER_IMPORT;
+            let message = if register { "将网页导入关联到当前 Hub 程序位置？移动便携版后需重新注册。\nAssociate web imports with this executable? Register again after moving it." } else { "解除当前程序的网页导入关联？\nRemove this executable's web import association?" };
+            if external_import::confirm(&frame, message) {
+                let result = if register { crate::external_import::registration::register() } else { crate::external_import::registration::unregister() };
+                match result { Ok(()) => show_info(&frame, "网页导入关联已更新 / Web import association updated"), Err(e) => show_error(&frame, &e) }
+            }
+        }
         ID_MENU_CLOSE_WINDOW => tray::hide_main_window(&frame, text, &gui_timers),
         ID_MENU_QUIT | ID_EXIT => tray::request_app_quit(&frame, &quitting),
         ID_MENU_MINIMIZE => frame.iconize(true),
@@ -3444,6 +3497,7 @@ fn show_ai_gw_channel_dialog(
                 .unwrap_or(100)
                 .max(1);
             Some(ProviderConfig {
+                import_source: initial.and_then(|p| p.import_source.clone()),
                 name,
                 enabled: initial.map(|provider| provider.enabled).unwrap_or(true),
                 chat_disable_reasoning: provider_type == ProviderType::ChatCompletions

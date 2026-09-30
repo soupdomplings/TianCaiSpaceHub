@@ -6,9 +6,17 @@ use serde::{Deserialize, Serialize};
 const DEFAULT_BIND: &str = "127.0.0.1:3847";
 const LEGACY_DEFAULT_BIND: &str = "127.0.0.1:8000";
 
+fn config_revision(raw: &str) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(Sha256::digest(raw.as_bytes()))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct AppConfig {
+    /// Optimistic concurrency token for GUI edits. Never persisted in TOML.
+    #[serde(rename = "_revision", skip_serializing_if = "Option::is_none")]
+    pub revision: Option<String>,
     pub bind: String,
     pub local_connection_mode: LocalConnectionMode,
     pub outbound_proxy: OutboundProxyConfig,
@@ -127,6 +135,7 @@ pub struct LoggingConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            revision: None,
             bind: DEFAULT_BIND.to_string(),
             local_connection_mode: LocalConnectionMode::default(),
             outbound_proxy: OutboundProxyConfig::default(),
@@ -279,7 +288,10 @@ impl AppConfig {
 
     pub fn load_or_default(path: &PathBuf) -> anyhow::Result<Self> {
         if !path.exists() {
-            return Ok(Self::default());
+            return Ok(Self {
+                revision: Some("missing".into()),
+                ..Self::default()
+            });
         }
         let raw = std::fs::read_to_string(path)
             .with_context(|| format!("failed to read config {}", path.display()))?;
@@ -292,18 +304,70 @@ impl AppConfig {
                 "unsupported gateway channels skipped; original configuration retained on disk"
             );
         }
-        document
+        let mut config: Self = document
             .try_into()
-            .with_context(|| format!("failed to parse config {}", path.display()))
+            .with_context(|| format!("failed to parse config {}", path.display()))?;
+        config.revision = Some(config_revision(&raw));
+        Ok(config)
     }
 
-    pub fn save(&self, path: &PathBuf) -> anyhow::Result<()> {
-        let mut document = toml::Value::try_from(self)?;
+    pub fn save(&mut self, path: &PathBuf) -> anyhow::Result<()> {
+        for provider in &self.ai_gateway.providers {
+            if provider.import_source.is_some() && provider.enabled {
+                anyhow::ensure!(
+                    !provider.models.is_empty(),
+                    "导入渠道需补全模型后启用 / Imported channels require models before enabling"
+                );
+                anyhow::ensure!(
+                    provider
+                        .model_aliases
+                        .values()
+                        .all(|m| provider.models.contains(m)),
+                    "导入渠道的模型映射需要核对 / Imported channel aliases require review"
+                );
+            }
+        }
+        use std::io::Write;
+        let parent = path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| std::path::Path::new("."));
+        std::fs::create_dir_all(parent)?;
+        // All processes using this version serialize their writes. The revision
+        // check also rejects a stale whole-config save after an import commits.
+        let lock = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(path.with_extension("toml.lock"))?;
+        fs2::FileExt::lock_exclusive(&lock)?;
+        let existing_raw = match std::fs::read_to_string(path) {
+            Ok(raw) => Some(raw),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(e.into()),
+        };
+        let actual = existing_raw
+            .as_deref()
+            .map(config_revision)
+            .unwrap_or_else(|| "missing".into());
+        if self
+            .revision
+            .as_deref()
+            .is_some_and(|expected| expected != actual)
+        {
+            anyhow::bail!(
+                "配置已被其他操作修改，请刷新后重试 / Configuration changed; reload and retry"
+            );
+        }
+        let mut document = toml::Value::try_from(&*self)?;
+        document
+            .as_table_mut()
+            .expect("config table")
+            .remove("_revision");
         // The GUI only edits supported providers. Preserve unknown entries from
         // disk when it saves, including fields introduced by a newer version.
-        if path.exists() {
-            let existing = std::fs::read_to_string(path)
-                .with_context(|| format!("failed to read config {}", path.display()))?;
+        if let Some(existing) = existing_raw {
             let mut existing: toml::Value = toml::from_str(&existing)
                 .with_context(|| format!("failed to parse config {}", path.display()))?;
             let unsupported = take_unsupported_providers(&mut existing);
@@ -320,8 +384,15 @@ impl AppConfig {
                 format!("failed to create config directory {}", parent.display())
             })?;
         }
-        std::fs::write(path, raw)
-            .with_context(|| format!("failed to write config {}", path.display()))
+        let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+        temporary.write_all(raw.as_bytes())?;
+        temporary.as_file().sync_all()?;
+        temporary
+            .persist(path)
+            .map_err(|e| e.error)
+            .with_context(|| format!("failed to write config {}", path.display()))?;
+        self.revision = Some(config_revision(&raw));
+        Ok(())
     }
 
     pub fn migrate_legacy_im_accounts(&mut self) -> bool {

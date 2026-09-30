@@ -5,6 +5,8 @@
 状态：源码调研快照。本文不代表已确定的重构计划；后续实施前应以当时的 Grok Build、
 Codex 和 CodexHub 最新代码重新核对。
 
+2026-09-30 清理说明：本仓库不包含下列外部参考快照文件，因此将失效链接改为历史相对路径。它们用于追溯原调查，不是当前仓库中可点击的代码入口；原调研结论不代表本轮重新核验。
+
 ## 1. 调研范围
 
 本次调研源码位于：
@@ -66,8 +68,8 @@ CodexHub 已有 `GatewayTurn` IR 和 Responses inbound decoder，但当前生产
 
 核心文件：
 
-- [`conversation.rs`](../references/grok-build-main/crates/codegen/xai-grok-sampling-types/src/conversation.rs)
-- [`messages.rs`](../references/grok-build-main/crates/codegen/xai-grok-sampling-types/src/messages.rs)
+- `crates/codegen/xai-grok-sampling-types/src/conversation.rs`（相对于原参考快照）
+- `crates/codegen/xai-grok-sampling-types/src/messages.rs`（相对于原参考快照）
 
 `ConversationItem` 的主要类型：
 
@@ -92,8 +94,8 @@ Reasoning
 
 核心文件：
 
-- [`client.rs`](../references/grok-build-main/crates/codegen/xai-grok-sampler/src/client.rs)
-- [`request_task.rs`](../references/grok-build-main/crates/codegen/xai-grok-sampler/src/actor/request_task.rs)
+- `crates/codegen/xai-grok-sampler/src/client.rs`（相对于原参考快照）
+- `crates/codegen/xai-grok-sampler/src/actor/request_task.rs`（相对于原参考快照）
 
 `ApiBackend` 在发送前决定使用哪个 encoder：
 
@@ -110,8 +112,8 @@ Messages 请求最终发送到 `{base_url}/messages`。流式请求设置 `strea
 
 核心文件：
 
-- [`stream/responses.rs`](../references/grok-build-main/crates/codegen/xai-grok-sampler/src/stream/responses.rs)
-- [`stream/messages.rs`](../references/grok-build-main/crates/codegen/xai-grok-sampler/src/stream/messages.rs)
+- `crates/codegen/xai-grok-sampler/src/stream/responses.rs`（相对于原参考快照）
+- `crates/codegen/xai-grok-sampler/src/stream/messages.rs`（相对于原参考快照）
 
 两种协议最终都产生统一的：
 

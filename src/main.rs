@@ -12,6 +12,7 @@ mod codex_session_history;
 mod config;
 mod daemon_process;
 mod diagnostics_export;
+mod external_import;
 #[cfg(feature = "gui")]
 mod gui;
 mod im;
@@ -45,7 +46,37 @@ use crate::{
 };
 
 fn main() -> anyhow::Result<()> {
-    let cli = Cli::parse()?;
+    let cli = match Cli::parse() {
+        Ok(cli) => cli,
+        Err(error) => {
+            #[cfg(all(windows, feature = "gui"))]
+            if std::env::args().any(|arg| arg == "import-url" || arg.contains("://")) {
+                external_import::registration::show_startup_error(&error.to_string());
+            }
+            return Err(error);
+        }
+    };
+    match &cli.command {
+        Command::Import(link) => {
+            #[cfg(feature = "gui")]
+            {
+                gui::run_with_import(Some(link.clone()));
+                return Ok(());
+            }
+            #[cfg(not(feature = "gui"))]
+            {
+                let _ = link;
+                anyhow::bail!("Import requires a GUI build");
+            }
+        }
+        Command::RegisterImport => {
+            return external_import::registration::register().map_err(anyhow::Error::msg);
+        }
+        Command::UnregisterImport => {
+            return external_import::registration::unregister().map_err(anyhow::Error::msg);
+        }
+        _ => {}
+    }
     // GUI 需要在自己的线程里创建 tokio 运行时，若这里先建立外层运行时，
     // gui::run() 内层运行时退出时会在 async 上下文中被 drop，触发
     // "Cannot drop a runtime in a context where blocking is not allowed" panic。
@@ -142,7 +173,9 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             );
             Ok(())
         }
-        Command::Gui => unreachable!("GUI command is handled before config loading"),
+        Command::Gui | Command::Import(_) | Command::RegisterImport | Command::UnregisterImport => {
+            unreachable!("GUI command is handled before config loading")
+        }
     }
 }
 

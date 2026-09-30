@@ -229,6 +229,8 @@ impl ZaiAccessMode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ProviderConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub import_source: Option<crate::external_import::ImportSource>,
     /// provider 名称标识（如 "openai"、"deepseek"）。
     pub name: String,
     /// 是否启用该 provider。
@@ -272,6 +274,7 @@ pub struct ProviderConfig {
 impl Default for ProviderConfig {
     fn default() -> Self {
         Self {
+            import_source: None,
             name: String::new(),
             enabled: true,
             provider_type: ProviderType::OpenAiResponses,

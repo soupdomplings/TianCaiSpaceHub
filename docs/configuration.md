@@ -7,6 +7,27 @@ There are two separate config surfaces:
 
 Do not mix them. `codexhub` stores IM channel and bridge settings. Codex App stores model provider, auth, and `chatgpt_base_url`.
 
+## TianCaiSpace customization fields and concurrent saves
+
+Updated 2026-09-30 for `0.4.29-2`. See the [customization inventory](customizations/README.md) for current behavior and code ownership.
+
+| Configuration area | Current contract | Detail |
+| --- | --- | --- |
+| `aiGateway.codexVisibleModels` | Saved model IDs displayed to Codex; visibility and provider routing are separate | [Dynamic models](dynamic-codex-models.zh-CN.md) |
+| `aiGateway.codexModelProfiles` | Explicit model capability overrides take priority over inferred family defaults | [Dynamic models](dynamic-codex-models.zh-CN.md) |
+| Provider `compatibility` / `chatDisableReasoning` | `openai_chat` identifies general Chat Completions; disabling reasoning is per provider | [Chat Completions](openai-chat-completions.md) |
+| Reserved provider `workbuddy` | Dedicated WorkBuddy configuration, excluded from ordinary Codex routing | [WorkBuddy](workbuddy.md) |
+| Provider `importSource` | Imported identity survives renaming; nested fields are `origin`, `key_id`, `site_name`, `key_name` | [Web import](hub-external-import.md) |
+| API `_revision` | Read from `GET /api/config`, send back unchanged with `POST /api/config`; never persisted in TOML | [Web import and save behavior](hub-external-import.md) |
+
+The full-config save endpoint requires `_revision`; missing or stale versions return HTTP 409. Reload the latest configuration, review the intended changes, and submit again. Do not blindly retry the old full document, as that could overwrite newer settings.
+
+`POST /api/external-import/commit` is the local GUI save operation after confirmation, not a public deep-link receiver. It rereads the latest file, merges only the selected provider, and checks the preview target fingerprint before updating an existing provider. Deep links arrive through Windows IPC. Both save paths use a file lock and an atomic replacement; `_revision` is the content revision used for conflict detection. Older Hub versions do not participate in this protection, so do not edit the same file from old and new versions at once.
+
+An enabled imported provider must have models, and its alias targets must exist in that list. This rule also applies when enabling it later through the normal configuration editor. The GUI should preserve `importSource` during ordinary edits.
+
+The source of truth for these fields is [provider configuration](../src/ai_gateway/config.rs), [config storage](../src/config.rs), and [local API](../src/web.rs). Back up configuration before downgrade or external edits; remove a newly imported channel or restore its prior backup to undo an import.
+
 ## `codexhub` Config
 
 Use an explicit config path for predictable behavior:
