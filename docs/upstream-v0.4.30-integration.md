@@ -11,7 +11,7 @@
 | 与本轮上游的共同基线 | `184ea454fc13df54616f35417bdbeaec59921536`，上次整合包含的 v0.4.29 发布后修复 |
 | 上次本地整合 | `9d4a7f4e60a8698fa8095f3c43ef33c3b466a114`，详见 [v0.4.29 记录](upstream-v0.4.29-integration.md) |
 | 本轮官方标签 | `v0.4.30` / `6520da49d55919a9f908c6c84c51efaf7e1a0a7b` |
-| 本地整合结果 | `0.4.30-1`；本轮本地合并，提交后补记 |
+| 本地整合结果 | `0.4.30-1` / `22ee85033e9e5f26f3a788e0f7a90e17c38c98c7`，随后仅补记文档追溯信息 |
 
 上游来源为 [happy-loki/codexhub](https://github.com/happy-loki/codexhub)，发布说明见 [官方 v0.4.30](https://github.com/happy-loki/codexhub/releases/tag/v0.4.30)。本地整合在 `integrate/upstream-v0.4.30` 完成；追溯和回滚以提交号为准，不依赖临时分支是否保留。上游相对共同基线改变 15 个文件，主要涉及模型目录、账号回调、增强启动、更新诊断和对应文档。
 
