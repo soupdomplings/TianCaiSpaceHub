@@ -1,6 +1,6 @@
 # TianCaiSpace Hub 文档总入口
 
-维护日期：2026-10-03。当前工作区版本：`0.4.29-5`（开发中，未发布，含天工 Claw 多模型、流式聚合与外部消息执行端变更）；上游整合基线：CodexHub `v0.4.29`。本目录统一维护二开现状、使用说明、设计依据和开发记录。
+维护日期：2026-10-03。当前工作区版本：`0.4.30-1`（开发中，未发布）；上游整合基线：CodexHub `v0.4.30`。天工 Claw 多模型、流式聚合与外部消息执行端已保存于 `9b9702e`，本轮整合继续保留。本目录统一维护二开现状、使用说明、设计依据和开发记录。
 
 ## 从哪里开始
 
@@ -15,7 +15,7 @@
 | 设置自定义模型与能力继承 | [动态 Codex 可见模型](dynamic-codex-models.zh-CN.md) |
 | 从 Sub2API 网页导入渠道 | [网页导入](hub-external-import.md)、[两端接口约定](HUB_EXTERNAL_IMPORT_CONTRACT_V1.md) |
 | 查看品牌、桌面行为和打包约定 | [品牌、桌面与交付](customizations/desktop-and-packaging.md) |
-| 了解最新上游合并 | [v0.4.29 整合记录](upstream-v0.4.29-integration.md) |
+| 了解最新上游合并及待验收项 | [v0.4.30 整合记录](upstream-v0.4.30-integration.md) |
 | 查看 macOS 网页导入接入与验证边界 | [0.4.29-5 开发状态](releases/v0.4.29-5.md) |
 | 获取上一版 Windows 导入流程调整的本地包信息 | [v0.4.29-4 Windows 交付版](releases/v0.4.29-4.md) |
 | 查看前一版本 HTTP 导入修复及验收记录 | [v0.4.29-3 Windows 修复版](releases/v0.4.29-3.md) |
@@ -39,7 +39,8 @@
 | [导入协议 v1](HUB_EXTERNAL_IMPORT_CONTRACT_V1.md) | Hub 与 Sub2API 联调契约；不表示主站已上线 |
 | [品牌、桌面与交付](customizations/desktop-and-packaging.md) | 天才空间品牌、窗口最大化、取消检查更新、平台和产物规则 |
 | [v0.4.28 整合](upstream-v0.4.28-integration.md) | 历史上游整合记录 |
-| [v0.4.29 整合](upstream-v0.4.29-integration.md) | 当前上游基线及二开衔接 |
+| [v0.4.29 整合](upstream-v0.4.29-integration.md) | 历史上游整合记录 |
+| [v0.4.30 整合](upstream-v0.4.30-integration.md) | 当前上游基线、12 项二开保留矩阵、冲突取舍和验收边界 |
 
 ## 通用架构与配置
 

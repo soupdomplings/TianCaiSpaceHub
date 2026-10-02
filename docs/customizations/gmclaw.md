@@ -1,7 +1,7 @@
 # 天工 Claw 模型接入
 
-维护日期：2026-10-03。关联 TC-011。基于 `3b3f213`（`0.4.29-5`）继续开发，尚未发布。
-实现状态：多模型管理、厂商参数适配与上游流式聚合已实现，Windows GUI/测试代码编译及调试 EXE 构建通过；端到端行为待用户验收。
+维护日期：2026-10-03。关联 TC-011。第二阶段保存点为 `9b9702e`；当前源码 `0.4.30-1` 在其上整合上游 `v0.4.30`，开发中、未发布。
+实现状态：多模型管理、厂商参数适配与上游流式聚合已实现，本轮上游整合保留这些源码与行为。当前 Windows GUI/测试代码编译及调试 EXE 构建通过；未执行测试，端到端行为待用户验收。当前产物身份见 [整合专题](../upstream-v0.4.30-integration.md#本轮验证与产物)。
 
 ## 范围与兼容依据
 
@@ -99,12 +99,14 @@ HTTP `502/503` 及已有可恢复连接错误在每轮原样转发中共用最�
 
 ## 验证状态
 
-本轮最终源码通过 `cargo check --locked --target x86_64-pc-windows-msvc --features gui --tests --bin codexhub` 和 `cargo build --locked --target x86_64-pc-windows-msvc --features gui --bin codexhub`。`cargo fmt --check`、差异空白和本轮文档本地链接核对通过；GUI 编译保留 23 条警告，测试代码编译保留 51 条警告，主要为未使用代码。已新增隔离 SQLite、多条目路由、JSON/SSE 聚合、Harness 事件与审批等夹具，按用户分工未执行测试。Windows 交互和端到端行为待用户验收；macOS 尚待构建及实机验证，不新增 Linux 验收范围。
+当前 `0.4.30-1` 上游整合后的编译、构建、静态产物核对及唯一 EXE 身份见 [v0.4.30 整合记录](../upstream-v0.4.30-integration.md#本轮验证与产物)。下列两个 EXE 仅保留历史阶段归属，不能用于识别当前调试输出。
 
-本轮调试程序为 `target/x86_64-pc-windows-msvc/debug/codexhub.exe`，大小 `55,158,784` 字节，SHA-256 `81f887e1140daf5f2c0146ffd05cab31cc5994da182c66c47f9e4d1959884872`。已静态确认 Windows x64 PE、GUI 子系统与直接导入 DLL 文件；Windows API-set 属于系统虚拟契约，列在依赖日志中，未运行程序验证加载器。清单 `.build-tools/gmclaw-feedback-build-manifest.json`，编译/构建日志 `.build-tools/gmclaw-feedback-check.log` 和 `.build-tools/gmclaw-feedback-build.log` 均不入仓库。用户测试前先退出旧 Hub（含托盘），再打开该调试程序；模型保存后无需为此重启天工。
+第二阶段保存点 `9b9702e` 曾通过 `cargo check --locked --target x86_64-pc-windows-msvc --features gui --tests --bin codexhub` 和 `cargo build --locked --target x86_64-pc-windows-msvc --features gui --bin codexhub`。该阶段格式、差异空白和文档本地链接核对通过；GUI 编译保留 23 条警告，测试代码编译保留 51 条警告，主要为未使用代码。已新增隔离 SQLite、多条目路由、JSON/SSE 聚合、Harness 事件与审批等夹具，按用户分工未执行测试。Windows 交互和端到端行为待用户验收；macOS 尚待构建及实机验证，不新增 Linux 验收范围。
+
+`9b9702e` 历史调试程序大小为 `55,158,784` 字节，SHA-256 `81f887e1140daf5f2c0146ffd05cab31cc5994da182c66c47f9e4d1959884872`。当时静态确认 Windows x64 PE、GUI 子系统与直接导入 DLL 文件；Windows API-set 属于系统虚拟契约，未运行程序验证加载器。清单 `.build-tools/gmclaw-feedback-build-manifest.json`，编译/构建日志 `.build-tools/gmclaw-feedback-check.log` 和 `.build-tools/gmclaw-feedback-build.log` 均不入仓库。共享输出路径 `target/x86_64-pc-windows-msvc/debug/codexhub.exe` 已由后续构建覆盖。用户测试当前版本前先退出旧 Hub（含托盘），并核对整合专题中的产物；模型保存后无需为此重启天工。
 
 用户已确认上一轮模型配置保存成功，保存后无需完全退出并重开天工。这是旧单模型版本的有限验收，不推定本轮新增、修改、删除、默认切换、备份恢复、流式上游、工具续轮或 IM 执行通过。
 
-上一轮厂商适配代码曾通过 Windows GUI/测试代码编译与调试 EXE 构建。该历史 EXE 为 `54,261,760` 字节，SHA-256 `141eaa28fe535fa95113b5f9609c8e82c2a0353c0add3d69cedd6b4f9edf8196`，对应 `3b3f213` 加上一轮未提交变更；不是本轮多模型和外部消息接入产物。构建日志与清单位于 Git 忽略的 `.build-tools/`，当前调试输出路径可能被后续构建覆盖，应以本轮最终清单识别产物。
+更早厂商适配代码曾通过 Windows GUI/测试代码编译与调试 EXE 构建。该历史 EXE 为 `54,261,760` 字节，SHA-256 `141eaa28fe535fa95113b5f9609c8e82c2a0353c0add3d69cedd6b4f9edf8196`，对应 `3b3f213` 加当时未提交变更；不是多模型/外部消息保存点或当前上游整合产物。构建日志与清单位于 Git 忽略的 `.build-tools/`，应按对应阶段清单识别产物。
 
 开发过程中未启动 Hub/Codex/天工进行交互验证，未发起真实模型或 Harness 执行请求，未修改用户实际模型配置。安装包仍统一由 GitHub Actions 生成，本轮尚未发布，也未在本地生成发布安装包。
