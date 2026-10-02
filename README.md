@@ -15,6 +15,7 @@
 | Codex 会话管理 | 在 GUI 中管理 Codex 历史会话；切换 provider 或接入 AI Gateway 后，可以把旧会话移动到当前入口，让 Codex App 左侧继续看到。 |
 | 支持 IM 端管理 Codex 会话 | 利用 Codex 原生 remote-control 协议，在 IM 里创建会话、恢复会话、处理审批。 |
 | 内置 AI Gateway | 让 Codex App 继续使用原生 Responses 入口，同时可以在本地 GUI 中接入 OpenAI、DeepSeek、Anthropic/Claude、智谱 Anthropic（API / Coding Plan）等模型渠道。 |
+| 天工 Claw 接入 | 独立页签管理多个模型，适配厂商参数及流式响应，支持撤销配置；保存模型无需重启天工。新增复用飞书、微信、企业微信的文本与工具审批接入首版，待用户验收，详见 [模型接入](docs/customizations/gmclaw.md) 和 [外部消息接入](docs/customizations/gmclaw-im.md)。 |
 
 <p align="center">
   <img src="docs/assets/product/main.png" alt="TianCaiSpace Hub GUI 状态和配置界面" width="900">

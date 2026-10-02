@@ -421,13 +421,27 @@ pub async fn proxy_chat_completion(
     provider: &ProviderConfig,
     log_context: Option<RequestLogContext>,
 ) -> Result<Response<Body>, GatewayError> {
+    let gmclaw_replay = if provider.is_gmclaw() {
+        let replay = super::gmclaw_replay::ReplayContext::new(&raw_body, provider, upstream_model);
+        replay.restore_chat(&mut raw_body);
+        super::gmclaw::prepare_chat_request(&mut raw_body, provider, upstream_model)?;
+        Some(replay)
+    } else {
+        None
+    };
     raw_body["model"] = json!(upstream_model);
-    apply_chat_cache_controls(&mut raw_body, ctx, provider);
-    super::providers::apply_chat_reasoning_override(&mut raw_body, provider);
+    if super::gmclaw::uses_chat_cache_controls(provider, upstream_model) {
+        apply_chat_cache_controls(&mut raw_body, ctx, provider);
+    }
+    if !provider.is_gmclaw() {
+        super::providers::apply_chat_reasoning_override(&mut raw_body, provider);
+    }
     let stream = raw_body
         .get("stream")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let gmclaw_deadline = (gmclaw_replay.is_some() && !stream)
+        .then(|| super::gmclaw_stream::deadline(provider.timeout_secs));
     let url = format!(
         "{}/v1/chat/completions",
         provider_api_root(&provider.base_url)
@@ -465,10 +479,24 @@ pub async fn proxy_chat_completion(
         }
     }
 
-    let upstream =
-        execute_provider_request(client, request, provider, "chat upstream request failed").await?;
+    let execution =
+        execute_provider_request(client, request, provider, "chat upstream request failed");
+    let upstream = if let Some(deadline) = gmclaw_deadline {
+        tokio::time::timeout_at(deadline, execution)
+            .await
+            .map_err(|_| GatewayError::upstream_timeout())??
+    } else {
+        execution.await?
+    };
     request_log::record_upstream_response_headers(log_context.as_ref(), upstream.headers());
-    let upstream = ensure_success_response(&provider.name, upstream).await?;
+    let success = ensure_success_response(&provider.name, upstream);
+    let upstream = if let Some(deadline) = gmclaw_deadline {
+        tokio::time::timeout_at(deadline, success)
+            .await
+            .map_err(|_| GatewayError::upstream_timeout())??
+    } else {
+        success.await?
+    };
     if stream {
         let bytes = upstream.bytes_stream();
         let body = if let Some(log_context) = log_context {
@@ -495,12 +523,39 @@ pub async fn proxy_chat_completion(
     }
 
     let headers = upstream.headers().clone();
-    let bytes = upstream.bytes().await.map_err(|error| {
-        GatewayError::upstream(
-            StatusCode::BAD_GATEWAY,
-            format!("read upstream response: {error}"),
+    let bytes = if let Some(deadline) = gmclaw_deadline {
+        let value = super::gmclaw_stream::collect(
+            upstream.bytes_stream(),
+            &headers,
+            super::gmclaw_stream::Protocol::Chat,
+            &provider.name,
+            deadline,
         )
-    })?;
+        .await?;
+        Bytes::from(serde_json::to_vec(&value).map_err(|_| {
+            GatewayError::upstream(
+                StatusCode::BAD_GATEWAY,
+                "could not encode collected Chat result",
+            )
+        })?)
+    } else {
+        upstream.bytes().await.map_err(|error| {
+            GatewayError::upstream(
+                StatusCode::BAD_GATEWAY,
+                format!("read upstream response: {error}"),
+            )
+        })?
+    };
+    if let Some(replay) = &gmclaw_replay {
+        let value: Value = serde_json::from_slice(&bytes).map_err(|_| {
+            GatewayError::upstream(
+                StatusCode::BAD_GATEWAY,
+                "上游返回了无效的 Chat JSON / Invalid upstream chat JSON",
+            )
+        })?;
+        super::gmclaw::validate_chat_response(&value, &provider.name)?;
+        replay.remember_chat(&value);
+    }
     if let Some(log_context) = &log_context {
         let response_json = serde_json::from_slice::<Value>(&bytes).ok();
         let update = RequestLogUpdate {

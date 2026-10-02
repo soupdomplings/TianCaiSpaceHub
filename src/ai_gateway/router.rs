@@ -1,7 +1,8 @@
 use std::time::Instant;
 
 use super::config::{
-    AiGatewayConfig, ProviderConfig, ProviderType, provider_route_id, select_by_priority,
+    AiGatewayConfig, GMCLAW_PROVIDER_NAME, ProviderConfig, ProviderType, gmclaw_provider_name,
+    provider_route_id, select_by_priority,
 };
 use super::error::GatewayError;
 use super::routing_state::GatewayRoutingState;
@@ -35,7 +36,7 @@ pub fn resolve_provider_with_state<'a>(
     now: Instant,
 ) -> Result<(&'a ProviderConfig, String), GatewayError> {
     resolve_provider_with_state_matching(model, session_id, config, state, now, |provider| {
-        !provider.is_workbuddy()
+        !provider.is_client_reserved()
     })
 }
 
@@ -49,7 +50,7 @@ pub fn resolve_provider_with_state_for_type<'a>(
     provider_type: &ProviderType,
 ) -> Result<(&'a ProviderConfig, String), GatewayError> {
     resolve_provider_with_state_matching(model, session_id, config, state, now, |provider| {
-        !provider.is_workbuddy()
+        !provider.is_client_reserved()
             && (&provider.provider_type == provider_type
                 || (provider_type == &ProviderType::OpenAiResponses
                     && provider.provider_type.is_openai()))
@@ -66,6 +67,35 @@ pub fn resolve_workbuddy_provider_with_state<'a>(
 ) -> Result<(&'a ProviderConfig, String), GatewayError> {
     resolve_provider_with_state_matching(model, session_id, config, state, now, |provider| {
         provider.is_workbuddy()
+    })
+}
+
+/// GMClaw must never fall back to a Codex or WorkBuddy channel.
+pub fn resolve_gmclaw_provider_with_state<'a>(
+    model: &str,
+    session_id: Option<&str>,
+    config: &'a AiGatewayConfig,
+    state: &mut GatewayRoutingState,
+    now: Instant,
+) -> Result<(&'a ProviderConfig, String), GatewayError> {
+    resolve_provider_with_state_matching(model, session_id, config, state, now, |provider| {
+        provider.name.eq_ignore_ascii_case(GMCLAW_PROVIDER_NAME)
+    })
+}
+
+/// Each GMClaw entry has an independent route even when model names are equal.
+pub fn resolve_gmclaw_entry_provider_with_state<'a>(
+    entry_id: &str,
+    model: &str,
+    session_id: Option<&str>,
+    config: &'a AiGatewayConfig,
+    state: &mut GatewayRoutingState,
+    now: Instant,
+) -> Result<(&'a ProviderConfig, String), GatewayError> {
+    let name = gmclaw_provider_name(entry_id)
+        .ok_or_else(|| GatewayError::bad_request("天工 Claw 条目身份无效"))?;
+    resolve_provider_with_state_matching(model, session_id, config, state, now, |provider| {
+        provider.name.eq_ignore_ascii_case(&name)
     })
 }
 
@@ -252,10 +282,11 @@ mod tests {
     }
 
     #[test]
-    fn codex_and_workbuddy_routes_are_isolated_for_the_same_model() {
+    fn codex_workbuddy_and_gmclaw_routes_are_isolated_for_the_same_model() {
         let codex = provider("codex-provider", 1, "gpt-5.6-sol");
         let workbuddy = provider("workbuddy", 10_000, "gpt-5.6-sol");
-        let cfg = config(vec![codex, workbuddy]);
+        let gmclaw = provider("gmclaw", 20_000, "gpt-5.6-sol");
+        let cfg = config(vec![codex, workbuddy, gmclaw]);
         let mut state = GatewayRoutingState::default();
         let now = Instant::now();
 
@@ -273,6 +304,19 @@ mod tests {
         )
         .unwrap();
         assert_eq!(workbuddy_selected.name, "workbuddy");
+        let (gmclaw_selected, _) = resolve_gmclaw_provider_with_state(
+            "gpt-5.6-sol",
+            Some("gmclaw:shared"),
+            &cfg,
+            &mut state,
+            now,
+        )
+        .unwrap();
+        assert_eq!(gmclaw_selected.name, "gmclaw");
+        assert_eq!(
+            cfg.select_provider("gpt-5.6-sol").unwrap().name,
+            "codex-provider"
+        );
     }
 
     #[test]
@@ -320,6 +364,85 @@ mod tests {
                 Instant::now(),
             )
             .is_err()
+        );
+        assert!(
+            resolve_gmclaw_provider_with_state(
+                "gpt-5.6-sol",
+                Some("gmclaw:session"),
+                &cfg,
+                &mut state,
+                Instant::now(),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn gmclaw_entry_routes_are_exact_even_for_same_model_and_session() {
+        let cfg = config(vec![
+            provider("codex", 1, "same-model"),
+            provider("gmclaw", 10, "same-model"),
+            provider("gmclaw:entry-a", 100, "same-model"),
+            provider("gmclaw:entry-b", 10_000, "same-model"),
+        ]);
+        let mut state = GatewayRoutingState::default();
+        let now = Instant::now();
+        for entry_id in ["entry-a", "entry-b", "entry-a"] {
+            let (selected, _) = resolve_gmclaw_entry_provider_with_state(
+                entry_id,
+                "same-model",
+                Some("shared"),
+                &cfg,
+                &mut state,
+                now,
+            )
+            .unwrap();
+            assert_eq!(selected.name, format!("gmclaw:{entry_id}"));
+        }
+        assert_eq!(
+            resolve_gmclaw_provider_with_state("same-model", Some("shared"), &cfg, &mut state, now)
+                .unwrap()
+                .0
+                .name,
+            "gmclaw"
+        );
+        assert_eq!(
+            resolve_provider_with_state("same-model", Some("shared"), &cfg, &mut state, now)
+                .unwrap()
+                .0
+                .name,
+            "codex"
+        );
+        assert!(
+            resolve_gmclaw_entry_provider_with_state(
+                "missing",
+                "same-model",
+                Some("shared"),
+                &cfg,
+                &mut state,
+                now
+            )
+            .is_err()
+        );
+        assert!(
+            resolve_gmclaw_entry_provider_with_state(
+                "../entry-a",
+                "same-model",
+                None,
+                &cfg,
+                &mut state,
+                now
+            )
+            .is_err()
+        );
+        let only_entries = config(vec![provider("gmclaw:entry-a", 100, "same-model")]);
+        assert!(
+            resolve_gmclaw_provider_with_state("same-model", None, &only_entries, &mut state, now)
+                .is_err()
+        );
+        assert!(
+            resolve_provider_with_state("same-model", None, &only_entries, &mut state, now)
+                .is_err()
         );
     }
 }

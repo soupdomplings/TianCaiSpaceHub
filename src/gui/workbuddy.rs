@@ -516,7 +516,7 @@ fn provider_options_from_config(config: &AppConfig) -> Vec<WorkBuddyProviderOpti
         .ai_gateway
         .providers
         .iter()
-        .filter(|provider| !provider.is_workbuddy())
+        .filter(|provider| !provider.is_client_reserved())
         .filter_map(provider_option)
         .collect()
 }

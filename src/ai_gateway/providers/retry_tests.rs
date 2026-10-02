@@ -445,11 +445,12 @@ async fn upstream_reply(
 
 async fn forward(provider: &ProviderConfig, stream: bool) -> Result<Response, GatewayError> {
     let client = reqwest::Client::builder().no_proxy().build().unwrap();
-    let ctx = GatewayContext::extract(&HeaderMap::new(), Some("workbuddy:test-session"));
+    let cache_key = format!("{}:test-session", provider.name);
+    let ctx = GatewayContext::extract(&HeaderMap::new(), Some(&cache_key));
     let chat = json!({
         "model":"test-model", "stream":stream,
         "messages":[{"role":"user","content":"test request"}],
-        "prompt_cache_key":"workbuddy:test-session",
+        "prompt_cache_key":cache_key,
     });
     match provider.provider_type {
         ProviderType::ChatCompletions => {
@@ -484,7 +485,7 @@ async fn forward(provider: &ProviderConfig, stream: bool) -> Result<Response, Ga
     }
 }
 
-async fn assert_workbuddy_recovers(provider_type: ProviderType) {
+async fn assert_client_recovers(client_name: &str, provider_type: ProviderType) {
     for stream in [false, true] {
         let upstream = TestUpstream::start(vec![
             StatusCode::BAD_GATEWAY,
@@ -493,11 +494,11 @@ async fn assert_workbuddy_recovers(provider_type: ProviderType) {
         ])
         .await;
         let response = forward(
-            &upstream.provider("workbuddy", provider_type.clone()),
+            &upstream.provider(client_name, provider_type.clone()),
             stream,
         )
         .await
-        .expect("WorkBuddy must recover from HTTP 502/503");
+        .expect("client must recover from HTTP 502/503");
         assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
         assert!(String::from_utf8_lossy(&body).contains("retry-recovered"));
@@ -505,33 +506,67 @@ async fn assert_workbuddy_recovers(provider_type: ProviderType) {
         assert_eq!(requests.len(), 3);
         assert_eq!(requests[0], requests[1]);
         assert_eq!(requests[1], requests[2]);
+        let expected_path = match provider_type {
+            ProviderType::ChatCompletions => "/v1/chat/completions",
+            ProviderType::AnthropicMessages => "/v1/messages",
+            _ => "/v1/responses",
+        };
+        assert_eq!(requests[0].uri.path(), expected_path);
+        if matches!(
+            provider_type,
+            ProviderType::OpenAiResponses | ProviderType::ChatCompletions
+        ) {
+            let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+            assert_eq!(
+                body["prompt_cache_key"],
+                format!("{client_name}:test-session")
+            );
+        }
     }
 }
 
 #[tokio::test]
 async fn workbuddy_responses_retries_502_and_503() {
-    assert_workbuddy_recovers(ProviderType::OpenAiResponses).await;
+    assert_client_recovers("workbuddy", ProviderType::OpenAiResponses).await;
 }
 
 #[tokio::test]
 async fn workbuddy_chat_retries_502_and_503() {
-    assert_workbuddy_recovers(ProviderType::ChatCompletions).await;
+    assert_client_recovers("workbuddy", ProviderType::ChatCompletions).await;
 }
 
 #[tokio::test]
 async fn workbuddy_anthropic_retries_502_and_503() {
-    assert_workbuddy_recovers(ProviderType::AnthropicMessages).await;
+    assert_client_recovers("workbuddy", ProviderType::AnthropicMessages).await;
 }
 
 #[tokio::test]
-async fn workbuddy_http_retries_stop_at_limit_and_preserve_last_error() {
+async fn gmclaw_protocols_retry_502_and_503_without_changing_request() {
+    for provider_type in [
+        ProviderType::OpenAiResponses,
+        ProviderType::KimiResponses,
+        ProviderType::ChatCompletions,
+        ProviderType::AnthropicMessages,
+    ] {
+        assert_client_recovers("gmclaw", provider_type).await;
+    }
+}
+
+#[tokio::test]
+async fn workbuddy_and_gmclaw_http_retries_stop_at_limit_and_preserve_last_error() {
+    for client_name in ["workbuddy", "gmclaw"] {
+        assert_http_retries_stop_at_limit_and_preserve_last_error(client_name).await;
+    }
+}
+
+async fn assert_http_retries_stop_at_limit_and_preserve_last_error(client_name: &str) {
     let upstream = TestUpstream::start(vec![
         StatusCode::BAD_GATEWAY,
         StatusCode::SERVICE_UNAVAILABLE,
     ])
     .await;
     let error = forward(
-        &upstream.provider("workbuddy", ProviderType::OpenAiResponses),
+        &upstream.provider(client_name, ProviderType::OpenAiResponses),
         true,
     )
     .await
@@ -544,12 +579,18 @@ async fn workbuddy_http_retries_stop_at_limit_and_preserve_last_error() {
 }
 
 #[tokio::test]
-async fn workbuddy_does_not_retry_other_http_errors() {
+async fn workbuddy_and_gmclaw_do_not_retry_other_http_errors() {
+    for client_name in ["workbuddy", "gmclaw"] {
+        assert_does_not_retry_other_http_errors(client_name).await;
+    }
+}
+
+async fn assert_does_not_retry_other_http_errors(client_name: &str) {
     for code in [400, 401, 403, 404, 408, 422, 429, 500, 504] {
         let status = StatusCode::from_u16(code).unwrap();
         let upstream = TestUpstream::start(vec![status, StatusCode::OK]).await;
         let error = forward(
-            &upstream.provider("workbuddy", ProviderType::OpenAiResponses),
+            &upstream.provider(client_name, ProviderType::OpenAiResponses),
             true,
         )
         .await
@@ -575,11 +616,17 @@ async fn codex_http_error_behavior_is_unchanged() {
 }
 
 #[tokio::test]
-async fn workbuddy_success_is_sent_once() {
+async fn workbuddy_and_gmclaw_success_is_sent_once() {
+    for client_name in ["workbuddy", "gmclaw"] {
+        assert_success_is_sent_once(client_name).await;
+    }
+}
+
+async fn assert_success_is_sent_once(client_name: &str) {
     for stream in [false, true] {
         let upstream = TestUpstream::start(vec![StatusCode::OK]).await;
         let response = forward(
-            &upstream.provider("workbuddy", ProviderType::OpenAiResponses),
+            &upstream.provider(client_name, ProviderType::OpenAiResponses),
             stream,
         )
         .await
@@ -590,7 +637,13 @@ async fn workbuddy_success_is_sent_once() {
 }
 
 #[tokio::test]
-async fn workbuddy_does_not_replay_non_cloneable_request_bodies() {
+async fn workbuddy_and_gmclaw_do_not_replay_non_cloneable_request_bodies() {
+    for client_name in ["workbuddy", "gmclaw"] {
+        assert_does_not_replay_non_cloneable_request_bodies(client_name).await;
+    }
+}
+
+async fn assert_does_not_replay_non_cloneable_request_bodies(client_name: &str) {
     let upstream = TestUpstream::start(vec![StatusCode::SERVICE_UNAVAILABLE, StatusCode::OK]).await;
     let client = reqwest::Client::builder().no_proxy().build().unwrap();
     let body = reqwest::Body::wrap_stream(futures_util::stream::iter([Ok::<_, std::io::Error>(
@@ -605,7 +658,7 @@ async fn workbuddy_does_not_replay_non_cloneable_request_bodies() {
     let response = execute_provider_request(
         &client,
         request,
-        &upstream.provider("workbuddy", ProviderType::OpenAiResponses),
+        &upstream.provider(client_name, ProviderType::OpenAiResponses),
         "test upstream",
     )
     .await
@@ -622,7 +675,13 @@ async fn workbuddy_does_not_replay_non_cloneable_request_bodies() {
 }
 
 #[tokio::test]
-async fn workbuddy_does_not_replay_a_successful_stream_that_disconnects() {
+async fn workbuddy_and_gmclaw_do_not_replay_a_successful_stream_that_disconnects() {
+    for client_name in ["workbuddy", "gmclaw"] {
+        assert_does_not_replay_a_successful_stream_that_disconnects(client_name).await;
+    }
+}
+
+async fn assert_does_not_replay_a_successful_stream_that_disconnects(client_name: &str) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -639,7 +698,7 @@ async fn workbuddy_does_not_replay_a_successful_stream_that_disconnects() {
     let client = reqwest::Client::builder().no_proxy().build().unwrap();
     let request = client.get(url).build().unwrap();
     let provider = ProviderConfig {
-        name: "workbuddy".to_string(),
+        name: client_name.to_string(),
         timeout_secs: 5,
         ..ProviderConfig::default()
     };
@@ -653,7 +712,13 @@ async fn workbuddy_does_not_replay_a_successful_stream_that_disconnects() {
 }
 
 #[tokio::test]
-async fn workbuddy_transport_and_http_errors_share_retry_budget() {
+async fn workbuddy_and_gmclaw_transport_and_http_errors_share_retry_budget() {
+    for client_name in ["workbuddy", "gmclaw"] {
+        assert_transport_and_http_errors_share_retry_budget(client_name).await;
+    }
+}
+
+async fn assert_transport_and_http_errors_share_retry_budget(client_name: &str) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -674,7 +739,7 @@ async fn workbuddy_transport_and_http_errors_share_retry_budget() {
     let client = reqwest::Client::builder().no_proxy().build().unwrap();
     let request = client.post(url).build().unwrap();
     let provider = ProviderConfig {
-        name: "workbuddy".to_string(),
+        name: client_name.to_string(),
         timeout_secs: 5,
         ..ProviderConfig::default()
     };

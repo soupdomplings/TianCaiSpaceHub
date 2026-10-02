@@ -156,7 +156,7 @@ fn dynamic_model_ids(config: &AiGatewayConfig) -> Vec<String> {
     for provider in config
         .providers
         .iter()
-        .filter(|p| p.enabled && !p.is_workbuddy())
+        .filter(|p| p.enabled && !p.is_client_reserved())
     {
         for id in provider.models.iter().chain(provider.model_aliases.keys()) {
             let id = id.trim();
@@ -183,7 +183,7 @@ fn model_for_id(config: &AiGatewayConfig, id: &str) -> Option<Value> {
     let provider = config
         .providers
         .iter()
-        .filter(|p| p.enabled && !p.is_workbuddy())
+        .filter(|p| p.enabled && !p.is_client_reserved())
         .find(|provider| {
             provider
                 .models

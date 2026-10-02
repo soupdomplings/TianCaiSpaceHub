@@ -605,6 +605,9 @@ async fn handle_inbound(
     outbound_tx: outbound::ImOutboundSender,
     message: InboundMessage,
 ) -> Result<()> {
+    if crate::gmclaw_im::handle_inbound(&state, &outbound_tx, &message).await? {
+        return Ok(());
+    }
     if message.platform == ImPlatformKind::Telegram {
         return telegram_flow::handle_inbound(state, outbound_tx, message).await;
     }

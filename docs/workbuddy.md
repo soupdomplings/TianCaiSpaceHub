@@ -1,6 +1,6 @@
 # WorkBuddy 接入
 
-维护日期：2026-09-30。适用版本：`0.4.29-2`。关联 TC-002、TC-003、TC-004；本页维护当前行为，历史开发和验证结果见 [二开变更记录](customizations/CHANGELOG.md)。
+维护日期：2026-10-03。基础能力适用版本：`0.4.29-2`；文末天工衔接及非流式错误处理为 `0.4.29-5` 工作区新增变更。关联 TC-002、TC-003、TC-004、TC-011；本页维护当前行为，历史开发和验证结果见 [二开变更记录](customizations/CHANGELOG.md)。
 
 TianCaiSpace Hub 提供独立的 WorkBuddy 接入页签。WorkBuddy 调用本机的 Chat Completions 兼容地址，Hub 再将请求转发到 AI Gateway 中选择的上游 provider，并按上游协议处理思考强度和缓存参数。
 
@@ -59,6 +59,10 @@ OpenAI Responses / Chat Completions provider 会发送 `prompt_cache_key`，并�
 
 代码入口：[界面及选择联动](../src/gui/workbuddy.rs)、[配置与备份](../src/workbuddy_config.rs)、[请求转换](../src/ai_gateway/workbuddy.rs)、[上游重试](../src/ai_gateway/providers/mod.rs)、[请求分发](../src/ai_gateway/handler.rs)。普通 Codex 模型路由排除保留名称 `workbuddy`，避免两种客户端相互抢占路由。
 
-网页导入创建的是普通渠道，不自动写 WorkBuddy 配置；导入并启用后，可在本页主动选择并保存。网页导入禁止创建或覆盖保留名称 `workbuddy`。修改来源渠道的 Key、协议或关闭推理选项后，需要重新保存 WorkBuddy 配置以同步副本。
+网页导入创建的是普通渠道，不自动写 WorkBuddy 配置；导入并启用后，可在本页主动选择并保存。网页导入禁止创建或覆盖保留名称 `workbuddy`、`gmclaw` 及多模型条目 `gmclaw:<entryId>`。WorkBuddy 的来源列表同样排除这些专用渠道，天工 Claw 不会占用 WorkBuddy 的配置或请求入口。修改来源渠道的 Key、协议或关闭推理选项后，需要重新保存 WorkBuddy 配置以同步副本。
 
-本轮仅整理文档，未重新验证 WorkBuddy 或真实上游调用。当前用户负责测试；已有模拟回归结果按原版本登记，不代表所有兼容站点均已验收。
+2026-10-03：共享 Chat Completions 转换在非流式 Responses JSON 返回 `status=failed/cancelled` 或非空 `error` 时返回网关错误，保留失败日志，不再将它转换成空的成功回复。该行为同时用于 WorkBuddy 和天工 Claw；原有 WorkBuddy 协议、思考与缓存配置继续保留。
+
+同日用户反馈修复新增的 SSE 聚合仅用于天工专用渠道的非流式客户端请求，不改变 WorkBuddy 的流式转发方式；详见 [天工流式兼容](customizations/gmclaw.md)。
+
+当前用户负责测试；本轮未重新验证 WorkBuddy 或真实上游调用。已有模拟回归结果按原版本登记，不代表所有兼容站点均已验收。

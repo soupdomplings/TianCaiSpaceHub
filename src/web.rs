@@ -1,7 +1,7 @@
 use axum::{
     Json, Router,
     body::Body,
-    extract::State,
+    extract::{Query, State},
     http::{
         Request, StatusCode,
         header::{CACHE_CONTROL, EXPIRES, HeaderValue, PRAGMA},
@@ -47,6 +47,13 @@ pub fn router(state: SharedState) -> Router {
             "/api/workbuddy/config/restore",
             post(restore_workbuddy_config),
         )
+        .route(
+            "/api/gmclaw/config",
+            get(gmclaw_config).post(save_gmclaw_config),
+        )
+        .route("/api/gmclaw/config/restore", post(restore_gmclaw_config))
+        .route("/api/gmclaw/config/activate", post(activate_gmclaw_config))
+        .route("/api/gmclaw/config/delete", post(delete_gmclaw_config))
         .route(
             "/api/chatgpt/login/start",
             post(crate::ai_gateway::chatgpt_auth::start_login_api),
@@ -379,6 +386,144 @@ async fn commit_external_import(
             (StatusCode::OK, Json(json!({"ok":true})))
         }
         Err(error) => (StatusCode::CONFLICT, Json(json!({"error":error}))),
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GmClawConfigQuery {
+    entry_id: Option<String>,
+}
+
+async fn gmclaw_config(
+    State(state): State<SharedState>,
+    Query(query): Query<GmClawConfigQuery>,
+) -> axum::response::Response {
+    let mut current = state.config.lock().await;
+    let path = state.config_path.clone();
+    // Use the same latest on-disk provider as save/restore so a refresh also
+    // resolves conflicts caused by edits outside this running Hub instance.
+    match tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        let mut config = AppConfig::load_or_default(&path)?;
+        crate::normalize_config_paths(&mut config, &path);
+        let status = crate::gmclaw_config::load_selected(&config, query.entry_id.as_deref())?;
+        Ok((status, config))
+    })
+    .await
+    {
+        Ok(Ok((status, config))) => {
+            *current = config;
+            Json(status).into_response()
+        }
+        Ok(Err(error)) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": error.to_string()})),
+        )
+            .into_response(),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": "无法读取天工 Claw 配置 / Cannot read GMClaw configuration"})),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct GmClawRestoreRequest {
+    revision: String,
+}
+
+enum GmClawMutation {
+    Save(crate::gmclaw_config::GmClawSaveRequest),
+    Restore(String),
+    Activate(crate::gmclaw_config::GmClawEntryRequest),
+    Delete(crate::gmclaw_config::GmClawEntryRequest),
+}
+
+async fn activate_gmclaw_config(
+    State(state): State<SharedState>,
+    Json(request): Json<crate::gmclaw_config::GmClawEntryRequest>,
+) -> axum::response::Response {
+    mutate_gmclaw_config(state, GmClawMutation::Activate(request)).await
+}
+
+async fn delete_gmclaw_config(
+    State(state): State<SharedState>,
+    Json(request): Json<crate::gmclaw_config::GmClawEntryRequest>,
+) -> axum::response::Response {
+    mutate_gmclaw_config(state, GmClawMutation::Delete(request)).await
+}
+
+async fn save_gmclaw_config(
+    State(state): State<SharedState>,
+    Json(request): Json<crate::gmclaw_config::GmClawSaveRequest>,
+) -> axum::response::Response {
+    mutate_gmclaw_config(state, GmClawMutation::Save(request)).await
+}
+
+async fn restore_gmclaw_config(
+    State(state): State<SharedState>,
+    Json(request): Json<GmClawRestoreRequest>,
+) -> axum::response::Response {
+    mutate_gmclaw_config(state, GmClawMutation::Restore(request.revision)).await
+}
+
+async fn mutate_gmclaw_config(
+    state: SharedState,
+    mutation: GmClawMutation,
+) -> axum::response::Response {
+    // Serialize with ordinary configuration saves while keeping SQLite and file
+    // I/O off Tokio's worker threads. Re-read the latest disk revision inside it.
+    let mut current = state.config.lock().await;
+    let path = state.config_path.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let outcome = (|| -> anyhow::Result<_> {
+            let mut config = AppConfig::load_or_default(&path)?;
+            crate::normalize_config_paths(&mut config, &path);
+            match mutation {
+                GmClawMutation::Save(request) => {
+                    crate::gmclaw_config::save(&request, &mut config, &path)
+                }
+                GmClawMutation::Restore(revision) => {
+                    crate::gmclaw_config::restore_backup(&revision, &mut config, &path)
+                }
+                GmClawMutation::Activate(request) => {
+                    crate::gmclaw_config::activate(&request, &mut config, &path)
+                }
+                GmClawMutation::Delete(request) => {
+                    crate::gmclaw_config::delete(&request, &mut config, &path)
+                }
+            }
+        })();
+        // Include rollback results in live state even when the mutation failed.
+        let latest = AppConfig::load_or_default(&path).map(|mut config| {
+            crate::normalize_config_paths(&mut config, &path);
+            config
+        });
+        (outcome, latest)
+    })
+    .await;
+    match result {
+        Ok((outcome, latest)) => {
+            if let Ok(config) = latest {
+                *current = config;
+            }
+            drop(current);
+            match outcome {
+                Ok(status) => {
+                    state.push_event("info", "gmclaw_config_updated", "GMClaw model configuration updated").await;
+                    Json(status).into_response()
+                }
+                Err(error) => (
+                    StatusCode::CONFLICT,
+                    Json(json!({"error": error.to_string()})),
+                ).into_response(),
+            }
+        }
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": "天工 Claw 配置操作失败，请刷新状态 / GMClaw configuration operation failed; refresh its status"})),
+        ).into_response(),
     }
 }
 

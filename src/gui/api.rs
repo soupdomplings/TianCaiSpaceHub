@@ -365,6 +365,54 @@ impl ApiClient {
         self.post_empty_with_timeout("/api/workbuddy/config/restore", GUI_CONFIG_TIMEOUT)
     }
 
+    pub(super) fn get_gmclaw_config(
+        &self,
+        entry_id: Option<&str>,
+    ) -> Result<crate::gmclaw_config::GmClawConfigStatus, String> {
+        let path = match entry_id {
+            Some(id) => format!(
+                "/api/gmclaw/config?{}",
+                url::form_urlencoded::Serializer::new(String::new())
+                    .append_pair("entryId", id)
+                    .finish()
+            ),
+            None => "/api/gmclaw/config".to_string(),
+        };
+        self.get_with_timeout(&path, GUI_CONFIG_TIMEOUT)
+    }
+
+    pub(super) fn activate_gmclaw_config(
+        &self,
+        request: &crate::gmclaw_config::GmClawEntryRequest,
+    ) -> Result<crate::gmclaw_config::GmClawConfigStatus, String> {
+        self.post_json_with_timeout("/api/gmclaw/config/activate", request, GUI_CONFIG_TIMEOUT)
+    }
+
+    pub(super) fn delete_gmclaw_config(
+        &self,
+        request: &crate::gmclaw_config::GmClawEntryRequest,
+    ) -> Result<crate::gmclaw_config::GmClawConfigStatus, String> {
+        self.post_json_with_timeout("/api/gmclaw/config/delete", request, GUI_CONFIG_TIMEOUT)
+    }
+
+    pub(super) fn save_gmclaw_config(
+        &self,
+        request: &crate::gmclaw_config::GmClawSaveRequest,
+    ) -> Result<crate::gmclaw_config::GmClawConfigStatus, String> {
+        self.post_json_with_timeout("/api/gmclaw/config", request, GUI_CONFIG_TIMEOUT)
+    }
+
+    pub(super) fn restore_gmclaw_config(
+        &self,
+        revision: &str,
+    ) -> Result<crate::gmclaw_config::GmClawConfigStatus, String> {
+        self.post_json_with_timeout(
+            "/api/gmclaw/config/restore",
+            &serde_json::json!({"revision": revision}),
+            GUI_CONFIG_TIMEOUT,
+        )
+    }
+
     pub(super) fn ai_gateway_request_logs(&self) -> Result<RequestLogsResponse, String> {
         self.get_with_timeout("/ai-gateway/request-logs?limit=200", GUI_CONFIG_TIMEOUT)
     }

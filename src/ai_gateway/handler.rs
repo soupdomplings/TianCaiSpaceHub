@@ -33,6 +33,7 @@ use super::request_log::{
 };
 use super::responses_lite_tools::prepare_for_provider;
 use super::router::{
+    resolve_gmclaw_entry_provider_with_state, resolve_gmclaw_provider_with_state,
     resolve_provider_with_state, resolve_provider_with_state_for_type,
     resolve_workbuddy_provider_with_state,
 };
@@ -689,6 +690,53 @@ pub async fn handle_workbuddy_chat_completions(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
+    handle_client_chat_completions(state, headers, body, ChatClient::WorkBuddy, None).await
+}
+
+/// POST /ai-gateway/gmclaw/v1/chat/completions
+pub async fn handle_gmclaw_chat_completions(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    handle_client_chat_completions(state, headers, body, ChatClient::GmClaw, None).await
+}
+
+pub async fn handle_gmclaw_entry_chat_completions(
+    State(state): State<SharedState>,
+    Path(entry_id): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    handle_client_chat_completions(state, headers, body, ChatClient::GmClaw, Some(entry_id)).await
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ChatClient {
+    WorkBuddy,
+    GmClaw,
+}
+
+impl ChatClient {
+    fn namespace(self) -> &'static str {
+        match self {
+            Self::WorkBuddy => "workbuddy",
+            Self::GmClaw => "gmclaw",
+        }
+    }
+}
+
+async fn handle_client_chat_completions(
+    state: SharedState,
+    headers: HeaderMap,
+    body: Bytes,
+    chat_client: ChatClient,
+    gmclaw_entry: Option<String>,
+) -> Response {
+    let namespace = gmclaw_entry
+        .as_ref()
+        .map(|id| format!("gmclaw:{id}"))
+        .unwrap_or_else(|| chat_client.namespace().to_string());
     let started_at = Instant::now();
     let created_at_ms = request_log::now_ms();
     let config = state.config.lock().await;
@@ -714,20 +762,31 @@ pub async fn handle_workbuddy_chat_completions(
         Ok(model) => model,
         Err(error) => return GatewayError::bad_request(error).into_response(),
     };
-    let default_effort = crate::workbuddy_config::configured_default_reasoning_effort(&model);
+    let default_effort = if chat_client == ChatClient::WorkBuddy {
+        crate::workbuddy_config::configured_default_reasoning_effort(&model)
+    } else {
+        None
+    };
     workbuddy::apply_default_reasoning_effort(&mut raw_chat, default_effort.as_deref());
     let stream = workbuddy::chat_request_stream(&raw_chat);
     let cache_key = workbuddy::chat_request_cache_key(&raw_chat)
         .or_else(|| {
             headers
-                .get("x-workbuddy-session-id")
+                .get(match chat_client {
+                    ChatClient::WorkBuddy => "x-workbuddy-session-id",
+                    ChatClient::GmClaw => "x-gmclaw-session-id",
+                })
                 .and_then(|value| value.to_str().ok())
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(str::to_string)
         })
-        .or_else(|| crate::workbuddy_config::configured_cache_key(&model))
-        .unwrap_or_else(|| format!("workbuddy:{model}"));
+        .or_else(|| {
+            (chat_client == ChatClient::WorkBuddy)
+                .then(|| crate::workbuddy_config::configured_cache_key(&model))
+                .flatten()
+        })
+        .unwrap_or_else(|| format!("{namespace}:{model}"));
     let ctx = GatewayContext::extract(&headers, Some(&cache_key));
     let envelope = GatewayRequestEnvelope {
         model: model.clone(),
@@ -737,19 +796,39 @@ pub async fn handle_workbuddy_chat_completions(
     let routing_session_id = ctx
         .session_id
         .as_deref()
-        .map(|session_id| format!("workbuddy:{session_id}"));
+        .map(|session_id| format!("{namespace}:{session_id}"));
     let routing_now = Instant::now();
     let route_started = Instant::now();
     let (provider, route_id) = {
         let mut routing = state.ai_gateway_routing.lock().await;
         routing.evict_stale(routing_now);
-        match resolve_workbuddy_provider_with_state(
-            &model,
-            routing_session_id.as_deref(),
-            &gw_config,
-            &mut routing,
-            routing_now,
-        ) {
+        let resolved = match chat_client {
+            ChatClient::WorkBuddy => resolve_workbuddy_provider_with_state(
+                &model,
+                routing_session_id.as_deref(),
+                &gw_config,
+                &mut routing,
+                routing_now,
+            ),
+            ChatClient::GmClaw if gmclaw_entry.is_some() => {
+                resolve_gmclaw_entry_provider_with_state(
+                    gmclaw_entry.as_deref().unwrap(),
+                    &model,
+                    routing_session_id.as_deref(),
+                    &gw_config,
+                    &mut routing,
+                    routing_now,
+                )
+            }
+            ChatClient::GmClaw => resolve_gmclaw_provider_with_state(
+                &model,
+                routing_session_id.as_deref(),
+                &gw_config,
+                &mut routing,
+                routing_now,
+            ),
+        };
+        match resolved {
             Ok(result) => result,
             Err(error) => {
                 drop(routing);
@@ -804,10 +883,25 @@ pub async fn handle_workbuddy_chat_completions(
         stream,
         in_flight,
         route_ms,
-        "workbuddy chat request routed"
+        client = chat_client.namespace(),
+        "client chat request routed"
     );
 
     let client = crate::outbound_http::get();
+    let gmclaw_replay = if chat_client == ChatClient::GmClaw
+        && provider.provider_type != ProviderType::ChatCompletions
+    {
+        let replay = super::gmclaw_replay::ReplayContext::new(&raw_chat, provider, &upstream_model);
+        if let Err(error) =
+            super::gmclaw::prepare_chat_request(&mut raw_chat, provider, &upstream_model)
+        {
+            update_failed_log(&log_context, &error.message);
+            return error.into_response();
+        }
+        Some(replay)
+    } else {
+        None
+    };
     let result = match provider.provider_type {
         ProviderType::ChatCompletions => {
             workbuddy::proxy_chat_completion(
@@ -827,10 +921,18 @@ pub async fn handle_workbuddy_chat_completions(
             // remain strings where WorkBuddy supplied strings, and `store`
             // defaults to false. This avoids changing the serialized prompt
             // prefix used by compatible upstream cache implementations.
-            let mut raw_responses = match workbuddy::chat_request_to_openai_responses(&raw_chat) {
+            let converted = match &gmclaw_replay {
+                Some(replay) => replay.to_responses(&raw_chat, true),
+                None => workbuddy::chat_request_to_openai_responses(&raw_chat),
+            };
+            let mut raw_responses = match converted {
                 Ok(value) => value,
                 Err(error) => return GatewayError::bad_request(error).into_response(),
             };
+            if gmclaw_replay.is_some() {
+                // Stateless reasoning/tool continuations need this opaque state.
+                raw_responses["include"] = json!(["reasoning.encrypted_content"]);
+            }
             raw_responses["prompt_cache_key"] = json!(cache_key);
             openai_responses::passthrough_with_tool_names(
                 &client,
@@ -846,11 +948,18 @@ pub async fn handle_workbuddy_chat_completions(
         ProviderType::DeepSeekResponses
         | ProviderType::KimiResponses
         | ProviderType::GrokResponses => {
-            let mut raw_responses = match workbuddy::chat_request_to_responses(&raw_chat) {
+            let converted = match &gmclaw_replay {
+                Some(replay) => replay.to_responses(&raw_chat, false),
+                None => workbuddy::chat_request_to_responses(&raw_chat),
+            };
+            let mut raw_responses = match converted {
                 Ok(value) => value,
                 Err(error) => return GatewayError::bad_request(error).into_response(),
             };
-            if provider.provider_type != ProviderType::KimiResponses {
+            if provider.provider_type != ProviderType::KimiResponses
+                && !(gmclaw_replay.is_some()
+                    && provider.provider_type == ProviderType::DeepSeekResponses)
+            {
                 raw_responses["prompt_cache_key"] = json!(cache_key);
             }
             openai_responses::passthrough_with_tool_names(
@@ -865,7 +974,11 @@ pub async fn handle_workbuddy_chat_completions(
             .await
         }
         ProviderType::AnthropicMessages => {
-            let mut raw_responses = match workbuddy::chat_request_to_responses(&raw_chat) {
+            let converted = match &gmclaw_replay {
+                Some(replay) => replay.to_responses(&raw_chat, false),
+                None => workbuddy::chat_request_to_responses(&raw_chat),
+            };
+            let mut raw_responses = match converted {
                 Ok(value) => value,
                 Err(error) => return GatewayError::bad_request(error).into_response(),
             };
@@ -882,6 +995,13 @@ pub async fn handle_workbuddy_chat_completions(
             };
             let mut upstream_request = request;
             upstream_request.model = upstream_model;
+            if gmclaw_replay.is_some()
+                && let Err(error) =
+                    super::gmclaw::prepare_anthropic_request(&mut upstream_request, provider)
+            {
+                update_failed_log(&log_context, &error.message);
+                return error.into_response();
+            }
             anthropic_messages::handle(
                 &client,
                 &ctx,
@@ -940,7 +1060,17 @@ pub async fn handle_workbuddy_chat_completions(
                     return gateway_error.into_response();
                 }
             };
-            let converted = workbuddy::responses_to_chat(&value, &envelope.model);
+            let converted = match client_responses_to_chat(&value, &envelope.model, &provider.name)
+            {
+                Ok(converted) => converted,
+                Err(error) => {
+                    update_failed_log(&log_context, &error.message);
+                    return error.into_response();
+                }
+            };
+            if let Some(replay) = &gmclaw_replay {
+                replay.remember_responses(&value, &converted);
+            }
             if let Some(log_context) = &log_context {
                 let update = RequestLogUpdate {
                     status: Some("completed".to_string()),
@@ -965,6 +1095,38 @@ pub async fn handle_workbuddy_chat_completions(
             error.into_response()
         }
     }
+}
+
+fn client_responses_to_chat(
+    value: &serde_json::Value,
+    model: &str,
+    provider: &str,
+) -> Result<serde_json::Value, GatewayError> {
+    // A Responses provider can fail a generation while returning HTTP 200.
+    // Preserve that failure instead of presenting an empty successful chat reply.
+    if matches!(
+        value.get("status").and_then(serde_json::Value::as_str),
+        Some("failed" | "cancelled")
+    ) || value.get("error").is_some_and(|error| !error.is_null())
+    {
+        let message = value
+            .get("error")
+            .and_then(|error| error.get("message"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("upstream Responses generation failed or was cancelled");
+        return Err(GatewayError::upstream_provider(
+            axum::http::StatusCode::BAD_GATEWAY,
+            provider,
+            message,
+            None,
+            value
+                .get("error")
+                .and_then(|error| error.get("code"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string),
+        ));
+    }
+    Ok(workbuddy::responses_to_chat(value, model))
 }
 
 fn decode_request_body(headers: &HeaderMap, body: Bytes) -> Result<Bytes, GatewayError> {
@@ -1572,8 +1734,8 @@ mod tests {
     use crate::ai_gateway::request_log::RequestLogStore;
 
     use super::{
-        GatewayRequestEnvelope, decode_request_body, deserialize_gateway_request,
-        filter_image_generation_tools, insert_initial_image_log,
+        GatewayRequestEnvelope, client_responses_to_chat, decode_request_body,
+        deserialize_gateway_request, filter_image_generation_tools, insert_initial_image_log,
         strip_hosted_web_search_from_lite_request_tools,
     };
 
@@ -1596,6 +1758,17 @@ mod tests {
                 }
             ]
         })
+    }
+
+    #[test]
+    fn failed_responses_are_not_reported_as_successful_chat_completions() {
+        let failure = json!({"status":"failed","error":{"code":"server_error","message":"generation failed"},"output":[]});
+        let error = client_responses_to_chat(&failure, "test-model", "gmclaw").unwrap_err();
+        assert_eq!(error.status, axum::http::StatusCode::BAD_GATEWAY);
+        assert_eq!(error.message, "generation failed");
+        let incomplete = json!({"status":"incomplete","error":null,"output":[],"incomplete_details":{"reason":"max_output_tokens"}});
+        let chat = client_responses_to_chat(&incomplete, "test-model", "gmclaw").unwrap();
+        assert_eq!(chat["choices"][0]["finish_reason"], "length");
     }
 
     #[test]

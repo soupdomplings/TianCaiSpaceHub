@@ -7,6 +7,9 @@ pub mod config;
 pub mod context;
 pub mod encrypted_content;
 pub mod error;
+pub mod gmclaw;
+mod gmclaw_replay;
+mod gmclaw_stream;
 pub mod handler;
 #[allow(dead_code)]
 pub mod ir;
@@ -40,6 +43,14 @@ pub fn router() -> Router<SharedState> {
         .route(
             "/v1/chat/completions",
             post(handler::handle_workbuddy_chat_completions),
+        )
+        .route(
+            "/gmclaw/v1/chat/completions",
+            post(handler::handle_gmclaw_chat_completions),
+        )
+        .route(
+            "/gmclaw/{entry_id}/v1/chat/completions",
+            post(handler::handle_gmclaw_entry_chat_completions),
         )
         .route(
             "/v1/responses/compact",

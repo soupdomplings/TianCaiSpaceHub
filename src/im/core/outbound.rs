@@ -361,6 +361,9 @@ async fn send_feishu_outbound(
         ImOutboundPayload::Approval(approval) => {
             send_feishu_approval(state, &adapter, &message, approval).await;
         }
+        ImOutboundPayload::Text(text) if message.item_type.as_deref() == Some("gmclaw") => {
+            send_feishu_gmclaw_text(state, &adapter, &message, text).await;
+        }
         ImOutboundPayload::Text(_) | ImOutboundPayload::Image { .. } => {
             state
                 .push_event(
@@ -374,6 +377,75 @@ async fn send_feishu_outbound(
                 .await;
         }
     }
+}
+
+async fn send_feishu_gmclaw_text(
+    state: &SharedState,
+    adapter: &FeishuAdapter,
+    message: &ImOutboundMessage,
+    text: &str,
+) {
+    // Keep full approval parameters and Unicode intact. A conservative chunk
+    // size also leaves room for JSON escaping in Feishu's nested text payload.
+    let chunks = feishu_gmclaw_text_chunks(text);
+    for (index, chunk) in chunks.iter().enumerate() {
+        if let Err(error) = adapter.send_text(&message.route.chat_id, chunk).await {
+            log_outbound_result(
+                "send_feishu_gmclaw_text_failed",
+                message,
+                &error.to_string(),
+            );
+            state
+                .push_event(
+                    "error",
+                    "feishu_gmclaw_send_failed",
+                    format!(
+                        "thread={} chat={} sent_chunks={} total_chunks={} err={error}",
+                        message.thread_id,
+                        message.route.chat_id,
+                        index,
+                        chunks.len()
+                    ),
+                )
+                .await;
+            return;
+        }
+    }
+    state
+        .push_event(
+            "info",
+            "feishu_gmclaw_text_sent",
+            format!(
+                "thread={} chat={} chunks={}",
+                message.thread_id,
+                message.route.chat_id,
+                chunks.len()
+            ),
+        )
+        .await;
+}
+
+fn feishu_gmclaw_text_chunks(mut text: &str) -> Vec<&str> {
+    const CHUNK_CHARS: usize = 2000;
+    let mut chunks = Vec::new();
+    while !text.is_empty() {
+        let end = text
+            .char_indices()
+            .nth(CHUNK_CHARS)
+            .map_or(text.len(), |(index, _)| index);
+        // Prefer a line boundary so short approval commands stay copyable.
+        let end = if end < text.len() {
+            text[..end]
+                .rfind('\n')
+                .filter(|index| *index > 0)
+                .map_or(end, |index| index + 1)
+        } else {
+            end
+        };
+        chunks.push(&text[..end]);
+        text = &text[end..];
+    }
+    chunks
 }
 
 async fn send_feishu_approval(
@@ -428,6 +500,24 @@ async fn send_feishu_approval(
                 )
                 .await;
         }
+    }
+}
+
+#[cfg(test)]
+mod gmclaw_outbound_tests {
+    use super::feishu_gmclaw_text_chunks;
+
+    #[test]
+    fn feishu_chunks_preserve_unicode_and_full_approval_text() {
+        let text = format!(
+            "  {}\n/gmclaw approve example-code",
+            "天工🔧\"\\".repeat(1600)
+        );
+        let chunks = feishu_gmclaw_text_chunks(&text);
+        assert!(chunks.len() > 1);
+        assert!(chunks.iter().all(|chunk| chunk.chars().count() <= 2000));
+        assert_eq!(chunks.concat(), text);
+        assert!(feishu_gmclaw_text_chunks("").is_empty());
     }
 }
 

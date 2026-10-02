@@ -372,7 +372,7 @@ pub fn apply_provider(config: &mut AppConfig, model: &WorkBuddyModelConfig) {
         .providers
         .iter()
         .find(|item| {
-            !item.is_workbuddy()
+            !item.is_client_reserved()
                 && item
                     .name
                     .eq_ignore_ascii_case(model.upstream_provider.trim())

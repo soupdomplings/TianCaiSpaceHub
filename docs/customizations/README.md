@@ -1,10 +1,12 @@
 # 二开功能总表
 
-维护日期：2026-09-30。范围：TianCaiSpace Hub 相对于 CodexHub 上游的定制，以及上游升级时必须保留的兼容衔接。
+维护日期：2026-10-03。范围：TianCaiSpace Hub 相对于 CodexHub 上游的定制，以及上游升级时必须保留的兼容衔接。
 
 当前源码版本 `0.4.29-5`（开发中，未发布），基于 `16eab07`（`0.4.29-4` 源码提交）补齐 macOS 网页导入系统接入。以下“已实现”仅指代码存在；构建与验收边界见 [变更记录](CHANGELOG.md) 和 [开发状态](../releases/v0.4.29-5.md)。上一版本本地包见 [0.4.29-4](../releases/v0.4.29-4.md)，已发布版本见 [v0.4.29-2](../releases/v0.4.29-2.md)。
 
 ## 已实现的二开能力
+
+2026-10-03 在 `3b3f213` 上继续天工 Claw 多模型与流式兼容（TC-011），新增外部消息执行端（TC-012）。本轮 Windows GUI/测试代码编译及调试 EXE 构建通过，待用户验收；尚未提交或发布，版本号暂不提升。
 
 编号用于后续需求、修复和合并记录引用，已有编号不复用。
 
@@ -20,6 +22,8 @@
 | TC-008 | 上游升级的二开衔接 | 保留品牌、WorkBuddy、动态模型和桌面行为；衔接 Kimi、ChatGPT 账号凭证、账号模型发现及 OAuth 浏览器启动 | [v0.4.28](../upstream-v0.4.28-integration.md)、[v0.4.29](../upstream-v0.4.29-integration.md) |
 | TC-009 | Sub2API 网页渠道导入 | Windows 协议唤起；macOS App 协议声明、URL 事件与同用户 Unix socket 转交代码已补齐，待 Mac 构建验收；共用一次性码兑换、模型查询、HTTP/HTTPS 兼容和预览保存；默认禁用，一次一个渠道 | [网页导入](../hub-external-import.md)、[契约 v1](../HUB_EXTERNAL_IMPORT_CONTRACT_V1.md) |
 | TC-010 | 导入带来的配置并发保护 | 保存重读最新配置，只合并目标；目标指纹防止覆盖预览期间修改；全量 API 保存带版本，文件锁及原子替换；空模型导入渠道不能事后直接启用 | [网页导入](../hub-external-import.md)、[配置](../configuration.md) |
+| TC-011 | 天工 Claw 模型接入 | 多条目独立 ID/渠道/地址，同模型可绑定不同渠道；保存、删除、默认切换及撤销；集合版本校验、厂商参数、JSON/SSE 聚合与推理状态；旧单模型无需重启已有有限反馈，本轮 Windows 编译与调试构建通过，待用户验收 | [天工 Claw 模型](gmclaw.md) |
+| TC-012 | 天工外部消息执行端 | 飞书/微信/企微显式 `/gmclaw`，本机 Harness 授权、发送者隔离、串行等待、文本和父会话工具审批；首版 Windows 编译与调试构建通过，待用户验收；附件、主动取消及 MCP CRUD 不在首版范围 | [天工外部消息](gmclaw-im.md) |
 
 ## 代码与配置定位
 
@@ -33,6 +37,8 @@
 | TC-008 | [账号登录](../../src/ai_gateway/chatgpt_auth.rs)、[WorkBuddy 配置](../../src/workbuddy_config.rs)、[浏览器启动](../../src/gui/browser.rs) | 保留账号引用和刷新，不把账号令牌变成普通 API Key；不能因移除更新入口破坏 OAuth |
 | TC-009 | [导入模块](../../src/external_import.rs)、[网络](../../src/external_import/client.rs)、[IPC](../../src/external_import/ipc.rs)、[关联注册](../../src/external_import/registration.rs)、[导入 UI](../../src/gui/external_import.rs)、[macOS 事件](../../src/gui/external_import/macos.rs)、[macOS IPC](../../src/external_import/ipc/macos.rs)、[CLI](../../src/cli.rs) | `tiancaispacehub://import/v1`；`importSource` 持久保存来源；ticket 和待保存 Key 仅在内存；macOS 关联由 App 与 Launch Services 管理 |
 | TC-010 | [配置读写](../../src/config.rs)、[本地 API](../../src/web.rs) | `_revision` 仅用于 API，不写 TOML；导入更新保留用户权重、超时、缓存及默认原有映射 |
+| TC-011 | [模型配置](../../src/gmclaw_config.rs)、[页签](../../src/gui/gmclaw.rs)、[参数](../../src/ai_gateway/gmclaw.rs)、[推理状态](../../src/ai_gateway/gmclaw_replay.rs)、[流式聚合](../../src/ai_gateway/gmclaw_stream.rs)、[API](../../src/web.rs)、[路由](../../src/ai_gateway/router.rs) | `GMCLAW_CONFIG_PATH`；只管理既有数据库的旧 `tiancaispacehub` 与新 `tiancaispacehub-<entryId>`；`gmclawParameters` 仅存 Hub；`gmclaw`/`gmclaw:<entryId>` 全部排除普通路由与导入；备份元数据 v2 兼容 v1 |
+| TC-012 | [Harness 客户端](../../src/gmclaw_executor.rs)、[IM 会话与审批](../../src/gmclaw_im.rs)、[分派](../../src/bridge.rs)、[状态](../../src/app_state.rs)、[配置](../../src/config.rs)、[页签](../../src/gui/gmclaw.rs) | `gmclawBridge` 默认禁用；用户设置天工启动环境 `GMCLAW_AUTH_TOKEN`；模型 ID 使用数据库行 ID；共享工作目录不等于文件隔离；不自动重试执行、不将断流视为取消 |
 
 ## 沿用的上游能力
 
@@ -47,5 +53,6 @@
 - 模型发现与推理调用分开；远端返回模型 ID 不等于证明所有协议和能力可用。导入不发起计费模型测试。
 - Chrome 插件完整兼容、按模型选择 Remote Compact V2、Agent Manager 等研究资料不属于本表已交付功能。用户授权新任务后再更新状态。
 - 当前测试由用户负责；已有历史测试数量仅属于对应版本，不能用于宣称后续变更已通过测试。
+- 用户已确认上一轮天工模型保存成功，且无需完全退出再重开；该有限反馈不覆盖本轮多模型、流式聚合和外部消息执行端。历史调试 EXE 的大小与哈希保留在专题，不能作为本轮产物身份。
 
 每次功能变更同时更新对应专题和 [变更记录](CHANGELOG.md)。新增能力扩充本表及 [索引](../README.md)，执行步骤见 [维护规范](../development/documentation.md)。

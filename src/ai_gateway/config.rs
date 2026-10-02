@@ -7,6 +7,35 @@ use sha2::{Digest, Sha256};
 pub(crate) const DEFAULT_PROVIDER_TIMEOUT_SECS: u64 = 600;
 const DEFAULT_PROVIDER_WEIGHT: u32 = 100;
 pub const WORKBUDDY_PROVIDER_NAME: &str = "workbuddy";
+pub const GMCLAW_PROVIDER_NAME: &str = "gmclaw";
+
+/// Reserve the whole namespace, including malformed suffixes, so ordinary
+/// channels/imports cannot accidentally enter a client-specific route.
+pub fn is_gmclaw_provider_name(name: &str) -> bool {
+    name.eq_ignore_ascii_case(GMCLAW_PROVIDER_NAME)
+        || name
+            .get(..7)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("gmclaw:"))
+}
+
+pub fn is_valid_gmclaw_entry_id(entry_id: &str) -> bool {
+    !entry_id.is_empty()
+        && entry_id.len() <= 64
+        && entry_id.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
+        })
+}
+
+pub fn gmclaw_provider_name(entry_id: &str) -> Option<String> {
+    if !is_valid_gmclaw_entry_id(entry_id) {
+        return None;
+    }
+    Some(if entry_id == "legacy" {
+        GMCLAW_PROVIDER_NAME.into()
+    } else {
+        format!("{GMCLAW_PROVIDER_NAME}:{entry_id}")
+    })
+}
 
 /// AI Gateway 顶层配置，对应 config.toml 中 `[aiGateway]` 段。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,7 +134,7 @@ impl AiGatewayConfig {
             .providers
             .iter()
             .filter(|provider| {
-                provider.enabled && !provider.is_workbuddy() && provider.matches_model(model)
+                provider.enabled && !provider.is_client_reserved() && provider.matches_model(model)
             })
             .collect();
         select_by_priority(&candidates, session_id)
@@ -242,6 +271,10 @@ pub struct ProviderConfig {
     pub compatibility: Option<String>,
     /// Force reasoning_effort=none for this Chat Completions channel only.
     pub chat_disable_reasoning: bool,
+    /// Hub-side request options for the reserved GMClaw channel only.
+    /// Omit absent options to preserve pre-existing provider backup fingerprints.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gmclaw_parameters: Option<crate::ai_gateway::gmclaw::GmClawParameters>,
     /// 智谱 Anthropic 渠道的服务类型；其它 provider 忽略该字段。
     #[serde(default, skip_serializing_if = "ZaiAccessMode::is_api")]
     pub zai_access_mode: ZaiAccessMode,
@@ -280,6 +313,7 @@ impl Default for ProviderConfig {
             provider_type: ProviderType::OpenAiResponses,
             compatibility: None,
             chat_disable_reasoning: false,
+            gmclaw_parameters: None,
             zai_access_mode: ZaiAccessMode::default(),
             base_url: String::new(),
             models_url: None,
@@ -297,6 +331,14 @@ impl Default for ProviderConfig {
 impl ProviderConfig {
     pub fn is_workbuddy(&self) -> bool {
         self.name.eq_ignore_ascii_case(WORKBUDDY_PROVIDER_NAME)
+    }
+
+    pub fn is_gmclaw(&self) -> bool {
+        is_gmclaw_provider_name(&self.name)
+    }
+
+    pub fn is_client_reserved(&self) -> bool {
+        self.is_workbuddy() || self.is_gmclaw()
     }
 
     pub fn effective_weight(&self) -> u32 {
@@ -357,6 +399,38 @@ pub enum ProviderType {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gmclaw_names_reserve_namespace_and_entry_ids_are_path_safe() {
+        for name in [
+            "gmclaw",
+            "GMCLAW",
+            "gmclaw:entry-a",
+            "GMCLAW:entry-b",
+            "gmclaw:",
+            "gmclaw:../unsafe",
+        ] {
+            assert!(is_gmclaw_provider_name(name));
+            assert!(
+                ProviderConfig {
+                    name: name.into(),
+                    ..Default::default()
+                }
+                .is_client_reserved()
+            );
+        }
+        for name in ["gmclaw-user", "my-gmclaw", "gmclawish"] {
+            assert!(!is_gmclaw_provider_name(name));
+        }
+        assert_eq!(gmclaw_provider_name("legacy").as_deref(), Some("gmclaw"));
+        assert_eq!(
+            gmclaw_provider_name("entry-a").as_deref(),
+            Some("gmclaw:entry-a")
+        );
+        for entry_id in ["", "../unsafe", "a/b", "UPPER", "a:b"] {
+            assert!(gmclaw_provider_name(entry_id).is_none());
+        }
+    }
 
     fn make_provider(name: &str, ptype: ProviderType, models: Vec<&str>) -> ProviderConfig {
         ProviderConfig {

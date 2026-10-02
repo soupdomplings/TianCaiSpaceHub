@@ -15,6 +15,7 @@ use crate::ai_gateway::encrypted_content::{
     EncryptedContentScope, prepare_responses_request, remove_all_responses_encrypted_content,
 };
 use crate::ai_gateway::error::GatewayError;
+use crate::ai_gateway::gmclaw_stream;
 use crate::ai_gateway::request_log::{
     self, RequestLogContext, RequestLogUpdate, ResponsesSseLogStream, UpstreamSseCaptureStream,
 };
@@ -169,6 +170,18 @@ async fn passthrough_to_endpoint(
     log_context: Option<RequestLogContext>,
     endpoint: ResponsesEndpoint,
 ) -> Result<Response<Body>, GatewayError> {
+    let gmclaw_unary = provider.is_gmclaw()
+        && !endpoint.is_compact()
+        && !raw_body
+            .get("stream")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+    let gmclaw_deadline = gmclaw_unary.then(|| gmclaw_stream::deadline(provider.timeout_secs));
+    if gmclaw_unary && provider.provider_type.is_openai() {
+        // GMClaw still receives unary Chat JSON. OpenAI Responses is collected
+        // here, before returning to the handler and recording replay state.
+        raw_body["stream"] = json!(true);
+    }
     if endpoint.is_compact()
         && raw_body
             .get("stream")
@@ -291,6 +304,12 @@ async fn passthrough_to_endpoint(
                 HeaderValue::from_static("application/json"),
             );
         }
+        if gmclaw_unary && is_stream {
+            upstream_req.headers_mut().insert(
+                HeaderName::from_static("accept"),
+                HeaderValue::from_static("text/event-stream"),
+            );
+        }
 
         chatgpt_auth::authorize(client, &mut upstream_req, provider, None).await?;
 
@@ -326,16 +345,29 @@ async fn passthrough_to_endpoint(
             "proxying to openai responses endpoint"
         );
 
-        let upstream_resp =
-            execute_openai_request(client, upstream_req, provider, "upstream request failed")
-                .await?;
+        let execution =
+            execute_openai_request(client, upstream_req, provider, "upstream request failed");
+        let upstream_resp = if let Some(deadline) = gmclaw_deadline {
+            tokio::time::timeout_at(deadline, execution)
+                .await
+                .map_err(|_| GatewayError::upstream_timeout())??
+        } else {
+            execution.await?
+        };
         request_log::record_upstream_response_headers(
             log_context.as_ref(),
             upstream_resp.headers(),
         );
 
         if upstream_resp.status() == StatusCode::BAD_REQUEST {
-            let body_text = upstream_resp.text().await.unwrap_or_default();
+            let body_text = if let Some(deadline) = gmclaw_deadline {
+                tokio::time::timeout_at(deadline, upstream_resp.text())
+                    .await
+                    .map_err(|_| GatewayError::upstream_timeout())?
+                    .unwrap_or_default()
+            } else {
+                upstream_resp.text().await.unwrap_or_default()
+            };
             if is_failed_to_read_request_body_error(StatusCode::BAD_REQUEST, &body_text)
                 && request_body_read_retry_count < UPSTREAM_REQUEST_BODY_READ_MAX_RETRIES
             {
@@ -378,10 +410,17 @@ async fn passthrough_to_endpoint(
         break upstream_resp;
     };
 
-    let upstream_resp = ensure_success_response(&provider.name, upstream_resp).await?;
+    let success = ensure_success_response(&provider.name, upstream_resp);
+    let upstream_resp = if let Some(deadline) = gmclaw_deadline {
+        tokio::time::timeout_at(deadline, success)
+            .await
+            .map_err(|_| GatewayError::upstream_timeout())??
+    } else {
+        success.await?
+    };
 
     // 6. 流式：透传 SSE 流
-    if is_stream {
+    if is_stream && !gmclaw_unary {
         let mut headers = HeaderMap::new();
         headers.insert(
             HeaderName::from_static("content-type"),
@@ -429,9 +468,26 @@ async fn passthrough_to_endpoint(
 
     // 7. 非流式：透传 JSON 响应
     let upstream_headers = upstream_resp.headers().clone();
-    let body_bytes = upstream_resp.bytes().await.map_err(|e| {
-        GatewayError::upstream(StatusCode::BAD_GATEWAY, format!("read upstream body: {e}"))
-    })?;
+    let body_bytes = if let Some(deadline) = gmclaw_deadline {
+        let value = gmclaw_stream::collect(
+            upstream_resp.bytes_stream(),
+            &upstream_headers,
+            gmclaw_stream::Protocol::Responses,
+            &provider.name,
+            deadline,
+        )
+        .await?;
+        axum::body::Bytes::from(serde_json::to_vec(&value).map_err(|_| {
+            GatewayError::upstream(
+                StatusCode::BAD_GATEWAY,
+                "could not encode collected Responses result",
+            )
+        })?)
+    } else {
+        upstream_resp.bytes().await.map_err(|e| {
+            GatewayError::upstream(StatusCode::BAD_GATEWAY, format!("read upstream body: {e}"))
+        })?
+    };
     let (body_bytes, response_json) = normalize_json_body_with_scope_and_tool_names(
         body_bytes,
         Some(&encrypted_content_scope),

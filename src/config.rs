@@ -36,6 +36,7 @@ pub struct AppConfig {
     pub wechat_accounts: Vec<WechatConfig>,
     pub wecom_accounts: Vec<WecomConfig>,
     pub bridge: BridgeConfig,
+    pub gmclaw_bridge: crate::gmclaw_im::GmClawBridgeConfig,
     pub ai_gateway: crate::ai_gateway::config::AiGatewayConfig,
 }
 
@@ -152,6 +153,7 @@ impl Default for AppConfig {
             wechat_accounts: Vec::new(),
             wecom_accounts: Vec::new(),
             bridge: BridgeConfig::default(),
+            gmclaw_bridge: crate::gmclaw_im::GmClawBridgeConfig::default(),
             ai_gateway: crate::ai_gateway::config::AiGatewayConfig::default(),
         }
     }
@@ -312,6 +314,7 @@ impl AppConfig {
     }
 
     pub fn save(&mut self, path: &PathBuf) -> anyhow::Result<()> {
+        self.gmclaw_bridge.validate()?;
         for provider in &self.ai_gateway.providers {
             if provider.import_source.is_some() && provider.enabled {
                 anyhow::ensure!(

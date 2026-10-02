@@ -13,6 +13,9 @@ mod config;
 mod daemon_process;
 mod diagnostics_export;
 mod external_import;
+mod gmclaw_config;
+mod gmclaw_executor;
+mod gmclaw_im;
 #[cfg(feature = "gui")]
 mod gui;
 mod im;

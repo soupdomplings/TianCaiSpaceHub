@@ -337,7 +337,7 @@ fn preview_with_config(parent: &Frame, api: &ApiClient, draft: ImportDraft, conf
         .ai_gateway
         .providers
         .iter()
-        .filter(|p| !p.is_workbuddy())
+        .filter(|p| !p.is_client_reserved())
         .cloned()
         .collect();
     let matching = targets.iter().position(|p| {

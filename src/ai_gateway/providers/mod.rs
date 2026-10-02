@@ -113,7 +113,7 @@ pub(super) async fn execute_upstream_request(
     timeout_secs: u64,
     error_log: &'static str,
 ) -> Result<reqwest::Response, GatewayError> {
-    execute_request_with_retries(client, request, timeout_secs, error_log, false).await
+    execute_request_with_retries(client, request, timeout_secs, error_log, None).await
 }
 
 pub(super) async fn execute_provider_request(
@@ -127,7 +127,13 @@ pub(super) async fn execute_provider_request(
         request,
         provider.timeout_secs,
         error_log,
-        provider.is_workbuddy(),
+        if provider.is_workbuddy() {
+            Some("workbuddy")
+        } else if provider.is_gmclaw() {
+            Some("gmclaw")
+        } else {
+            None
+        },
     )
     .await
 }
@@ -137,7 +143,7 @@ async fn execute_request_with_retries(
     request: reqwest::Request,
     timeout_secs: u64,
     error_log: &'static str,
-    retry_http_errors: bool,
+    http_retry_client: Option<&'static str>,
 ) -> Result<reqwest::Response, GatewayError> {
     let retry_template = request.try_clone();
     let mut next_request = Some(request);
@@ -158,7 +164,7 @@ async fn execute_request_with_retries(
 
         match response {
             Ok(response)
-                if retry_http_errors
+                if http_retry_client.is_some()
                     && matches!(
                         response.status(),
                         StatusCode::BAD_GATEWAY | StatusCode::SERVICE_UNAVAILABLE
@@ -172,7 +178,7 @@ async fn execute_request_with_retries(
                 retry_count += 1;
                 let delay = Duration::from_secs(retry_count as u64);
                 warn!(
-                    provider = "workbuddy",
+                    provider = http_retry_client.unwrap_or_default(),
                     upstream_status = response.status().as_u16(),
                     retry_count,
                     max_retries = UPSTREAM_MAX_RETRIES,

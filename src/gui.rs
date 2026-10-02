@@ -120,6 +120,7 @@ enum GuiMessage {
     ImAction(ImActionResult),
     AiGwAction(AiGwActionResult),
     WorkBuddy(WorkBuddyActionResult),
+    GmClaw(gmclaw::GmClawActionResult),
     DashboardUpdate,
     DiagnosticsExport,
 }
@@ -146,6 +147,7 @@ mod chatgpt;
 mod codex_tab;
 mod daemon;
 mod external_import;
+mod gmclaw;
 mod im_accounts;
 mod onboarding;
 mod provider;
@@ -1146,6 +1148,8 @@ fn build_ui(
     // --- WorkBuddy Tab ---
     let workbuddy_tab = workbuddy::create(&notebook, text);
     enable_full_repaint_on_resize(&workbuddy_tab.page);
+    let gmclaw_tab = gmclaw::create(&notebook, text);
+    enable_full_repaint_on_resize(&gmclaw_tab.page);
 
     notebook.add_page(&codex_tab.page, text.codex_tab(), true, tab_icons[0]);
     notebook.add_page(&ai_gw_page, text.ai_gateway_tab(), false, tab_icons[1]);
@@ -1161,6 +1165,15 @@ fn build_ui(
         text.workbuddy_tab(),
         false,
         tab_icons[4],
+    );
+    notebook.add_page(
+        &gmclaw_tab.page,
+        match text.locale {
+            GuiLocale::ZhCn => "天工 Claw 接入",
+            GuiLocale::EnUs => "GMClaw Integration",
+        },
+        false,
+        tab_icons[5],
     );
 
     root_sizer.add(
@@ -1237,6 +1250,7 @@ fn build_ui(
     );
 
     workbuddy::bind_actions(&workbuddy_tab, &api, &frame, text, &gui_tx);
+    gmclaw::bind_actions(&gmclaw_tab, &api, &frame, text, &gui_tx);
 
     bind_service_connection_settings(&frame, &handles);
 
@@ -1797,6 +1811,7 @@ fn build_ui(
         let request_log_clear_old_button = request_log_clear_old_button;
         let request_log_clear_all_button = request_log_clear_all_button;
         let workbuddy_tab = workbuddy_tab.clone();
+        let gmclaw_tab = gmclaw_tab.clone();
         frame.on_idle(move |event| {
             // Kick off any toggles queued from the data views.
             process_pending_im_toggle(
@@ -1869,6 +1884,9 @@ fn build_ui(
                                     needs_dashboard_refresh = true;
                                 }
                                 apply_pending_ai_gw_action(&handles, &frame, result);
+                            }
+                            GuiMessage::GmClaw(result) => {
+                                gmclaw::apply_result(&gmclaw_tab, &frame, handles.text, result);
                             }
                             GuiMessage::WorkBuddy(result) => {
                                 workbuddy::apply_result(
@@ -2041,10 +2059,10 @@ fn screen_work_area_size() -> Option<(i32, i32)> {
     None
 }
 
-fn create_main_tab_icons(notebook: &Notebook) -> [Option<i32>; 5] {
+fn create_main_tab_icons(notebook: &Notebook) -> [Option<i32>; 6] {
     // Use 24x24 for better quality on high-DPI displays
     let size = 24;
-    let image_list = ImageList::new(size, size, true, 4);
+    let image_list = ImageList::new(size, size, true, 6);
     let image_ids = [
         image_list.add_bitmap(&status_icon_bitmap(StatusIconKind::Codex, size as usize)),
         image_list.add_bitmap(&lucide_icon_bitmap(LucideIconKind::Router, size as usize)),
@@ -2056,6 +2074,7 @@ fn create_main_tab_icons(notebook: &Notebook) -> [Option<i32>; 5] {
             LucideIconKind::ScrollText,
             size as usize,
         )),
+        image_list.add_bitmap(&lucide_icon_bitmap(LucideIconKind::Router, size as usize)),
         image_list.add_bitmap(&lucide_icon_bitmap(LucideIconKind::Router, size as usize)),
     ];
     let icons = image_ids.map(|id| (id >= 0).then_some(id));
@@ -3504,6 +3523,7 @@ fn show_ai_gw_channel_dialog(
                 .max(1);
             Some(ProviderConfig {
                 import_source: initial.and_then(|p| p.import_source.clone()),
+                gmclaw_parameters: initial.and_then(|p| p.gmclaw_parameters.clone()),
                 name,
                 enabled: initial.map(|provider| provider.enabled).unwrap_or(true),
                 chat_disable_reasoning: provider_type == ProviderType::ChatCompletions

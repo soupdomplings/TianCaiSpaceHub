@@ -256,6 +256,7 @@ impl ResolveData {
         }
         if !text_valid(&wire.name, 256)
             || wire.name.eq_ignore_ascii_case("workbuddy")
+            || crate::ai_gateway::config::is_gmclaw_provider_name(&wire.name)
             || !text_valid(&wire.api_key, 8192)
             || !wire.api_key.is_ascii()
         {
@@ -315,7 +316,10 @@ pub fn provider_fingerprint(provider: &ProviderConfig) -> String {
 
 pub fn merge_import(config: &mut AppConfig, request: &CommitImport) -> Result<(), String> {
     let name = request.name.trim();
-    if !text_valid(name, 256) || name.eq_ignore_ascii_case("workbuddy") {
+    if !text_valid(name, 256)
+        || name.eq_ignore_ascii_case("workbuddy")
+        || crate::ai_gateway::config::is_gmclaw_provider_name(name)
+    {
         return Err("请输入有效且非保留的渠道名称 / Invalid channel name".into());
     }
     let models = normalized_models(&request.models)?;
@@ -332,7 +336,7 @@ pub fn merge_import(config: &mut AppConfig, request: &CommitImport) -> Result<()
             .enumerate()
             .find(|(_, p)| p.name == target.name)
             .ok_or("目标渠道已删除，请重新打开预览 / Channel was deleted")?;
-        if existing.is_workbuddy() || provider_fingerprint(existing) != target.fingerprint {
+        if existing.is_client_reserved() || provider_fingerprint(existing) != target.fingerprint {
             return Err("目标渠道已修改，请重新打开预览 / Channel changed during preview".into());
         }
         Some(i)

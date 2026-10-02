@@ -9,7 +9,7 @@ Do not mix them. `codexhub` stores IM channel and bridge settings. Codex App sto
 
 ## TianCaiSpace customization fields and concurrent saves
 
-Updated 2026-09-30 for `0.4.29-2`. See the [customization inventory](customizations/README.md) for current behavior and code ownership.
+维护日期：2026-10-03；当前 `0.4.29-5` 开发中。天工多模型和外部消息执行端的最终编译、用户验收状态见 [二开总表](customizations/README.md) 与对应专题。
 
 | Configuration area | Current contract | Detail |
 | --- | --- | --- |
@@ -17,6 +17,10 @@ Updated 2026-09-30 for `0.4.29-2`. See the [customization inventory](customizati
 | `aiGateway.codexModelProfiles` | Explicit model capability overrides take priority over inferred family defaults | [Dynamic models](dynamic-codex-models.zh-CN.md) |
 | Provider `compatibility` / `chatDisableReasoning` | `openai_chat` identifies general Chat Completions; disabling reasoning is per provider | [Chat Completions](openai-chat-completions.md) |
 | Reserved provider `workbuddy` | Dedicated WorkBuddy configuration, excluded from ordinary Codex routing | [WorkBuddy](workbuddy.md) |
+| Reserved providers `gmclaw` / `gmclaw:<entryId>` | 旧天工专用渠道与多模型条目渠道，排除普通 Codex 路由、可见模型同步和网页导入；每项按独立地址路由，同模型可使用不同来源；来源配置改变后需重新保存相应条目 | [天工 Claw](customizations/gmclaw.md) |
+| `aiGateway.providers[].gmclawParameters` | 仅天工专用渠道使用；`reasoningEffort` 省略时跟随上游，`temperatureMode` 为 `auto`（默认）/`omit`/`preserve`；经天工页签保存并随专用渠道备份恢复，不写天工 `extra_params` | [厂商适配](customizations/gmclaw.md#hub-的厂商适配) |
+| GMClaw API `entryId` / `makeActive` / `revision` | 条目身份与模型名分开；空 ID 新增，已有 ID 更新；`makeActive` 默认 `true`；集合 revision 防止覆盖任一管理条目及默认选择的后续改动，不写 Hub TOML | [模型 API 与备份](customizations/gmclaw.md#本地配置-api) |
+| `gmclawBridge` | 第二阶段外部消息执行端：默认禁用，本机 Harness、用户提供的 Token、绝对工作目录、可选天工模型 ID 及执行步数；不等同于原 `bridge` 的 Codex 连接 | [天工外部消息](customizations/gmclaw-im.md) |
 | Provider `importSource` | Imported identity survives renaming; nested fields are `origin`, `key_id`, `site_name`, `key_name` | [Web import](hub-external-import.md) |
 | API `_revision` | Read from `GET /api/config`, send back unchanged with `POST /api/config`; never persisted in TOML | [Web import and save behavior](hub-external-import.md) |
 
@@ -27,6 +31,25 @@ The full-config save endpoint requires `_revision`; missing or stale versions re
 An enabled imported provider must have models, and its alias targets must exist in that list. This rule also applies when enabling it later through the normal configuration editor. The GUI should preserve `importSource` during ordinary edits.
 
 The source of truth for these fields is [provider configuration](../src/ai_gateway/config.rs), [config storage](../src/config.rs), and [local API](../src/web.rs). Back up configuration before downgrade or external edits; remove a newly imported channel or restore its prior backup to undo an import.
+
+### 天工配置边界
+
+模型页通过 `GET/POST /api/gmclaw/config` 读取和保存管理条目，`activate/delete/restore` 操作使用同一集合版本；原顶层状态字段表示当前选中条目，新列表位于 `entries`。新增条目的数据库 ID 为 `tiancaispacehub-<entryId>`，网关地址为 `/ai-gateway/gmclaw/<entryId>/v1`；旧 `entryId=legacy` 保留原行、渠道和地址。保存、删除、设为默认均保留一次定点撤销；新元数据 v2 兼容读取旧 v1，旧程序不能保证理解新备份和多模型路由。
+
+用户已确认上一轮模型保存后可以直接选择使用，无需完全退出重开天工；本轮 API 不再要求重启。新增多模型操作和上游流式聚合仍待用户验收。模型客户端继续接收完整 Chat JSON，OpenAI Responses 上游流式响应由 Hub 聚合，不意味着天工客户端改为逐字显示。
+
+`gmclawBridge` 经现有 `GET/POST /api/config` 和 `_revision` 保存。界面后台重读最新配置，核对桥接字段仍等于加载值后只合并桥接字段，使用最新整体版本提交；模型保存或其他无关配置变化不会必然造成冲突。启用时由 `AppConfig::save` 校验，配置字段如下：
+
+| 字段 | 默认值与含义 |
+| --- | --- |
+| `enabled` | `false`；显式启用外部消息执行 |
+| `endpoint` | `http://127.0.0.1:7861`；只接受本机回环根地址或 `/v2/chat` |
+| `authToken` | 空；由用户提供，与天工启动环境 `GMCLAW_AUTH_TOKEN` 相同；不自动读取进程 token |
+| `projectPath` | 空；启用时必须为本机已存在的绝对目录，不创建目录、不自动补相对路径 |
+| `modelId` | 省略；填写天工 `model_configs.model_id`，留空使用天工默认选择 |
+| `maxSteps` | `30`，范围 `1–200` |
+
+`GMCLAW_AUTH_TOKEN` 是启动天工执行端时的授权环境变量；`GMCLAW_CONFIG_PATH` 是 Hub 定位既有模型数据库的路径覆盖，两者用途不同。桥接 Token 保存在用户本地 Hub 配置中，不应写入仓库、截图或日志。外部消息执行使用当前 IM 账号允许名单及 `/gmclaw` 显式绑定，不扩展原 Codex 会话卡片、附件、主动取消或 MCP 配置管理。参数校验、指令、审批、停用与回滚详见 [TC-012](customizations/gmclaw-im.md)。
 
 ## `codexhub` Config
 

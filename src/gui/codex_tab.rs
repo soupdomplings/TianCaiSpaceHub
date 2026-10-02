@@ -400,7 +400,7 @@ pub(super) fn initialize_visible_model_checks(tab: &CodexTab, gateway_config: &A
     let names: Vec<String> = gateway_config
         .providers
         .iter()
-        .filter(|provider| provider.enabled && !provider.is_workbuddy())
+        .filter(|provider| provider.enabled && !provider.is_client_reserved())
         .map(|provider| provider.name.clone())
         .collect();
     if *tab.model_provider_names.borrow() != names {
@@ -638,7 +638,7 @@ fn bind_sync_models_action(
                     .ai_gateway
                     .providers
                     .into_iter()
-                    .filter(|provider| provider.enabled && !provider.is_workbuddy())
+                    .filter(|provider| provider.enabled && !provider.is_client_reserved())
                 {
                     models.extend(provider.models);
                     models.extend(provider.model_aliases.into_keys());
@@ -1098,7 +1098,7 @@ fn bind_unrouted_models(
         .iter()
         .filter(|model| {
             !config.providers.iter().any(|provider| {
-                provider.enabled && !provider.is_workbuddy() && provider.matches_model(model)
+                provider.enabled && !provider.is_client_reserved() && provider.matches_model(model)
             })
         })
         .cloned()
@@ -1108,7 +1108,7 @@ fn bind_unrouted_models(
     }
     let Some(provider) = config.providers.iter_mut().find(|provider| {
         provider.enabled
-            && !provider.is_workbuddy()
+            && !provider.is_client_reserved()
             && Some(provider.name.as_str()) == provider_name
     }) else {
         return Err(format!(
@@ -1163,7 +1163,7 @@ fn bind_fetch_models_action(
                     .iter()
                     .find(|provider| {
                         provider.enabled
-                            && !provider.is_workbuddy()
+                            && !provider.is_client_reserved()
                             && provider.name == provider_name
                     })
                     .ok_or_else(|| "Selected provider is unavailable".to_string())?;
