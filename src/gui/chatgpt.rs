@@ -12,6 +12,7 @@ use std::{
 use wxdragon::{prelude::*, timer::Timer};
 
 use super::{
+    ai_gateway::provider_scope_help,
     api::ApiClient,
     provider::strip_nul,
     show_error,
@@ -22,7 +23,7 @@ use crate::ai_gateway::{
     chatgpt_auth::{
         AccountSummary, AccountUsage, BASE_URL, ImportRequest, LoginStart, LoginStatus,
     },
-    config::{ProviderConfig, ProviderType},
+    config::{ProviderConfig, ProviderType, is_gmclaw_provider_name, is_workbuddy_provider_name},
 };
 
 enum Event {
@@ -130,6 +131,20 @@ pub(super) fn show_channel_dialog(
         .build();
     title.set_font(&theme::font(theme::TextRole::Title));
     root.add(&title, 0, SizerFlag::All, 18);
+    let scope_help = StaticText::builder(&panel)
+        .with_label(provider_scope_help(
+            initial.map(|provider| provider.name.as_str()).unwrap_or(""),
+            text,
+        ))
+        .build();
+    scope_help.set_foreground_color(theme::theme().ink_secondary);
+    scope_help.wrap(530);
+    root.add(
+        &scope_help,
+        0,
+        SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Bottom,
+        18,
+    );
     let name_label = StaticText::builder(&panel)
         .with_label(text.ai_gw_col_name())
         .build();
@@ -554,12 +569,20 @@ pub(super) fn show_channel_dialog(
     {
         let auth_id = auth_id.clone();
         let busy = busy.clone();
+        let editing_reserved_channel = initial.is_some_and(ProviderConfig::is_client_reserved);
         save.on_click(move |_| {
             if *busy.borrow() || auth_id.borrow().is_none() {
                 return;
             }
-            if strip_nul(&name.get_value()).trim().is_empty() {
+            let channel_name = strip_nul(&name.get_value()).trim().to_string();
+            if channel_name.is_empty() {
                 show_error(&dialog, text.ai_gw_provider_name_empty());
+                return;
+            }
+            if (is_workbuddy_provider_name(&channel_name) || is_gmclaw_provider_name(&channel_name))
+                && !editing_reserved_channel
+            {
+                show_error(&dialog, text.ai_gw_reserved_provider_name());
                 return;
             }
             if selected_models(models).is_empty() {

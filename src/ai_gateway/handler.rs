@@ -35,7 +35,7 @@ use super::responses_lite_tools::prepare_for_provider;
 use super::router::{
     resolve_gmclaw_entry_provider_with_state, resolve_gmclaw_provider_with_state,
     resolve_provider_with_state, resolve_provider_with_state_for_type,
-    resolve_workbuddy_provider_with_state,
+    resolve_workbuddy_entry_provider_with_state, resolve_workbuddy_provider_with_state,
 };
 use super::workbuddy;
 
@@ -693,6 +693,16 @@ pub async fn handle_workbuddy_chat_completions(
     handle_client_chat_completions(state, headers, body, ChatClient::WorkBuddy, None).await
 }
 
+pub async fn handle_workbuddy_entry_chat_completions(
+    State(state): State<SharedState>,
+    Path(entry_id): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    handle_client_chat_completions(state, headers, body, ChatClient::WorkBuddy, Some(entry_id))
+        .await
+}
+
 /// POST /ai-gateway/gmclaw/v1/chat/completions
 pub async fn handle_gmclaw_chat_completions(
     State(state): State<SharedState>,
@@ -731,11 +741,21 @@ async fn handle_client_chat_completions(
     headers: HeaderMap,
     body: Bytes,
     chat_client: ChatClient,
-    gmclaw_entry: Option<String>,
+    client_entry: Option<String>,
 ) -> Response {
-    let namespace = gmclaw_entry
+    if let Some(entry_id) = client_entry.as_deref() {
+        let valid = match chat_client {
+            ChatClient::WorkBuddy => super::config::is_valid_workbuddy_entry_id(entry_id),
+            ChatClient::GmClaw => super::config::is_valid_gmclaw_entry_id(entry_id),
+        };
+        if !valid {
+            return GatewayError::bad_request("无效的接入条目 / Invalid client entry")
+                .into_response();
+        }
+    }
+    let namespace = client_entry
         .as_ref()
-        .map(|id| format!("gmclaw:{id}"))
+        .map(|id| format!("{}:{id}", chat_client.namespace()))
         .unwrap_or_else(|| chat_client.namespace().to_string());
     let started_at = Instant::now();
     let created_at_ms = request_log::now_ms();
@@ -762,10 +782,27 @@ async fn handle_client_chat_completions(
         Ok(model) => model,
         Err(error) => return GatewayError::bad_request(error).into_response(),
     };
-    let default_effort = if chat_client == ChatClient::WorkBuddy {
-        crate::workbuddy_config::configured_default_reasoning_effort(&model)
+    let (default_effort, configured_cache_key) = if chat_client == ChatClient::WorkBuddy {
+        let defaults_gateway = gw_config.clone();
+        let defaults_entry = client_entry.clone();
+        let defaults_model = model.clone();
+        match tokio::task::spawn_blocking(move || {
+            crate::workbuddy_config::configured_request_defaults(
+                &defaults_gateway,
+                defaults_entry.as_deref(),
+                &defaults_model,
+            )
+        })
+        .await
+        {
+            Ok(defaults) => defaults,
+            Err(_) => {
+                return GatewayError::bad_request("无法读取 WorkBuddy 条目参数，请重试")
+                    .into_response();
+            }
+        }
     } else {
-        None
+        (None, None)
     };
     workbuddy::apply_default_reasoning_effort(&mut raw_chat, default_effort.as_deref());
     let stream = workbuddy::chat_request_stream(&raw_chat);
@@ -781,11 +818,7 @@ async fn handle_client_chat_completions(
                 .filter(|value| !value.is_empty())
                 .map(str::to_string)
         })
-        .or_else(|| {
-            (chat_client == ChatClient::WorkBuddy)
-                .then(|| crate::workbuddy_config::configured_cache_key(&model))
-                .flatten()
-        })
+        .or(configured_cache_key)
         .unwrap_or_else(|| format!("{namespace}:{model}"));
     let ctx = GatewayContext::extract(&headers, Some(&cache_key));
     let envelope = GatewayRequestEnvelope {
@@ -803,6 +836,16 @@ async fn handle_client_chat_completions(
         let mut routing = state.ai_gateway_routing.lock().await;
         routing.evict_stale(routing_now);
         let resolved = match chat_client {
+            ChatClient::WorkBuddy if client_entry.is_some() => {
+                resolve_workbuddy_entry_provider_with_state(
+                    client_entry.as_deref().unwrap(),
+                    &model,
+                    routing_session_id.as_deref(),
+                    &gw_config,
+                    &mut routing,
+                    routing_now,
+                )
+            }
             ChatClient::WorkBuddy => resolve_workbuddy_provider_with_state(
                 &model,
                 routing_session_id.as_deref(),
@@ -810,9 +853,9 @@ async fn handle_client_chat_completions(
                 &mut routing,
                 routing_now,
             ),
-            ChatClient::GmClaw if gmclaw_entry.is_some() => {
+            ChatClient::GmClaw if client_entry.is_some() => {
                 resolve_gmclaw_entry_provider_with_state(
-                    gmclaw_entry.as_deref().unwrap(),
+                    client_entry.as_deref().unwrap(),
                     &model,
                     routing_session_id.as_deref(),
                     &gw_config,

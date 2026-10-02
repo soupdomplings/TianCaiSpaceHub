@@ -4,7 +4,7 @@
 
 源码版本：0.4.29-5（开发中，未发布）。实现 Sub2API 外部导入约定 v1，默认禁用保存。Windows 既有行为继续保留；macOS 系统接入已补齐代码，尚未在 macOS 构建和实机验收；Linux 不在本次范围。
 
-2026-10-03 衔接天工 Claw：网页导入禁止创建或覆盖保留渠道 `workbuddy`、`gmclaw` 及 `gmclaw:<entryId>`，更新目标列表也排除这些渠道。导入普通渠道并启用后，可在对应客户端页签主动选择并保存；天工可创建多个独立条目，见 [天工 Claw](customizations/gmclaw.md)。
+2026-10-03 接入点隔离：网页导入禁止创建或覆盖 `workbuddy`、`workbuddy:`、`gmclaw`、`gmclaw:` 整个保留命名空间，更新目标列表也排除这些渠道。导入普通渠道并启用后，可在对应客户端页签主动选择并保存；WorkBuddy 与天工可创建多个独立条目，见 [WorkBuddy](workbuddy.md)、[天工 Claw](customizations/gmclaw.md)及[用途标识](customizations/client-channel-scope.md)。
 
 ## 用户流程
 

@@ -359,10 +359,45 @@ impl ApiClient {
         self.post_json_with_timeout("/api/config", config, GUI_CONFIG_TIMEOUT)
     }
 
+    pub(super) fn get_workbuddy_config(
+        &self,
+        entry_id: Option<&str>,
+    ) -> Result<crate::workbuddy_config::WorkBuddyConfigStatus, String> {
+        let path = match entry_id {
+            Some(id) => format!(
+                "/api/workbuddy/config?{}",
+                url::form_urlencoded::Serializer::new(String::new())
+                    .append_pair("entryId", id)
+                    .finish()
+            ),
+            None => "/api/workbuddy/config".to_string(),
+        };
+        self.get_with_timeout(&path, GUI_CONFIG_TIMEOUT)
+    }
+
+    pub(super) fn save_workbuddy_config(
+        &self,
+        request: &crate::workbuddy_config::WorkBuddySaveRequest,
+    ) -> Result<crate::workbuddy_config::WorkBuddyConfigStatus, String> {
+        self.post_json_with_timeout("/api/workbuddy/config", request, GUI_CONFIG_TIMEOUT)
+    }
+
+    pub(super) fn delete_workbuddy_config(
+        &self,
+        request: &crate::workbuddy_config::WorkBuddyEntryRequest,
+    ) -> Result<crate::workbuddy_config::WorkBuddyConfigStatus, String> {
+        self.post_json_with_timeout("/api/workbuddy/config/delete", request, GUI_CONFIG_TIMEOUT)
+    }
+
     pub(super) fn restore_workbuddy_config(
         &self,
+        revision: &str,
     ) -> Result<crate::workbuddy_config::WorkBuddyConfigStatus, String> {
-        self.post_empty_with_timeout("/api/workbuddy/config/restore", GUI_CONFIG_TIMEOUT)
+        self.post_json_with_timeout(
+            "/api/workbuddy/config/restore",
+            &serde_json::json!({"revision": revision}),
+            GUI_CONFIG_TIMEOUT,
+        )
     }
 
     pub(super) fn get_gmclaw_config(

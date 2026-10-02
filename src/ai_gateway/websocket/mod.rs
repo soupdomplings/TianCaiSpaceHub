@@ -37,7 +37,7 @@ pub(super) async fn handle_upgrade(
     if !config
         .providers
         .iter()
-        .any(|p| p.enabled && p.provider_type.is_openai())
+        .any(|p| p.enabled && !p.is_client_reserved() && p.provider_type.is_openai())
     {
         return (
             StatusCode::UPGRADE_REQUIRED,
@@ -154,6 +154,7 @@ impl Session {
                     self.selected.as_ref().ok_or_else(previous_response_error)?;
                 if !config.providers.iter().any(|p| {
                     p.enabled
+                        && !p.is_client_reserved()
                         && super::config::provider_route_id(p) == *route_id
                         && same_credentials(p, provider)
                         && p.matches_model(&model)

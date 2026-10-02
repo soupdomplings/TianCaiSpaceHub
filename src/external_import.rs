@@ -5,7 +5,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use url::Url;
 
-use crate::ai_gateway::config::{ProviderConfig, ProviderType, provider_display_base_url};
+use crate::ai_gateway::config::{
+    ProviderConfig, ProviderType, is_gmclaw_provider_name, is_workbuddy_provider_name,
+    provider_display_base_url,
+};
 use crate::config::AppConfig;
 
 pub mod client;
@@ -255,8 +258,8 @@ impl ResolveData {
             validate_endpoint(url)?;
         }
         if !text_valid(&wire.name, 256)
-            || wire.name.eq_ignore_ascii_case("workbuddy")
-            || crate::ai_gateway::config::is_gmclaw_provider_name(&wire.name)
+            || is_workbuddy_provider_name(wire.name.trim())
+            || is_gmclaw_provider_name(wire.name.trim())
             || !text_valid(&wire.api_key, 8192)
             || !wire.api_key.is_ascii()
         {
@@ -316,10 +319,7 @@ pub fn provider_fingerprint(provider: &ProviderConfig) -> String {
 
 pub fn merge_import(config: &mut AppConfig, request: &CommitImport) -> Result<(), String> {
     let name = request.name.trim();
-    if !text_valid(name, 256)
-        || name.eq_ignore_ascii_case("workbuddy")
-        || crate::ai_gateway::config::is_gmclaw_provider_name(name)
-    {
+    if !text_valid(name, 256) || is_workbuddy_provider_name(name) || is_gmclaw_provider_name(name) {
         return Err("请输入有效且非保留的渠道名称 / Invalid channel name".into());
     }
     let models = normalized_models(&request.models)?;

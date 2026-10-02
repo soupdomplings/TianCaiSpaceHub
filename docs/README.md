@@ -1,6 +1,6 @@
 # TianCaiSpace Hub 文档总入口
 
-维护日期：2026-10-03。当前工作区版本：`0.4.30-1`（开发中，未发布）；上游整合基线：CodexHub `v0.4.30`。天工 Claw 多模型、流式聚合与外部消息执行端已保存于 `9b9702e`，本轮整合继续保留。本目录统一维护二开现状、使用说明、设计依据和开发记录。
+维护日期：2026-10-03。当前工作区版本：`0.4.30-2`（本地开发版，未发布），新增 WorkBuddy 多模型及接入点用途标识；上游基线仍为 CodexHub `v0.4.30`。本目录统一维护二开现状、使用说明、设计依据和开发记录。
 
 ## 从哪里开始
 
@@ -10,6 +10,8 @@
 | 查看每次二开开发变更 | [二开变更记录](customizations/CHANGELOG.md) |
 | 开发时知道必须更新哪些文档 | [文档规划与维护规范](development/documentation.md) |
 | 接入 WorkBuddy | [WorkBuddy 使用说明](workbuddy.md) |
+| 区分普通渠道与 WorkBuddy/天工专用渠道 | [接入点用途与隔离](customizations/client-channel-scope.md) |
+| 查看当前本地调试版本与验收边界 | [0.4.30-2 开发交付](releases/v0.4.30-2.md) |
 | 管理天工 Claw 多模型、参数、备份及上游流式兼容 | [天工 Claw 模型接入](customizations/gmclaw.md) |
 | 通过飞书、微信或企业微信使用天工执行任务 | [天工外部消息执行端](customizations/gmclaw-im.md) |
 | 设置自定义模型与能力继承 | [动态 Codex 可见模型](dynamic-codex-models.zh-CN.md) |
@@ -30,7 +32,8 @@
 
 | 文档 | 用途与状态 |
 | --- | --- |
-| [WorkBuddy](workbuddy.md) | 独立接入、备份还原、协议、重试、思考强度和缓存；已实现 |
+| [WorkBuddy](workbuddy.md) | 多条目独立接入、备份撤销、协议、重试、思考和缓存；本轮验收状态见开发交付记录 |
+| [接入点用途与隔离](customizations/client-channel-scope.md) | 普通/专用渠道标识、各接入点及同模型条目的精确路由、保留名称与回滚注意项 |
 | [天工 Claw 模型](customizations/gmclaw.md) | 多条目与独立路由、保存/删除/默认切换恢复、厂商参数及上游流式聚合；本轮 Windows 编译与调试构建通过，待用户验收；旧单模型保存无需重启已有有限用户反馈 |
 | [天工外部消息执行端](customizations/gmclaw-im.md) | 第二阶段首版：显式 `/gmclaw`、发送者会话隔离、文本和父会话工具审批；Windows 编译与调试构建通过，待用户验收；MCP 设置继续由天工管理，不属于本轮范围 |
 | [OpenAI Chat Completions](openai-chat-completions.md) | 通用兼容渠道与按渠道关闭推理；已实现 |

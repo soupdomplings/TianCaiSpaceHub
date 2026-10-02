@@ -16,7 +16,8 @@ Do not mix them. `codexhub` stores IM channel and bridge settings. Codex App sto
 | `aiGateway.codexVisibleModels` | Saved model IDs displayed to Codex; visibility and provider routing are separate | [Dynamic models](dynamic-codex-models.zh-CN.md) |
 | `aiGateway.codexModelProfiles` | Explicit model capability overrides take priority over inferred family defaults | [Dynamic models](dynamic-codex-models.zh-CN.md) |
 | Provider `compatibility` / `chatDisableReasoning` | `openai_chat` identifies general Chat Completions; disabling reasoning is per provider | [Chat Completions](openai-chat-completions.md) |
-| Reserved provider `workbuddy` | Dedicated WorkBuddy configuration, excluded from ordinary Codex routing | [WorkBuddy](workbuddy.md) |
+| Reserved providers `workbuddy` / `workbuddy:<entryId>` | 旧 WorkBuddy 专用渠道与多模型条目，独立地址精确选路；排除 Codex、天工、普通模型同步与导入；源码版本 `0.4.30-2` 起支持多条目 | [WorkBuddy](workbuddy.md) |
+| 接入点用途 | 大模型列表标明 Codex/可选为来源渠道、WorkBuddy 专用、天工 Claw 专用；用途按内部名称派生，无新增必填 scope 字段；专用请求不跨接入点或条目回退 | [用途与隔离](customizations/client-channel-scope.md) |
 | Reserved providers `gmclaw` / `gmclaw:<entryId>` | 旧天工专用渠道与多模型条目渠道，排除普通 Codex 路由、可见模型同步和网页导入；每项按独立地址路由，同模型可使用不同来源；来源配置改变后需重新保存相应条目 | [天工 Claw](customizations/gmclaw.md) |
 | `aiGateway.providers[].gmclawParameters` | 仅天工专用渠道使用；`reasoningEffort` 省略时跟随上游，`temperatureMode` 为 `auto`（默认）/`omit`/`preserve`；经天工页签保存并随专用渠道备份恢复，不写天工 `extra_params` | [厂商适配](customizations/gmclaw.md#hub-的厂商适配) |
 | GMClaw API `entryId` / `makeActive` / `revision` | 条目身份与模型名分开；空 ID 新增，已有 ID 更新；`makeActive` 默认 `true`；集合 revision 防止覆盖任一管理条目及默认选择的后续改动，不写 Hub TOML | [模型 API 与备份](customizations/gmclaw.md#本地配置-api) |

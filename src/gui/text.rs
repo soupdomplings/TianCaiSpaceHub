@@ -3143,6 +3143,78 @@ impl GuiText {
         }
     }
 
+    pub(super) fn ai_gw_col_scope(self) -> &'static str {
+        match self.locale {
+            GuiLocale::ZhCn => "适用接入点",
+            GuiLocale::EnUs => "Client scope",
+        }
+    }
+
+    pub(super) fn ai_gw_scope_workbuddy(self) -> &'static str {
+        match self.locale {
+            GuiLocale::ZhCn => "WorkBuddy 专用",
+            GuiLocale::EnUs => "WorkBuddy only",
+        }
+    }
+
+    pub(super) fn ai_gw_scope_gmclaw(self) -> &'static str {
+        match self.locale {
+            GuiLocale::ZhCn => "天工 Claw 专用",
+            GuiLocale::EnUs => "GMClaw only",
+        }
+    }
+
+    pub(super) fn ai_gw_scope_codex(self) -> &'static str {
+        match self.locale {
+            GuiLocale::ZhCn => "Codex / 可选为来源渠道",
+            GuiLocale::EnUs => "Codex / available as a source",
+        }
+    }
+
+    pub(super) fn ai_gw_scope_workbuddy_help(self) -> &'static str {
+        match self.locale {
+            GuiLocale::ZhCn => {
+                "适用接入点：WorkBuddy 专用。仅对应的 WorkBuddy 模型条目使用此渠道，Codex 和天工 Claw 不会路由到这里。专用名称已锁定；条目身份请在 WorkBuddy 接入页管理。"
+            }
+            GuiLocale::EnUs => {
+                "Client scope: WorkBuddy only. Used by its matching WorkBuddy model entry; Codex and GMClaw do not route here. The dedicated name is locked; manage entry identities on the WorkBuddy tab."
+            }
+        }
+    }
+
+    pub(super) fn ai_gw_scope_gmclaw_help(self) -> &'static str {
+        match self.locale {
+            GuiLocale::ZhCn => {
+                "适用接入点：天工 Claw 专用。仅对应的天工 Claw 模型条目使用此渠道，Codex 和 WorkBuddy 不会路由到这里。专用名称已锁定；条目身份请在天工 Claw 接入页管理。"
+            }
+            GuiLocale::EnUs => {
+                "Client scope: GMClaw only. Used by its matching GMClaw model entry; Codex and WorkBuddy do not route here. The dedicated name is locked; manage entry identities on the GMClaw tab."
+            }
+        }
+    }
+
+    pub(super) fn ai_gw_scope_codex_help(self) -> &'static str {
+        match self.locale {
+            GuiLocale::ZhCn => {
+                "适用接入点：Codex。也可在 WorkBuddy / 天工 Claw 接入页选为来源渠道，生成对应的专用渠道后使用。"
+            }
+            GuiLocale::EnUs => {
+                "Client scope: Codex. You may also select it as a source on the WorkBuddy or GMClaw tab to create a dedicated channel for that client."
+            }
+        }
+    }
+
+    pub(super) fn ai_gw_reserved_provider_name(self) -> &'static str {
+        match self.locale {
+            GuiLocale::ZhCn => {
+                "workbuddy、workbuddy:、gmclaw 和 gmclaw: 是专用渠道保留名称或前缀，请在对应接入页创建模型条目。"
+            }
+            GuiLocale::EnUs => {
+                "workbuddy, workbuddy:, gmclaw and gmclaw: are reserved names or prefixes. Create model entries on the corresponding client tab."
+            }
+        }
+    }
+
     pub(super) fn ai_gw_provider_service(self) -> &'static str {
         match self.locale {
             GuiLocale::ZhCn => "服务商",

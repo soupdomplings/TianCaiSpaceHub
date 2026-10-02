@@ -26,7 +26,8 @@ use windows_sys::Win32::{
 };
 
 use crate::ai_gateway::config::{
-    DEFAULT_PROVIDER_TIMEOUT_SECS, ProviderConfig, ProviderType, ZaiAccessMode, provider_api_root,
+    DEFAULT_PROVIDER_TIMEOUT_SECS, ProviderConfig, ProviderType, ZaiAccessMode,
+    is_gmclaw_provider_name, is_workbuddy_provider_name, provider_api_root,
     provider_display_base_url,
 };
 use crate::config::{AppConfig, LocalConnectionMode, OutboundProxyConfig, OutboundProxyMode};
@@ -165,10 +166,11 @@ mod workbuddy;
 use self::ai_gateway::{
     AiGwActionResult, AiGwChannelToggle, AiGwProviderModel, AiGwProviderRow, AiGwProviderRows,
     PendingAiGwChannelToggle, apply_pending_ai_gw_action, delete_ai_gw_provider,
-    provider_logo_variant, provider_protocol_display, refresh_ai_gw_enable_logging,
-    refresh_ai_gw_filter_image_generation, refresh_ai_gw_provider_list, save_ai_gw_provider,
-    set_ai_gw_actions_enabled, set_ai_gw_provider_enabled, set_filter_image_generation_tool,
-    set_request_log_details_enabled, set_request_logging_enabled,
+    provider_logo_variant, provider_protocol_display, provider_scope_display, provider_scope_help,
+    refresh_ai_gw_enable_logging, refresh_ai_gw_filter_image_generation,
+    refresh_ai_gw_provider_list, save_ai_gw_provider, set_ai_gw_actions_enabled,
+    set_ai_gw_provider_enabled, set_filter_image_generation_tool, set_request_log_details_enabled,
+    set_request_logging_enabled,
 };
 use self::api::{
     ApiClient, ConfigureTelegramBotRequest, DashboardSnapshot, DeleteImAccountRequest,
@@ -614,7 +616,7 @@ fn build_ui(
         Rc::new(RefCell::new(CustomDataViewVirtualListModel::new(
             0,
             ai_gw_provider_rows.clone(),
-            |rows: &AiGwProviderRows, row, col| -> Variant {
+            move |rows: &AiGwProviderRows, row, col| -> Variant {
                 let rows = rows.borrow();
                 let Some(row_data) = rows.get(row) else {
                     return String::new().into();
@@ -630,6 +632,7 @@ fn build_ui(
                     .into(),
                     4 => row_data.base_url.clone().into(),
                     5 => row_data.weight.to_string().into(),
+                    6 => provider_scope_display(&row_data.name, text).into(),
                     _ => String::new().into(),
                 }
             },
@@ -685,6 +688,13 @@ fn build_ui(
         text.ai_gw_col_name(),
         1,
         160,
+        DataViewAlign::Left,
+        DataViewColumnFlags::Resizable,
+    );
+    ai_gw_provider_list.append_text_column(
+        text.ai_gw_col_scope(),
+        6,
+        210,
         DataViewAlign::Left,
         DataViewColumnFlags::Resizable,
     );
@@ -2594,6 +2604,21 @@ fn show_ai_gw_channel_dialog(
         18,
     );
 
+    let scope_help = StaticText::builder(&panel)
+        .with_label(provider_scope_help(
+            initial.map(|provider| provider.name.as_str()).unwrap_or(""),
+            text,
+        ))
+        .build();
+    scope_help.set_foreground_color(theme::theme().ink_secondary);
+    scope_help.wrap(1020);
+    root.add(
+        &scope_help,
+        0,
+        SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Top,
+        18,
+    );
+
     let workspace = BoxSizer::builder(Orientation::Horizontal).build();
 
     let service_panel = Panel::builder(&panel).build();
@@ -2799,6 +2824,10 @@ fn show_ai_gw_channel_dialog(
     );
     grid.add(&chat_disable_reasoning, 0, SizerFlag::Expand, 0);
     let name_input = text_field_row(&form_panel, &grid, text.ai_gw_provider_name(), "");
+    if let Some(provider) = initial.filter(|provider| provider.is_client_reserved()) {
+        name_input.enable(false);
+        name_input.set_tooltip(provider_scope_help(&provider.name, text));
+    }
     let base_url_input = text_field_row(&form_panel, &grid, text.ai_gw_col_base_url(), "");
     let models_url_input = text_field_row(&form_panel, &grid, text.ai_gw_models_url(), "");
     models_url_input.set_tooltip(text.ai_gw_models_url_help());
@@ -3475,9 +3504,17 @@ fn show_ai_gw_channel_dialog(
     let result = dialog.show_modal();
 
     let provider = if result == ID_OK {
-        let name = strip_nul(&name_input.get_value()).trim().to_string();
+        let name = initial
+            .filter(|provider| provider.is_client_reserved())
+            .map(|provider| provider.name.clone())
+            .unwrap_or_else(|| strip_nul(&name_input.get_value()).trim().to_string());
         if name.is_empty() {
             show_error(parent, text.ai_gw_provider_name_empty());
+            None
+        } else if (is_workbuddy_provider_name(&name) || is_gmclaw_provider_name(&name))
+            && !initial.is_some_and(ProviderConfig::is_client_reserved)
+        {
+            show_error(parent, text.ai_gw_reserved_provider_name());
             None
         } else {
             let provider_type = initial

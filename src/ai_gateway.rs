@@ -45,6 +45,10 @@ pub fn router() -> Router<SharedState> {
             post(handler::handle_workbuddy_chat_completions),
         )
         .route(
+            "/workbuddy/{entry_id}/v1/chat/completions",
+            post(handler::handle_workbuddy_entry_chat_completions),
+        )
+        .route(
             "/gmclaw/v1/chat/completions",
             post(handler::handle_gmclaw_chat_completions),
         )

@@ -4,7 +4,7 @@
 
 [文档总入口](docs/README.md) · [二开功能总表](docs/customizations/README.md) · [二开变更记录](docs/customizations/CHANGELOG.md)
 
-当前工作区版本为 `0.4.30-1`（开发中，未发布），合入上游 CodexHub `v0.4.30` 的 Windows 增强启动识别、ChatGPT 登录回调修复和 GPT-6.1-Sol 目录，保留全部 12 项二开能力。天工 Claw 第二阶段已实现多模型独立接入、流式聚合和飞书/微信/企业微信外部消息执行；Windows GUI/测试代码编译及调试 EXE 构建通过，功能测试与交互待用户验收。完整范围及回滚见 [整合记录](docs/upstream-v0.4.30-integration.md)。
+当前工作区版本为 `0.4.30-2`（本地开发版，未发布），新增 WorkBuddy 多模型配置和“大模型接入”的渠道用途标识。Codex、WorkBuddy、天工的专用入口分别选路，同名模型也不跨条目回退。上游仍为 CodexHub `v0.4.30`，既有天工模型与外部消息等二开保留；当前构建、测试边界与回滚见 [开发交付](docs/releases/v0.4.30-2.md)，上游来源见 [整合记录](docs/upstream-v0.4.30-integration.md)。
 
 macOS 网页导入的 App 协议声明、URL 事件接收和实例转交代码已补齐，仍待 macOS 构建及实机验收；与 Windows 共用 HTTP/HTTPS 导入、模型预览和默认禁用保存，见 [导入说明](docs/hub-external-import.md)。发布安装包统一由 GitHub Actions 生成。新开发优先 Windows、其次 macOS；下文沿用的 Linux 资料不代表本轮新增功能已在 Linux 实现或验收。
 
@@ -17,6 +17,7 @@ macOS 网页导入的 App 协议声明、URL 事件接收和实例转交代码�
 | Codex 会话管理 | 在 GUI 中管理 Codex 历史会话；切换 provider 或接入 AI Gateway 后，可以把旧会话移动到当前入口，让 Codex App 左侧继续看到。 |
 | 支持 IM 端管理 Codex 会话 | 利用 Codex 原生 remote-control 协议，在 IM 里创建会话、恢复会话、处理审批。 |
 | 内置 AI Gateway | 让 Codex App 继续使用原生 Responses 入口，同时可以在本地 GUI 中接入 OpenAI、DeepSeek、Anthropic/Claude、智谱 Anthropic（API / Coding Plan）等模型渠道。 |
+| WorkBuddy 多模型 | 逐条新增、编辑、删除与撤销，独立渠道和地址，保留原生配置中的其他模型；大模型列表显示各渠道的适用接入点。详见 [WorkBuddy](docs/workbuddy.md) 和 [用途与隔离](docs/customizations/client-channel-scope.md)。 |
 | 天工 Claw 接入 | 独立页签管理多个模型，适配厂商参数及流式响应，支持撤销配置；保存模型无需重启天工。新增复用飞书、微信、企业微信的文本与工具审批接入首版，待用户验收，详见 [模型接入](docs/customizations/gmclaw.md) 和 [外部消息接入](docs/customizations/gmclaw-im.md)。 |
 
 <p align="center">

@@ -13,17 +13,20 @@ use std::{
 use wxdragon::prelude::*;
 
 use crate::{
-    ai_gateway::config::{ProviderConfig, ProviderType, provider_display_base_url},
+    ai_gateway::config::{
+        ProviderConfig, ProviderType, provider_display_base_url, workbuddy_provider_name,
+    },
     config::AppConfig,
     workbuddy_config::{
-        self, WorkBuddyConfigStatus, WorkBuddyModelConfig, WorkBuddyReasoningConfig,
+        self, WorkBuddyConfigStatus, WorkBuddyEntryRequest, WorkBuddyModelConfig,
+        WorkBuddyReasoningConfig, WorkBuddySaveRequest,
     },
 };
 
 use super::{
     api::ApiClient,
     show_error, show_info,
-    text::GuiText,
+    text::{GuiLocale, GuiText},
     theme,
     widgets::{card_section, text_field_row},
 };
@@ -33,7 +36,7 @@ pub(super) struct WorkBuddyProviderOption {
     name: String,
     display_name: String,
     upstream_url: String,
-    upstream_api_key: String,
+    has_api_key: bool,
     upstream_protocol: String,
     models: Vec<String>,
     model_aliases: BTreeMap<String, String>,
@@ -45,6 +48,9 @@ type WorkBuddyProviderOptions = Rc<RefCell<Vec<WorkBuddyProviderOption>>>;
 #[derive(Clone)]
 pub(super) struct WorkBuddyTab {
     pub(super) page: ScrolledWindow,
+    entry: Choice,
+    dedicated_channel: TextCtrl,
+    path_hint: StaticText,
     local_url: TextCtrl,
     local_api_key: TextCtrl,
     provider: Choice,
@@ -58,22 +64,38 @@ pub(super) struct WorkBuddyTab {
     cache_hint: StaticText,
     text: GuiText,
     save_button: Button,
+    delete_button: Button,
     restore_button: Button,
     reload_button: Button,
     status: StaticText,
     in_flight: Arc<AtomicBool>,
     provider_options: WorkBuddyProviderOptions,
+    selection: Rc<RefCell<WorkBuddySelection>>,
+}
+
+#[derive(Default)]
+struct WorkBuddySelection {
+    status: Option<WorkBuddyConfigStatus>,
+    fresh: bool,
 }
 
 #[derive(Debug)]
 pub(super) enum WorkBuddyActionResult {
     Save(Result<WorkBuddyConfigStatus, String>),
     Restore(Result<WorkBuddyConfigStatus, String>),
-    Refresh(Result<Vec<WorkBuddyProviderOption>, String>),
+    Delete(Result<WorkBuddyConfigStatus, String>),
+    Refresh(Result<(Vec<WorkBuddyProviderOption>, WorkBuddyConfigStatus), String>),
 }
 
 const PROVIDER_REFRESH_ATTEMPTS: usize = 30;
 const PROVIDER_REFRESH_RETRY_DELAY: Duration = Duration::from_millis(250);
+
+fn tr(text: GuiText, zh: &'static str, en: &'static str) -> &'static str {
+    match text.locale {
+        GuiLocale::ZhCn => zh,
+        GuiLocale::EnUs => en,
+    }
+}
 
 pub(super) fn create(parent: &Notebook, text: GuiText) -> WorkBuddyTab {
     let page = ScrolledWindow::builder(parent)
@@ -81,16 +103,14 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> WorkBuddyTab {
         .build();
     page.set_background_color(theme::theme().bg_card_alt);
 
-    let existing_status = workbuddy_config::load().ok();
-    let existing = existing_status
-        .as_ref()
-        .map(|status| status.model.clone())
-        .unwrap_or_default();
+    let existing = WorkBuddyModelConfig::default();
     let root = BoxSizer::builder(Orientation::Vertical).build();
 
     let (connection_box, connection_section) = card_section(&page, text.workbuddy_connection());
     let hint = StaticText::builder(&connection_box)
-        .with_label(text.workbuddy_connection_help())
+        .with_label(tr(text,
+            "每个模型独立选择来源渠道、协议与思考设置，保存后在 WorkBuddy 中选择使用。同一模型可通过不同渠道重复添加。这里的选择只决定编辑对象，不改变 WorkBuddy 默认模型。",
+            "Each model has its own source, protocol, and reasoning settings. Select it in WorkBuddy after saving. You can add the same model through multiple sources. This selector chooses what to edit; it does not change WorkBuddy's default model."))
         .build();
     hint.set_foreground_color(theme::theme().ink_muted);
     hint.wrap(920);
@@ -106,11 +126,29 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> WorkBuddyTab {
         .with_hgap(14)
         .build();
     grid.add_growable_col(1, 1);
+    let entry_label = StaticText::builder(&connection_box)
+        .with_label(tr(text, "管理模型", "Managed model"))
+        .build();
+    entry_label.set_foreground_color(theme::theme().ink_secondary);
+    grid.add(&entry_label, 0, SizerFlag::AlignCenterVertical, 0);
+    let entry = Choice::builder(&connection_box)
+        .with_choices(vec![tr(text, "新增模型", "Add a model").to_string()])
+        .with_size(Size::new(420, -1))
+        .build();
+    entry.set_selection(0);
+    grid.add(&entry, 1, SizerFlag::Expand, 0);
+    let dedicated_channel = text_field_row(
+        &connection_box,
+        &grid,
+        tr(text, "WorkBuddy 专属渠道", "WorkBuddy dedicated channel"),
+        tr(text, "保存后自动生成", "Generated when saved"),
+    );
+    dedicated_channel.set_editable(false);
     let local_url = text_field_row(
         &connection_box,
         &grid,
         text.workbuddy_local_url(),
-        workbuddy_config::DEFAULT_WORKBUDDY_URL,
+        tr(text, "保存后自动生成", "Generated when saved"),
     );
     local_url.set_editable(false);
     local_url.set_tooltip(text.workbuddy_local_url_help());
@@ -149,10 +187,12 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> WorkBuddyTab {
         &connection_box,
         &grid,
         text.workbuddy_upstream_api_key(),
-        &existing.upstream_api_key,
+        "",
     );
     upstream_api_key.set_editable(false);
-    upstream_api_key.set_tooltip(text.workbuddy_upstream_api_key_help());
+    upstream_api_key.set_tooltip(tr(text,
+        "沿用来源渠道的凭据；此页不显示或保存真实 Key，账号渠道沿用登录凭据。",
+        "Uses the source channel's credentials. This page does not display or submit API keys; account channels keep their signed-in credentials."));
     let model_label = StaticText::builder(&connection_box)
         .with_label(text.workbuddy_model())
         .build();
@@ -258,30 +298,28 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> WorkBuddyTab {
     let actions = BoxSizer::builder(Orientation::Horizontal).build();
     let status = StaticText::builder(&page).with_label("").build();
     status.set_foreground_color(theme::theme().ink_muted);
-    actions.add(
+    root.add(
         &status,
-        1,
-        SizerFlag::AlignCenterVertical | SizerFlag::Right,
-        12,
+        0,
+        SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Top,
+        10,
     );
     let reload_button = Button::builder(&page)
         .with_label(text.workbuddy_reload())
         .build();
     let restore_button = Button::builder(&page)
-        .with_label(text.workbuddy_restore())
+        .with_label(tr(text, "撤销上次操作", "Undo last operation"))
         .build();
-    restore_button.enable(
-        existing_status
-            .as_ref()
-            .is_some_and(|status| status.backup_exists)
-            || workbuddy_config::backup_exists(),
-    );
     let save_button = Button::builder(&page)
         .with_label(text.workbuddy_save())
         .build();
+    let delete_button = Button::builder(&page)
+        .with_label(tr(text, "删除所选模型", "Delete selected model"))
+        .build();
     actions.add(&reload_button, 0, SizerFlag::Right, 8);
     actions.add(&restore_button, 0, SizerFlag::Right, 8);
-    actions.add(&save_button, 0, SizerFlag::Right, 0);
+    actions.add(&save_button, 0, SizerFlag::Right, 8);
+    actions.add(&delete_button, 0, SizerFlag::Right, 0);
     root.add_sizer(
         &actions,
         0,
@@ -289,11 +327,12 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> WorkBuddyTab {
         10,
     );
 
-    let path = workbuddy_config::config_path()
-        .to_string_lossy()
-        .to_string();
     let path_hint = StaticText::builder(&page)
-        .with_label(&format!("{}: {path}", text.workbuddy_config_path()))
+        .with_label(tr(
+            text,
+            "正在读取 WorkBuddy 配置…",
+            "Loading WorkBuddy configuration…",
+        ))
         .build();
     path_hint.set_foreground_color(theme::theme().ink_muted);
     root.add(
@@ -310,6 +349,9 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> WorkBuddyTab {
 
     let tab = WorkBuddyTab {
         page,
+        entry,
+        dedicated_channel,
+        path_hint,
         local_url,
         local_api_key,
         provider,
@@ -323,13 +365,18 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> WorkBuddyTab {
         cache_hint,
         text,
         save_button,
+        delete_button,
         restore_button,
         reload_button,
         status,
         in_flight: Arc::new(AtomicBool::new(false)),
         provider_options: Rc::new(RefCell::new(Vec::new())),
+        selection: Rc::new(RefCell::new(WorkBuddySelection::default())),
     };
     apply_model(&tab, &existing);
+    tab.local_url
+        .set_value(tr(text, "保存后自动生成", "Generated when saved"));
+    update_controls(&tab);
     tab
 }
 
@@ -340,16 +387,43 @@ pub(super) fn bind_actions(
     text: GuiText,
     gui_tx: &tokio::sync::mpsc::UnboundedSender<super::GuiMessage>,
 ) {
+    let entry_tab = tab.clone();
+    tab.entry.on_selection_changed(move |_| {
+        if entry_tab.in_flight.load(Ordering::SeqCst) {
+            return;
+        }
+        let Some(mut status) = entry_tab.selection.borrow().status.clone() else {
+            return;
+        };
+        let selected = entry_tab
+            .entry
+            .get_selection()
+            .and_then(|index| index.checked_sub(1))
+            .and_then(|index| status.entries.get(index as usize))
+            .map(|entry| entry.entry_id.clone());
+        select_status_entry(&mut status, selected.as_deref());
+        apply_status(&entry_tab, status);
+    });
     let provider_tab = tab.clone();
     tab.provider.on_selection_changed(move |_| {
         let Some(index) = provider_tab.provider.get_selection() else {
             return;
         };
-        apply_provider_option(&provider_tab, index as usize);
+        if let Some(index) = index.checked_sub(1) {
+            apply_provider_option(&provider_tab, index as usize);
+        } else {
+            provider_tab.upstream_url.set_value("");
+            provider_tab.upstream_api_key.set_value("");
+            provider_tab.model.clear();
+            refresh_model_settings(&provider_tab);
+        }
+        update_controls(&provider_tab);
     });
     let model_tab = tab.clone();
-    tab.model
-        .on_selection_changed(move |_| refresh_model_settings(&model_tab));
+    tab.model.on_selection_changed(move |_| {
+        refresh_model_settings(&model_tab);
+        update_controls(&model_tab);
+    });
     let protocol_tab = tab.clone();
     tab.protocol
         .on_selection_changed(move |_| refresh_model_settings(&protocol_tab));
@@ -359,28 +433,24 @@ pub(super) fn bind_actions(
     let api_for_save = api.clone();
     let gui_tx_for_save = gui_tx.clone();
     let frame_for_save = *frame;
-    let frame_for_reload = *frame;
     save_button.on_click(move |_| {
-        if tab_for_save.in_flight.swap(true, Ordering::SeqCst) {
+        if tab_for_save.in_flight.load(Ordering::SeqCst) {
             return;
         }
-        let model = match build_model(&tab_for_save) {
-            Ok(model) => model,
+        let request = match build_request(&tab_for_save) {
+            Ok(request) => request,
             Err(error) => {
-                tab_for_save.in_flight.store(false, Ordering::SeqCst);
                 show_error(&frame_for_save, &error);
                 return;
             }
         };
-        tab_for_save.save_button.enable(false);
-        tab_for_save.restore_button.enable(false);
-        tab_for_save.status.set_label(text.workbuddy_saving());
-        let tab = tab_for_save.clone();
+        if !begin_action(&tab_for_save, text.workbuddy_saving()) {
+            return;
+        }
         let api = api_for_save.clone();
         let gui_tx = gui_tx_for_save.clone();
         thread::spawn(move || {
-            let result = save_model(&api, &model);
-            tab.in_flight.store(false, Ordering::SeqCst);
+            let result = api.save_workbuddy_config(&request);
             let _ = gui_tx.send(super::GuiMessage::WorkBuddy(WorkBuddyActionResult::Save(
                 result,
             )));
@@ -391,22 +461,54 @@ pub(super) fn bind_actions(
     let tab_for_restore = tab.clone();
     let api_for_restore = api.clone();
     let gui_tx_for_restore = gui_tx.clone();
+    let frame_for_restore = *frame;
     tab.restore_button.on_click(move |_| {
-        if tab_for_restore.in_flight.swap(true, Ordering::SeqCst) {
+        let revision = match current_revision(&tab_for_restore) {
+            Ok(revision) => revision,
+            Err(error) => {
+                show_error(&frame_for_restore, &error);
+                return;
+            }
+        };
+        if !begin_action(&tab_for_restore, text.workbuddy_restoring()) {
             return;
         }
-        tab_for_restore.save_button.enable(false);
-        tab_for_restore.restore_button.enable(false);
-        tab_for_restore.status.set_label(text.workbuddy_restoring());
-        let tab = tab_for_restore.clone();
         let api = api_for_restore.clone();
         let gui_tx = gui_tx_for_restore.clone();
         thread::spawn(move || {
-            let result = api.restore_workbuddy_config();
-            tab.in_flight.store(false, Ordering::SeqCst);
+            let result = api.restore_workbuddy_config(&revision);
             let _ = gui_tx.send(super::GuiMessage::WorkBuddy(
                 WorkBuddyActionResult::Restore(result),
             ));
+            wxdragon::wake_up_idle();
+        });
+    });
+
+    let delete_tab = tab.clone();
+    let delete_api = api.clone();
+    let delete_tx = gui_tx.clone();
+    let delete_frame = *frame;
+    tab.delete_button.on_click(move |_| {
+        let Some(entry_id) = selected_entry_id(&delete_tab) else {
+            return;
+        };
+        let revision = match current_revision(&delete_tab) {
+            Ok(revision) => revision,
+            Err(error) => {
+                show_error(&delete_frame, &error);
+                return;
+            }
+        };
+        if !begin_action(&delete_tab, tr(text, "正在删除模型…", "Deleting model…")) {
+            return;
+        }
+        let api = delete_api.clone();
+        let tx = delete_tx.clone();
+        thread::spawn(move || {
+            let result = api.delete_workbuddy_config(&WorkBuddyEntryRequest { entry_id, revision });
+            let _ = tx.send(super::GuiMessage::WorkBuddy(WorkBuddyActionResult::Delete(
+                result,
+            )));
             wxdragon::wake_up_idle();
         });
     });
@@ -415,91 +517,110 @@ pub(super) fn bind_actions(
     let api_for_reload = api.clone();
     let gui_tx_for_reload = gui_tx.clone();
     tab.reload_button.on_click(move |_| {
-        match workbuddy_config::load() {
-            Ok(status) => {
-                apply_model(&tab_for_reload, &status.model);
-                tab_for_reload.restore_button.enable(status.backup_exists);
-                tab_for_reload.status.set_label(&status.path);
-            }
-            Err(error) => {
-                tab_for_reload
-                    .restore_button
-                    .enable(workbuddy_config::backup_exists());
-                show_error(&frame_for_reload, &error.to_string());
-            }
-        }
-        refresh_providers(&tab_for_reload, &api_for_reload, &gui_tx_for_reload);
+        refresh_configuration(&tab_for_reload, &api_for_reload, &gui_tx_for_reload, false);
     });
-
-    // Populate the provider and model selectors as soon as the page is bound.
-    // The fields are initialized from the saved WorkBuddy file in `create`;
-    // re-apply it here as well so a page opened during daemon startup never
-    // falls back to empty/default values while the provider list is loading.
-    if let Ok(status) = workbuddy_config::load() {
-        apply_model(tab, &status.model);
-        tab.restore_button.enable(status.backup_exists);
-    }
-    refresh_providers(tab, api, gui_tx);
+    refresh_configuration(tab, api, gui_tx, true);
 }
 
 pub(super) fn apply_result(
     tab: &WorkBuddyTab,
     frame: &Frame,
     text: GuiText,
-    api: &ApiClient,
-    gui_tx: &tokio::sync::mpsc::UnboundedSender<super::GuiMessage>,
+    _api: &ApiClient,
+    _gui_tx: &tokio::sync::mpsc::UnboundedSender<super::GuiMessage>,
     result: WorkBuddyActionResult,
 ) {
-    tab.save_button.enable(true);
+    // Only release the busy state after applying the reply on the GUI thread.
+    tab.in_flight.store(false, Ordering::SeqCst);
     match result {
         WorkBuddyActionResult::Save(Ok(status)) => {
-            tab.restore_button.enable(status.backup_exists);
+            apply_status(tab, status);
             tab.status.set_label(text.workbuddy_saved());
             show_info(frame, text.workbuddy_saved());
         }
-        WorkBuddyActionResult::Save(Err(error)) => {
-            tab.restore_button.enable(workbuddy_config::backup_exists());
-            tab.status.set_label(text.workbuddy_save_failed());
-            show_error(frame, &error);
-        }
         WorkBuddyActionResult::Restore(Ok(status)) => {
-            apply_model(tab, &status.model);
-            tab.restore_button.enable(status.backup_exists);
-            tab.status.set_label(text.workbuddy_restored());
-            show_info(frame, text.workbuddy_restored());
-            refresh_providers(tab, api, gui_tx);
+            apply_status(tab, status);
+            tab.status
+                .set_label(tr(text, "上次操作已撤销。", "Last operation undone."));
         }
-        WorkBuddyActionResult::Restore(Err(error)) => {
-            tab.restore_button.enable(workbuddy_config::backup_exists());
-            tab.status.set_label(text.workbuddy_restore_failed());
-            show_error(frame, &error);
+        WorkBuddyActionResult::Delete(Ok(status)) => {
+            apply_status(tab, status);
+            tab.status.set_label(tr(
+                text,
+                "所选模型已删除，可撤销上次操作。",
+                "Selected model deleted. You can undo this operation.",
+            ));
         }
-        WorkBuddyActionResult::Refresh(Ok(options)) => {
-            apply_provider_options(tab, options);
-            tab.reload_button.enable(true);
+        WorkBuddyActionResult::Refresh(Ok((options, status))) => {
+            *tab.provider_options.borrow_mut() = options;
+            apply_status(tab, status);
         }
         WorkBuddyActionResult::Refresh(Err(error)) => {
-            tab.reload_button.enable(true);
-            tab.status.set_label(&error);
+            tab.selection.borrow_mut().fresh = false;
+            tab.status.set_label(&format!(
+                "{}\n{error}",
+                tr(
+                    text,
+                    "读取失败，请确认 Hub 服务已启动后刷新。",
+                    "Could not load configuration. Make sure Hub is running, then refresh."
+                )
+            ));
+        }
+        WorkBuddyActionResult::Save(Err(error))
+        | WorkBuddyActionResult::Delete(Err(error))
+        | WorkBuddyActionResult::Restore(Err(error)) => {
+            tab.selection.borrow_mut().fresh = false;
+            tab.status.set_label(tr(text,
+                "操作未完成，当前输入已保留；请刷新以读取最新配置后重试。",
+                "The operation did not complete. Your inputs are retained; refresh to load current configuration before retrying."));
+            show_error(frame, &error);
         }
     }
+    update_controls(tab);
 }
 
-fn refresh_providers(
+fn refresh_configuration(
     tab: &WorkBuddyTab,
     api: &ApiClient,
     gui_tx: &tokio::sync::mpsc::UnboundedSender<super::GuiMessage>,
+    startup: bool,
 ) {
-    tab.reload_button.enable(false);
+    if !begin_action(
+        tab,
+        tr(
+            tab.text,
+            "正在读取模型与渠道…",
+            "Loading models and channels…",
+        ),
+    ) {
+        return;
+    }
+    let previous_selection = tab
+        .selection
+        .borrow()
+        .status
+        .as_ref()
+        .map(|status| status.selected_entry_id.clone());
     let api = api.clone();
     let gui_tx = gui_tx.clone();
     thread::spawn(move || {
         let mut result = Err(String::from("provider list is not available yet"));
-        for attempt in 0..PROVIDER_REFRESH_ATTEMPTS {
-            result = api
-                .get_app_config()
-                .map(|config| provider_options_from_config(&config));
-            if result.is_ok() || attempt + 1 == PROVIDER_REFRESH_ATTEMPTS {
+        let attempts = if startup {
+            PROVIDER_REFRESH_ATTEMPTS
+        } else {
+            1
+        };
+        for attempt in 0..attempts {
+            result = api.get_app_config().and_then(|config| {
+                // Read the collection even if the selected entry was deleted
+                // externally, so refresh always provides a way to recover.
+                let mut status = api.get_workbuddy_config(None)?;
+                if let Some(selected) = &previous_selection {
+                    select_status_entry(&mut status, selected.as_deref());
+                }
+                Ok((provider_options_from_config(&config), status))
+            });
+            if result.is_ok() || attempt + 1 == attempts {
                 break;
             }
             thread::sleep(PROVIDER_REFRESH_RETRY_DELAY);
@@ -516,7 +637,7 @@ fn provider_options_from_config(config: &AppConfig) -> Vec<WorkBuddyProviderOpti
         .ai_gateway
         .providers
         .iter()
-        .filter(|provider| !provider.is_client_reserved())
+        .filter(|provider| provider.enabled && !provider.is_client_reserved())
         .filter_map(provider_option)
         .collect()
 }
@@ -531,16 +652,16 @@ fn provider_option(provider: &ProviderConfig) -> Option<WorkBuddyProviderOption>
     if models.is_empty() || provider.base_url.trim().is_empty() {
         return None;
     }
-    let disabled_suffix = if provider.enabled { "" } else { " (disabled)" };
     Some(WorkBuddyProviderOption {
         name: provider.name.clone(),
-        display_name: format!("{}{}", provider.name, disabled_suffix),
+        display_name: provider.name.clone(),
         upstream_url: if provider.provider_type == ProviderType::ChatGptResponses {
             crate::ai_gateway::chatgpt_auth::BASE_URL.to_string()
         } else {
             provider_display_base_url(&provider.base_url)
         },
-        upstream_api_key: provider.api_key.clone(),
+        has_api_key: !provider.api_key.trim().is_empty()
+            || provider.provider_type == ProviderType::ChatGptResponses,
         upstream_protocol: match &provider.provider_type {
             ProviderType::OpenAiResponses | ProviderType::ChatGptResponses => "openai-responses",
             ProviderType::AnthropicMessages => "anthropic-messages",
@@ -553,66 +674,49 @@ fn provider_option(provider: &ProviderConfig) -> Option<WorkBuddyProviderOption>
     })
 }
 
-fn apply_provider_options(tab: &WorkBuddyTab, options: Vec<WorkBuddyProviderOption>) {
-    let saved_status = workbuddy_config::load().ok();
-    let saved_model = saved_status
-        .as_ref()
-        .map(|status| status.model.provider_model.clone())
-        .unwrap_or_default();
-    let configured_provider = saved_status
-        .as_ref()
-        .map(|status| status.model.upstream_provider.clone())
-        .unwrap_or_default();
-    let current_model = tab.model.get_value();
-    // Prefer the persisted provider model. `ComboBox::clear()` below can
-    // discard the pending value in some wxWidgets builds, so reading the
-    // control alone is not sufficient to restore the saved selection.
-    let preferred_model = if !saved_model.trim().is_empty() {
-        saved_model.as_str()
-    } else {
-        current_model.as_str()
-    };
-    let current_url = tab.upstream_url.get_value();
-    let current_key = tab.upstream_api_key.get_value();
-    let selected = options.iter().position(|option| {
-        if !configured_provider.trim().is_empty()
-            && option.name.eq_ignore_ascii_case(configured_provider.trim())
-        {
-            return true;
-        }
-        let model_match = option
-            .models
-            .iter()
-            .any(|model| model.eq_ignore_ascii_case(&current_model));
-        let url_match = !current_url.trim().is_empty()
-            && provider_display_base_url(&current_url).eq_ignore_ascii_case(&option.upstream_url);
-        let key_match =
-            current_key.trim().is_empty() || current_key.trim() == option.upstream_api_key.trim();
-        (url_match && key_match) || (current_url.trim().is_empty() && model_match)
+fn apply_provider_options(tab: &WorkBuddyTab, model: &WorkBuddyModelConfig) {
+    let selected = tab.provider_options.borrow().iter().position(|option| {
+        !model.upstream_provider.trim().is_empty()
+            && option
+                .name
+                .eq_ignore_ascii_case(model.upstream_provider.trim())
     });
-
-    *tab.provider_options.borrow_mut() = options;
     tab.provider.clear();
+    tab.provider
+        .append(tr(tab.text, "请选择来源渠道", "Select a source channel"));
     for option in tab.provider_options.borrow().iter() {
         tab.provider.append(&option.display_name);
     }
-
     if let Some(index) = selected {
-        tab.provider.set_selection(index as u32);
-        apply_provider_option_for_model(tab, index, Some(preferred_model));
-        if let Some(saved) = saved_status.as_ref().map(|status| &status.model)
-            && tab.provider_options.borrow()[index].name == saved.upstream_provider
-            && tab
-                .model
-                .get_value()
-                .eq_ignore_ascii_case(&saved.provider_model)
+        tab.provider.set_selection(index as u32 + 1);
+        apply_provider_option_for_model(tab, index, Some(&model.provider_model));
+        if !tab
+            .model
+            .get_value()
+            .eq_ignore_ascii_case(&model.provider_model)
         {
-            // A manually selected protocol must survive reopening and refresh.
-            apply_saved_model_settings(tab, saved);
+            // Preserve an edited/deleted source model for inspection; saving is
+            // disabled until the user explicitly chooses an available model.
+            tab.model.append(&model.provider_model);
+            tab.model.set_value(&model.provider_model);
         }
     } else {
+        tab.provider.set_selection(0);
         tab.model.clear();
-        tab.model.set_value(preferred_model);
+        if !model.provider_model.is_empty() {
+            tab.model.append(&model.provider_model);
+            tab.model.set_selection(0);
+            tab.model.set_value(&model.provider_model);
+        }
+        tab.upstream_api_key.set_value("");
+    }
+    // A manually selected protocol and effort belong to this entry, not its
+    // source channel's current defaults or the previous entry in the form.
+    apply_saved_model_settings(tab, model);
+    if !model.upstream_url.is_empty() {
+        // Existing entries use a saved source snapshot until explicitly saved
+        // again; show the endpoint returned for this entry by the daemon.
+        tab.upstream_url.set_value(&model.upstream_url);
     }
 }
 
@@ -632,7 +736,15 @@ fn apply_provider_option_for_model(
         .map(str::to_string)
         .unwrap_or_else(|| tab.model.get_value());
     tab.upstream_url.set_value(&option.upstream_url);
-    tab.upstream_api_key.set_value(&option.upstream_api_key);
+    tab.upstream_api_key.set_value(if option.has_api_key {
+        tr(
+            tab.text,
+            "已配置（沿用来源凭据）",
+            "Configured (uses source credentials)",
+        )
+    } else {
+        tr(tab.text, "来源未填写 Key", "No key configured on source")
+    });
     tab.protocol
         .set_selection(protocol_index(&option.upstream_protocol));
     tab.model.clear();
@@ -732,6 +844,7 @@ fn refresh_model_settings(tab: &WorkBuddyTab) {
     let provider = tab
         .provider
         .get_selection()
+        .and_then(|index| index.checked_sub(1))
         .and_then(|i| options.get(i as usize));
     let protocol = selected_protocol(tab);
     let reasoning = reasoning_for_selection(
@@ -751,27 +864,51 @@ fn refresh_model_settings(tab: &WorkBuddyTab) {
 }
 
 fn build_model(tab: &WorkBuddyTab) -> Result<WorkBuddyModelConfig, String> {
-    let mut model = WorkBuddyModelConfig::default();
-    model.url = workbuddy_config::DEFAULT_WORKBUDDY_URL.to_string();
+    let mut model = tab
+        .selection
+        .borrow()
+        .status
+        .as_ref()
+        .filter(|status| status.selected_entry_id.is_some())
+        .map(|status| status.model.clone())
+        .unwrap_or_default();
+    model.url = tab.local_url.get_value();
     model.api_key = workbuddy_config::DEFAULT_WORKBUDDY_API_KEY.to_string();
-    model.upstream_url = clean(&tab.upstream_url.get_value());
-    model.upstream_api_key = clean(&tab.upstream_api_key.get_value());
+    // The daemon resolves the latest source credentials. Do not put a real key
+    // in controls, WorkBuddy status, or a save payload.
+    model.upstream_url.clear();
+    model.upstream_api_key.clear();
     let provider = tab
         .provider
         .get_selection()
+        .and_then(|index| index.checked_sub(1))
         .and_then(|index| tab.provider_options.borrow().get(index as usize).cloned())
-        .ok_or_else(|| "select an upstream provider first".to_string())?;
+        .ok_or_else(|| {
+            tr(
+                tab.text,
+                "请先选择已启用的来源渠道。",
+                "Select an enabled source channel first.",
+            )
+            .to_string()
+        })?;
     model.upstream_provider = provider.name.clone();
+    let original_model = model.provider_model.clone();
     model.provider_model = clean(&tab.model.get_value());
     if !provider
         .models
         .iter()
         .any(|candidate| candidate.eq_ignore_ascii_case(&model.provider_model))
     {
-        return Err("select a model provided by the selected upstream provider".to_string());
+        return Err(tr(
+            tab.text,
+            "请选择来源渠道中的可用模型。",
+            "Select an available model from the source channel.",
+        )
+        .to_string());
     }
-    model.id = model.provider_model.clone();
-    model.name = model.provider_model.clone();
+    if selected_entry_id(tab).is_none() || model.name == original_model {
+        model.name = model.provider_model.clone();
+    }
     model.upstream_protocol = selected_protocol(tab).to_string();
     model.reasoning = reasoning_for_selection(
         Some(&provider),
@@ -782,10 +919,8 @@ fn build_model(tab: &WorkBuddyTab) -> Result<WorkBuddyModelConfig, String> {
             .unwrap_or_default(),
     );
     model.upstream_default_reasoning_effort = model.reasoning.default_effort.clone();
-    if model.provider_model.is_empty() || model.upstream_url.is_empty() {
-        return Err("upstream URL and model are required".to_string());
-    }
     model.extra.remove("cacheKey");
+    model.extra.remove("cache_key");
     if workbuddy_config::uses_prompt_cache_key(&model.upstream_protocol) {
         let cache_key = workbuddy_config::default_cache_key_for_provider(&provider.name);
         model
@@ -795,31 +930,201 @@ fn build_model(tab: &WorkBuddyTab) -> Result<WorkBuddyModelConfig, String> {
     Ok(model)
 }
 
-fn save_model(
-    api: &ApiClient,
-    model: &WorkBuddyModelConfig,
-) -> Result<WorkBuddyConfigStatus, String> {
-    // Write the WorkBuddy file first so its existing contents are protected
-    // before the Hub provider configuration is changed.
-    let status = workbuddy_config::save(model).map_err(|error| error.to_string())?;
-    let mut config = api.get_app_config()?;
-    workbuddy_config::apply_provider(&mut config, model);
-    if let Err(error) = api.save_app_config(&config) {
-        // The backup still points at the previous WorkBuddy file, so restore
-        // it when updating the Hub config fails and keep both sides aligned.
-        let _ = workbuddy_config::restore_backup();
-        return Err(format!("save TianCaiSpace Hub provider: {error}"));
+fn build_request(tab: &WorkBuddyTab) -> Result<WorkBuddySaveRequest, String> {
+    Ok(WorkBuddySaveRequest {
+        entry_id: selected_entry_id(tab),
+        revision: current_revision(tab)?,
+        model: build_model(tab)?,
+    })
+}
+
+fn select_status_entry(status: &mut WorkBuddyConfigStatus, selected: Option<&str>) {
+    let entry = selected.and_then(|id| status.entries.iter().find(|entry| entry.entry_id == id));
+    status.selected_entry_id = entry.map(|entry| entry.entry_id.clone());
+    status.model = entry.map(|entry| entry.model.clone()).unwrap_or_else(|| {
+        let mut model = WorkBuddyModelConfig::default();
+        model.id.clear();
+        model.name.clear();
+        model.url.clear();
+        model.provider_model.clear();
+        model
+    });
+}
+
+fn selected_entry_id(tab: &WorkBuddyTab) -> Option<String> {
+    tab.selection
+        .borrow()
+        .status
+        .as_ref()
+        .and_then(|status| status.selected_entry_id.clone())
+}
+
+fn current_revision(tab: &WorkBuddyTab) -> Result<String, String> {
+    let selection = tab.selection.borrow();
+    selection
+        .status
+        .as_ref()
+        .filter(|status| selection.fresh && !status.revision.is_empty())
+        .map(|status| status.revision.clone())
+        .ok_or_else(|| {
+            tr(
+                tab.text,
+                "请先刷新以读取最新 WorkBuddy 配置。",
+                "Refresh to load the latest WorkBuddy configuration first.",
+            )
+            .to_string()
+        })
+}
+
+fn begin_action(tab: &WorkBuddyTab, message: &str) -> bool {
+    if tab.in_flight.swap(true, Ordering::SeqCst) {
+        return false;
     }
-    Ok(status)
+    tab.status.set_label(message);
+    update_controls(tab);
+    true
+}
+
+fn update_controls(tab: &WorkBuddyTab) {
+    let busy = tab.in_flight.load(Ordering::SeqCst);
+    let selection = tab.selection.borrow();
+    let fresh = selection.fresh
+        && selection
+            .status
+            .as_ref()
+            .is_some_and(|status| !status.revision.is_empty());
+    let editable = fresh
+        && !busy
+        && selection
+            .status
+            .as_ref()
+            .is_some_and(|status| status.error.is_none());
+    let provider = tab
+        .provider
+        .get_selection()
+        .and_then(|index| index.checked_sub(1))
+        .and_then(|index| tab.provider_options.borrow().get(index as usize).cloned());
+    let model_valid = provider.as_ref().is_some_and(|provider| {
+        provider
+            .models
+            .iter()
+            .any(|model| model.eq_ignore_ascii_case(&tab.model.get_value()))
+    });
+    tab.reload_button.enable(!busy);
+    tab.entry.enable(editable);
+    tab.provider.enable(editable);
+    tab.model.enable(editable && provider.is_some());
+    tab.protocol.enable(editable && provider.is_some());
+    tab.default_effort.enable(editable && provider.is_some());
+    tab.save_button.enable(editable && model_valid);
+    tab.delete_button.enable(
+        editable
+            && selection
+                .status
+                .as_ref()
+                .is_some_and(|status| status.selected_entry_id.is_some()),
+    );
+    // A legacy backup may still recover a malformed current file; the daemon
+    // performs the corresponding backup and revision validation.
+    tab.restore_button.enable(
+        fresh
+            && !busy
+            && selection
+                .status
+                .as_ref()
+                .is_some_and(|status| status.backup_exists),
+    );
+}
+
+fn apply_status(tab: &WorkBuddyTab, mut status: WorkBuddyConfigStatus) {
+    let selected_id = status.selected_entry_id.clone();
+    select_status_entry(&mut status, selected_id.as_deref());
+    tab.entry.clear();
+    tab.entry.append(tr(tab.text, "新增模型", "Add a model"));
+    for entry in &status.entries {
+        let short_id: String = entry.entry_id.chars().take(8).collect();
+        tab.entry.append(&format!(
+            "{} · {} · {}",
+            entry.model.provider_model,
+            entry
+                .source_provider
+                .as_deref()
+                .unwrap_or(tr(tab.text, "来源待选择", "Select source")),
+            short_id
+        ));
+    }
+    let selected = status.selected_entry_id.as_ref().and_then(|id| {
+        status
+            .entries
+            .iter()
+            .position(|entry| &entry.entry_id == id)
+    });
+    tab.entry
+        .set_selection(selected.map(|index| index as u32 + 1).unwrap_or(0));
+    let mut model = status.model.clone();
+    if let Some(entry) = selected.and_then(|index| status.entries.get(index)) {
+        model.upstream_provider = entry.source_provider.clone().unwrap_or_default();
+        model.url = entry.local_url.clone();
+    }
+    apply_model(tab, &model);
+    apply_provider_options(tab, &model);
+    tab.dedicated_channel.set_value(
+        &status
+            .selected_entry_id
+            .as_deref()
+            .and_then(workbuddy_provider_name)
+            .unwrap_or_else(|| tr(tab.text, "保存后自动生成", "Generated when saved").to_string()),
+    );
+    if status.selected_entry_id.is_none() {
+        tab.local_url
+            .set_value(tr(tab.text, "保存后自动生成", "Generated when saved"));
+    }
+    tab.path_hint.set_label(&format!(
+        "{}: {}",
+        tab.text.workbuddy_config_path(),
+        status.path
+    ));
+    let message = if let Some(error) = &status.error {
+        error.as_str()
+    } else if status.selected_entry_id.is_none() {
+        tr(
+            tab.text,
+            "选择来源渠道和模型后保存，即可新增独立的 WorkBuddy 模型。",
+            "Choose a source channel and model, then save to add a separate WorkBuddy model.",
+        )
+    } else if selected
+        .and_then(|index| status.entries.get(index))
+        .is_some_and(|entry| entry.configured)
+    {
+        tr(
+            tab.text,
+            "模型已接入 WorkBuddy；本页可编辑或删除当前条目。",
+            "This model is connected to WorkBuddy. You can edit or delete this entry here.",
+        )
+    } else {
+        tr(
+            tab.text,
+            "当前条目接入信息不完整，请核对来源渠道和模型后保存。",
+            "This entry has incomplete connection settings. Review its source and model, then save.",
+        )
+    };
+    tab.status.set_label(message);
+    tab.status.wrap(920);
+    *tab.selection.borrow_mut() = WorkBuddySelection {
+        fresh: !status.revision.is_empty(),
+        status: Some(status),
+    };
+    update_controls(tab);
+    tab.page.layout();
+    tab.page.fit_inside();
 }
 
 fn apply_model(tab: &WorkBuddyTab, model: &WorkBuddyModelConfig) {
-    tab.local_url
-        .set_value(workbuddy_config::DEFAULT_WORKBUDDY_URL);
+    tab.local_url.set_value(&model.url);
     tab.local_api_key
         .set_value(workbuddy_config::DEFAULT_WORKBUDDY_API_KEY);
     tab.upstream_url.set_value(&model.upstream_url);
-    tab.upstream_api_key.set_value(&model.upstream_api_key);
+    tab.upstream_api_key.set_value("");
     tab.model.set_value(&model.provider_model);
     apply_saved_model_settings(tab, model);
 }
@@ -839,6 +1144,16 @@ fn apply_saved_model_settings(tab: &WorkBuddyTab, model: &WorkBuddyModelConfig) 
     );
     apply_reasoning(tab, &reasoning);
     apply_cache_settings(tab, &model.upstream_protocol, &model.upstream_provider);
+    if workbuddy_config::uses_prompt_cache_key(&model.upstream_protocol)
+        && let Some(cache_key) = model
+            .extra
+            .get("cacheKey")
+            .or_else(|| model.extra.get("cache_key"))
+            .and_then(serde_json::Value::as_str)
+            .filter(|key| !key.trim().is_empty())
+    {
+        tab.cache_key.set_value(cache_key);
+    }
 }
 
 fn clean(value: &str) -> String {
@@ -870,7 +1185,7 @@ mod tests {
     }
 
     #[test]
-    fn provider_options_reuse_ai_gateway_connections_and_skip_workbuddy() {
+    fn provider_options_reuse_ai_gateway_connections_and_skip_reserved_channels() {
         let mut workbuddy = provider("workbuddy", ProviderType::OpenAiResponses);
         workbuddy.models = vec!["private-model".to_string()];
         let config = AppConfig {
@@ -881,6 +1196,10 @@ mod tests {
                     provider("compatible", ProviderType::ChatCompletions),
                     provider("account", ProviderType::ChatGptResponses),
                     workbuddy,
+                    provider("workbuddy:entry-a", ProviderType::OpenAiResponses),
+                    provider("WORKBUDDY:entry-b", ProviderType::OpenAiResponses),
+                    provider("gmclaw", ProviderType::OpenAiResponses),
+                    provider("gmclaw:entry-a", ProviderType::OpenAiResponses),
                 ],
                 ..AiGatewayConfig::default()
             },
@@ -899,7 +1218,8 @@ mod tests {
             crate::ai_gateway::chatgpt_auth::BASE_URL
         );
         assert_eq!(options[0].upstream_url, "https://provider.example/v1");
-        assert_eq!(options[0].upstream_api_key, "secret");
+        assert!(options[0].has_api_key);
+        assert!(!format!("{:?}", options[0]).contains("secret"));
         assert_eq!(options[0].models, vec!["model-a", "model-b"]);
     }
 
@@ -909,15 +1229,43 @@ mod tests {
         without_models.models.clear();
         let mut without_url = provider("empty-url", ProviderType::OpenAiResponses);
         without_url.base_url.clear();
+        let mut disabled = provider("disabled", ProviderType::OpenAiResponses);
+        disabled.enabled = false;
         let config = AppConfig {
             ai_gateway: AiGatewayConfig {
-                providers: vec![without_models, without_url],
+                providers: vec![without_models, without_url, disabled],
                 ..AiGatewayConfig::default()
             },
             ..AppConfig::default()
         };
 
         assert!(provider_options_from_config(&config).is_empty());
+    }
+
+    #[test]
+    fn selecting_one_model_keeps_its_native_settings_and_missing_entries_use_add_view() {
+        let mut status: WorkBuddyConfigStatus = serde_json::from_value(serde_json::json!({
+            "path":"fixture/models.json", "exists":true, "backupPath":"fixture/models.json.bak",
+            "backupExists":true, "revision":"fixture-revision", "model":{},
+            "selectedEntryId":"entry-a", "error":null,
+            "entries":[
+                {"entryId":"entry-a", "model":{"providerModel":"same-model", "upstreamProvider":"source-a", "supportsImages":false, "extraOption":"keep-a"}, "configured":true, "localUrl":"http://127.0.0.1:3847/ai-gateway/workbuddy/entry-a/v1", "sourceProvider":"source-a"},
+                {"entryId":"entry-b", "model":{"providerModel":"same-model", "upstreamProvider":"source-b", "useCustomProtocol":true, "extraOption":"keep-b"}, "configured":true, "localUrl":"http://127.0.0.1:3847/ai-gateway/workbuddy/entry-b/v1", "sourceProvider":"source-b"}
+            ]
+        })).unwrap();
+        select_status_entry(&mut status, Some("entry-a"));
+        assert_eq!(status.model.upstream_provider, "source-a");
+        assert!(!status.model.supports_images);
+        assert_eq!(status.model.extra["extraOption"], "keep-a");
+        select_status_entry(&mut status, Some("entry-b"));
+        assert_eq!(status.model.upstream_provider, "source-b");
+        assert!(status.model.use_custom_protocol);
+        assert_eq!(status.model.extra["extraOption"], "keep-b");
+        select_status_entry(&mut status, Some("deleted-externally"));
+        assert!(status.selected_entry_id.is_none());
+        assert!(status.model.url.is_empty() && status.model.provider_model.is_empty());
+        assert_eq!(status.revision, "fixture-revision");
+        assert_eq!(status.entries.len(), 2);
     }
 
     #[test]

@@ -2,18 +2,18 @@
 
 维护日期：2026-10-03。范围：TianCaiSpace Hub 相对于 CodexHub 上游的定制，以及上游升级时必须保留的兼容衔接。
 
-当前源码版本 `0.4.30-1`（开发中，未发布），在天工第二阶段保存点 `9b9702e` 上整合 CodexHub `v0.4.30`。以下“已实现”仅指代码存在；本轮基线、构建和验收边界见 [整合记录](../upstream-v0.4.30-integration.md) 与 [变更记录](CHANGELOG.md)。macOS 网页导入接入保存于 `3b3f213`，其历史开发状态见 [0.4.29-5](../releases/v0.4.29-5.md)；上一版本本地包见 [0.4.29-4](../releases/v0.4.29-4.md)，已有 GitHub 交付见 [v0.4.29-2](../releases/v0.4.29-2.md)。
+当前源码版本 `0.4.30-2`（本地开发版，未发布），基于 `ba3be07` 增加 WorkBuddy 多模型与渠道用途标识。以下“已实现”仅指代码存在；当前构建/验收见 [开发交付](../releases/v0.4.30-2.md) 和 [变更记录](CHANGELOG.md)。上游来源见 [v0.4.30 整合记录](../upstream-v0.4.30-integration.md)；macOS 导入历史见 [0.4.29-5](../releases/v0.4.29-5.md)，已有 GitHub 交付见 [v0.4.29-2](../releases/v0.4.29-2.md)。
 
 ## 已实现的二开能力
 
-2026-10-03 天工 Claw 多模型与流式兼容（TC-011）、外部消息执行端（TC-012）已提交为 `9b9702e`。随后合入上游 `v0.4.30`，逐项保留 TC-001～TC-012；当前 Windows GUI/测试代码编译及调试 EXE 构建通过，未执行测试，待用户验收，尚未发布。历史阶段的产物身份单独保留，不作为当前构建产物。
+2026-10-03 天工模型/外部消息已保存于 `9b9702e`，上游合并为 `22ee850`。本轮继续保留 TC-001～TC-012，扩展 TC-002 为 WorkBuddy 多模型，并新增 TC-013 接入点用途标识；本轮构建结果在开发交付记录单独登记，历史产物和测试不作为当前验收。
 
 编号用于后续需求、修复和合并记录引用，已有编号不复用。
 
 | 编号 | 内容 | 当前行为与必须保留的约束 | 详细说明 |
 | --- | --- | --- | --- |
 | TC-001 | 天才空间品牌与打包 | 产品显示名和图标使用 TianCaiSpace Hub；保留 `codexhub` 内部标识及安装升级身份；支持平台产物及未签名测试包 | [品牌、桌面与交付](desktop-and-packaging.md) |
-| TC-002 | WorkBuddy 独立接入 | 单独页签、Chat Completions 本地入口、专用 `workbuddy` 渠道、上游选择、配置备份和还原；普通 Codex 路由排除该专用渠道 | [WorkBuddy](../workbuddy.md) |
+| TC-002 | WorkBuddy 多模型独立接入 | 页签逐条新增/编辑/删除/撤销；专用 `workbuddy` 与 `workbuddy:<entryId>`、独立地址、上游选择、数组/未知字段保留和版本校验；旧单模型入口兼容 | [WorkBuddy](../workbuddy.md) |
 | TC-003 | WorkBuddy 错误重试 | 上游 HTTP 502/503 最多额外重试两次，等待 1 秒、2 秒；与传输错误共用预算，同一上游和请求，流已建立后不重发 | [WorkBuddy](../workbuddy.md) |
 | TC-004 | WorkBuddy 思考强度与缓存 | 模型、别名和协议联动；Claude 五档；保留有效默认值；OpenAI 缓存键按优先级回退，Anthropic 用原生 `cache_control` | [WorkBuddy](../workbuddy.md) |
 | TC-005 | 通用 Chat Completions | 新建通用渠道使用 `compatibility=openai_chat`；保留旧 DeepSeek Chat 行为；按渠道关闭推理，不改全局 | [Chat Completions](../openai-chat-completions.md) |
@@ -24,13 +24,14 @@
 | TC-010 | 导入带来的配置并发保护 | 保存重读最新配置，只合并目标；目标指纹防止覆盖预览期间修改；全量 API 保存带版本，文件锁及原子替换；空模型导入渠道不能事后直接启用 | [网页导入](../hub-external-import.md)、[配置](../configuration.md) |
 | TC-011 | 天工 Claw 模型接入 | 多条目独立 ID/渠道/地址，同模型可绑定不同渠道；保存、删除、默认切换及撤销；集合版本校验、厂商参数、JSON/SSE 聚合与推理状态；旧单模型无需重启已有有限反馈，本轮 Windows 编译与调试构建通过，待用户验收 | [天工 Claw 模型](gmclaw.md) |
 | TC-012 | 天工外部消息执行端 | 飞书/微信/企微显式 `/gmclaw`，本机 Harness 授权、发送者隔离、串行等待、文本和父会话工具审批；首版 Windows 编译与调试构建通过，待用户验收；附件、主动取消及 MCP CRUD 不在首版范围 | [天工外部消息](gmclaw-im.md) |
+| TC-013 | 接入点用途标识与隔离 | 大模型渠道列表/编辑器明确普通与专用用途，专用身份不可误改；整个 WorkBuddy/天工命名空间排除普通请求与导入，条目地址精确选渠道，不跨客户端或条目回退 | [用途与隔离](client-channel-scope.md) |
 
 ## 代码与配置定位
 
 | 范围 | 入口 | 配置或兼容注意点 |
 | --- | --- | --- |
 | TC-001 / TC-007 | [GUI](../../src/gui.rs)、[托盘](../../src/gui/tray.rs)、[Windows MSI](../../packaging/windows/CodexHub.wxs)、[macOS 信息](../../packaging/macos/Info.plist)、[打包脚本](../../scripts/package-hub-import.ps1) | 不把产品显示名替换扩散到协议、状态目录或升级身份；历史更新模块不代表存在用户入口 |
-| TC-002 / TC-004 | [WorkBuddy UI](../../src/gui/workbuddy.rs)、[配置与备份](../../src/workbuddy_config.rs)、[协议转换](../../src/ai_gateway/workbuddy.rs)、[请求分发](../../src/ai_gateway/handler.rs) | `WORKBUDDY_CONFIG_PATH`；`models.json` 数组首项、旧单对象兼容、两个备份文件；切换协议时清理不适用缓存字段 |
+| TC-002 / TC-004 | [WorkBuddy UI](../../src/gui/workbuddy.rs)、[配置与备份](../../src/workbuddy_config.rs)、[协议转换](../../src/ai_gateway/workbuddy.rs)、[请求分发](../../src/ai_gateway/handler.rs) | `WORKBUDDY_CONFIG_PATH`；保留完整数组，兼容旧对象；独立 entryId、集合版本与备份；切换协议清理不适用缓存字段 |
 | TC-003 | [上游请求及重试](../../src/ai_gateway/providers/mod.rs) | 重试不能叠加预算、切换渠道或重放成功建立的流 |
 | TC-005 | [渠道配置](../../src/ai_gateway/config.rs)、[Chat 转换](../../src/ai_gateway/providers/deepseek_chat.rs)、[GUI](../../src/gui.rs) | `providerType=chat_completions`、`compatibility=openai_chat`、`chatDisableReasoning` |
 | TC-006 | [模型目录](../../src/ai_gateway/model.rs)、[网关配置](../../src/ai_gateway/config.rs)、[Codex 页签](../../src/gui/codex_tab.rs)、[GUI](../../src/gui.rs) | `codexVisibleModels`、`codexModelProfiles`、`modelAliases`；继承不证明上游真实能力 |
@@ -39,6 +40,7 @@
 | TC-010 | [配置读写](../../src/config.rs)、[本地 API](../../src/web.rs) | `_revision` 仅用于 API，不写 TOML；导入更新保留用户权重、超时、缓存及默认原有映射 |
 | TC-011 | [模型配置](../../src/gmclaw_config.rs)、[页签](../../src/gui/gmclaw.rs)、[参数](../../src/ai_gateway/gmclaw.rs)、[推理状态](../../src/ai_gateway/gmclaw_replay.rs)、[流式聚合](../../src/ai_gateway/gmclaw_stream.rs)、[API](../../src/web.rs)、[路由](../../src/ai_gateway/router.rs) | `GMCLAW_CONFIG_PATH`；只管理既有数据库的旧 `tiancaispacehub` 与新 `tiancaispacehub-<entryId>`；`gmclawParameters` 仅存 Hub；`gmclaw`/`gmclaw:<entryId>` 全部排除普通路由与导入；备份元数据 v2 兼容 v1 |
 | TC-012 | [Harness 客户端](../../src/gmclaw_executor.rs)、[IM 会话与审批](../../src/gmclaw_im.rs)、[分派](../../src/bridge.rs)、[状态](../../src/app_state.rs)、[配置](../../src/config.rs)、[页签](../../src/gui/gmclaw.rs) | `gmclawBridge` 默认禁用；用户设置天工启动环境 `GMCLAW_AUTH_TOKEN`；模型 ID 使用数据库行 ID；共享工作目录不等于文件隔离；不自动重试执行、不将断流视为取消 |
+| TC-013 | [渠道身份](../../src/ai_gateway/config.rs)、[列表用途](../../src/gui/ai_gateway.rs)、[路由](../../src/ai_gateway/router.rs)、[WebSocket](../../src/ai_gateway/websocket/mod.rs) | 用途由保留名称派生，原始名称与展示标签分开；权重和粘性不能突破入口隔离，旧版不理解新 WorkBuddy 命名空间 |
 
 ## 沿用的上游能力
 

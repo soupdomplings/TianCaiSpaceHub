@@ -11,6 +11,34 @@ pub const GMCLAW_PROVIDER_NAME: &str = "gmclaw";
 
 /// Reserve the whole namespace, including malformed suffixes, so ordinary
 /// channels/imports cannot accidentally enter a client-specific route.
+pub fn is_workbuddy_provider_name(name: &str) -> bool {
+    name.eq_ignore_ascii_case(WORKBUDDY_PROVIDER_NAME)
+        || name
+            .get(..10)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("workbuddy:"))
+}
+
+pub fn is_valid_workbuddy_entry_id(entry_id: &str) -> bool {
+    !entry_id.is_empty()
+        && entry_id.len() <= 64
+        && entry_id.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
+        })
+}
+
+pub fn workbuddy_provider_name(entry_id: &str) -> Option<String> {
+    if !is_valid_workbuddy_entry_id(entry_id) {
+        return None;
+    }
+    Some(if entry_id == "legacy" {
+        WORKBUDDY_PROVIDER_NAME.into()
+    } else {
+        format!("{WORKBUDDY_PROVIDER_NAME}:{entry_id}")
+    })
+}
+
+/// Reserve the whole namespace, including malformed suffixes, so ordinary
+/// channels/imports cannot accidentally enter a client-specific route.
 pub fn is_gmclaw_provider_name(name: &str) -> bool {
     name.eq_ignore_ascii_case(GMCLAW_PROVIDER_NAME)
         || name
@@ -330,7 +358,7 @@ impl Default for ProviderConfig {
 
 impl ProviderConfig {
     pub fn is_workbuddy(&self) -> bool {
-        self.name.eq_ignore_ascii_case(WORKBUDDY_PROVIDER_NAME)
+        is_workbuddy_provider_name(&self.name)
     }
 
     pub fn is_gmclaw(&self) -> bool {

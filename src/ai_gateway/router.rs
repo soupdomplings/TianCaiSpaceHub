@@ -1,8 +1,8 @@
 use std::time::Instant;
 
 use super::config::{
-    AiGatewayConfig, GMCLAW_PROVIDER_NAME, ProviderConfig, ProviderType, gmclaw_provider_name,
-    provider_route_id, select_by_priority,
+    AiGatewayConfig, GMCLAW_PROVIDER_NAME, ProviderConfig, ProviderType, WORKBUDDY_PROVIDER_NAME,
+    gmclaw_provider_name, provider_route_id, select_by_priority, workbuddy_provider_name,
 };
 use super::error::GatewayError;
 use super::routing_state::GatewayRoutingState;
@@ -66,7 +66,24 @@ pub fn resolve_workbuddy_provider_with_state<'a>(
     now: Instant,
 ) -> Result<(&'a ProviderConfig, String), GatewayError> {
     resolve_provider_with_state_matching(model, session_id, config, state, now, |provider| {
-        provider.is_workbuddy()
+        provider.name.eq_ignore_ascii_case(WORKBUDDY_PROVIDER_NAME)
+    })
+}
+
+/// An entry may use the same model as another entry without sharing its route.
+/// Missing, disabled or mismatched entries never fall back to another client.
+pub fn resolve_workbuddy_entry_provider_with_state<'a>(
+    entry_id: &str,
+    model: &str,
+    session_id: Option<&str>,
+    config: &'a AiGatewayConfig,
+    state: &mut GatewayRoutingState,
+    now: Instant,
+) -> Result<(&'a ProviderConfig, String), GatewayError> {
+    let name = workbuddy_provider_name(entry_id)
+        .ok_or_else(|| GatewayError::bad_request("WorkBuddy 条目身份无效"))?;
+    resolve_provider_with_state_matching(model, session_id, config, state, now, |provider| {
+        provider.name.eq_ignore_ascii_case(&name)
     })
 }
 
@@ -442,6 +459,123 @@ mod tests {
         );
         assert!(
             resolve_provider_with_state("same-model", None, &only_entries, &mut state, now)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn workbuddy_entries_stay_isolated_across_clients_and_sticky_routes() {
+        let mut disabled = provider("workbuddy:disabled", 50_000, "same-model");
+        disabled.enabled = false;
+        let cfg = config(vec![
+            provider("codex", 1, "same-model"),
+            provider("workbuddy", 10, "same-model"),
+            provider("workbuddy:entry-a", 100, "same-model"),
+            provider("workbuddy:entry-b", 10_000, "same-model"),
+            provider("gmclaw", 20_000, "same-model"),
+            provider("gmclaw:entry-a", 30_000, "same-model"),
+            disabled,
+            provider("workbuddy:../invalid", 60_000, "same-model"),
+        ]);
+        let mut state = GatewayRoutingState::default();
+        let now = Instant::now();
+        for entry_id in ["entry-a", "entry-b", "entry-a"] {
+            // The same session is deliberately bound to a different entry.
+            // Neither stickiness nor provider weight may override the endpoint.
+            let (selected, _) = resolve_workbuddy_entry_provider_with_state(
+                entry_id,
+                "same-model",
+                Some("shared"),
+                &cfg,
+                &mut state,
+                now,
+            )
+            .unwrap();
+            assert_eq!(selected.name, format!("workbuddy:{entry_id}"));
+        }
+        assert_eq!(
+            resolve_workbuddy_provider_with_state(
+                "same-model",
+                Some("shared"),
+                &cfg,
+                &mut state,
+                now
+            )
+            .unwrap()
+            .0
+            .name,
+            "workbuddy"
+        );
+        assert_eq!(
+            resolve_gmclaw_provider_with_state("same-model", Some("shared"), &cfg, &mut state, now)
+                .unwrap()
+                .0
+                .name,
+            "gmclaw"
+        );
+        assert_eq!(
+            resolve_provider_with_state("same-model", Some("shared"), &cfg, &mut state, now)
+                .unwrap()
+                .0
+                .name,
+            "codex"
+        );
+        assert_eq!(cfg.select_provider("same-model").unwrap().name, "codex");
+        assert_eq!(
+            resolve_provider_with_state_for_type(
+                "same-model",
+                Some("shared"),
+                &cfg,
+                &mut state,
+                now,
+                &ProviderType::OpenAiResponses,
+            )
+            .unwrap()
+            .0
+            .name,
+            "codex"
+        );
+        for entry_id in ["missing", "disabled", "../invalid"] {
+            assert!(
+                resolve_workbuddy_entry_provider_with_state(
+                    entry_id,
+                    "same-model",
+                    Some("shared"),
+                    &cfg,
+                    &mut state,
+                    now,
+                )
+                .is_err()
+            );
+        }
+        assert!(
+            resolve_workbuddy_entry_provider_with_state(
+                "entry-a",
+                "other-model",
+                None,
+                &cfg,
+                &mut state,
+                now,
+            )
+            .is_err()
+        );
+
+        let only_entries = config(vec![
+            provider("workbuddy:entry-a", 100, "same-model"),
+            provider("gmclaw:entry-a", 100, "same-model"),
+        ]);
+        assert!(
+            resolve_workbuddy_provider_with_state(
+                "same-model",
+                None,
+                &only_entries,
+                &mut state,
+                now,
+            )
+            .is_err()
+        );
+        assert!(
+            resolve_provider_with_state("same-model", None, &only_entries, &mut state, now,)
                 .is_err()
         );
     }

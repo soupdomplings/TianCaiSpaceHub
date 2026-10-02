@@ -108,11 +108,22 @@ async fn websocket_without_openai_channels_returns_426_and_post_stays_available(
     let temp = tempfile::tempdir().unwrap();
     let state = state(
         &temp,
-        vec![ProviderConfig {
+        std::iter::once(ProviderConfig {
             provider_type: ProviderType::DeepSeekResponses,
             models: vec!["other".into()],
             ..Default::default()
-        }],
+        })
+        .chain(
+            ["workbuddy", "workbuddy:entry-a", "gmclaw", "gmclaw:entry-a"].map(|name| {
+                ProviderConfig {
+                    name: name.into(),
+                    provider_type: ProviderType::OpenAiResponses,
+                    models: vec!["missing".into()],
+                    ..Default::default()
+                }
+            }),
+        )
+        .collect(),
     );
     let (base, task) = server(crate::ai_gateway::router().with_state(state)).await;
     let error =

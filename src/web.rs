@@ -48,6 +48,10 @@ pub fn router(state: SharedState) -> Router {
             post(restore_workbuddy_config),
         )
         .route(
+            "/api/workbuddy/config/delete",
+            post(delete_workbuddy_config),
+        )
+        .route(
             "/api/gmclaw/config",
             get(gmclaw_config).post(save_gmclaw_config),
         )
@@ -527,66 +531,118 @@ async fn mutate_gmclaw_config(
     }
 }
 
-async fn workbuddy_config() -> impl IntoResponse {
-    match crate::workbuddy_config::load() {
-        Ok(status) => (StatusCode::OK, Json(status)).into_response(),
-        Err(error) => (
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkBuddyConfigQuery {
+    entry_id: Option<String>,
+}
+
+async fn workbuddy_config(
+    State(state): State<SharedState>,
+    Query(query): Query<WorkBuddyConfigQuery>,
+) -> axum::response::Response {
+    let mut current = state.config.lock().await;
+    let path = state.config_path.clone();
+    match tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        let mut config = AppConfig::load_or_default(&path)?;
+        crate::normalize_config_paths(&mut config, &path);
+        let status = crate::workbuddy_config::load_selected(&config, query.entry_id.as_deref())?;
+        Ok((status, config))
+    })
+    .await
+    {
+        Ok(Ok((status, config))) => {
+            *current = config;
+            Json(status).into_response()
+        }
+        Ok(Err(error)) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error":error.to_string()})),
+        )
+            .into_response(),
+        Err(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": error.to_string() })),
+            Json(json!({"error":"无法读取 WorkBuddy 配置 / Cannot read WorkBuddy configuration"})),
         )
             .into_response(),
     }
+}
+
+#[derive(serde::Deserialize)]
+struct WorkBuddyRestoreRequest {
+    revision: String,
+}
+
+enum WorkBuddyMutation {
+    Save(crate::workbuddy_config::WorkBuddySaveRequest),
+    Delete(crate::workbuddy_config::WorkBuddyEntryRequest),
+    Restore(String),
 }
 
 async fn save_workbuddy_config(
-    Json(model): Json<crate::workbuddy_config::WorkBuddyModelConfig>,
-) -> impl IntoResponse {
-    match crate::workbuddy_config::save(&model) {
-        Ok(status) => (StatusCode::OK, Json(status)).into_response(),
-        Err(error) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": error.to_string() })),
-        )
-            .into_response(),
-    }
+    State(state): State<SharedState>,
+    Json(request): Json<crate::workbuddy_config::WorkBuddySaveRequest>,
+) -> axum::response::Response {
+    mutate_workbuddy_config(state, WorkBuddyMutation::Save(request)).await
 }
 
-async fn restore_workbuddy_config(State(state): State<SharedState>) -> impl IntoResponse {
-    let status = match crate::workbuddy_config::restore_backup() {
-        Ok(status) => status,
-        Err(error) => {
-            let message = error.to_string();
-            let status = if message.contains("no WorkBuddy backup") {
-                StatusCode::NOT_FOUND
-            } else {
-                StatusCode::INTERNAL_SERVER_ERROR
-            };
-            return (status, Json(json!({ "error": message }))).into_response();
-        }
-    };
+async fn delete_workbuddy_config(
+    State(state): State<SharedState>,
+    Json(request): Json<crate::workbuddy_config::WorkBuddyEntryRequest>,
+) -> axum::response::Response {
+    mutate_workbuddy_config(state, WorkBuddyMutation::Delete(request)).await
+}
 
-    let mut config = state.config.lock().await.clone();
-    crate::workbuddy_config::apply_provider(&mut config, &status.model);
-    if let Err(error) = config.save(&state.config_path) {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({
-                "error": format!(
-                    "WorkBuddy config restored, but TianCaiSpace Hub provider update failed: {error}"
-                )
-            })),
-        )
-            .into_response();
+async fn restore_workbuddy_config(
+    State(state): State<SharedState>,
+    Json(request): Json<WorkBuddyRestoreRequest>,
+) -> axum::response::Response {
+    mutate_workbuddy_config(state, WorkBuddyMutation::Restore(request.revision)).await
+}
+
+async fn mutate_workbuddy_config(
+    state: SharedState,
+    mutation: WorkBuddyMutation,
+) -> axum::response::Response {
+    let mut current = state.config.lock().await;
+    let path = state.config_path.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let outcome = (|| -> anyhow::Result<_> {
+            let mut config = AppConfig::load_or_default(&path)?;
+            crate::normalize_config_paths(&mut config, &path);
+            match mutation {
+                WorkBuddyMutation::Save(request) => {
+                    crate::workbuddy_config::save(&request, &mut config, &path)
+                }
+                WorkBuddyMutation::Delete(request) => {
+                    crate::workbuddy_config::delete(&request, &mut config, &path)
+                }
+                WorkBuddyMutation::Restore(revision) => {
+                    crate::workbuddy_config::restore_backup(&revision, &mut config, &path)
+                }
+            }
+        })();
+        let latest = AppConfig::load_or_default(&path).map(|mut config| {
+            crate::normalize_config_paths(&mut config, &path);
+            config
+        });
+        (outcome, latest)
+    })
+    .await;
+    match result {
+        Ok((outcome, latest)) => {
+            if let Ok(config) = latest { *current = config; }
+            drop(current);
+            match outcome {
+                Ok(status) => {
+                    state.push_event("info", "workbuddy_config_updated", "WorkBuddy model configuration updated").await;
+                    Json(status).into_response()
+                }
+                Err(error) => (StatusCode::CONFLICT, Json(json!({"error":error.to_string()}))).into_response(),
+            }
+        }
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"WorkBuddy 配置操作失败，请刷新状态 / WorkBuddy configuration operation failed; refresh its status"}))).into_response(),
     }
-    *state.config.lock().await = config;
-    state
-        .push_event(
-            "info",
-            "workbuddy_config_restored",
-            "WorkBuddy configuration restored",
-        )
-        .await;
-    (StatusCode::OK, Json(status)).into_response()
 }
 
 #[derive(Serialize)]

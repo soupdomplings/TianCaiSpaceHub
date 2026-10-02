@@ -5,11 +5,13 @@ use wxdragon::prelude::*;
 use wxdragon::widgets::dataview::CustomDataViewVirtualListModel;
 
 use crate::ai_gateway::config::{
-    AiGatewayConfig, ProviderConfig, ProviderType, provider_display_base_url,
+    AiGatewayConfig, ProviderConfig, ProviderType, is_gmclaw_provider_name,
+    is_workbuddy_provider_name, provider_display_base_url,
 };
 
 use super::UiHandles;
 use super::api::ApiClient;
+use super::text::GuiText;
 use super::widgets::{ProviderLogoKind, provider_logo_bitmap};
 
 pub(super) type AiGwProviderRows = Rc<RefCell<Vec<AiGwProviderRow>>>;
@@ -25,6 +27,26 @@ pub(super) struct AiGwProviderRow {
     pub(super) base_url: String,
     pub(super) models_url: Option<String>,
     pub(super) weight: u32,
+}
+
+pub(super) fn provider_scope_display(name: &str, text: GuiText) -> &'static str {
+    if is_workbuddy_provider_name(name) {
+        text.ai_gw_scope_workbuddy()
+    } else if is_gmclaw_provider_name(name) {
+        text.ai_gw_scope_gmclaw()
+    } else {
+        text.ai_gw_scope_codex()
+    }
+}
+
+pub(super) fn provider_scope_help(name: &str, text: GuiText) -> &'static str {
+    if is_workbuddy_provider_name(name) {
+        text.ai_gw_scope_workbuddy_help()
+    } else if is_gmclaw_provider_name(name) {
+        text.ai_gw_scope_gmclaw_help()
+    } else {
+        text.ai_gw_scope_codex_help()
+    }
 }
 
 #[derive(Clone)]
