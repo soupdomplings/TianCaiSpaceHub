@@ -1,6 +1,6 @@
 # 动态 Codex 可见模型
 
-维护日期：2026-10-03。适用版本：`0.4.30-2`（本地开发版，未发布）。关联 TC-006；版本沿革见 [二开变更记录](customizations/CHANGELOG.md)，上游目录来源见 [v0.4.30 整合](upstream-v0.4.30-integration.md)，当前用途标识和完整保留名称隔离见 [接入点用途与隔离](customizations/client-channel-scope.md)。
+维护日期：2026-10-03。适用版本：`v0.4.30-2`（已发布 GitHub 预发布版）。关联 TC-006；版本沿革见 [二开变更记录](customizations/CHANGELOG.md)，上游目录来源见 [v0.4.30 整合](upstream-v0.4.30-integration.md)，当前用途标识和完整保留名称隔离见 [接入点用途与隔离](customizations/client-channel-scope.md)。
 
 Codex 可见模型现在支持内置目录之外的模型。模型来源包括已配置渠道保存的模型列表，以及 Codex 接入页中手动输入的模型 ID。
 
@@ -41,7 +41,7 @@ supportsReasoning = true
 
 ## 建议验收
 
-此处为用户验收参考。`0.4.30-1` 已同步目录和未知模型继承的测试期望，Windows 测试代码编译通过，未执行测试或真实模型调用；`0.4.30-2` 将 WorkBuddy 多条目命名空间一并排除，当前构建状态见 [开发交付](releases/v0.4.30-2.md)。
+此处为用户验收参考。`0.4.30-1` 已同步目录和未知模型继承的测试期望，Windows 测试代码编译通过，未执行测试或真实模型调用。`v0.4.30-2` 将 WorkBuddy 多条目命名空间一并排除，已通过 Windows/macOS Actions 原生构建及打包并预发布；功能测试、安装升级、实机和真实模型调用仍待用户验收。Windows 未签名、macOS universal/ad-hoc/未公证的安装包信息见 [版本交付](releases/v0.4.30-2.md)。
 
 - 新模型 ID 不在内置目录中，手动输入后保存，并验证 Codex 能选择和发送请求。
 - 直接获取厂商列表，删掉不需要的条目后保存；检查手动输入仍保留。

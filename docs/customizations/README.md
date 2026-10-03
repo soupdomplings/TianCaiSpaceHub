@@ -2,11 +2,11 @@
 
 维护日期：2026-10-03。范围：TianCaiSpace Hub 相对于 CodexHub 上游的定制，以及上游升级时必须保留的兼容衔接。
 
-当前源码版本 `0.4.30-2`（本地开发版，未发布），基于 `ba3be07` 增加 WorkBuddy 多模型与渠道用途标识。以下“已实现”仅指代码存在；当前构建/验收见 [开发交付](../releases/v0.4.30-2.md) 和 [变更记录](CHANGELOG.md)。上游来源见 [v0.4.30 整合记录](../upstream-v0.4.30-integration.md)；macOS 导入历史见 [0.4.29-5](../releases/v0.4.29-5.md)，已有 GitHub 交付见 [v0.4.29-2](../releases/v0.4.29-2.md)。
+当前版本 `v0.4.30-2` 已发布 GitHub 预发布版，基于 `ba3be07` 增加 WorkBuddy 多模型与渠道用途标识，标签源码为 `5114002fceee61c7db6cc7709cbd99b0fecf672c`。Windows/macOS Actions 原生构建和打包均通过；Windows 包未签名，macOS universal 包为 ad-hoc 签名、未公证。以下“已实现”仅指代码存在，功能、安装升级、实机和真实调用仍待用户验收；当前交付见 [版本记录](../releases/v0.4.30-2.md) 和 [变更记录](CHANGELOG.md)。上游来源见 [v0.4.30 整合](../upstream-v0.4.30-integration.md)；macOS 导入历史见 [0.4.29-5](../releases/v0.4.29-5.md)，早期 GitHub 交付见 [v0.4.29-2](../releases/v0.4.29-2.md)。
 
 ## 已实现的二开能力
 
-2026-10-03 天工模型/外部消息已保存于 `9b9702e`，上游合并为 `22ee850`。本轮继续保留 TC-001～TC-012，扩展 TC-002 为 WorkBuddy 多模型，并新增 TC-013 接入点用途标识；本轮构建结果在开发交付记录单独登记，历史产物和测试不作为当前验收。
+2026-10-03 天工模型/外部消息已保存于 `9b9702e`，上游合并为 `22ee850`。本轮继续保留 TC-001～TC-012，扩展 TC-002 为 WorkBuddy 多模型，并新增 TC-013 接入点用途标识；本轮构建和预发布结果在版本交付记录单独登记，历史产物和测试不作为当前验收。
 
 编号用于后续需求、修复和合并记录引用，已有编号不复用。
 
@@ -20,10 +20,10 @@
 | TC-006 | 动态 Codex 模型 | 手动新增、同步渠道、远端获取、补齐选定渠道路由；未知模型按家族继承能力，手工覆盖优先；新增目录后 `gpt-6-next` 默认继承 `gpt-6.1-sol`；可见模型与路由分开管理 | [动态模型](../dynamic-codex-models.zh-CN.md) |
 | TC-007 | 桌面启动与升级方式 | 启动自动最大化；帮助菜单、托盘及启动自动检查更新均取消；保留主动安装新版的打包能力 | [品牌、桌面与交付](desktop-and-packaging.md) |
 | TC-008 | 上游升级的二开衔接 | 保留全部二开；沿用 Kimi、ChatGPT 账号凭证和模型发现，合入 Windows 官方桌面识别、1455/1457 登录回调及 GPT-6.1-Sol；生产检查更新入口继续关闭 | [v0.4.30 整合](../upstream-v0.4.30-integration.md)，历史 [v0.4.28](../upstream-v0.4.28-integration.md)、[v0.4.29](../upstream-v0.4.29-integration.md) |
-| TC-009 | Sub2API 网页渠道导入 | Windows 协议唤起；macOS App 协议声明、URL 事件与同用户 Unix socket 转交代码已补齐，待 Mac 构建验收；共用一次性码兑换、模型查询、HTTP/HTTPS 兼容和预览保存；默认禁用，一次一个渠道 | [网页导入](../hub-external-import.md)、[契约 v1](../HUB_EXTERNAL_IMPORT_CONTRACT_V1.md) |
+| TC-009 | Sub2API 网页渠道导入 | Windows 协议唤起；macOS App 协议声明、URL 事件与同用户 Unix socket 转交已随本版成功构建打包，实机待验收；共用一次性码兑换、模型查询、HTTP/HTTPS 兼容和预览保存；默认禁用，一次一个渠道 | [网页导入](../hub-external-import.md)、[契约 v1](../HUB_EXTERNAL_IMPORT_CONTRACT_V1.md) |
 | TC-010 | 导入带来的配置并发保护 | 保存重读最新配置，只合并目标；目标指纹防止覆盖预览期间修改；全量 API 保存带版本，文件锁及原子替换；空模型导入渠道不能事后直接启用 | [网页导入](../hub-external-import.md)、[配置](../configuration.md) |
-| TC-011 | 天工 Claw 模型接入 | 多条目独立 ID/渠道/地址，同模型可绑定不同渠道；保存、删除、默认切换及撤销；集合版本校验、厂商参数、JSON/SSE 聚合与推理状态；旧单模型无需重启已有有限反馈，本轮 Windows 编译与调试构建通过，待用户验收 | [天工 Claw 模型](gmclaw.md) |
-| TC-012 | 天工外部消息执行端 | 飞书/微信/企微显式 `/gmclaw`，本机 Harness 授权、发送者隔离、串行等待、文本和父会话工具审批；首版 Windows 编译与调试构建通过，待用户验收；附件、主动取消及 MCP CRUD 不在首版范围 | [天工外部消息](gmclaw-im.md) |
+| TC-011 | 天工 Claw 模型接入 | 多条目独立 ID/渠道/地址，同模型可绑定不同渠道；保存、删除、默认切换及撤销；集合版本校验、厂商参数、JSON/SSE 聚合与推理状态；旧单模型无需重启已有有限反馈，本版 Windows/macOS 构建通过并预发布，功能待用户验收 | [天工 Claw 模型](gmclaw.md) |
+| TC-012 | 天工外部消息执行端 | 飞书/微信/企微显式 `/gmclaw`，本机 Harness 授权、发送者隔离、串行等待、文本和父会话工具审批；Windows/macOS 构建通过并预发布，功能待用户验收；附件、主动取消及 MCP CRUD 不在首版范围 | [天工外部消息](gmclaw-im.md) |
 | TC-013 | 接入点用途标识与隔离 | 大模型渠道列表/编辑器明确普通与专用用途，专用身份不可误改；整个 WorkBuddy/天工命名空间排除普通请求与导入，条目地址精确选渠道，不跨客户端或条目回退 | [用途与隔离](client-channel-scope.md) |
 
 ## 代码与配置定位
@@ -50,9 +50,9 @@
 
 ## 当前边界与后续衔接
 
-- 仓库只保留 `main`，二开内容和上游整合统一进入主分支；版本通过完整二开版本标签及 GitHub Releases 管理，不再为版本建立分支。当前 `0.4.30-2` 源码已提交，尚未发布 Release；详见 [仓库清理记录](../development/repository-cleanup.md)。
+- 仓库只保留 `main`，二开内容和上游整合统一进入主分支；版本通过完整二开版本标签及 GitHub Releases 管理，不再为版本建立分支。当前 `v0.4.30-2` 已发布 GitHub 预发布版，交付与验收分别记录；分支整理见 [仓库清理记录](../development/repository-cleanup.md)。
 - Windows 优先，macOS 次之；Linux 不纳入新增需求。保留上游 Linux 工作流不代表本次开发和验收覆盖 Linux。
-- `0.4.29-3` 用户反馈 Windows 本地导入正常；后续流程调整、其他站点及安装/升级/卸载待用户验收。`0.4.29-5` macOS 系统接入已写入源码，尚未在 Mac 构建/验收，不把 Windows 编译结果计为 macOS 通过。
+- `0.4.29-3` 用户反馈 Windows 本地导入正常；后续流程调整、其他站点及安装/升级/卸载待用户验收。`0.4.29-5` 当时只有 macOS 接入源码，未完成 Mac 构建/验收；当前 `v0.4.30-2` 已通过 macOS 原生 Actions 构建并交付 universal 包，实机导入仍待用户验收。
 - 模型发现与推理调用分开；远端返回模型 ID 不等于证明所有协议和能力可用。导入不发起计费模型测试。
 - Chrome 插件完整兼容、按模型选择 Remote Compact V2、Agent Manager 等研究资料不属于本表已交付功能。用户授权新任务后再更新状态。
 - 当前测试由用户负责；已有历史测试数量仅属于对应版本，不能用于宣称后续变更已通过测试。

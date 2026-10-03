@@ -1,8 +1,8 @@
 # Hub 网页导入（Windows / macOS）
 
-维护日期：2026-09-30。关联 TC-009、TC-010。本文维护当前实现；需求字段见 [接口契约](HUB_EXTERNAL_IMPORT_CONTRACT_V1.md)，开发沿革见 [二开变更记录](customizations/CHANGELOG.md)。
+维护日期：2026-10-03。关联 TC-009、TC-010。本文维护当前实现；需求字段见 [接口契约](HUB_EXTERNAL_IMPORT_CONTRACT_V1.md)，开发沿革见 [二开变更记录](customizations/CHANGELOG.md)。
 
-源码版本：0.4.29-5（开发中，未发布）。实现 Sub2API 外部导入约定 v1，默认禁用保存。Windows 既有行为继续保留；macOS 系统接入已补齐代码，尚未在 macOS 构建和实机验收；Linux 不在本次范围。
+当前版本：`v0.4.30-2`，已发布 GitHub 预发布版。实现 Sub2API 外部导入约定 v1，默认禁用保存；Windows/macOS Actions 原生构建和打包均通过，macOS 系统接入代码已随本版交付。功能测试、安装升级、实机导入及真实站点调用仍待用户验收；Linux 不在本次范围。安装包和验证边界见 [版本交付](releases/v0.4.30-2.md)。
 
 2026-10-03 接入点隔离：网页导入禁止创建或覆盖 `workbuddy`、`workbuddy:`、`gmclaw`、`gmclaw:` 整个保留命名空间，更新目标列表也排除这些渠道。导入普通渠道并启用后，可在对应客户端页签主动选择并保存；WorkBuddy 与天工可创建多个独立条目，见 [WorkBuddy](workbuddy.md)、[天工 Claw](customizations/gmclaw.md)及[用途标识](customizations/client-channel-scope.md)。
 
@@ -48,7 +48,7 @@
 
 ## macOS 打包与维护
 
-原有 [macOS 工作流](../.github/workflows/release-macos.yml) 构建 Apple Silicon 与 Intel 的 universal App、DMG 和 App ZIP；本次将协议声明及 `WEB-IMPORT.md` 一并纳入 App，在签名前检查 plist 和双架构程序。构建使用 Cargo 锁文件。手动对分支执行 `workflow_dispatch` 只上传 Actions artifact；只有标签触发才会发布 Release。本次尚未执行 macOS 工作流，不把配置存在视为已构建。
+[macOS 工作流](../.github/workflows/release-macos.yml) 构建 Apple Silicon 与 Intel 的 universal App、DMG 和 App ZIP；协议声明及 `WEB-IMPORT.md` 纳入 App，在签名前检查 plist 和双架构程序，构建使用 Cargo 锁文件。`v0.4.30-2` 标签触发的 [macOS Actions 37092082348](https://github.com/soupdomplings/TianCaiSpaceHub/actions/runs/37092082348) 已成功，安装包已预发布，为 ad-hoc 签名且未公证的 universal 包。该结果覆盖编译与打包，不替代浏览器唤起和系统关联实机验收。源码只维护 `main`；手动 `workflow_dispatch` 只上传 Actions artifact，完整版本标签触发 Release 发布。
 
 关键入口：`packaging/macos/Info.plist`、`src/gui/external_import/macos.rs`（系统事件与重复进程转交）、`src/external_import/ipc/macos.rs`（Unix socket）、`src/external_import/registration/macos.rs`（App 注册）、`vendor/wxdragon/rust/wxdragon-sys/cpp/src/app.cpp`（回调前事件暂存）。GUI 公共预览、兑换、模型查询及保存使用原有实现。
 
@@ -68,11 +68,11 @@ cargo build --locked --release --features gui --bin codexhub
 ./scripts/package-hub-import.ps1
 ```
 
-当前功能测试由用户负责；上述为格式、构建和打包命令。需要运行已有自动测试时，使用 `cargo test --locked --features gui --bin codexhub`，不将用例更新视为测试通过。
+当前功能测试由用户负责；上述本地打包命令仅为历史维护参考，不用于本版及后续发布安装包。发布包统一由 GitHub Actions 生成。需要运行已有自动测试时，使用 `cargo test --locked --features gui --bin codexhub`，不将用例更新视为测试通过。
 
-打包输出包含 MSI、ZIP、程序及 SHA-256 清单；构建清单说明源提交和是否包含未提交变更。测试包未签名，不自动发布远程版本。
+当前 `v0.4.30-2` 的 [Windows Actions 37092082347](https://github.com/soupdomplings/TianCaiSpaceHub/actions/runs/37092082347) 与 [macOS Actions 37092082348](https://github.com/soupdomplings/TianCaiSpaceHub/actions/runs/37092082348) 均成功，标签源码为 `5114002fceee61c7db6cc7709cbd99b0fecf672c`。Windows MSI/便携 ZIP 未签名；macOS DMG/App ZIP 为 universal、ad-hoc 签名、未公证。发布产物、哈希和静态核对见 [版本交付](releases/v0.4.30-2.md)。本轮未进行功能、安装升级、实机交互或真实调用验收，未替换用户现有安装与配置。
 
-`0.4.29-5`：基于 `16eab07` 加本次未提交的 macOS 系统接入。Windows GUI 及测试代码编译核对通过，未执行测试；格式、plist、工作流脚本语法和文档链接核对通过。macOS 的首次浏览器唤起、已运行/隐藏窗口、连续导入、CLI/重复进程转交、App 移动与多副本关联待用户在 Mac 验收，未生成或发布本版本 macOS 安装包。详见 [开发状态](releases/v0.4.29-5.md)。
+`0.4.29-5` 历史状态：基于 `16eab07` 加当时未提交的 macOS 系统接入。Windows GUI 及测试代码编译核对通过，未执行测试；格式、plist、工作流脚本语法和文档链接核对通过。当时未生成或发布该版本 macOS 安装包，详见 [历史开发状态](releases/v0.4.29-5.md)。其接入代码已随当前 `v0.4.30-2` 成功构建打包；首次浏览器唤起、已运行/隐藏窗口、连续导入、CLI/重复进程转交、App 移动与多副本关联仍待用户在 Mac 验收，当前结果另见 [版本交付](releases/v0.4.30-2.md)。
 
 `0.4.29-4`：导入前确认已移除，Windows release 构建完成，本次流程调整待用户验收。交付目录为 `target/dist/hub-import-0.4.29-4/`，打包时基于 `e25ecd9` 加当时未提交的 HTTP 修复和流程调整；源码随后随 GitHub 提交归档，原包和清单保留。详见 [本地交付说明](releases/v0.4.29-4.md)。
 

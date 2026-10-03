@@ -1,6 +1,6 @@
 # 天才空间品牌、桌面行为与交付
 
-维护日期：2026-10-03。适用源码版本：`0.4.30-2`（本地开发版，未发布）。关联 TC-001、TC-007；网页导入另见 [专门说明](../hub-external-import.md)，上游合并见 [v0.4.30 整合](../upstream-v0.4.30-integration.md)，当前产物与验证见 [开发交付](../releases/v0.4.30-2.md)。
+维护日期：2026-10-03。适用源码版本：`0.4.30-2`（已发布 Pre-release）。关联 TC-001、TC-007；网页导入另见 [专门说明](../hub-external-import.md)，上游合并见 [v0.4.30 整合](../upstream-v0.4.30-integration.md)，当前产物与验证见 [交付记录](../releases/v0.4.30-2.md)。
 
 ## 名称与兼容身份
 
@@ -61,6 +61,6 @@ macOS 保持 `com.codexhub.app` 的安装身份，完整 App 声明导入协议�
 
 ## 当前交付状态
 
-`0.4.29-2` 首批本地 MSI/ZIP 保留原样；GitHub 交付采用按提交源码重新打包的 Windows 预发布产物，见 [版本交付说明](../releases/v0.4.29-2.md)。后续 Windows 本地包及用户反馈见 [导入专题](../hub-external-import.md)。`0.4.29-5` macOS 网页接入代码已补齐，尚未在 Mac 构建或实机验收，也未生成新版 macOS 分发包。
+`0.4.29-2` 首批本地 MSI/ZIP 保留原样；GitHub 交付采用按提交源码重新打包的 Windows 预发布产物，见 [版本交付说明](../releases/v0.4.29-2.md)。后续 Windows 本地包及用户反馈见 [导入专题](../hub-external-import.md)。`0.4.29-5` 当时补齐 macOS 网页接入代码，但未完成 Mac 包；该实现已随本次 `0.4.30-2` 的 macOS universal 包构建发布，原生交互仍待用户验收。
 
-`0.4.30-1` 已完成 Windows x64 GUI/测试代码编译和调试程序构建，该记录属于前轮整合版本；后续 WorkBuddy 多模型及用途标识的 `0.4.30-2` 本地及 Actions 产物单独登记在 [交付记录](../releases/v0.4.30-2.md)。用户已授权本次 GitHub 发布；功能测试、桌面交互和安装升级仍待用户验收，构建成功不代表这些项目通过。本轮不修改用户运行中的 Hub 配置、协议关联或已交付包。
+`0.4.30-1` 的 Windows 编译记录属于前轮整合版本；`0.4.30-2` 已由 GitHub Actions 成功构建并预发布 Windows x64 MSI/ZIP 和 macOS universal DMG/App ZIP，具体签名与哈希见 [交付记录](../releases/v0.4.30-2.md)。Windows 包未签名，macOS 为 ad-hoc 签名且未公证。功能测试、桌面交互和安装升级仍待用户验收，构建成功不代表这些项目通过。本轮不修改用户运行中的 Hub 配置、协议关联或已交付包。

@@ -1,7 +1,7 @@
 # 天工 Claw 模型接入
 
-维护日期：2026-10-03。关联 TC-011。第二阶段保存点为 `9b9702e`，上游整合版为 `0.4.30-1`；当前 `0.4.30-2` 继续保留，开发中、未发布。
-实现状态：多模型管理、厂商参数与流式聚合已实现，端到端行为待用户验收。本轮增加跨接入点[用途标识与隔离](client-channel-scope.md)，天工不选择 WorkBuddy 新多模型渠道。当前构建及产物见 [开发交付](../releases/v0.4.30-2.md)。
+维护日期：2026-10-03。关联 TC-011。第二阶段保存点为 `9b9702e`，上游整合版为 `0.4.30-1`；当前 `v0.4.30-2` 继续保留，并已发布 GitHub 预发布版。
+实现状态：多模型管理、厂商参数与流式聚合已实现，端到端行为待用户验收。本轮增加跨接入点[用途标识与隔离](client-channel-scope.md)，天工不选择 WorkBuddy 新多模型渠道。Windows/macOS Actions 原生构建与打包均通过，当前产物见 [版本交付](../releases/v0.4.30-2.md)。
 
 ## 范围与兼容依据
 
@@ -99,9 +99,9 @@ HTTP `502/503` 及已有可恢复连接错误在每轮原样转发中共用最�
 
 ## 验证状态
 
-`0.4.30-1` 上游整合时的编译及 EXE 身份见 [v0.4.30 整合记录](../upstream-v0.4.30-integration.md#本轮验证与产物)，当前版本见 [0.4.30-2](../releases/v0.4.30-2.md)。下列两个 EXE 仅保留历史归属，不能用于识别当前调试输出。
+`v0.4.30-2` 已通过 Windows/macOS Actions 原生构建并发布预发布包，功能、安装升级、实机及真实调用仍待用户验收。Windows 未签名；macOS 为 Apple Silicon/Intel universal 包，ad-hoc 签名且未公证。当前安装包身份见 [版本交付](../releases/v0.4.30-2.md)；`0.4.30-1` 当时的编译及 EXE 身份见 [上游整合记录](../upstream-v0.4.30-integration.md#本轮验证与产物)。下列两个 EXE 仅保留历史归属，不能用于识别当前产物。
 
-第二阶段保存点 `9b9702e` 曾通过 `cargo check --locked --target x86_64-pc-windows-msvc --features gui --tests --bin codexhub` 和 `cargo build --locked --target x86_64-pc-windows-msvc --features gui --bin codexhub`。该阶段格式、差异空白和文档本地链接核对通过；GUI 编译保留 23 条警告，测试代码编译保留 51 条警告，主要为未使用代码。已新增隔离 SQLite、多条目路由、JSON/SSE 聚合、Harness 事件与审批等夹具，按用户分工未执行测试。Windows 交互和端到端行为待用户验收；macOS 尚待构建及实机验证，不新增 Linux 验收范围。
+第二阶段保存点 `9b9702e` 曾通过 `cargo check --locked --target x86_64-pc-windows-msvc --features gui --tests --bin codexhub` 和 `cargo build --locked --target x86_64-pc-windows-msvc --features gui --bin codexhub`。该阶段格式、差异空白和文档本地链接核对通过；GUI 编译保留 23 条警告，测试代码编译保留 51 条警告，主要为未使用代码。已新增隔离 SQLite、多条目路由、JSON/SSE 聚合、Harness 事件与审批等夹具，按用户分工未执行测试。该保存点当时未完成 macOS 构建及实机验证；当前构建结果见本节顶部，Windows/macOS 端到端行为仍待用户验收，不新增 Linux 验收范围。
 
 `9b9702e` 历史调试程序大小为 `55,158,784` 字节，SHA-256 `81f887e1140daf5f2c0146ffd05cab31cc5994da182c66c47f9e4d1959884872`。当时静态确认 Windows x64 PE、GUI 子系统与直接导入 DLL 文件；Windows API-set 属于系统虚拟契约，未运行程序验证加载器。清单 `.build-tools/gmclaw-feedback-build-manifest.json`，编译/构建日志 `.build-tools/gmclaw-feedback-check.log` 和 `.build-tools/gmclaw-feedback-build.log` 均不入仓库。共享输出路径 `target/x86_64-pc-windows-msvc/debug/codexhub.exe` 已由后续构建覆盖。用户测试当前版本前先退出旧 Hub（含托盘），并核对整合专题中的产物；模型保存后无需为此重启天工。
 
@@ -109,4 +109,4 @@ HTTP `502/503` 及已有可恢复连接错误在每轮原样转发中共用最�
 
 更早厂商适配代码曾通过 Windows GUI/测试代码编译与调试 EXE 构建。该历史 EXE 为 `54,261,760` 字节，SHA-256 `141eaa28fe535fa95113b5f9609c8e82c2a0353c0add3d69cedd6b4f9edf8196`，对应 `3b3f213` 加当时未提交变更；不是多模型/外部消息保存点或当前上游整合产物。构建日志与清单位于 Git 忽略的 `.build-tools/`，应按对应阶段清单识别产物。
 
-开发过程中未启动 Hub/Codex/天工进行交互验证，未发起真实模型或 Harness 执行请求，未修改用户实际模型配置。安装包仍统一由 GitHub Actions 生成，本轮尚未发布，也未在本地生成发布安装包。
+开发和发布过程中未启动 Hub/Codex/天工进行交互验证，未发起真实模型或 Harness 执行请求，未修改用户实际模型配置。`v0.4.30-2` 安装包由 GitHub Actions 生成并已预发布，未在本地生成发布安装包；发布成功不代表功能已验收。

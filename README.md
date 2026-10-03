@@ -4,9 +4,9 @@
 
 [文档总入口](docs/README.md) · [二开功能总表](docs/customizations/README.md) · [二开变更记录](docs/customizations/CHANGELOG.md)
 
-当前工作区版本为 `0.4.30-2`（本地开发版，未发布），新增 WorkBuddy 多模型配置和“大模型接入”的渠道用途标识。Codex、WorkBuddy、天工的专用入口分别选路，同名模型也不跨条目回退。上游仍为 CodexHub `v0.4.30`，既有天工模型与外部消息等二开保留；当前构建、测试边界与回滚见 [开发交付](docs/releases/v0.4.30-2.md)，上游来源见 [整合记录](docs/upstream-v0.4.30-integration.md)。
+当前版本 `v0.4.30-2` 已发布为 [GitHub 预发布版](https://github.com/soupdomplings/TianCaiSpaceHub/releases/tag/v0.4.30-2)，新增 WorkBuddy 多模型配置和“大模型接入”的渠道用途标识。Codex、WorkBuddy、天工的专用入口分别选路，同名模型也不跨条目回退。上游仍为 CodexHub `v0.4.30`，既有天工模型与外部消息等二开保留；安装包、构建、验收边界与回滚见 [版本交付](docs/releases/v0.4.30-2.md)，上游来源见 [整合记录](docs/upstream-v0.4.30-integration.md)。源码只维护 `main`，版本通过完整二开版本标签与 Releases 管理。
 
-macOS 网页导入的 App 协议声明、URL 事件接收和实例转交代码已补齐，仍待 macOS 构建及实机验收；与 Windows 共用 HTTP/HTTPS 导入、模型预览和默认禁用保存，见 [导入说明](docs/hub-external-import.md)。发布安装包统一由 GitHub Actions 生成。新开发优先 Windows、其次 macOS；下文沿用的 Linux 资料不代表本轮新增功能已在 Linux 实现或验收。
+Windows/macOS 的 GitHub Actions 原生构建和打包均已通过，macOS 网页导入的 App 协议声明、URL 事件接收和实例转交代码已随本版构建交付；与 Windows 共用 HTTP/HTTPS 导入、模型预览和默认禁用保存，见 [导入说明](docs/hub-external-import.md)。Windows 包未签名；macOS 为 Apple Silicon/Intel universal 包，采用 ad-hoc 签名且未公证。功能测试、安装升级、实机交互及真实调用仍待用户验收。新开发优先 Windows、其次 macOS；下文沿用的 Linux 资料不代表本轮新增功能已在 Linux 实现或验收。
 
 ## 产品预览
 
