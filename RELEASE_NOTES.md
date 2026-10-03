@@ -6,7 +6,7 @@ TianCaiSpace Hub v0.4.30-2（本地开发版，未发布）
 - WorkBuddy 支持逐条新增、编辑、删除及撤销；每条模型使用独立地址和渠道，同名模型可绑定不同来源，保留其他模型和未知字段。兼容旧单模型配置。
 - 保存带版本与冲突检查，撤销只恢复最近目标模型及渠道，保留其他条目的后续修改；来源凭据在新保存的模型条目与状态 API 中清空，撤销备份可能含凭据。
 
-Windows GUI/测试代码编译、调试 EXE 构建及静态核对通过；未执行功能测试或真实调用。调试程序及待验收项见 [0.4.30-2 开发交付](docs/releases/v0.4.30-2.md)；使用见 [WorkBuddy](docs/workbuddy.md)和[接入点用途与隔离](docs/customizations/client-channel-scope.md)。功能由用户验收，macOS 待原生构建验证；本轮不推送、发布或本地生成安装包。下方保留原版本历史。
+Windows GUI/测试代码编译、调试 EXE 构建及静态核对通过；未执行功能测试或真实调用。调试程序及待验收项见 [0.4.30-2 开发交付](docs/releases/v0.4.30-2.md)；使用见 [WorkBuddy](docs/workbuddy.md)和[接入点用途与隔离](docs/customizations/client-channel-scope.md)。功能由用户验收，macOS 待原生构建验证；源码已推送到用户仓库，未发布或本地生成安装包。下方保留原版本历史。
 
 ---
 

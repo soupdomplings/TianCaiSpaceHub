@@ -15,7 +15,7 @@
 | 本轮官方标签 | `v0.4.30` / `6520da49d55919a9f908c6c84c51efaf7e1a0a7b` |
 | 本地整合结果 | `0.4.30-1` / `22ee85033e9e5f26f3a788e0f7a90e17c38c98c7`，随后仅补记文档追溯信息 |
 
-上游来源为 [happy-loki/codexhub](https://github.com/happy-loki/codexhub)，发布说明见 [官方 v0.4.30](https://github.com/happy-loki/codexhub/releases/tag/v0.4.30)。本地整合在 `integrate/upstream-v0.4.30` 完成；追溯和回滚以提交号为准，不依赖临时分支是否保留。上游相对共同基线改变 15 个文件，主要涉及模型目录、账号回调、增强启动、更新诊断和对应文档。
+上游来源为 [happy-loki/codexhub](https://github.com/happy-loki/codexhub)，发布说明见 [官方 v0.4.30](https://github.com/happy-loki/codexhub/releases/tag/v0.4.30)。本地整合当时在 `integrate/upstream-v0.4.30` 完成，后续按二开版本更名为 `tiancaispace/v0.4.30-2`，远端状态见 [仓库清理记录](development/repository-cleanup.md)；追溯和回滚以提交号为准，不依赖临时分支是否保留。上游相对共同基线改变 15 个文件，主要涉及模型目录、账号回调、增强启动、更新诊断和对应文档。
 
 ## 上游变化与本地衔接
 
