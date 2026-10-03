@@ -33,10 +33,11 @@
 
 ## 平台与产物
 
-新开发以 Windows 为先，macOS 为后续优先级，Linux 不纳入。历史 CI 仍有三平台工作流；本次保留它们，不将其存在解释为新增功能已完成多平台测试。
+新开发以 Windows 为先，macOS 为后续优先级，Linux 不纳入。`0.4.30-2` 发布起，版本标签只自动构建 Windows 和 macOS；Linux 历史工作流保留手动入口，macOS 发布不再等待 Linux 清单。不将历史工作流存在解释为新增功能已完成多平台测试。
 
 - [Windows 工作流](../../.github/workflows/release-windows.yml)：使用 Cargo 锁文件构建 MSI、便携 ZIP，ZIP 包含导入说明；有签名凭据时签名。
 - [macOS 工作流](../../.github/workflows/release-macos.yml)：DMG、App ZIP；包含 `tiancaispacehub` 协议声明和导入说明，签名前检查 plist 和双架构程序。保留签名/公证流程和无 Developer ID 凭据时的测试包路径。ad-hoc 签名不等于 Developer ID 签名或公证。手动对分支构建只上传 Actions artifact，标签触发才发布 Release。
+- 标签带 `-` 的二开版本沿用 Pre-release 标记，不自动设为 Latest；macOS 发布前最多等待 30 分钟确认同版 Windows 清单。
 - [Windows 本地打包](../../scripts/package-hub-import.ps1)：基于已构建的程序生成导入测试包，拒绝覆盖同名产物，并记录版本、构建 profile、基线提交、本地变更、签名状态和 SHA-256。
 
 用户已要求所有发布安装包通过 GitHub Actions 生成；Windows 和 macOS 分别运行对应工作流，手动对分支构建时从 artifact 获取安装包。以下本地打包命令仅保留为历史维护参考，不用于本次及后续发布：
@@ -62,4 +63,4 @@ macOS 保持 `com.codexhub.app` 的安装身份，完整 App 声明导入协议�
 
 `0.4.29-2` 首批本地 MSI/ZIP 保留原样；GitHub 交付采用按提交源码重新打包的 Windows 预发布产物，见 [版本交付说明](../releases/v0.4.29-2.md)。后续 Windows 本地包及用户反馈见 [导入专题](../hub-external-import.md)。`0.4.29-5` macOS 网页接入代码已补齐，尚未在 Mac 构建或实机验收，也未生成新版 macOS 分发包。
 
-`0.4.30-1` 已完成 Windows x64 GUI/测试代码编译和调试程序构建，该记录属于前轮整合版本；后续 WorkBuddy 多模型及用途标识的 `0.4.30-2` 产物单独登记在开发交付。功能测试未执行，桌面交互、安装升级及 macOS 原生构建仍待用户验收或相应平台验证。当前尚未生成发布安装包、触发本版 Actions 发布或发布 Release；调试 EXE 不等于安装包。本轮不修改用户运行中的 Hub 配置、协议关联或已交付包。
+`0.4.30-1` 已完成 Windows x64 GUI/测试代码编译和调试程序构建，该记录属于前轮整合版本；后续 WorkBuddy 多模型及用途标识的 `0.4.30-2` 本地及 Actions 产物单独登记在 [交付记录](../releases/v0.4.30-2.md)。用户已授权本次 GitHub 发布；功能测试、桌面交互和安装升级仍待用户验收，构建成功不代表这些项目通过。本轮不修改用户运行中的 Hub 配置、协议关联或已交付包。

@@ -1,10 +1,8 @@
 ﻿name: release-linux
 
 on:
+  # Historical Linux packaging is available only when explicitly requested.
   workflow_dispatch:
-  push:
-    tags:
-      - "v*"
 
 permissions:
   contents: write
@@ -189,8 +187,7 @@ jobs:
           overwrite_files: true
           body_path: RELEASE_NOTES.md
           prerelease: ${{ contains(github.ref_name, '-') }}
-          # macOS publishes last and promotes the release only after every
-          # platform-specific update manifest is available.
+          # Optional Linux builds do not control Windows/macOS release promotion.
           make_latest: false
           files: |
             target/dist/TianCaiSpaceHub.Linux.x86_64.AppImage

@@ -1,4 +1,4 @@
-TianCaiSpace Hub v0.4.30-2（本地开发版，未发布）
+TianCaiSpace Hub v0.4.30-2（预发布）
 
 在官方 v0.4.30 整合版本上新增接入点用途标识与 WorkBuddy 多模型，保留天工模型、外部消息接入及全部既有二开。
 
@@ -6,7 +6,7 @@ TianCaiSpace Hub v0.4.30-2（本地开发版，未发布）
 - WorkBuddy 支持逐条新增、编辑、删除及撤销；每条模型使用独立地址和渠道，同名模型可绑定不同来源，保留其他模型和未知字段。兼容旧单模型配置。
 - 保存带版本与冲突检查，撤销只恢复最近目标模型及渠道，保留其他条目的后续修改；来源凭据在新保存的模型条目与状态 API 中清空，撤销备份可能含凭据。
 
-Windows GUI/测试代码编译、调试 EXE 构建及静态核对通过；未执行功能测试或真实调用。调试程序及待验收项见 [0.4.30-2 开发交付](docs/releases/v0.4.30-2.md)；使用见 [WorkBuddy](docs/workbuddy.md)和[接入点用途与隔离](docs/customizations/client-channel-scope.md)。功能由用户验收，macOS 待原生构建验证；源码已推送到用户仓库，未发布或本地生成安装包。下方保留原版本历史。
+Windows GUI/测试代码编译、调试 EXE 构建及静态核对通过；未执行功能测试或真实调用。发布安装包由 GitHub Actions 构建 Windows x64 MSI/ZIP 和 macOS universal DMG/App ZIP，macOS 同时包含 Apple Silicon 与 Intel 架构；实际产物、签名及构建状态见 [0.4.30-2 交付记录](docs/releases/v0.4.30-2.md)。功能、安装升级和客户端交互仍待用户验收。使用见 [WorkBuddy](docs/workbuddy.md)和[接入点用途与隔离](docs/customizations/client-channel-scope.md)，回滚前请先阅读交付记录的配置兼容说明。下方保留原版本历史。
 
 ---
 

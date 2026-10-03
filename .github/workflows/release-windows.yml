@@ -284,8 +284,8 @@ jobs:
           overwrite_files: true
           body_path: RELEASE_NOTES.md
           prerelease: ${{ contains(github.ref_name, '-') }}
-          # macOS publishes last and promotes the release only after every
-          # platform-specific update manifest is available.
+          # macOS publishes last after confirming the Windows manifest exists.
+          # Optional Linux builds do not participate in release promotion.
           make_latest: false
           files: |
             target/dist/TianCaiSpaceHub-*-windows-x64.zip
