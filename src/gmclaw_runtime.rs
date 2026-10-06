@@ -138,8 +138,8 @@ fn display_failure_detail(error: &anyhow::Error) -> &'static str {
         "检测到多个匹配的桌面页面，未修改任何页面"
     } else if detail.contains("桌面页面标识无法核验") {
         "桌面页面标识未通过核对，页面未修改"
-    } else if detail.contains("版本") || detail.contains("资源") {
-        "天工安装资源或版本未通过核对，页面未修改"
+    } else if detail.contains("资源") || detail.contains("安装") || detail.contains("入口") {
+        "天工安装身份或界面入口未通过核对，页面未修改"
     } else if detail.contains("尚未启用") {
         "同步通道未启用；首次请正常退出天工后从 Hub 启动一次"
     } else if detail.contains("端口") || detail.contains("进程") || detail.contains("用户") {

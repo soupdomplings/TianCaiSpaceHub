@@ -2,6 +2,8 @@
 
 维护日期：2026-10-06。当前预发布 `v0.4.30-3` 汇总 `v0.4.30-2` 之后全部本地二开：统一命名、接入页概览与启动、自动授权/重连、共用会话、真实桌面历史/消息、原生状态/步数、局部显示同步、平台审批、退出端口/完整项目/临时回复状态。关联 TC-001、TC-007、TC-011、TC-012；实际发布进度见 [v0.4.30-3](../releases/v0.4.30-3.md)，已发布前版仍见 [v0.4.30-2](../releases/v0.4.30-2.md)。网页导入见 [专门说明](../hub-external-import.md)，上游来源见 [v0.4.30 整合](../upstream-v0.4.30-integration.md)。
 
+本轮准备发布 `v0.4.30-4`，承接前阶段未发布修改：天工桌面同步移除固定产品版本与 renderer 资源白名单，按已安装天工身份、renderer HTML 脚本入口及运行时字段能力识别，并保留可写能力与原生状态保护。用户已授权提交 GitHub 和重新运行 Windows/macOS Actions，本版 Windows locked GUI/测试代码编译已通过（夹具不执行），源码/Release/两平台包核验待完成，见 [v0.4.30-4 交付记录](../releases/v0.4.30-4.md)。该行为不在已下载 `v0.4.30-3` 包中，前阶段调试 EXE 仍为 `0.4.30-3`；其构建和验收与本版分别记录，历史发布与旧程序不覆盖。
+
 ## 名称与兼容身份
 
 当前源码的产品名称统一为 **TianCaiSpaceHub**，不含空格，覆盖窗口、托盘、CLI 帮助、程序资源、Windows 安装与快捷方式、macOS App 及包内程序。本轮按用户要求同时更改编译输出名；原先只更改显示名、保留 `codexhub` 可执行文件的约定已被替代。首次品牌二开见提交 `76e58f3`；已发布包的旧文件名和历史哈希保留原样，不能据当前源码更名推断已下载包也已变化。
@@ -81,7 +83,25 @@ macOS 保持 `com.codexhub.app` 的安装身份，完整 App 声明导入协议�
 
 ## 当前交付状态
 
-### 本轮：v0.4.30-3 预发布
+### 本轮：v0.4.30-4 发布准备
+
+基线为唯一 `main` 的 `8cfebe6`，本版准备提升为 `0.4.30-4`，仅用完整标签和 Release 管理，不建版本分支。用户已授权提交与两平台 Actions 重新出包，版本提升后的 Windows locked GUI/测试代码编译已通过，源码推送/标签/Release、Windows MSI/ZIP、macOS universal DMG/App ZIP 及四份更新附件待完成；发布、签名与下载核验见 [本版交付](../releases/v0.4.30-4.md)，前版成功构建和签名状态不作为本版证据。
+
+本版承接此前去除同步 `version == 1.1.1`、固定 renderer JS 文件名与 SHA-256 门槛的修改，改核对已安装天工应用身份、renderer HTML 声明的本地脚本入口和 App/ChatPanel 运行时字段能力；版本变化或重新打包但结构兼容时不再被版本白名单阻止。保留同用户/监听归属、唯一准确页面、精确任务/会话、原生执行/审批/未保存状态和自有回复行来源保护。没有稳定接口且运行时结构不兼容时仍停止页面修改，不能推定所有未来版本均已验收。
+
+组件名称与 Closure/Block 编译布局不再单独决定兼容，完整字段/只读 setup schema 的有效候选仍须唯一；实际写入的 `scenarios`、`messages`、`showWelcome`、`hasOlderMessages` Ref 与实例缓存须可写，纯读 Ref 不额外限制，异步读取后再次核对。这些能力保护阻止未知或只读结构被部分写入，不改变消息保存与执行结果。常规路径尝试显式释放 CDP 对象组；`display` 函数整体超时取消 future 时通过断开 CDP 会话结束本次检查，不宣称显式释放已获确认。
+
+不新增 TOML 或关联文件字段，不迁移天工数据库，不修改安装资源、运行配置、系统环境或持久启动项。回退已发布 `v0.4.30-3` 会恢复固定版本和资源门槛，已经保存的模型、任务和消息保留；退出或回退 Hub 不会取消天工任务。初次使用同步通道仍需从 Hub 启动天工，既有运行中实例不强制重启。
+
+#### 发布前实现阶段核对（0.4.30-3 调试身份）
+
+发布前实现阶段的 Windows GUI/测试代码 `cargo check --locked --target-dir target/tg-version-independent-sync-20261006 --target x86_64-pc-windows-msvc --features gui --tests --bin TianCaiSpaceHub` 通过（普通程序 36 条警告、测试代码 59 条，其中 20 条重复）；同目录/目标 GUI `cargo build --locked` 通过（36 条警告）。四份 renderer 脚本已作语法编译，不执行函数；Rust 格式和 Git 差异空白核对通过。该阶段 272 个指定源码/资源文件的内容指纹为 `ba460beb31e4b8c187e5d0d637e432fe4e2fecc67504e419ff6cdb25bd25a207`，最终编译前后保持一致。独立构建缓存准备时曾因未复制原生品牌库出现 `LNK1181`，补生成库后重建及该阶段最终构建通过，原失败日志保留，不把该缓存问题算作功能验收。
+
+该阶段独立 Windows 调试程序为 `target/tg-version-independent-sync-20261006/x86_64-pc-windows-msvc/debug/TianCaiSpaceHub.exe`，大小 `58,543,616` 字节，SHA-256 `e7b3fba8bfae44da0d5d5ad4bce0bf81fca36f408d2d7931558e97c7d969268d`。PE 身份为 AMD64 `0x8664` / PE32+ `0x020b` / GUI subsystem `2`，品牌为 `TianCaiSpaceHub`、`OriginalFilename=TianCaiSpaceHub.exe`、`FileVersion=0.4.30-3`。这是发布前功能核对的本地调试 EXE，既不是已发布 `v0.4.30-3` 的 Actions 安装包，也不是本版 `0.4.30-4` 程序；同版号不能代替来源与哈希核对。忽略目录记录为 `.build-tools/tg-version-independent-check-final.log`、`tg-version-independent-build-final.log` 与 `tg-version-independent-build-manifest.json`；此前 `c0952f61…` 调试 EXE 和已下载的 8 个前版 Release 附件均保持不变。
+
+功能已实现，发布前实现阶段完成上述 Windows 必要编译与静态产物核对；本版候选 Windows locked GUI/测试代码编译已通过（31.28 秒，程序 36 条警告、测试代码 59 条，其中 20 条重复），日志 `.build-tools/release-v0.4.30-4-check.log`，只执行 check、不生成新 EXE/安装包、不覆盖 `e7b3fba8…` 调试程序。本版源码指纹与后续 Windows/macOS Actions/包核验另行登记，不复用旧源码或产物身份。测试夹具和 renderer 函数不执行，未启动 Hub/天工或发起真实 IM/模型/Harness/DataServer/CDP 业务请求。没有读取用户私有数据库/日志/运行口令或修改运行配置、安装资源、系统环境/关联。Windows 与 macOS 实机同步、天工升级与重新打包后的字段兼容、未知结构固定诊断、执行/审批/草稿保护均待用户验收。本版未提交、推送或发布，不本地生成安装包，不覆盖此前交付 EXE 或 Actions 产物。
+
+### 已发布：v0.4.30-3 预发布
 
 已按用户授权将全部后续本地二开保存于 `90868fa`，推送唯一 `main` 与注释标签 `v0.4.30-3`，并发布非草稿 Pre-release（`Latest=false`），未新建版本分支。Windows/macOS Actions 均成功，4 个安装包及 4 份更新附件已上传、下载并静态核验；完整提交、运行记录、文件大小与哈希见 [发布交付记录](../releases/v0.4.30-3.md)。
 

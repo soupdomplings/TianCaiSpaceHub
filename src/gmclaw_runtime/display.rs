@@ -1,4 +1,4 @@
-//! Bounded, version-pinned refresh of messages in the official local renderer.
+//! Bounded, capability-checked refresh of messages in the official local renderer.
 //! No model request, navigation, reload, draft edit, or installed file edit.
 use std::{
     io::{Read, Seek, SeekFrom},
@@ -13,7 +13,6 @@ use anyhow::{Result, ensure};
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 #[cfg(target_os = "macos")]
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;
@@ -27,8 +26,6 @@ pub(super) const DISPLAY_PORT: u16 = 18769;
 const TIMEOUT: Duration = Duration::from_secs(12);
 const MAX_HTTP_BYTES: usize = 128 * 1024;
 const MAX_SOCKET_BYTES: usize = 512 * 1024;
-const RENDERER_ASSET: &str = "index-oms9jgdP.js";
-const RENDERER_HASH: &str = "f47a5a8a5049b8df664053eec2428098d6c691ff28bbbc3bad55b2f4cdc133e3";
 const GROUP: &str = "tiancaispacehub-gmclaw-display";
 const ENABLE_HINT: &str =
     "天工桌面消息同步尚未启用，请正常退出天工后使用 Hub 的启动天工 Claw 按钮打开一次";
@@ -124,12 +121,10 @@ fn view_issue(code: &str) -> Option<ViewIssue> {
 }
 
 impl SetupView {
-    fn scope_name(self) -> &'static str {
+    fn schema_name(self) -> &'static str {
         match self {
-            Self::App => "Closure",
-            // This pinned ChatPanel setup has a destructured emit parameter.
-            // V8 keeps its body variables in the non-simple parameter Block.
-            Self::Panel => "Block",
+            Self::App => "app",
+            Self::Panel => "panel",
         }
     }
 
@@ -148,11 +143,15 @@ impl SetupView {
     }
 
     fn allows_scope(self, description: &str) -> bool {
-        let kind = self.scope_name();
-        description == kind
-            || (description
-                .strip_prefix(kind)
-                .is_some_and(|suffix| suffix.starts_with(" (") && suffix.ends_with(')')))
+        // Setup values may move between Closure and Block when the desktop's
+        // compiler or function parameters change. The full schema identifies
+        // the correct scope; unrelated module/global/script scopes stay out.
+        ["Closure", "Block"].iter().any(|kind| {
+            description == *kind
+                || description
+                    .strip_prefix(*kind)
+                    .is_some_and(|suffix| suffix.starts_with(" (") && suffix.ends_with(')'))
+        })
     }
 }
 
@@ -190,6 +189,7 @@ async fn available_inner(executable: &Path, desktop_pids: &[u32]) -> Result<()> 
             Some("ready") => {}
             Some("app_fields") => anyhow::bail!(ViewIssue::AppSchema),
             Some("panel_fields") => anyhow::bail!(ViewIssue::PanelSchema),
+            Some("instance_identity") => anyhow::bail!(ViewIssue::InstanceIdentity),
             _ => anyhow::bail!("天工桌面视图能力检查结果无法核验"),
         }
         Ok(())
@@ -319,7 +319,7 @@ impl Cdp {
         .await
     }
 
-    /// Only the bounded, version-pinned scope kind for each view is examined,
+    /// Only bounded Closure/Block scopes of this exact view are examined,
     /// never module/global/script scopes. CDP
     /// enumerates all setup properties, so primitive values (including the
     /// native renderer's authorization) briefly enter local memory. They are
@@ -360,6 +360,7 @@ impl Cdp {
         if candidates.is_empty() || candidates.len() > 8 {
             anyhow::bail!(view.scope_error());
         }
+        let mut matched = None;
         for scope in candidates {
             let values = self.properties(&scope).await?;
             let Some(values) = values.get("result").and_then(Value::as_array) else {
@@ -386,10 +387,34 @@ impl Cdp {
                 })
                 .collect();
             if let Some(arguments) = arguments {
-                return Ok(arguments);
+                let mut schema_arguments = vec![json!({"value": view.schema_name()})];
+                schema_arguments.extend(arguments.iter().cloned());
+                let schema = self
+                    .call(
+                        "Runtime.callFunctionOn",
+                        json!({
+                            "functionDeclaration": include_str!("display-setup-schema.js"),
+                            "arguments": schema_arguments, "objectGroup": GROUP,
+                            "silent": true, "returnByValue": true,
+                            "generatePreview": false, "objectId": function,
+                        }),
+                    )
+                    .await?;
+                let compatible = schema.get("exceptionDetails").is_none()
+                    && schema
+                        .get("result")
+                        .and_then(|value| value.get("value"))
+                        .and_then(Value::as_bool)
+                        == Some(true);
+                if compatible {
+                    if matched.is_some() {
+                        anyhow::bail!(view.scope_error());
+                    }
+                    matched = Some(arguments);
+                }
             }
         }
-        anyhow::bail!(view.field_error())
+        matched.ok_or_else(|| anyhow::anyhow!(view.field_error()))
     }
 }
 
@@ -570,7 +595,7 @@ async fn target(executable: &Path, desktop_pids: &[u32]) -> Result<Url> {
         "天工桌面运行身份无法核验"
     );
     let path = executable.to_owned();
-    let expected = tokio::task::spawn_blocking(move || pinned_renderer(&path))
+    let expected = tokio::task::spawn_blocking(move || installed_renderer(&path))
         .await
         .map_err(|_| anyhow::anyhow!("天工桌面资源检查未完成"))??;
     let path = executable
@@ -715,13 +740,12 @@ mod scope_tests {
     use super::{SetupView, ViewIssue, view_issue_detail};
 
     #[test]
-    fn each_pinned_view_accepts_only_its_own_scope_kind() {
-        assert!(SetupView::App.allows_scope("Closure"));
-        assert!(SetupView::App.allows_scope("Closure (setup)"));
-        assert!(SetupView::Panel.allows_scope("Block"));
-        assert!(SetupView::Panel.allows_scope("Block (setup)"));
-        assert!(!SetupView::App.allows_scope("Block (setup)"));
-        assert!(!SetupView::Panel.allows_scope("Closure (setup)"));
+    fn setup_scopes_follow_capabilities_instead_of_compiler_layout() {
+        for view in [SetupView::App, SetupView::Panel] {
+            for scope in ["Closure", "Closure (setup)", "Block", "Block (setup)"] {
+                assert!(view.allows_scope(scope));
+            }
+        }
         for scope in ["Module", "Global", "Script", "BlockBody", "Closure (setup"] {
             assert!(!SetupView::App.allows_scope(scope));
             assert!(!SetupView::Panel.allows_scope(scope));
@@ -739,7 +763,7 @@ mod scope_tests {
     }
 }
 
-fn pinned_renderer(executable: &Path) -> Result<PathBuf> {
+fn installed_renderer(executable: &Path) -> Result<PathBuf> {
     ensure!(super::valid_executable(executable), "天工桌面安装无法核验");
     let executable = executable
         .canonicalize()
@@ -776,7 +800,10 @@ fn pinned_renderer(executable: &Path) -> Result<PathBuf> {
     let header_size = number(4);
     let json_size = number(12);
     ensure!(
-        number(0) == 4 && json_size <= 8 * 1024 * 1024 && json_size + 8 <= header_size,
+        number(0) == 4
+            && json_size <= 8 * 1024 * 1024
+            && json_size + 8 <= header_size
+            && 8 + header_size as u64 <= file_size,
         "天工桌面资源头无法核验"
     );
     let mut header = vec![0; json_size];
@@ -791,7 +818,7 @@ fn pinned_renderer(executable: &Path) -> Result<PathBuf> {
                 value = value
                     .get("files")
                     .and_then(|v| v.get(*name))
-                    .ok_or_else(|| anyhow::anyhow!("天工桌面视图资源版本不支持"))?;
+                    .ok_or_else(|| anyhow::anyhow!("天工桌面视图入口资源缺失"))?;
             }
             ensure!(
                 value.get("unpacked").is_none() && value.get("link").is_none(),
@@ -822,18 +849,52 @@ fn pinned_renderer(executable: &Path) -> Result<PathBuf> {
             Ok(bytes)
         };
     let package = read_entry(&mut file, &["package.json"], 64 * 1024)?;
-    let package: Value =
-        serde_json::from_slice(&package).map_err(|_| anyhow::anyhow!("天工桌面版本无法核验"))?;
-    let renderer = read_entry(
-        &mut file,
-        &["out", "renderer", "assets", RENDERER_ASSET],
-        2 * 1024 * 1024,
-    )?;
-    ensure!(
-        package.get("version").and_then(Value::as_str) == Some("1.1.1")
-            && hex::encode(Sha256::digest(&renderer)) == RENDERER_HASH,
-        "此天工版本尚不支持桌面即时消息同步，消息已保存"
-    );
+    let package: Value = serde_json::from_slice(&package)
+        .map_err(|_| anyhow::anyhow!("天工桌面应用身份无法核验"))?;
+    ensure!(is_tiangong_package(&package), "桌面应用身份不属于天工 Claw");
+    let html = read_entry(&mut file, &["out", "renderer", "index.html"], 256 * 1024)?;
+    let html =
+        std::str::from_utf8(&html).map_err(|_| anyhow::anyhow!("天工桌面视图入口格式无法核验"))?;
+    // Locate the script through the installed HTML. Build hashes and package
+    // versions are irrelevant; actual Vue/API capabilities are checked later.
+    let entries = renderer_script_entries(html)?;
+    let mut total_bytes = 0_u64;
+    for entry in entries {
+        let mut value = &header;
+        for name in ["out", "renderer"]
+            .into_iter()
+            .chain(entry.iter().map(String::as_str))
+        {
+            value = value
+                .get("files")
+                .and_then(|files| files.get(name))
+                .ok_or_else(|| anyhow::anyhow!("天工桌面视图入口脚本缺失"))?;
+        }
+        ensure!(
+            value.get("unpacked").is_none() && value.get("link").is_none(),
+            "天工桌面视图入口脚本无法核验"
+        );
+        let size = value
+            .get("size")
+            .and_then(Value::as_u64)
+            .filter(|size| *size > 0 && *size <= 32 * 1024 * 1024)
+            .ok_or_else(|| anyhow::anyhow!("天工桌面视图入口脚本大小无效"))?;
+        total_bytes += size;
+        ensure!(
+            total_bytes <= 32 * 1024 * 1024,
+            "天工桌面视图入口脚本超过限制"
+        );
+        let start = value
+            .get("offset")
+            .and_then(Value::as_str)
+            .and_then(|offset| offset.parse::<u64>().ok())
+            .and_then(|offset| (8 + header_size as u64).checked_add(offset))
+            .ok_or_else(|| anyhow::anyhow!("天工桌面视图入口脚本位置无效"))?;
+        ensure!(
+            start.checked_add(size).is_some_and(|end| end <= file_size),
+            "天工桌面视图入口脚本范围无效"
+        );
+    }
     // Chromium exposes ordinary Windows file paths, without canonicalize's
     // extended-length prefix. No virtual ASAR path is canonicalized.
     #[cfg(windows)]
@@ -842,6 +903,232 @@ fn pinned_renderer(executable: &Path) -> Result<PathBuf> {
         PathBuf::from(path.strip_prefix("\\\\?\\").unwrap_or(&path))
     };
     Ok(archive.join("out").join("renderer").join("index.html"))
+}
+
+fn is_tiangong_package(package: &Value) -> bool {
+    fn recognized(value: &str) -> bool {
+        if value.len() > 128 {
+            return false;
+        }
+        let normalized: String = value
+            .chars()
+            .filter(|character| !matches!(character, ' ' | '-' | '_' | '.'))
+            .flat_map(char::to_lowercase)
+            .collect();
+        matches!(
+            normalized.as_str(),
+            "tiangongdesktop"
+                | "tiangongclaw"
+                | "tiangong"
+                | "gmclaw"
+                | "gmclawdesktop"
+                | "天工claw"
+                | "天工"
+                | "天工桌面"
+        )
+    }
+    package
+        .get("name")
+        .and_then(Value::as_str)
+        .is_some_and(recognized)
+        && match package.get("productName") {
+            None => true,
+            Some(Value::String(name)) => recognized(name),
+            _ => false,
+        }
+}
+
+/// Parse only bounded external script tags in the renderer entry document.
+/// No JavaScript is executed or read here. Entries must stay below that same
+/// ASAR renderer directory; Runtime inspection provides the capability check.
+fn renderer_script_entries(html: &str) -> Result<Vec<Vec<String>>> {
+    ensure!(
+        html.len() <= 256 * 1024 && !html.contains('\0'),
+        "天工桌面视图入口格式无法核验"
+    );
+    let mut entries = Vec::new();
+    let mut remaining = html;
+    let mut script_count = 0;
+    while let Some(open) = remaining.find('<') {
+        remaining = &remaining[open + 1..];
+        if let Some(comment) = remaining.strip_prefix("!--") {
+            let end = comment
+                .find("-->")
+                .ok_or_else(|| anyhow::anyhow!("天工桌面视图入口注释格式无法核验"))?;
+            remaining = &comment[end + 3..];
+            continue;
+        }
+        if remaining.len() < 6
+            || !remaining.as_bytes()[..6].eq_ignore_ascii_case(b"script")
+            || remaining
+                .as_bytes()
+                .get(6)
+                .is_some_and(|byte| !byte.is_ascii_whitespace() && *byte != b'>')
+        {
+            continue;
+        }
+        script_count += 1;
+        ensure!(script_count <= 32, "天工桌面视图入口脚本超过限制");
+        let tag = &remaining[6..];
+        let mut quote = None;
+        let end = tag
+            .bytes()
+            .position(|byte| match quote {
+                Some(current) if current == byte => {
+                    quote = None;
+                    false
+                }
+                Some(_) => false,
+                None if matches!(byte, b'\'' | b'"') => {
+                    quote = Some(byte);
+                    false
+                }
+                None => byte == b'>',
+            })
+            .ok_or_else(|| anyhow::anyhow!("天工桌面视图入口脚本格式无法核验"))?;
+        let src = script_source(&tag[..end])?;
+        remaining = &tag[end + 1..];
+        if let Some(src) = src {
+            ensure!(src.len() <= 1024, "天工桌面视图入口脚本地址超过限制");
+            let src = src.strip_prefix("./").unwrap_or(src);
+            ensure!(
+                !src.is_empty()
+                    && !src.contains(['\\', ':', '?', '#', '%', '&'])
+                    && src.chars().all(|character| !character.is_control()),
+                "天工桌面视图入口脚本必须属于安装目录"
+            );
+            let names: Vec<String> = src.split('/').map(str::to_owned).collect();
+            ensure!(
+                names.len() <= 8
+                    && names.iter().all(|name| !name.is_empty()
+                        && name != "."
+                        && name != ".."
+                        && name.len() <= 255)
+                    && names
+                        .last()
+                        .is_some_and(|name| name.ends_with(".js") || name.ends_with(".mjs")),
+                "天工桌面视图入口脚本地址无法核验"
+            );
+            if !entries.contains(&names) {
+                entries.push(names);
+            }
+        }
+        // Script contents are raw text, including '<' characters. Do not
+        // mistake a string inside an inline script for another script tag.
+        let lower = remaining.to_ascii_lowercase();
+        let close = lower
+            .find("</script")
+            .ok_or_else(|| anyhow::anyhow!("天工桌面视图入口脚本结束标记缺失"))?;
+        let end = remaining[close..]
+            .find('>')
+            .ok_or_else(|| anyhow::anyhow!("天工桌面视图入口脚本结束标记无效"))?;
+        remaining = &remaining[close + end + 1..];
+    }
+    ensure!(!entries.is_empty(), "天工桌面视图入口脚本缺失");
+    Ok(entries)
+}
+
+fn script_source(mut attributes: &str) -> Result<Option<&str>> {
+    let mut source = None;
+    while !attributes.trim().is_empty() {
+        attributes = attributes.trim_start();
+        let end = attributes
+            .find(|character: char| character.is_ascii_whitespace() || character == '=')
+            .unwrap_or(attributes.len());
+        ensure!(end > 0, "天工桌面视图入口脚本属性无效");
+        let name = &attributes[..end];
+        attributes = attributes[end..].trim_start();
+        let Some(value) = attributes.strip_prefix('=') else {
+            ensure!(
+                !name.eq_ignore_ascii_case("src"),
+                "天工桌面视图入口脚本地址缺失"
+            );
+            continue;
+        };
+        attributes = value.trim_start();
+        let value;
+        if attributes.starts_with(['\'', '"']) {
+            let quote = attributes.as_bytes()[0] as char;
+            let end = attributes[1..]
+                .find(quote)
+                .ok_or_else(|| anyhow::anyhow!("天工桌面视图入口脚本属性无法核验"))?
+                + 1;
+            value = &attributes[1..end];
+            attributes = &attributes[end + 1..];
+        } else {
+            let end = attributes
+                .find(char::is_whitespace)
+                .unwrap_or(attributes.len());
+            value = &attributes[..end];
+            attributes = &attributes[end..];
+        }
+        if name.eq_ignore_ascii_case("src") {
+            ensure!(source.is_none(), "天工桌面视图入口脚本地址重复");
+            source = Some(value);
+        }
+    }
+    Ok(source)
+}
+
+#[cfg(test)]
+mod renderer_entry_tests {
+    use super::{is_tiangong_package, renderer_script_entries};
+    use serde_json::json;
+
+    #[test]
+    fn package_identity_does_not_depend_on_a_version_number() {
+        for version in ["1.1.1", "1.2.0", "2.0.0-beta.1"] {
+            assert!(is_tiangong_package(
+                &json!({"name":"tiangong-desktop", "productName":"GMClaw", "version":version})
+            ));
+        }
+        assert!(is_tiangong_package(&json!({"name":"tiangong-desktop"})));
+        assert!(is_tiangong_package(
+            &json!({"name":"gmclaw-desktop", "productName":"天工 Claw", "version":"3.0.0"})
+        ));
+        for package in [
+            json!({"name":"other-app", "productName":"GMClaw"}),
+            json!({"name":"tiangong-desktop", "productName":"another-app"}),
+            json!({"name":"fake-ti angong-desktop"}),
+        ] {
+            assert!(!is_tiangong_package(&package));
+        }
+    }
+
+    #[test]
+    fn renderer_uses_the_installed_script_with_any_build_suffix() {
+        for asset in ["index-oms9jgdP.js", "index-new-build.mjs", "app-v2.js"] {
+            let html = format!(
+                "<!-- <script src='fake.js'></script> --><script type=\"module\" crossorigin src='./assets/{asset}'></script>"
+            );
+            assert_eq!(
+                renderer_script_entries(&html).unwrap(),
+                vec![vec!["assets".to_owned(), asset.to_owned()]]
+            );
+        }
+    }
+
+    #[test]
+    fn renderer_rejects_scripts_outside_its_installed_entry() {
+        for script in [
+            "../other.js",
+            "/assets/index.js",
+            "https://example.invalid/index.js",
+            "//example.invalid/index.js",
+            "assets/../index.js",
+            "assets/%2e%2e/index.js",
+            "assets/index.js?other=1",
+            "assets/index.js#other",
+            "assets/index.css",
+        ] {
+            assert!(renderer_script_entries(&format!("<script src='{script}'></script>")).is_err());
+        }
+        assert!(renderer_script_entries("<script src='one.js' src='two.js'></script>").is_err());
+        assert!(
+            renderer_script_entries("<script>const fake = '<script src=\"one.js\">';</script>")
+                .is_err()
+        );
+    }
 }
 
 #[cfg(target_os = "macos")]

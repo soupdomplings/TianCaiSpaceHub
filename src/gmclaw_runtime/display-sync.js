@@ -2,16 +2,51 @@ async function (messages, streaming, confirmation, welcome, older, scroll, loadi
   // Requests run inside the verified renderer; only an outcome is returned.
   // Scope discovery may transiently receive primitive values in Hub memory.
   const isRef = (value) => value && value.__v_isRef === true;
-  if (!isRef(instances) || !Array.isArray(instances.value) || !isRef(scenarios) || !Array.isArray(scenarios.value)) return 'app_fields';
+  const isMutableObject = (value) => value !== null && typeof value === 'object' && value.__v_isReadonly !== true && !Object.isFrozen(value);
+  const canAssign = (target, key, requireExisting = false) => {
+    if (!isMutableObject(target)) return false;
+    let owner = target;
+    for (let depth = 0; owner && depth < 8; depth++, owner = Object.getPrototypeOf(owner)) {
+      const descriptor = Object.getOwnPropertyDescriptor(owner, key);
+      if (!descriptor) continue;
+      if ('value' in descriptor) return descriptor.writable === true && (owner === target || Object.isExtensible(target));
+      return typeof descriptor.set === 'function';
+    }
+    return !owner && !requireExisting && Object.isExtensible(target);
+  };
+  const isWritableRef = (value) => isRef(value) && canAssign(value, 'value', true);
+  const canAssignCache = (target, key) => {
+    if (!canAssign(target, key)) return false;
+    if (target.__v_isReactive !== true) return true;
+    for (let owner = target, depth = 0; owner && depth < 8; depth++, owner = Object.getPrototypeOf(owner)) {
+      const descriptor = Object.getOwnPropertyDescriptor(owner, key);
+      if (descriptor) return !('value' in descriptor) || !isRef(descriptor.value) || isWritableRef(descriptor.value);
+    }
+    return true;
+  };
+  const isBooleanRef = (value) => isRef(value) && typeof value.value === 'boolean';
+  const isNullableStringRef = (value) => isRef(value) && (value.value === null || typeof value.value === 'string');
+  const isConfirmationRef = (value) => isRef(value) && (value.value === null || (typeof value.value === 'object' && !Array.isArray(value.value)));
+  const hasPanelProps = (value) => value && typeof value.taskId === 'string' && typeof value.conversationSessionId === 'string' && typeof value.isActive === 'boolean';
+  if (!isRef(instances) || !Array.isArray(instances.value) || !isWritableRef(scenarios) || !Array.isArray(scenarios.value)) return 'app_fields';
   const opening = isRef(openingTasks) ? openingTasks.value : openingTasks;
   const deleting = isRef(deletingTaskIds) ? deletingTaskIds.value : deletingTaskIds;
   if (!(opening instanceof Set) || !(deleting instanceof Set)) return 'app_sets';
   if (!Array.isArray(hubRowIds) || hubRowIds.length > 128 || hubRowIds.some((id) => !Number.isSafeInteger(id) || id <= 0)) return 'incompatible';
   const ownedRows = new Set(hubRowIds);
-  const bound = instances.value.filter((instance) => instance.taskId === taskId);
+  const instanceArray = instances.value;
+  const scenarioArray = scenarios.value;
+  const messageArray = props ? messages?.value : null;
+  const bound = instanceArray.filter((instance) => instance.taskId === taskId);
   if (bound.length > 1 || bound.some((instance) => instance.sessionId !== sessionId)) return 'instance_identity';
   if (props && (props.taskId !== taskId || props.conversationSessionId !== sessionId)) return 'panel_identity';
-  if (props && (![messages, streaming, confirmation, welcome, older, loadingOlder, modelsLoaded, localTaskIdRef, sessionIdRef].every(isRef) || !Array.isArray(messages.value) || typeof scroll !== 'function' || (nativeCleanup !== null && typeof nativeCleanup !== 'function'))) return 'panel_fields';
+  if (props && (!hasPanelProps(props) || !isRef(messages) || !Array.isArray(messages.value) || ![messages, welcome, older].every(isWritableRef) || ![streaming, welcome, older, loadingOlder, modelsLoaded].every(isBooleanRef) || !isConfirmationRef(confirmation) || ![localTaskIdRef, sessionIdRef].every(isNullableStringRef) || typeof scroll !== 'function' || (nativeCleanup !== null && typeof nativeCleanup !== 'function'))) return 'panel_fields';
+  if (props && bound.length !== 1) return 'changed';
+  const cacheFields = ['seedMessages', 'messageSummaries', 'hasOlderMessages'];
+  const cacheSnapshot = props ? cacheFields.map((key) => bound[0][key]) : null;
+  const cacheWritable = () => !props || (isMutableObject(bound[0]) && cacheFields.every((key) => canAssignCache(bound[0], key)));
+  const refsWritable = () => isWritableRef(scenarios) && (!props || [messages, welcome, older].every(isWritableRef));
+  if (!cacheWritable()) return 'app_fields';
   const idle = () => !opening.has(taskId) && !deleting.has(taskId) && (!props || (streaming.value === false && confirmation.value === null && loadingOlder.value === false && modelsLoaded.value === true && nativeCleanup === null && localTaskIdRef.value === taskId && (sessionIdRef.value || props.conversationSessionId) === sessionId && !messages.value.some((m) => m.awaitingConfirm)));
   if (!idle()) return 'busy';
   const snapshot = props ? JSON.stringify(messages.value) : null;
@@ -93,11 +128,19 @@ async function (messages, streaming, confirmation, welcome, older, scroll, loadi
       page.has_more = previous.has_more;
     }
     // An opening/closing panel or a new native execution during the read wins.
-    const nowBound = instances.value.filter((instance) => instance.taskId === taskId);
-    if (nowBound.length !== bound.length || nowBound.some((instance, index) => instance !== bound[index]) || !idle() || JSON.stringify(scenarios.value) !== scenarioSnapshot || (props && (props.taskId !== taskId || props.conversationSessionId !== sessionId || JSON.stringify(messages.value) !== snapshot))) return 'changed';
+    const unchanged = () => {
+      if (instances.value !== instanceArray || scenarios.value !== scenarioArray) return false;
+      const nowBound = instanceArray.filter((instance) => instance.taskId === taskId);
+      return nowBound.length === bound.length && !nowBound.some((instance, index) => instance !== bound[index] || instance.sessionId !== sessionId) && idle() && JSON.stringify(scenarios.value) === scenarioSnapshot && (!props || (messages.value === messageArray && hasPanelProps(props) && props.taskId === taskId && props.conversationSessionId === sessionId && JSON.stringify(messages.value) === snapshot && cacheFields.every((key, index) => bound[0][key] === cacheSnapshot[index])));
+    };
+    if (!unchanged()) return 'changed';
+    if (!refsWritable()) return props ? 'panel_fields' : 'app_fields';
+    if (!cacheWritable()) return 'app_fields';
     const nextScenarios = list.scenarios.map((scenario) => ({...scenario, tasks: [...scenario.tasks].sort((left, right) => Number(left.sort_order ?? 0) - Number(right.sort_order ?? 0) || String(right.updated_at || '').localeCompare(String(left.updated_at || '')) || String(right.created_at || '').localeCompare(String(left.created_at || '')) || right.task_id.localeCompare(left.task_id))}));
     if (!props) {
       if (bound.length) return 'changed';
+      if (!unchanged()) return 'changed';
+      if (!refsWritable()) return 'app_fields';
       scenarios.value = nextScenarios;
       return 'closed';
     }
@@ -164,19 +207,26 @@ async function (messages, streaming, confirmation, welcome, older, scroll, loadi
     const scroller = host?.querySelector('.chat-messages');
     const follow = scroller && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;
     const previousTimes = new Map(bound[0].seedMessages?.map((message) => [message.dbId, message.createdAt]) || []);
-    // Preserve all loaded older rows and the original form/model/attachments.
-    messages.value = [...retained, ...refreshed];
-    welcome.value = messages.value.length === 0;
-    const loadedIds = new Set(messages.value.map((message) => message.dbId));
+    const nextMessages = [...retained, ...refreshed];
+    const loadedIds = new Set(nextMessages.map((message) => message.dbId));
     const completeLoaded = !page.has_more || summary.messages.every((message) => loadedIds.has(message.id));
-    older.value = !completeLoaded;
-    const instance = bound[0];
-    instance.seedMessages = messages.value.map((message) => ({
+    const nextSeedMessages = nextMessages.map((message) => ({
       type: message.type, content: message.content, dbId: message.dbId,
       createdAt: stored.get(message.dbId)?.created_at ?? previousTimes.get(message.dbId), thinkingSteps: message.thinkingSteps, files: message.files,
     }));
+    // Compute every replacement and recheck writable targets after asynchronous
+    // reads, before the first assignment to the view or its cached instance.
+    if (!unchanged()) return 'changed';
+    if (!refsWritable()) return 'panel_fields';
+    if (!cacheWritable()) return 'app_fields';
+    // Preserve all loaded older rows and the original form/model/attachments.
+    messages.value = nextMessages;
+    welcome.value = nextMessages.length === 0;
+    older.value = !completeLoaded;
+    const instance = bound[0];
+    instance.seedMessages = nextSeedMessages;
     instance.messageSummaries = summary.messages;
-    instance.hasOlderMessages = older.value;
+    instance.hasOlderMessages = !completeLoaded;
     scenarios.value = nextScenarios;
     // Auto-scroll only the active panel already at its bottom; no page change.
     if (follow) queueMicrotask(() => scroll());

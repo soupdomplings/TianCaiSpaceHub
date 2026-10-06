@@ -1,3 +1,18 @@
+TianCaiSpaceHub v0.4.30-4
+
+取消天工 Claw 桌面即时同步的固定版本门槛，在官方 CodexHub v0.4.30 基线和全部既有二开上继续发布。
+
+- 不再要求天工 `1.1.1`、固定 renderer 脚本文件名或 SHA-256 白名单；识别实际安装身份、HTML 本地脚本入口及运行时能力，兼容接口和字段的其他版本可直接同步。
+- 组件定位不依赖编译名称，兼容 Closure/Block 布局；完整字段必须来自唯一有效作用域。实际写入的消息状态和会话缓存要求可写，异步读取后再次核对身份、快照和目标，避免只读状态误报更新。
+- 保留同用户进程、精确页面与任务/会话保护，以及原生执行、审批、未保存消息与自有回复来源保护；同步不重载页面、不重启天工、不重放模型或工具任务。首次同步通道仍通过 Hub 启动天工启用。
+- 保留 Codex/WorkBuddy/天工多模型与专用入口隔离、自动重连、平台会话和审批流程、端口释放、完整项目目录、回复状态及全部既有二开。无配置迁移，回退 `v0.4.30-3` 会恢复原版本限制。
+
+发布准备：用户已授权更新唯一 `main` 并创建 `v0.4.30-4` Release，Windows/macOS 安装包由 GitHub Actions 重新生成；源码提交、Actions、附件与签名状态见 [本版交付](docs/releases/v0.4.30-4.md)。本轮 Windows locked GUI/测试代码编译通过，保留程序 36 条及测试代码 59 条（20 条重复）警告；开发阶段独立 Windows 调试构建已通过，不等于安装包或实机验收。开发方不启动客户端或真实业务；两平台消息同步、新版天工兼容及安装升级待用户验收，未来接口结构变化仍需按实际能力适配。
+
+实现与回滚见 [天工外部消息](docs/customizations/gmclaw-im.md)、[模型接入](docs/customizations/gmclaw.md) 及 [品牌与交付](docs/customizations/desktop-and-packaging.md)。此前发布历史保留原版本事实。
+
+---
+
 TianCaiSpaceHub v0.4.30-3
 
 已推送 `main` 和 `v0.4.30-3` 注释标签并创建非草稿 Pre-release。Windows/macOS GitHub Actions 构建与打包均成功，Windows x64 MSI/便携 ZIP、macOS Apple Silicon/Intel universal DMG/App ZIP 及四份更新附件已上传、下载并通过哈希与结构静态核验。Windows 包未签名，macOS 为 ad-hoc 签名且未公证；构建及产物核验不替代实机功能与安装升级验收。
