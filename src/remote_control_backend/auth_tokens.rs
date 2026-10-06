@@ -1,4 +1,4 @@
-﻿use std::{
+use std::{
     path::Path,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -118,7 +118,7 @@ fn local_chatgpt_jwt(account_id: &str, plan_type: &str) -> String {
                 "id": account_id,
                 "is_default": true,
                 "role": "owner",
-        "title": "TianCaiSpace Hub Local"
+        "title": "TianCaiSpaceHub Local"
             }]
         },
         "scp": ["openid", "profile", "email", "offline_access"],

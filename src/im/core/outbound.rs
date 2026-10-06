@@ -8,6 +8,8 @@ use crate::{
     chain_log,
     im::{
         core::accounts::ImApiRegistry,
+        core::executor_approval::{self, GmClawApproval},
+        core::executor_turn::{GmClawTurn, GmClawTurnPhase, TurnPresenter},
         core::i18n::im_text_for_state,
         feishu::{FeishuAdapter, FeishuApi},
         telegram::{adapter::TelegramAdapter, api::TelegramApi},
@@ -19,7 +21,7 @@ use crate::{
         wecom::{adapter::WecomAdapter, api::WecomApi},
     },
     im_runtime::{PendingApproval, RouteTarget},
-    types::ImPlatformKind,
+    types::{ImPlatformKind, InboundMessage},
 };
 
 #[derive(Clone)]
@@ -53,6 +55,20 @@ pub(crate) enum ImOutboundKind {
 pub(crate) enum ImOutboundPayload {
     Text(String),
     Approval(PendingApproval),
+    GmClawApproval(GmClawApproval),
+    GmClawApprovalResolved {
+        approval: GmClawApproval,
+        option_index: usize,
+        callback: Option<InboundMessage>,
+    },
+    GmClawTurnStage {
+        turn: GmClawTurn,
+        phase: GmClawTurnPhase,
+    },
+    GmClawTurnFinished {
+        turn: GmClawTurn,
+        text: String,
+    },
     Image {
         path: PathBuf,
         caption: Option<String>,
@@ -83,8 +99,24 @@ pub(crate) async fn run_worker(
     api_registry: ImApiRegistry,
     mut receiver: ImOutboundReceiver,
 ) {
-    while let Some(message) = receiver.receiver.recv().await {
+    let mut turns = TurnPresenter::default();
+    let mut cleanup = tokio::time::interval(std::time::Duration::from_secs(15));
+    cleanup.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        let message = tokio::select! {
+            message = receiver.receiver.recv() => match message {
+                Some(message) => message,
+                None => break,
+            },
+            _ = cleanup.tick() => {
+                turns.expire(&state, &api_registry).await;
+                continue;
+            }
+        };
         log_outbound_message("worker_dequeue", &message, None);
+        if turns.handle(&state, &api_registry, &message).await {
+            continue;
+        }
         if !outbound_channel_enabled(&state, &message.route).await {
             state
                 .push_event(
@@ -135,6 +167,7 @@ pub(crate) async fn run_worker(
             }
         }
     }
+    turns.close_all(&state, &api_registry).await;
     state
         .push_event(
             "warn",
@@ -189,7 +222,7 @@ pub(crate) async fn replay_wechat_pending_for_peer(
     count
 }
 
-async fn outbound_channel_enabled(state: &SharedState, route: &RouteTarget) -> bool {
+pub(super) async fn outbound_channel_enabled(state: &SharedState, route: &RouteTarget) -> bool {
     let config = state.config.lock().await;
     match route.platform {
         ImPlatformKind::Feishu => config
@@ -207,13 +240,15 @@ async fn outbound_channel_enabled(state: &SharedState, route: &RouteTarget) -> b
     }
 }
 
-async fn send_wecom_outbound(
+pub(super) async fn send_wecom_outbound(
     state: &SharedState,
     wecom_api: &WecomApi,
     message: ImOutboundMessage,
 ) {
     let adapter = WecomAdapter::new(wecom_api.clone());
     let result = match &message.payload {
+        ImOutboundPayload::GmClawTurnStage { .. }
+        | ImOutboundPayload::GmClawTurnFinished { .. } => return,
         ImOutboundPayload::Text(text) => {
             adapter
                 .send_text(
@@ -245,6 +280,40 @@ async fn send_wecom_outbound(
                         .await
                         .map_err(|text_err| anyhow!("card={card_err}; fallback={text_err}"))
                 }
+            }
+        }
+        ImOutboundPayload::GmClawApproval(approval) => {
+            send_wecom_gmclaw_approval(state, &adapter, &message, approval).await
+        }
+        ImOutboundPayload::GmClawApprovalResolved {
+            approval,
+            option_index,
+            callback,
+        } => {
+            let response = executor_approval::resolved_text(*option_index);
+            if let Some(response) = response {
+                let updated = if let Some(callback) = callback {
+                    adapter
+                        .acknowledge_gmclaw_approval(approval, *option_index, callback)
+                        .await
+                        .unwrap_or(false)
+                } else {
+                    false
+                };
+                if updated {
+                    Ok(String::new())
+                } else {
+                    adapter
+                        .send_text(
+                            state,
+                            &message.route.account_id,
+                            &message.route.chat_id,
+                            &response,
+                        )
+                        .await
+                }
+            } else {
+                Err(anyhow!("invalid TianGong approval choice"))
             }
         }
         ImOutboundPayload::Image {
@@ -320,6 +389,148 @@ async fn log_missing_api(state: &SharedState, message: &ImOutboundMessage) {
         .await;
 }
 
+async fn send_wecom_gmclaw_approval(
+    state: &SharedState,
+    adapter: &WecomAdapter,
+    message: &ImOutboundMessage,
+    approval: &GmClawApproval,
+) -> Result<String> {
+    // The native card subtitle is bounded. Send every parameter first; a
+    // partially delivered description must not be followed by actionable buttons.
+    let details = executor_approval::approval_text(approval);
+    for chunk in executor_approval::text_chunks(&details, 3500) {
+        adapter
+            .send_text(
+                state,
+                &message.route.account_id,
+                &message.route.chat_id,
+                chunk,
+            )
+            .await
+            .map_err(|_| anyhow!("天工审批完整参数发送未完成，审批卡片未发送"))?;
+    }
+    match adapter
+        .send_gmclaw_approval_card(&message.route.chat_id, approval)
+        .await
+    {
+        Ok(message_id) => {
+            crate::gmclaw_im::remember_approval_message_id(
+                state,
+                &approval.request_key,
+                message_id.clone(),
+            )
+            .await;
+            Ok(message_id)
+        }
+        Err(_) => {
+            state
+                .push_event(
+                    "warn",
+                    "wecom_gmclaw_approval_card_fallback",
+                    "天工审批卡片发送失败，改用完整文字审批指令",
+                )
+                .await;
+            let fallback = executor_approval::legacy_approval_text(approval);
+            let mut last_id = String::new();
+            for chunk in executor_approval::text_chunks(&fallback, 3500) {
+                last_id = adapter
+                    .send_text(
+                        state,
+                        &message.route.account_id,
+                        &message.route.chat_id,
+                        chunk,
+                    )
+                    .await
+                    .map_err(|_| anyhow!("天工审批卡片和文字回退发送未完成"))?;
+            }
+            Ok(last_id)
+        }
+    }
+}
+
+async fn send_feishu_gmclaw_approval(
+    state: &SharedState,
+    adapter: &FeishuAdapter,
+    message: &ImOutboundMessage,
+    approval: &GmClawApproval,
+) {
+    let mut shown = approval.clone();
+    let card =
+        crate::im::feishu::renderer::build_gmclaw_approval_card(&shown, im_text_for_state(state));
+    if card.to_string().len() > 24 * 1024 {
+        let details = format!("天工 Claw 审批请求：完整工具参数\n\n{}", approval.summary);
+        if send_feishu_gmclaw_full_text(adapter, &message.route.chat_id, &details)
+            .await
+            .is_err()
+        {
+            state
+                .push_event(
+                    "error",
+                    "feishu_gmclaw_approval_failed",
+                    "完整工具参数发送未完成，审批按钮未发送",
+                )
+                .await;
+            return;
+        }
+        shown.summary =
+            "完整工具参数已在前面的消息中发送，请核对后选择；仅适用于本次请求，不会永久授权。"
+                .into();
+    }
+    match adapter
+        .send_gmclaw_approval(&message.route.chat_id, &shown, im_text_for_state(state))
+        .await
+    {
+        Ok(message_id) => {
+            crate::gmclaw_im::remember_approval_message_id(
+                state,
+                &approval.request_key,
+                message_id,
+            )
+            .await;
+            state
+                .push_event("info", "feishu_gmclaw_approval_sent", "天工审批卡片已发送")
+                .await;
+        }
+        Err(_) => {
+            state
+                .push_event(
+                    "warn",
+                    "feishu_gmclaw_approval_card_fallback",
+                    "天工审批卡片发送失败，改用完整文字审批指令",
+                )
+                .await;
+            let fallback = executor_approval::legacy_approval_text(approval);
+            if send_feishu_gmclaw_full_text(adapter, &message.route.chat_id, &fallback)
+                .await
+                .is_err()
+            {
+                state
+                    .push_event(
+                        "error",
+                        "feishu_gmclaw_approval_failed",
+                        "天工审批卡片和文字回退发送未完成",
+                    )
+                    .await;
+            }
+        }
+    }
+}
+
+async fn send_feishu_gmclaw_full_text(
+    adapter: &FeishuAdapter,
+    target: &str,
+    text: &str,
+) -> Result<()> {
+    let adapter = adapter.for_sensitive_messages();
+    for chunk in feishu_gmclaw_text_chunks(text) {
+        adapter
+            .send_text(target, chunk)
+            .await
+            .map_err(|_| anyhow!("天工审批文字发送未完成"))?;
+    }
+    Ok(())
+}
+
 async fn send_telegram_outbound(
     state: &SharedState,
     telegram_api: &TelegramApi,
@@ -327,11 +538,22 @@ async fn send_telegram_outbound(
 ) {
     let adapter = TelegramAdapter::new(telegram_api.clone());
     match &message.payload {
+        ImOutboundPayload::GmClawTurnStage { .. }
+        | ImOutboundPayload::GmClawTurnFinished { .. } => return,
         ImOutboundPayload::Text(text) => {
             send_telegram_text(state, &adapter, &message, text).await;
         }
         ImOutboundPayload::Approval(approval) => {
             send_telegram_approval(state, &adapter, &message, approval).await;
+        }
+        ImOutboundPayload::GmClawApproval(_) | ImOutboundPayload::GmClawApprovalResolved { .. } => {
+            send_telegram_text(
+                state,
+                &adapter,
+                &message,
+                "Telegram 暂不支持天工 Claw 审批，请在天工桌面处理。",
+            )
+            .await;
         }
         ImOutboundPayload::Image {
             path,
@@ -358,8 +580,30 @@ async fn send_feishu_outbound(
 ) {
     let adapter = FeishuAdapter::new(feishu_api.clone());
     match &message.payload {
+        ImOutboundPayload::GmClawTurnStage { .. }
+        | ImOutboundPayload::GmClawTurnFinished { .. } => return,
         ImOutboundPayload::Approval(approval) => {
             send_feishu_approval(state, &adapter, &message, approval).await;
+        }
+        ImOutboundPayload::GmClawApproval(approval) => {
+            send_feishu_gmclaw_approval(state, &adapter, &message, approval).await;
+        }
+        ImOutboundPayload::GmClawApprovalResolved {
+            approval,
+            option_index,
+            ..
+        } => {
+            let adapter = adapter.for_sensitive_messages();
+            let Some(response) = executor_approval::resolved_text(*option_index) else {
+                return;
+            };
+            if !adapter
+                .update_resolved_gmclaw_approval(approval, *option_index, im_text_for_state(state))
+                .await
+                .unwrap_or(false)
+            {
+                send_feishu_gmclaw_text(state, &adapter, &message, &response).await;
+            }
         }
         ImOutboundPayload::Text(text) if message.item_type.as_deref() == Some("gmclaw") => {
             send_feishu_gmclaw_text(state, &adapter, &message, text).await;
@@ -521,13 +765,17 @@ mod gmclaw_outbound_tests {
     }
 }
 
-async fn send_wechat_outbound(
+pub(super) async fn send_wechat_outbound(
     state: &SharedState,
     wechat_api: &WechatApi,
     message: ImOutboundMessage,
 ) {
     let adapter = WechatAdapter::new(wechat_api.clone());
     match &message.payload {
+        ImOutboundPayload::GmClawTurnStage { .. } => return,
+        ImOutboundPayload::GmClawTurnFinished { text, .. } => {
+            send_wechat_text(state, &adapter, &message, text).await;
+        }
         ImOutboundPayload::Text(text) => {
             send_wechat_text(state, &adapter, &message, text).await;
         }
@@ -535,6 +783,15 @@ async fn send_wechat_outbound(
             let text =
                 crate::im::wechat::adapter::approval_text(approval, im_text_for_state(state));
             send_wechat_text(state, &adapter, &message, &text).await;
+        }
+        ImOutboundPayload::GmClawApproval(approval) => {
+            let text = executor_approval::approval_text(approval);
+            send_wechat_text(state, &adapter, &message, &text).await;
+        }
+        ImOutboundPayload::GmClawApprovalResolved { option_index, .. } => {
+            if let Some(response) = executor_approval::resolved_text(*option_index) {
+                send_wechat_text(state, &adapter, &message, &response).await;
+            }
         }
         ImOutboundPayload::Image {
             path,
@@ -559,7 +816,7 @@ async fn send_wechat_text(
     adapter: &WechatAdapter,
     message: &ImOutboundMessage,
     text: &str,
-) {
+) -> bool {
     let event_begin = match message.kind {
         ImOutboundKind::TurnReply => "wechat_turn_send_begin",
         ImOutboundKind::Item | ImOutboundKind::ImageItem => "wechat_item_send_begin",
@@ -585,18 +842,11 @@ async fn send_wechat_text(
         )
         .await;
     log_outbound_message("send_wechat_text_begin", message, Some(text));
-    match adapter
-        .send_text(
-            state,
-            &message.route.account_id,
-            &message.route.chat_id,
-            text,
-        )
-        .await
-    {
+    match send_wechat_text_with_context_mode(state, adapter, message, text, true).await {
         Ok(message_id) => {
             log_outbound_result("send_wechat_text_done", message, &message_id);
             push_wechat_text_sent_event(state, event_done, message, &message_id).await;
+            true
         }
         Err(err) => {
             let err_text = err.to_string();
@@ -615,7 +865,7 @@ async fn send_wechat_text(
                             message.item_id.as_deref().unwrap_or(""),
                             message.item_type.as_deref().unwrap_or(""),
                             message.route.chat_id,
-                            err_text
+                            safe_outbound_error(message, &err_text)
                         ),
                     )
                     .await;
@@ -624,14 +874,7 @@ async fn send_wechat_text(
                     message,
                     &err_text,
                 );
-                match adapter
-                    .send_text_without_context_token(
-                        state,
-                        &message.route.account_id,
-                        &message.route.chat_id,
-                        text,
-                    )
-                    .await
+                match send_wechat_text_with_context_mode(state, adapter, message, text, false).await
                 {
                     Ok(message_id) => {
                         log_outbound_result(
@@ -640,7 +883,7 @@ async fn send_wechat_text(
                             &message_id,
                         );
                         push_wechat_text_sent_event(state, event_done, message, &message_id).await;
-                        return;
+                        return true;
                     }
                     Err(retry_err) => {
                         let retry_err_text = retry_err.to_string();
@@ -653,12 +896,12 @@ async fn send_wechat_text(
                         if defer_wechat_outbound_on_context_error(state, message, &retry_err_text)
                             .await
                         {
-                            return;
+                            return false;
                         }
                     }
                 }
             } else if defer_wechat_outbound_on_context_error(state, message, &err_text).await {
-                return;
+                return false;
             }
             let event_failed = match message.kind {
                 ImOutboundKind::TurnReply => "wechat_turn_completed_failed",
@@ -675,11 +918,77 @@ async fn send_wechat_text(
                         message.item_id.as_deref().unwrap_or(""),
                         message.item_type.as_deref().unwrap_or(""),
                         message.route.chat_id,
-                        final_err_text
+                        safe_outbound_error(message, &final_err_text)
                     ),
                 )
                 .await;
+            false
         }
+    }
+}
+
+async fn send_wechat_text_with_context_mode(
+    state: &SharedState,
+    adapter: &WechatAdapter,
+    message: &ImOutboundMessage,
+    text: &str,
+    use_context_token: bool,
+) -> anyhow::Result<String> {
+    if let ImOutboundPayload::GmClawTurnFinished { turn, .. } = &message.payload {
+        adapter
+            .send_gmclaw_turn_text(
+                state,
+                &message.route.account_id,
+                &message.route.chat_id,
+                text,
+                use_context_token,
+                turn.delivery_scope(),
+            )
+            .await
+    } else if matches!(
+        message.payload,
+        ImOutboundPayload::GmClawApproval(_) | ImOutboundPayload::GmClawApprovalResolved { .. }
+    ) || message.item_type.as_deref() == Some("gmclaw-turn")
+    {
+        adapter
+            .send_gmclaw_approval_text(
+                state,
+                &message.route.account_id,
+                &message.route.chat_id,
+                text,
+                use_context_token,
+            )
+            .await
+    } else if use_context_token {
+        adapter
+            .send_text(
+                state,
+                &message.route.account_id,
+                &message.route.chat_id,
+                text,
+            )
+            .await
+    } else {
+        adapter
+            .send_text_without_context_token(
+                state,
+                &message.route.account_id,
+                &message.route.chat_id,
+                text,
+            )
+            .await
+    }
+}
+
+fn safe_outbound_error<'a>(message: &ImOutboundMessage, error: &'a str) -> &'a str {
+    if matches!(
+        message.payload,
+        ImOutboundPayload::GmClawApproval(_) | ImOutboundPayload::GmClawApprovalResolved { .. }
+    ) || message.item_type.as_deref() == Some("gmclaw-turn")
+    {
+        "天工审批消息发送未完成（详细响应已隐藏）"
+    } else {
+        error
     }
 }
 
@@ -767,7 +1076,11 @@ async fn defer_wechat_outbound_if_waiting(
     if waiting {
         if matches!(
             message.payload,
-            ImOutboundPayload::Text(_) | ImOutboundPayload::Approval(_)
+            ImOutboundPayload::Text(_)
+                | ImOutboundPayload::Approval(_)
+                | ImOutboundPayload::GmClawApproval(_)
+                | ImOutboundPayload::GmClawApprovalResolved { .. }
+                | ImOutboundPayload::GmClawTurnFinished { .. }
         ) {
             log_outbound_result(
                 "wechat_context_token_waiting_text_allowed",
@@ -788,7 +1101,11 @@ async fn defer_wechat_outbound_if_waiting(
     if context_token.is_none() {
         if matches!(
             message.payload,
-            ImOutboundPayload::Text(_) | ImOutboundPayload::Approval(_)
+            ImOutboundPayload::Text(_)
+                | ImOutboundPayload::Approval(_)
+                | ImOutboundPayload::GmClawApproval(_)
+                | ImOutboundPayload::GmClawApprovalResolved { .. }
+                | ImOutboundPayload::GmClawTurnFinished { .. }
         ) {
             log_outbound_result(
                 "wechat_context_token_missing_text_allowed",
@@ -853,6 +1170,14 @@ async fn push_wechat_text_sent_event(
     message: &ImOutboundMessage,
     message_id: &str,
 ) {
+    if let ImOutboundPayload::GmClawApproval(approval) = &message.payload {
+        crate::gmclaw_im::remember_approval_message_id(
+            state,
+            &approval.request_key,
+            message_id.to_owned(),
+        )
+        .await;
+    }
     state
         .push_event(
             "info",
@@ -1050,6 +1375,23 @@ fn log_outbound_message(event: &str, message: &ImOutboundMessage, text: Option<&
         return;
     }
     let (payload_kind, text_len, preview) = match (&message.payload, text) {
+        (ImOutboundPayload::GmClawTurnStage { .. }, _) => {
+            ("gmclaw_turn_stage", 0, "[redacted]".to_owned())
+        }
+        (ImOutboundPayload::GmClawTurnFinished { text, .. }, _) => {
+            ("gmclaw_turn_finished", text.len(), "[redacted]".to_owned())
+        }
+        (_, _) if message.item_type.as_deref() == Some("gmclaw-turn") => {
+            ("gmclaw_turn_fallback", 0, "[redacted]".to_owned())
+        }
+        (ImOutboundPayload::GmClawApproval(approval), _) => (
+            "gmclaw_approval",
+            approval.summary.chars().count(),
+            "[redacted]".to_owned(),
+        ),
+        (ImOutboundPayload::GmClawApprovalResolved { .. }, _) => {
+            ("gmclaw_approval_resolved", 0, "[redacted]".to_owned())
+        }
         (_, Some(text)) => ("text", text.chars().count(), trace_preview(text, 500)),
         (ImOutboundPayload::Text(text), None) => {
             ("text", text.chars().count(), trace_preview(text, 500))
@@ -1099,6 +1441,18 @@ fn log_outbound_message(event: &str, message: &ImOutboundMessage, text: Option<&
 }
 
 fn log_outbound_result(event: &str, message: &ImOutboundMessage, result: &str) {
+    let result = if matches!(
+        message.payload,
+        ImOutboundPayload::GmClawApproval(_)
+            | ImOutboundPayload::GmClawApprovalResolved { .. }
+            | ImOutboundPayload::GmClawTurnStage { .. }
+            | ImOutboundPayload::GmClawTurnFinished { .. }
+    ) || message.item_type.as_deref() == Some("gmclaw-turn")
+    {
+        "[redacted]"
+    } else {
+        result
+    };
     chain_log::write_diagnostic_lazy(|| {
         format!(
             "[im_trace] event=remote_to_im_outbound_{} platform={} account={} chat={} thread={} item={} type={} kind={:?} result={}",

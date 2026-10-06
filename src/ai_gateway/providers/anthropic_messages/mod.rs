@@ -121,6 +121,12 @@ pub async fn handle(
 
     if let Some(log_context) = &log_context {
         let update = RequestLogUpdate {
+            upstream_stream: Some(
+                anthropic_body
+                    .get("stream")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+            ),
             upstream_request_headers_json: log_context
                 .details_enabled
                 .then(|| request_log::headers_to_json(upstream_req.headers()))
@@ -1374,6 +1380,12 @@ fn update_upstream_log(
 ) {
     if let Some(log_context) = log_context {
         let update = RequestLogUpdate {
+            upstream_stream: Some(
+                anthropic_body
+                    .get("stream")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+            ),
             upstream_request_headers_json: log_context
                 .details_enabled
                 .then(|| request_log::headers_to_json(headers))

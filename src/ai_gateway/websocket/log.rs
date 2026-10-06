@@ -60,6 +60,7 @@ impl TurnLog {
             return;
         };
         self.update(RequestLogUpdate {
+            upstream_stream: Some(true),
             upstream_request_body_bytes: request_log::json_body_size_bytes(request),
             upstream_request_json: context.details_enabled.then(|| request.to_string()),
             upstream_request_headers_json: context

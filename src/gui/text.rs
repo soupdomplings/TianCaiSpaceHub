@@ -69,8 +69,8 @@ impl GuiText {
 
     pub(super) fn close_window_help(self) -> &'static str {
         match self.locale {
-            GuiLocale::ZhCn => "隐藏窗口，TianCaiSpace Hub 会继续在托盘运行",
-            GuiLocale::EnUs => "Hide this window and keep TianCaiSpace Hub running in the tray",
+            GuiLocale::ZhCn => "隐藏窗口，TianCaiSpaceHub 会继续在托盘运行",
+            GuiLocale::EnUs => "Hide this window and keep TianCaiSpaceHub running in the tray",
         }
     }
 
@@ -90,22 +90,22 @@ impl GuiText {
 
     pub(super) fn quit(self) -> &'static str {
         match self.locale {
-            GuiLocale::ZhCn => "退出 TianCaiSpace Hub\tCtrl+Q",
-            GuiLocale::EnUs => "&Quit TianCaiSpace Hub\tCtrl+Q",
+            GuiLocale::ZhCn => "退出 TianCaiSpaceHub\tCtrl+Q",
+            GuiLocale::EnUs => "&Quit TianCaiSpaceHub\tCtrl+Q",
         }
     }
 
     pub(super) fn quit_help(self) -> &'static str {
         match self.locale {
-            GuiLocale::ZhCn => "退出 TianCaiSpace Hub 并停止本地服务",
-            GuiLocale::EnUs => "Quit TianCaiSpace Hub and stop the local service",
+            GuiLocale::ZhCn => "退出 TianCaiSpaceHub 并停止本地服务",
+            GuiLocale::EnUs => "Quit TianCaiSpaceHub and stop the local service",
         }
     }
 
     pub(super) fn tray_open(self) -> &'static str {
         match self.locale {
-            GuiLocale::ZhCn => "打开 TianCaiSpace Hub",
-            GuiLocale::EnUs => "Open TianCaiSpace Hub",
+            GuiLocale::ZhCn => "打开 TianCaiSpaceHub",
+            GuiLocale::EnUs => "Open TianCaiSpaceHub",
         }
     }
 
@@ -119,10 +119,10 @@ impl GuiText {
     pub(super) fn tray_still_running_message(self) -> &'static str {
         match self.locale {
             GuiLocale::ZhCn => {
-                "TianCaiSpace Hub 已隐藏到托盘，本地服务会继续运行。需要退出时请使用托盘菜单里的“退出 TianCaiSpace Hub”。"
+                "TianCaiSpaceHub 已隐藏到托盘，本地服务会继续运行。需要退出时请使用托盘菜单里的“退出 TianCaiSpaceHub”。"
             }
             GuiLocale::EnUs => {
-                "TianCaiSpace Hub is hidden in the tray and the local service keeps running. Use Quit TianCaiSpace Hub from the tray menu to exit."
+                "TianCaiSpaceHub is hidden in the tray and the local service keeps running. Use Quit TianCaiSpaceHub from the tray menu to exit."
             }
         }
     }
@@ -141,8 +141,8 @@ impl GuiText {
 
     pub(super) fn language_restart_message(self) -> &'static str {
         match self.locale {
-            GuiLocale::ZhCn => "语言设置已保存，重启 TianCaiSpace Hub 后生效。",
-            GuiLocale::EnUs => "Language saved. Restart TianCaiSpace Hub to apply it.",
+            GuiLocale::ZhCn => "语言设置已保存，重启 TianCaiSpaceHub 后生效。",
+            GuiLocale::EnUs => "Language saved. Restart TianCaiSpaceHub to apply it.",
         }
     }
 
@@ -183,8 +183,8 @@ impl GuiText {
 
     pub(super) fn theme_restart_message(self) -> &'static str {
         match self.locale {
-            GuiLocale::ZhCn => "主题设置已保存，重启 TianCaiSpace Hub 后生效。",
-            GuiLocale::EnUs => "Theme saved. Restart TianCaiSpace Hub to apply it.",
+            GuiLocale::ZhCn => "主题设置已保存，重启 TianCaiSpaceHub 后生效。",
+            GuiLocale::EnUs => "Theme saved. Restart TianCaiSpaceHub to apply it.",
         }
     }
 
@@ -211,8 +211,8 @@ impl GuiText {
 
     pub(super) fn outbound_proxy_system_help(self) -> &'static str {
         match self.locale {
-            GuiLocale::ZhCn => "TianCaiSpace Hub 访问外部 API 时跟随系统代理设置",
-            GuiLocale::EnUs => "Use the system proxy for TianCaiSpace Hub external API requests",
+            GuiLocale::ZhCn => "TianCaiSpaceHub 访问外部 API 时跟随系统代理设置",
+            GuiLocale::EnUs => "Use the system proxy for TianCaiSpaceHub external API requests",
         }
     }
 
@@ -225,8 +225,8 @@ impl GuiText {
 
     pub(super) fn outbound_proxy_direct_help(self) -> &'static str {
         match self.locale {
-            GuiLocale::ZhCn => "TianCaiSpace Hub 访问外部 API 时不使用任何代理",
-            GuiLocale::EnUs => "Do not use a proxy for TianCaiSpace Hub external API requests",
+            GuiLocale::ZhCn => "TianCaiSpaceHub 访问外部 API 时不使用任何代理",
+            GuiLocale::EnUs => "Do not use a proxy for TianCaiSpaceHub external API requests",
         }
     }
 
@@ -239,8 +239,8 @@ impl GuiText {
 
     pub(super) fn outbound_proxy_custom_help(self) -> &'static str {
         match self.locale {
-            GuiLocale::ZhCn => "指定 TianCaiSpace Hub 自身使用的出站代理",
-            GuiLocale::EnUs => "Set an explicit outbound proxy for TianCaiSpace Hub",
+            GuiLocale::ZhCn => "指定 TianCaiSpaceHub 自身使用的出站代理",
+            GuiLocale::EnUs => "Set an explicit outbound proxy for TianCaiSpaceHub",
         }
     }
 
@@ -257,8 +257,8 @@ impl GuiText {
 
     pub(super) fn outbound_proxy_restart_message(self) -> &'static str {
         match self.locale {
-            GuiLocale::ZhCn => "出站代理设置已保存，重启 TianCaiSpace Hub 后生效。",
-            GuiLocale::EnUs => "Outbound proxy saved. Restart TianCaiSpace Hub to apply it.",
+            GuiLocale::ZhCn => "出站代理设置已保存，重启 TianCaiSpaceHub 后生效。",
+            GuiLocale::EnUs => "Outbound proxy saved. Restart TianCaiSpaceHub to apply it.",
         }
     }
 
@@ -293,7 +293,7 @@ impl GuiText {
     pub(super) fn check_updates_help(self) -> &'static str {
         match self.locale {
             GuiLocale::ZhCn => "检查 GitHub Releases 是否有新版本",
-            GuiLocale::EnUs => "Check GitHub Releases for a newer TianCaiSpace Hub version",
+            GuiLocale::EnUs => "Check GitHub Releases for a newer TianCaiSpaceHub version",
         }
     }
 
@@ -317,8 +317,8 @@ impl GuiText {
 
     pub(super) fn about(self) -> &'static str {
         match self.locale {
-            GuiLocale::ZhCn => "关于 TianCaiSpace Hub",
-            GuiLocale::EnUs => "&About TianCaiSpace Hub",
+            GuiLocale::ZhCn => "关于 TianCaiSpaceHub",
+            GuiLocale::EnUs => "&About TianCaiSpaceHub",
         }
     }
 
@@ -326,6 +326,20 @@ impl GuiText {
         match self.locale {
             GuiLocale::ZhCn => "状态概览",
             GuiLocale::EnUs => "Status",
+        }
+    }
+
+    pub(super) fn overview_model_count(self, count: usize) -> String {
+        match self.locale {
+            GuiLocale::ZhCn => format!("已配置 {count} 个模型"),
+            GuiLocale::EnUs => format!("{count} models configured"),
+        }
+    }
+
+    pub(super) fn overview_unsupported(self) -> &'static str {
+        match self.locale {
+            GuiLocale::ZhCn => "暂不支持",
+            GuiLocale::EnUs => "Not supported yet",
         }
     }
 
@@ -408,9 +422,9 @@ impl GuiText {
 
     pub(super) fn local_connection_switch_help(self) -> &'static str {
         match self.locale {
-            GuiLocale::ZhCn => "切换后需要重启 TianCaiSpace Hub，之后再重新初始化 Codex 配置。",
+            GuiLocale::ZhCn => "切换后需要重启 TianCaiSpaceHub，之后再重新初始化 Codex 配置。",
             GuiLocale::EnUs => {
-                "Restart TianCaiSpace Hub after switching, then initialize Codex config again."
+                "Restart TianCaiSpaceHub after switching, then initialize Codex config again."
             }
         }
     }
@@ -418,10 +432,10 @@ impl GuiText {
     pub(super) fn local_connection_restart_message(self) -> &'static str {
         match self.locale {
             GuiLocale::ZhCn => {
-                "连接模式已更新。请重启 TianCaiSpace Hub，之后再重新初始化 Codex 配置。"
+                "连接模式已更新。请重启 TianCaiSpaceHub，之后再重新初始化 Codex 配置。"
             }
             GuiLocale::EnUs => {
-                "Connection mode updated. Restart TianCaiSpace Hub, then initialize Codex config again."
+                "Connection mode updated. Restart TianCaiSpaceHub, then initialize Codex config again."
             }
         }
     }
@@ -443,10 +457,10 @@ impl GuiText {
     pub(super) fn local_connection_detected_message(self) -> &'static str {
         match self.locale {
             GuiLocale::ZhCn => {
-                "检测到当前网络环境可能影响本地连接，建议切换到 VPN 兼容连接。切换后需要重启 TianCaiSpace Hub。"
+                "检测到当前网络环境可能影响本地连接，建议切换到 VPN 兼容连接。切换后需要重启 TianCaiSpaceHub。"
             }
             GuiLocale::EnUs => {
-                "The current network environment may affect local connections. Switch to VPN-compatible connection, then restart TianCaiSpace Hub."
+                "The current network environment may affect local connections. Switch to VPN-compatible connection, then restart TianCaiSpaceHub."
             }
         }
     }
@@ -612,10 +626,10 @@ impl GuiText {
     pub(super) fn codex_local_config_help(self) -> &'static str {
         match self.locale {
             GuiLocale::ZhCn => {
-                "初始化 TianCaiSpace Hub 所需配置，可随时恢复到初始化前状态，包括 ChatGPT 登录状态。"
+                "初始化 TianCaiSpaceHub 所需配置，可随时恢复到初始化前状态，包括 ChatGPT 登录状态。"
             }
             GuiLocale::EnUs => {
-                "Set up TianCaiSpace Hub integration. You can restore the pre-setup state anytime, including ChatGPT sign-in."
+                "Set up TianCaiSpaceHub integration. You can restore the pre-setup state anytime, including ChatGPT sign-in."
             }
         }
     }
@@ -933,10 +947,10 @@ impl GuiText {
     pub(super) fn codex_enhanced_launch_help(self) -> &'static str {
         match self.locale {
             GuiLocale::ZhCn => {
-                "使用 TianCaiSpace Hub 当前模型列表启动 Codex，并同步 Codex 前端模型选项。Codex App 正在运行时，需要先完全退出。"
+                "使用 TianCaiSpaceHub 当前模型列表启动 Codex，并同步 Codex 前端模型选项。Codex App 正在运行时，需要先完全退出。"
             }
             GuiLocale::EnUs => {
-                "Launch Codex with the current TianCaiSpace Hub model list and sync the model picker. Exit Codex App first if it is already running."
+                "Launch Codex with the current TianCaiSpaceHub model list and sync the model picker. Exit Codex App first if it is already running."
             }
         }
     }
@@ -999,10 +1013,10 @@ impl GuiText {
     pub(super) fn codex_enhanced_launch_check_failed_detail(self, detail: &str) -> String {
         match self.locale {
             GuiLocale::ZhCn => format!(
-                "暂时无法检测 Codex App 状态。请稍后重试；如果反复出现，请完全退出并重新打开 TianCaiSpace Hub。\n检测详情：{detail}"
+                "暂时无法检测 Codex App 状态。请稍后重试；如果反复出现，请完全退出并重新打开 TianCaiSpaceHub。\n检测详情：{detail}"
             ),
             GuiLocale::EnUs => format!(
-                "Could not check Codex App status. Please try again. If it keeps happening, fully exit and reopen TianCaiSpace Hub.\nDetails: {detail}"
+                "Could not check Codex App status. Please try again. If it keeps happening, fully exit and reopen TianCaiSpaceHub.\nDetails: {detail}"
             ),
         }
     }
@@ -1635,11 +1649,11 @@ impl GuiText {
     pub(super) fn local_service_offline_detail(self, mode: LocalConnectionMode) -> String {
         match self.locale {
             GuiLocale::ZhCn => format!(
-                "{} · GUI 会自动启动本地服务；如果一直未运行，请重启 TianCaiSpace Hub。",
+                "{} · GUI 会自动启动本地服务；如果一直未运行，请重启 TianCaiSpaceHub。",
                 self.local_connection_label(mode)
             ),
             GuiLocale::EnUs => format!(
-                "{} · The GUI starts the local service automatically. Restart TianCaiSpace Hub if it stays offline.",
+                "{} · The GUI starts the local service automatically. Restart TianCaiSpaceHub if it stays offline.",
                 self.local_connection_label(mode)
             ),
         }
@@ -1972,10 +1986,10 @@ impl GuiText {
     pub(super) fn service_not_ready_retry(self) -> &'static str {
         match self.locale {
             GuiLocale::ZhCn => {
-                "本地服务还没有启动完成，请稍后再试。如果一直未运行，请重启 TianCaiSpace Hub。"
+                "本地服务还没有启动完成，请稍后再试。如果一直未运行，请重启 TianCaiSpaceHub。"
             }
             GuiLocale::EnUs => {
-                "The local service is not ready yet. Try again shortly. Restart TianCaiSpace Hub if it stays offline."
+                "The local service is not ready yet. Try again shortly. Restart TianCaiSpaceHub if it stays offline."
             }
         }
     }
@@ -2010,8 +2024,8 @@ impl GuiText {
 
     pub(super) fn update_dialog_title(self) -> &'static str {
         match self.locale {
-            GuiLocale::ZhCn => "TianCaiSpace Hub 更新",
-            GuiLocale::EnUs => "TianCaiSpace Hub Update",
+            GuiLocale::ZhCn => "TianCaiSpaceHub 更新",
+            GuiLocale::EnUs => "TianCaiSpaceHub Update",
         }
     }
 
@@ -2036,10 +2050,10 @@ impl GuiText {
     ) -> String {
         match self.locale {
             GuiLocale::ZhCn => format!(
-                "暂时无法获取更新信息。请检查网络和 TianCaiSpace Hub 的代理设置，稍后重试或打开发布页面。\n\n详细信息：\n{platform_manifest_err}\n{legacy_manifest_err}"
+                "暂时无法获取更新信息。请检查网络和 TianCaiSpaceHub 的代理设置，稍后重试或打开发布页面。\n\n详细信息：\n{platform_manifest_err}\n{legacy_manifest_err}"
             ),
             GuiLocale::EnUs => format!(
-                "Unable to retrieve update information. Check your network and TianCaiSpace Hub proxy settings, then try again or open the Releases page.\n\nDetails:\n{platform_manifest_err}\n{legacy_manifest_err}"
+                "Unable to retrieve update information. Check your network and TianCaiSpaceHub proxy settings, then try again or open the Releases page.\n\nDetails:\n{platform_manifest_err}\n{legacy_manifest_err}"
             ),
         }
     }
@@ -2236,9 +2250,9 @@ impl GuiText {
     #[cfg(target_os = "windows")]
     pub(super) fn update_installer_started(self) -> &'static str {
         match self.locale {
-            GuiLocale::ZhCn => "更新包已下载。TianCaiSpace Hub 将退出以继续安装。",
+            GuiLocale::ZhCn => "更新包已下载。TianCaiSpaceHub 将退出以继续安装。",
             GuiLocale::EnUs => {
-                "The update was downloaded. TianCaiSpace Hub will exit to continue installation."
+                "The update was downloaded. TianCaiSpaceHub will exit to continue installation."
             }
         }
     }
@@ -2247,10 +2261,10 @@ impl GuiText {
     pub(super) fn update_installer_started(self) -> &'static str {
         match self.locale {
             GuiLocale::ZhCn => {
-                "更新包已下载并打开。请将 TianCaiSpace Hub 拖到 Applications 覆盖安装，然后重新打开。"
+                "更新包已下载并打开。请将 TianCaiSpaceHub 拖到 Applications 覆盖安装，然后重新打开。"
             }
             GuiLocale::EnUs => {
-                "The update was downloaded and opened. Drag TianCaiSpace Hub to Applications to replace the old app, then reopen it."
+                "The update was downloaded and opened. Drag TianCaiSpaceHub to Applications to replace the old app, then reopen it."
             }
         }
     }
@@ -2743,11 +2757,11 @@ impl GuiText {
         match self.locale {
             GuiLocale::ZhCn => {
                 format!(
-                    "端口 {port} 被非 TianCaiSpace Hub 进程占用，已停止自动启动以避免误杀：{owner}"
+                    "端口 {port} 被非 TianCaiSpaceHub 进程占用，已停止自动启动以避免误杀：{owner}"
                 )
             }
             GuiLocale::EnUs => format!(
-                "Port {port} is owned by a non-TianCaiSpace Hub process. Automatic startup was stopped to avoid terminating it: {owner}"
+                "Port {port} is owned by a non-TianCaiSpaceHub process. Automatic startup was stopped to avoid terminating it: {owner}"
             ),
         }
     }
@@ -2755,11 +2769,11 @@ impl GuiText {
     pub(super) fn daemon_stop_failed(self, port: u16, pids: &str) -> String {
         match self.locale {
             GuiLocale::ZhCn => {
-                format!("无法停止占用端口 {port} 的旧 TianCaiSpace Hub 进程（PID：{pids}）")
+                format!("无法停止占用端口 {port} 的旧 TianCaiSpaceHub 进程（PID：{pids}）")
             }
             GuiLocale::EnUs => {
                 format!(
-                    "Failed to stop the old TianCaiSpace Hub process on port {port} (PID: {pids})"
+                    "Failed to stop the old TianCaiSpaceHub process on port {port} (PID: {pids})"
                 )
             }
         }
@@ -2791,7 +2805,7 @@ impl GuiText {
     pub(super) fn workbuddy_connection_help(self) -> &'static str {
         match self.locale {
             GuiLocale::ZhCn => {
-                "保存后会写入 WorkBuddy 的单模型配置，并同步更新 TianCaiSpace Hub 上游路由。本机地址、WorkBuddy Key、上游连接信息、模型和缓存键会自动管理；WorkBuddy 通过本机地址调用 Chat Completions。"
+                "保存后会写入 WorkBuddy 的单模型配置，并同步更新 TianCaiSpaceHub 上游路由。本机地址、WorkBuddy Key、上游连接信息、模型和缓存键会自动管理；WorkBuddy 通过本机地址调用 Chat Completions。"
             }
             GuiLocale::EnUs => {
                 "Save writes one WorkBuddy model and updates the dedicated route. The local URL, WorkBuddy key, upstream connection, model, and cache key are managed automatically; WorkBuddy calls the local Chat Completions endpoint without replacing Codex providers."
@@ -2829,10 +2843,10 @@ impl GuiText {
     pub(super) fn workbuddy_local_url_help(self) -> &'static str {
         match self.locale {
             GuiLocale::ZhCn => {
-                "WorkBuddy 调用 TianCaiSpace Hub 的本机地址，由 Hub 默认监听配置自动生成，不需要手工修改。"
+                "WorkBuddy 调用 TianCaiSpaceHub 的本机地址，由 Hub 默认监听配置自动生成，不需要手工修改。"
             }
             GuiLocale::EnUs => {
-                "The local TianCaiSpace Hub endpoint used by WorkBuddy. It is generated from the Hub defaults and is not editable."
+                "The local TianCaiSpaceHub endpoint used by WorkBuddy. It is generated from the Hub defaults and is not editable."
             }
         }
     }

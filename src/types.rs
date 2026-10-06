@@ -66,6 +66,10 @@ pub enum InboundAction {
         request_fingerprint: String,
         option_index: usize,
     },
+    GmClawApprovalDecision {
+        request_key: String,
+        option_index: usize,
+    },
     ThreadRouteChoice {
         request_id: String,
         action: String,
@@ -80,6 +84,16 @@ pub enum InboundAction {
     },
     ThreadRouteCreateDefault {
         request_id: String,
+    },
+    ThreadRouteCreateCwdPage {
+        request_id: String,
+        page: usize,
+        direction: ThreadRouteDirection,
+        cwd_choice: Option<String>,
+        cwd_custom: Option<String>,
+        model: Option<String>,
+        effort: Option<String>,
+        permission: Option<String>,
     },
     ThreadRouteCreateConfigured {
         request_id: String,
@@ -122,6 +136,11 @@ pub enum InboundAction {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InboundMessage {
+    /// Hub-owned session UI scope. Never accepted from transport JSON.
+    #[serde(skip)]
+    pub session_scope: Option<String>,
+    #[serde(skip)]
+    pub session_entry: Option<SessionUiEntry>,
     #[serde(default)]
     pub platform: ImPlatformKind,
     pub account_id: String,
@@ -146,14 +165,24 @@ pub struct InboundMessage {
     pub attachments: Vec<InboundAttachment>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum SessionUiEntry {
+    Choice,
+    Create,
+}
+
 impl InboundMessage {
     pub fn conversation_key(&self) -> String {
-        format!(
+        let conversation = format!(
             "{}:{}:{}",
             self.platform.key(),
             self.account_id,
             self.chat_id
-        )
+        );
+        match &self.session_scope {
+            Some(scope) => format!("{conversation}:{scope}"),
+            None => conversation,
+        }
     }
 }
 

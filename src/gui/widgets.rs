@@ -6,7 +6,7 @@ use wxdragon::prelude::*;
 use wxdragon::widgets::dataview::DataViewItemAttr;
 
 use super::text::GuiText;
-use super::theme::{self, Theme};
+use super::theme;
 
 #[derive(Clone, Copy)]
 pub(super) struct StatusPanel {
@@ -456,81 +456,6 @@ pub(super) fn im_channel_row(
     }
 }
 
-pub(super) fn topology_connector<W: WxWidget>(parent: &W) -> StaticBitmap {
-    let bitmap = topology_connector_bitmap(56, TOPOLOGY_HEIGHT);
-    let connector = StaticBitmap::builder(parent)
-        .with_bitmap(Some(bitmap))
-        .with_scale_mode(Some(ScaleMode::None))
-        .with_size(Size::new(56, TOPOLOGY_HEIGHT as i32))
-        .build();
-    connector.set_min_size(Size::new(56, TOPOLOGY_HEIGHT as i32));
-    connector
-}
-
-pub(super) fn topology_splitter<W: WxWidget>(parent: &W) -> StaticBitmap {
-    let bitmap = topology_splitter_bitmap(56, TOPOLOGY_HEIGHT);
-    let splitter = StaticBitmap::builder(parent)
-        .with_bitmap(Some(bitmap))
-        .with_scale_mode(Some(ScaleMode::None))
-        .with_size(Size::new(56, TOPOLOGY_HEIGHT as i32))
-        .build();
-    splitter.set_min_size(Size::new(56, TOPOLOGY_HEIGHT as i32));
-    splitter
-}
-
-const TOPOLOGY_HEIGHT: usize = 176;
-
-/// Alpha-composite `fg` over the opaque `bg` and return an opaque RGBA tuple.
-/// Used so self-drawn topology bitmaps contain no translucent pixels.
-fn blend_over(fg: Colour, bg: Colour, alpha: u8) -> [u8; 4] {
-    let a = alpha as u16;
-    let inv = 255 - a;
-    let mix = |f: u8, b: u8| (((f as u16 * a) + (b as u16 * inv)) / 255) as u8;
-    [mix(fg.r, bg.r), mix(fg.g, bg.g), mix(fg.b, bg.b), 255]
-}
-
-pub(super) fn topology_connector_bitmap(width: usize, height: usize) -> Bitmap {
-    // Composite the semi-transparent line colour onto the (opaque) card
-    // background so the produced bitmap is fully opaque. A bitmap with
-    // translucent or transparent pixels makes Windows StaticBitmap skip
-    // erasing the parent background on redraw, layering successive frames
-    // into a "ghost" of the vertical trunk line.
-    let t = theme::theme();
-    let mut canvas = IconCanvas::new_with_size(width, height, Theme::rgba(t.bg_card, 255));
-    let colour = blend_over(t.divider, t.bg_card, 210);
-    let trunk_x = width.saturating_mul(5) / 12;
-    let (top_y, mid_y, bottom_y) = topology_branch_positions(height);
-    let out_x = width.saturating_sub(1);
-    canvas.draw_line(0, top_y, trunk_x, top_y, 2, colour);
-    canvas.draw_line(0, bottom_y, trunk_x, bottom_y, 2, colour);
-    canvas.draw_line(trunk_x, top_y, trunk_x, bottom_y, 2, colour);
-    canvas.draw_line(trunk_x, mid_y, out_x, mid_y, 2, colour);
-    Bitmap::from_rgba(&canvas.rgba, width as u32, height as u32).expect("topology connector bitmap")
-}
-
-fn topology_branch_positions(height: usize) -> (usize, usize, usize) {
-    let mid_y = height / 2;
-    let offset = height / 3;
-    let top_y = mid_y.saturating_sub(offset);
-    let bottom_y = (mid_y + offset).min(height.saturating_sub(1));
-    (top_y, mid_y, bottom_y)
-}
-
-pub(super) fn topology_splitter_bitmap(width: usize, height: usize) -> Bitmap {
-    let t = theme::theme();
-    let mut canvas = IconCanvas::new_with_size(width, height, Theme::rgba(t.bg_card, 255));
-    let colour = blend_over(t.divider, t.bg_card, 210);
-    let trunk_x = width.saturating_mul(5) / 12;
-    let (top_y, mid_y, bottom_y) = topology_branch_positions(height);
-    let out_x = width.saturating_sub(1);
-    canvas.draw_line(0, mid_y, trunk_x, mid_y, 2, colour);
-    canvas.draw_line(trunk_x, top_y, trunk_x, bottom_y, 2, colour);
-    canvas.draw_line(trunk_x, top_y, out_x, top_y, 2, colour);
-    canvas.draw_line(trunk_x, mid_y, out_x, mid_y, 2, colour);
-    canvas.draw_line(trunk_x, bottom_y, out_x, bottom_y, 2, colour);
-    Bitmap::from_rgba(&canvas.rgba, width as u32, height as u32).expect("topology splitter bitmap")
-}
-
 pub(super) fn status_icon_bitmap(kind: StatusIconKind, size: usize) -> Bitmap {
     cached_icon(IconCacheKey::Status(kind, size, false), || {
         render_status_icon_bitmap(kind, size)
@@ -853,61 +778,6 @@ fn soften_disabled_pixel(pixel: &mut [u8]) {
     pixel[1] = soft as u8;
     pixel[2] = soft as u8;
     pixel[3] = ((alpha as u16 * 50) / 100) as u8;
-}
-
-pub(super) struct IconCanvas {
-    width: usize,
-    height: usize,
-    rgba: Vec<u8>,
-}
-
-impl IconCanvas {
-    fn new_with_size(width: usize, height: usize, background: [u8; 4]) -> Self {
-        let mut rgba = vec![0; width * height * 4];
-        for pixel in rgba.chunks_exact_mut(4) {
-            pixel.copy_from_slice(&background);
-        }
-        Self {
-            width,
-            height,
-            rgba,
-        }
-    }
-
-    fn fill_rect(&mut self, x: usize, y: usize, width: usize, height: usize, color: [u8; 4]) {
-        for yy in y..(y + height).min(self.height) {
-            for xx in x..(x + width).min(self.width) {
-                self.set_pixel(xx, yy, color);
-            }
-        }
-    }
-
-    fn draw_line(
-        &mut self,
-        x1: usize,
-        y1: usize,
-        x2: usize,
-        y2: usize,
-        thickness: usize,
-        color: [u8; 4],
-    ) {
-        if y1 == y2 {
-            let start = x1.min(x2);
-            let end = x1.max(x2);
-            let y = y1.saturating_sub(thickness / 2);
-            self.fill_rect(start, y, end - start + 1, thickness, color);
-        } else if x1 == x2 {
-            let start = y1.min(y2);
-            let end = y1.max(y2);
-            let x = x1.saturating_sub(thickness / 2);
-            self.fill_rect(x, start, thickness, end - start + 1, color);
-        }
-    }
-
-    fn set_pixel(&mut self, x: usize, y: usize, color: [u8; 4]) {
-        let offset = (y * self.width + x) * 4;
-        self.rgba[offset..offset + 4].copy_from_slice(&color);
-    }
 }
 
 pub(super) fn text_field_row<W: WxWidget>(

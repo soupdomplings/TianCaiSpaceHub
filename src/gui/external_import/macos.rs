@@ -42,7 +42,7 @@ impl NativeEvents {
 pub(in crate::gui) fn relay_to_running_instance() {
     let result = wxdragon::main(|app| {
         let native = NativeEvents::attach(app);
-        let frame = Frame::builder().with_title("TianCaiSpace Hub").build();
+        let frame = Frame::builder().with_title("TianCaiSpaceHub").build();
         app.set_top_window(&frame);
         frame.show(false);
         let timer = Rc::new(Timer::new(&frame));

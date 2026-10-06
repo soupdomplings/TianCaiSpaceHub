@@ -91,13 +91,13 @@ impl Cli {
             Some("configure-codex-app") => parse_configure_codex_app(&remaining[1..])?,
             Some("uninstall-codex-app") => parse_uninstall_codex_app(&remaining[1..])?,
             Some("install-shim") | Some("uninstall-shim") | Some("shim") => anyhow::bail!(
-                "CLI shim support has been removed. Use `codexhub configure-codex-app` and Codex App remote-control instead."
+                "CLI shim support has been removed. Use `TianCaiSpaceHub configure-codex-app` and Codex App remote-control instead."
             ),
             Some("-h") | Some("--help") | Some("help") => {
                 print_help();
                 std::process::exit(0);
             }
-            Some(_) => anyhow::bail!("unknown command. Run `codexhub help`."),
+            Some(_) => anyhow::bail!("unknown command. Run `TianCaiSpaceHub help`."),
         };
 
         Ok(Self {
@@ -185,19 +185,19 @@ fn parse_uninstall_codex_app(args: &[String]) -> anyhow::Result<Command> {
 
 pub fn print_help() {
     println!(
-        r#"codexhub
+        r#"TianCaiSpaceHub
 
 Usage:
-  codexhub [--config PATH] gui
-  codexhub import-url "tiancaispacehub://import/v1?..."
-  codexhub register-web-import
-  codexhub unregister-web-import
-  codexhub [--config PATH] daemon
-  codexhub [--config PATH] on
-  codexhub [--config PATH] off
-  codexhub [--config PATH] status
-  codexhub [--config PATH] configure-codex-app [--codex-home PATH] [--provider-name NAME] [--provider-base-url URL] [--provider-key TOKEN] [--model MODEL]
-  codexhub [--config PATH] uninstall-codex-app [--codex-home PATH]
+  TianCaiSpaceHub [--config PATH] gui
+  TianCaiSpaceHub import-url "tiancaispacehub://import/v1?..."
+  TianCaiSpaceHub register-web-import
+  TianCaiSpaceHub unregister-web-import
+  TianCaiSpaceHub [--config PATH] daemon
+  TianCaiSpaceHub [--config PATH] on
+  TianCaiSpaceHub [--config PATH] off
+  TianCaiSpaceHub [--config PATH] status
+  TianCaiSpaceHub [--config PATH] configure-codex-app [--codex-home PATH] [--provider-name NAME] [--provider-base-url URL] [--provider-key TOKEN] [--model MODEL]
+  TianCaiSpaceHub [--config PATH] uninstall-codex-app [--codex-home PATH]
 
 Default command is gui when built with the gui feature, otherwise daemon.
 "#

@@ -19,13 +19,9 @@ pub(super) fn request_log_cell(rows: &RequestLogRows, row: usize, col: usize) ->
     match col {
         0 => format!("#{}", log.id).into(),
         1 => log.model_id.clone().into(),
-        2 => {
-            if log.stream {
-                "Streaming".to_string().into()
-            } else {
-                "No".to_string().into()
-            }
-        }
+        2 => stream_label(log.stream, log.upstream_stream)
+            .to_string()
+            .into(),
         3 => log.channel.clone().into(),
         4 => status_label(&log.status).into(),
         5 => format_tokens(log).into(),
@@ -41,6 +37,15 @@ pub(super) fn request_log_cell(rows: &RequestLogRows, row: usize, col: usize) ->
         11 => format_optional_duration(log.latency_ms).into(),
         12 => log.created_at.clone().into(),
         _ => String::new().into(),
+    }
+}
+
+fn stream_label(client_stream: bool, upstream_stream: Option<bool>) -> &'static str {
+    match (client_stream, upstream_stream) {
+        (false, Some(true)) => "Streaming (Upstream)",
+        (true, Some(false)) => "Streaming (Client)",
+        (true, _) => "Streaming",
+        (false, _) => "No",
     }
 }
 

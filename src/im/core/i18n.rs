@@ -82,11 +82,13 @@ impl ImText {
     pub(crate) fn unsupported_command(self, command: &str) -> String {
         match self.locale {
             ImLocale::ZhCn => {
-                format!("不支持的命令：{command}。当前只支持 /s 中断当前任务、/q 退出当前会话。")
+                format!(
+                    "不支持的命令：{command}。当前会话支持 /s 中断当前任务、/q 退出当前会话。飞书、微信、企业微信还可用 /tg 切到天工、/gpt 切到 Codex；/wb 暂不支持。"
+                )
             }
             ImLocale::EnUs => {
                 format!(
-                    "Unsupported command: {command}. Only /s interrupt and /q exit are supported."
+                    "Unsupported command: {command}. Use /s to interrupt or /q to exit this session. In Feishu, WeChat, and WeCom, /tg selects GMClaw and /gpt selects Codex; /wb is not yet supported."
                 )
             }
         }
@@ -463,8 +465,8 @@ impl ImText {
 
     pub(crate) fn remote_not_connected(self) -> &'static str {
         self.choose(
-            "Codex remote-control 还没有连接。请在项目目录运行 codex，确认它已经通过 remote-control 连接到 codexhub。",
-            "Codex remote-control is not connected yet. Run codex in the project directory and make sure it is connected to codexhub through remote-control.",
+            "Codex remote-control 还没有连接。请在项目目录运行 codex，确认它已经通过 remote-control 连接到 TianCaiSpaceHub。",
+            "Codex remote-control is not connected yet. Run codex in the project directory and make sure it is connected to TianCaiSpaceHub through remote-control.",
         )
     }
 
@@ -491,10 +493,7 @@ impl ImText {
     }
 
     pub(crate) fn creating_new_thread(self) -> &'static str {
-        self.choose(
-            "正在创建新的 Codex 会话...",
-            "Creating a new Codex session...",
-        )
+        self.choose("正在创建新会话...", "Creating a new session...")
     }
 
     pub(crate) fn created_new_session_title(self) -> &'static str {
@@ -559,22 +558,47 @@ impl ImText {
         }
     }
 
-    pub(crate) fn create_settings_menu_suffix(self) -> &'static str {
+    pub(crate) fn invalid_create_settings_reply(self) -> &'static str {
         self.choose(
-            "\n\n1. 修改目录\n2. 修改模型\n3. 修改推理强度\n4. 修改权限\n5. 创建会话\n6. 恢复历史会话\n\n回复数字选择。也可以回复 y 创建，n 取消。",
-            "\n\n1. Change directory\n2. Change model\n3. Change reasoning effort\n4. Change permissions\n5. Create session\n6. Restore history session\n\nReply with a number. You can also reply y to create or n to cancel.",
+            "请按当前设置菜单的数字选择，或回复 y 创建、n 取消。",
+            "Choose a number from the current settings menu, or reply y to create, n to cancel.",
         )
     }
 
-    pub(crate) fn invalid_create_settings_reply(self) -> &'static str {
+    pub(crate) fn change_create_setting(self, field: &str) -> &'static str {
+        match field {
+            "cwd" => self.choose("修改目录", "Change directory"),
+            "model" => self.choose("修改模型", "Change model"),
+            "effort" => self.choose("修改推理强度", "Change reasoning effort"),
+            "perm" => self.choose("修改权限", "Change permissions"),
+            _ => self.choose("修改设置", "Change setting"),
+        }
+    }
+
+    pub(crate) fn create_settings_reply_hint(self) -> &'static str {
         self.choose(
-            "请回复 1~6，或回复 y 创建、n 取消。",
-            "Reply 1~6, or reply y to create, n to cancel.",
+            "回复数字选择。也可以回复 y 创建，n 取消。",
+            "Reply with a number. You can also reply y to create or n to cancel.",
         )
     }
 
     pub(crate) fn create_cancelled(self) -> &'static str {
         self.choose("已取消创建会话。", "Session creation cancelled.")
+    }
+
+    pub(crate) fn session_operation_failed(
+        self,
+        operation: &str,
+        error: &dyn std::fmt::Display,
+    ) -> String {
+        match self.locale {
+            ImLocale::ZhCn => {
+                format!("{operation}未完成：{error}\n请检查后重试，或返回菜单重新选择。")
+            }
+            ImLocale::EnUs => format!(
+                "{operation} did not complete: {error}\nCheck the issue and try again, or return to the menu."
+            ),
+        }
     }
 
     pub(crate) fn create_option_unavailable(self) -> &'static str {
@@ -646,8 +670,8 @@ impl ImText {
 
     pub(crate) fn create_choice_wechat(self) -> &'static str {
         self.choose(
-            "当前微信会话还没有接入 Codex 会话。\n\n1. 新建会话\n2. 恢复历史会话或接入当前 Codex 活跃会话\n\n回复 1 或 2。",
-            "This WeChat chat is not attached to a Codex session yet.\n\n1. Create new session\n2. Restore a history session or attach to the current active Codex session\n\nReply 1 or 2.",
+            "当前微信聊天还没有接入所选执行端的会话。\n\n1. 新建会话\n2. 恢复或接入已有会话\n\n回复 1 或 2。",
+            "This WeChat chat is not attached to a session on the selected executor yet.\n\n1. Create new session\n2. Restore or attach an existing session\n\nReply 1 or 2.",
         )
     }
 
@@ -660,8 +684,8 @@ impl ImText {
 
     pub(crate) fn invalid_route_choice_wechat(self) -> &'static str {
         self.choose(
-            "请回复 1 新建会话，或回复 2 恢复历史会话或接入当前 Codex 活跃会话。",
-            "Reply 1 to create a session, or 2 to restore a history session or attach to the current active Codex session.",
+            "请回复 1 新建会话，或回复 2 恢复或接入已有会话。",
+            "Reply 1 to create a session, or 2 to restore or attach an existing session.",
         )
     }
 
@@ -674,8 +698,8 @@ impl ImText {
 
     pub(crate) fn list_load_failed(self) -> &'static str {
         self.choose(
-            "会话列表加载失败：Codex App 暂时没有响应，请稍后重试。",
-            "Failed to load the session list: Codex App is not responding right now. Try again later.",
+            "会话列表加载失败：当前执行端暂时没有响应，请稍后重试。",
+            "Failed to load the session list: the current executor is not responding. Try again later.",
         )
     }
 
@@ -742,8 +766,8 @@ impl ImText {
 
     pub(crate) fn stale_thread_unbound(self) -> &'static str {
         self.choose(
-            "当前绑定的 Codex thread 已失效，已解除绑定。",
-            "The attached Codex thread is no longer valid and has been detached.",
+            "当前绑定的会话已失效，已解除绑定。",
+            "The attached session is no longer valid and has been detached.",
         )
     }
 
@@ -763,7 +787,7 @@ impl ImText {
     }
 
     pub(crate) fn thread_list_title_feishu(self) -> &'static str {
-        self.choose("选择 Codex 会话", "Select Codex Session")
+        self.choose("选择会话", "Select Session")
     }
 
     pub(crate) fn thread_list_body_telegram(self, provider: Option<&str>) -> String {
@@ -787,17 +811,19 @@ impl ImText {
     pub(crate) fn thread_list_body_feishu(self, provider: Option<&str>) -> String {
         let mut body = self
             .choose(
-                "当前飞书会话还没有订阅任何 Codex thread。请选择一个会话接入后续事件。",
-                "This Feishu chat is not subscribed to any Codex thread yet. Choose a session to attach future events.",
+                "请选择当前执行端中的一个会话，接入后续消息。",
+                "Choose a session on the current executor to attach future messages.",
             )
             .to_string();
         if let Some(provider) = provider {
             body.push_str(&match self.locale {
                 ImLocale::ZhCn => {
-                    format!("\n\n<font color='grey'>已按当前 Codex App provider `{provider}` 过滤。</font>")
+                    format!("\n\n<font color='grey'>已按当前 provider `{provider}` 过滤。</font>")
                 }
                 ImLocale::EnUs => {
-                    format!("\n\n<font color='grey'>Filtered by current Codex App provider `{provider}`.</font>")
+                    format!(
+                        "\n\n<font color='grey'>Filtered by current provider `{provider}`.</font>"
+                    )
                 }
             });
         }
@@ -806,8 +832,8 @@ impl ImText {
 
     pub(crate) fn provider_filter_line(self, provider: &str) -> String {
         match self.locale {
-            ImLocale::ZhCn => format!("已按当前 Codex App provider `{provider}` 过滤。"),
-            ImLocale::EnUs => format!("Filtered by current Codex App provider `{provider}`."),
+            ImLocale::ZhCn => format!("已按当前 provider `{provider}` 过滤。"),
+            ImLocale::EnUs => format!("Filtered by current provider `{provider}`."),
         }
     }
 
@@ -930,23 +956,23 @@ impl ImText {
 
     pub(crate) fn create_choice_body_feishu(self) -> &'static str {
         self.choose(
-            "当前飞书会话还没有接入 Codex thread。请选择新建会话，或恢复历史会话或接入当前 Codex 活跃会话。",
-            "This Feishu chat is not attached to a Codex thread yet. Create a new session, or restore a history session or attach to the current active Codex session.",
+            "当前飞书聊天还没有接入所选执行端的会话。请选择新建会话，或恢复或接入已有会话。",
+            "This Feishu chat is not attached to a session on the selected executor yet. Create a session, or restore or attach an existing one.",
         )
     }
 
     pub(crate) fn create_choice_body_wecom(self) -> &'static str {
         self.choose(
-            "当前企业微信会话还没有接入 Codex thread。请选择新建会话，或恢复历史会话。",
-            "This WeCom chat is not attached to a Codex thread yet. Create a new session or restore a history session.",
+            "当前企业微信聊天还没有接入所选执行端的会话。请选择新建会话，或恢复历史会话。",
+            "This WeCom chat is not attached to a session on the selected executor yet. Create a session or restore a history session.",
         )
     }
 
     pub(crate) fn thread_list_body_wecom(self, provider: Option<&str>) -> String {
         let mut body = self
             .choose(
-                "请选择一个 Codex 会话接入后续消息。",
-                "Choose a Codex session to attach future messages.",
+                "请选择当前执行端中的一个会话，接入后续消息。",
+                "Choose a session on the current executor to attach future messages.",
             )
             .to_string();
         if let Some(provider) = provider {
@@ -960,22 +986,22 @@ impl ImText {
 
     pub(crate) fn create_choice_tip_feishu(self) -> &'static str {
         self.choose(
-            "提示：回复 `/q` 可退出当前会话，回复 `/s` 可中断当前任务。",
-            "Tip: reply `/q` to exit the current session, or `/s` to interrupt the current task.",
+            "提示：回复 `/q` 退出当前会话，回复 `/s` 请求停止任务；停止能力取决于当前执行端。",
+            "Tip: reply `/q` to exit the session, or `/s` to request a stop when supported by the current executor.",
         )
     }
 
     pub(crate) fn create_new_description_feishu(self) -> &'static str {
         self.choose(
-            "创建一个新的 Codex thread，并接入后续消息。",
-            "Create a new Codex thread and attach future messages.",
+            "在当前执行端创建新会话，并接入后续消息。",
+            "Create a session on the current executor and attach future messages.",
         )
     }
 
     pub(crate) fn restore_history_description_feishu(self) -> &'static str {
         self.choose(
-            "查看 Codex App 当前可恢复的历史 thread 列表。",
-            "View restorable Codex App history threads.",
+            "查看当前执行端可恢复的会话列表。",
+            "View restorable sessions on the current executor.",
         )
     }
 
@@ -988,8 +1014,8 @@ impl ImText {
 
     pub(crate) fn create_settings_card_intro(self) -> &'static str {
         self.choose(
-            "选择这次新会话的属性。Provider 固定使用 Codex App 当前配置。",
-            "Choose settings for this new session. Provider uses the current Codex App configuration.",
+            "选择这次新会话的目录和模型。可调整的设置由当前执行端决定。",
+            "Choose the directory and model for this session. Available settings depend on the current executor.",
         )
     }
 
@@ -1046,8 +1072,8 @@ impl ImText {
 
     pub(crate) fn create_default_description(self) -> &'static str {
         self.choose(
-            "使用当前 provider，不指定目录、模型和推理强度。",
-            "Use the current provider without overriding directory, model, or reasoning effort.",
+            "使用当前执行端的默认目录、模型和执行设置。",
+            "Use the current executor's default directory, model, and execution settings.",
         )
     }
 
@@ -1091,11 +1117,11 @@ impl ImText {
     }
 
     pub(crate) fn codex_app_default_value(self) -> &'static str {
-        self.choose("使用 Codex App 默认值", "Use Codex App default")
+        self.choose("使用当前执行端默认值", "Use current executor default")
     }
 
     pub(crate) fn create_thread_heading(self) -> &'static str {
-        self.choose("创建新 Codex thread", "Create New Codex Thread")
+        self.choose("创建新会话", "Create New Session")
     }
 
     pub(crate) fn current_settings_heading(self) -> &'static str {
@@ -1135,14 +1161,14 @@ impl ImText {
     }
 
     pub(crate) fn use_current_provider(self) -> &'static str {
-        self.choose(
-            "使用 Codex App 当前 provider",
-            "Use Codex App current provider",
-        )
+        self.choose("使用当前执行端的 provider", "Use current executor provider")
     }
 
     pub(crate) fn use_default_cwd(self) -> &'static str {
-        self.choose("使用 Codex App 默认目录", "Use Codex App default directory")
+        self.choose(
+            "使用当前执行端默认目录",
+            "Use current executor default directory",
+        )
     }
 
     pub(crate) fn waiting_custom_cwd(self) -> &'static str {
@@ -1151,8 +1177,8 @@ impl ImText {
 
     pub(crate) fn use_default_cwd_with_path(self, cwd: &str) -> String {
         match self.locale {
-            ImLocale::ZhCn => format!("使用 Codex App 默认目录（{cwd}）"),
-            ImLocale::EnUs => format!("Use Codex App default directory ({cwd})"),
+            ImLocale::ZhCn => format!("使用当前执行端默认目录（{cwd}）"),
+            ImLocale::EnUs => format!("Use current executor default directory ({cwd})"),
         }
     }
 
@@ -1169,8 +1195,8 @@ impl ImText {
 
     pub(crate) fn do_not_override_model(self) -> &'static str {
         self.choose(
-            "不覆盖模型，由 Codex App 决定",
-            "Do not override model; Codex App decides",
+            "不覆盖模型，由当前执行端决定",
+            "Do not override model; the current executor decides",
         )
     }
 
@@ -1193,16 +1219,13 @@ impl ImText {
     }
 
     pub(crate) fn use_current_permission(self) -> &'static str {
-        self.choose(
-            "使用 Codex App 当前权限",
-            "Use Codex App current permissions",
-        )
+        self.choose("使用当前执行端的权限", "Use current executor permissions")
     }
 
     pub(crate) fn use_current_permission_with_value(self, permission: &str) -> String {
         match self.locale {
-            ImLocale::ZhCn => format!("使用 Codex App 当前权限（{permission}）"),
-            ImLocale::EnUs => format!("Use Codex App current permissions ({permission})"),
+            ImLocale::ZhCn => format!("使用当前执行端的权限（{permission}）"),
+            ImLocale::EnUs => format!("Use current executor permissions ({permission})"),
         }
     }
 

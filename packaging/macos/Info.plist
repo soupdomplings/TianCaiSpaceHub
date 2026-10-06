@@ -5,9 +5,9 @@
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
   <key>CFBundleDisplayName</key>
-  <string>TianCaiSpace Hub</string>
+  <string>TianCaiSpaceHub</string>
   <key>CFBundleExecutable</key>
-  <string>CodexHub</string>
+  <string>TianCaiSpaceHub</string>
   <key>CFBundleIconFile</key>
   <string>AppIcon</string>
   <key>CFBundleIdentifier</key>
@@ -15,7 +15,7 @@
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
-  <string>TianCaiSpace Hub</string>
+  <string>TianCaiSpaceHub</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleURLTypes</key>

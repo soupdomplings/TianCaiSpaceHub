@@ -21,10 +21,12 @@ use crate::{
 };
 
 mod codex_app;
+mod gmclaw_bridge;
 mod im_api;
 mod oauth;
 mod onboarding;
 pub(crate) mod plugins;
+mod workbuddy_launch;
 
 pub async fn start_bridge_if_ready(state: &SharedState, event_message: &'static str) -> bool {
     im_api::start_bridge_task(state, im_api::BridgeStartMode::KeepExisting, event_message).await
@@ -52,12 +54,17 @@ pub fn router(state: SharedState) -> Router {
             post(delete_workbuddy_config),
         )
         .route(
+            "/api/workbuddy/runtime/start",
+            post(workbuddy_launch::start),
+        )
+        .route(
             "/api/gmclaw/config",
             get(gmclaw_config).post(save_gmclaw_config),
         )
         .route("/api/gmclaw/config/restore", post(restore_gmclaw_config))
         .route("/api/gmclaw/config/activate", post(activate_gmclaw_config))
         .route("/api/gmclaw/config/delete", post(delete_gmclaw_config))
+        .route("/api/gmclaw/runtime/start", post(gmclaw_bridge::start))
         .route(
             "/api/chatgpt/login/start",
             post(crate::ai_gateway::chatgpt_auth::start_login_api),
@@ -287,20 +294,29 @@ struct GuiDashboardResponse {
     codex_app: codex_app_config::CodexAppConfigStatus,
     im_accounts: im_api::ImAccountsResponse,
     ai_gateway: crate::ai_gateway::config::AiGatewayConfig,
+    client_overview: crate::client_overview::ClientOverview,
 }
 
 async fn gui_dashboard(State(state): State<SharedState>) -> Json<GuiDashboardResponse> {
-    let status = status_snapshot(&state).await;
-    let remote = remote_control_backend::status_snapshot(&state).await;
-    let codex_app = codex_app::codex_app_status_snapshot(&state).await;
-    let im_accounts = im_api::im_accounts_snapshot(&state).await;
-    let ai_gateway = state.config.lock().await.ai_gateway.clone();
+    let overview_config = state.config.lock().await.clone();
+    let overview = crate::client_overview::snapshot(overview_config);
+    let existing = async {
+        let status = status_snapshot(&state).await;
+        let remote = remote_control_backend::status_snapshot(&state).await;
+        let codex_app = codex_app::codex_app_status_snapshot(&state).await;
+        let im_accounts = im_api::im_accounts_snapshot(&state).await;
+        let ai_gateway = state.config.lock().await.ai_gateway.clone();
+        (status, remote, codex_app, im_accounts, ai_gateway)
+    };
+    let (client_overview, (status, remote, codex_app, im_accounts, ai_gateway)) =
+        tokio::join!(overview, existing);
     Json(GuiDashboardResponse {
         status,
         remote,
         codex_app,
         im_accounts,
         ai_gateway,
+        client_overview,
     })
 }
 

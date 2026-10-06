@@ -8,8 +8,12 @@ use crate::{app_state::SharedState, im::core::text_adapter::TextChatAdapter};
 use super::api::WecomApi;
 use crate::{
     im::core::{
+        executor_approval::{GmClawApproval, decision_label, resolved_text, valid_request_key},
         i18n::ImText,
-        thread::{ThreadCreateDefaults, create_options_for_field},
+        thread::{
+            ThreadCreateDefaults, ThreadCreateSettingsAction, create_options_for_field,
+            create_settings_actions,
+        },
         thread_list::ThreadRoutingPage,
     },
     im_runtime::{PendingApproval, ThreadCreateDraftState, approval_request_fingerprint},
@@ -17,6 +21,7 @@ use crate::{
 };
 
 const WECOM_TEXT_CHUNK_CHARS: usize = 4000;
+const WECOM_SELECTION_MAX_OPTIONS: usize = 10;
 
 #[derive(Clone)]
 pub struct WecomAdapter {
@@ -79,7 +84,7 @@ impl WecomAdapter {
             .collect::<Vec<_>>();
         let card = serde_json::json!({
             "card_type": "button_interaction",
-            "source": { "desc": "TianCaiSpace Hub", "desc_color": 0 },
+            "source": { "desc": "TianCaiSpaceHub", "desc_color": 0 },
             "main_title": {
                 "title": "Codex 审批请求",
                 "desc": approval.request_kind
@@ -89,6 +94,73 @@ impl WecomAdapter {
             "task_id": task_id
         });
         self.api.send_template_card(target, card).await
+    }
+
+    pub(crate) async fn send_gmclaw_approval_card(
+        &self,
+        target: &str,
+        approval: &GmClawApproval,
+    ) -> Result<String> {
+        anyhow::ensure!(
+            valid_request_key(&approval.request_key),
+            "invalid TianGong approval identity"
+        );
+        let card = serde_json::json!({
+            "card_type": "button_interaction",
+            "source": { "desc": "TianCaiSpaceHub", "desc_color": 0 },
+            "main_title": { "title": "天工 Claw 审批请求", "desc": "仅本次工具请求，不会永久授权" },
+            "sub_title_text": "完整工具参数已在前面的消息中发送，请核对后选择。",
+            "button_list": [
+                { "text": "批准全部", "style": 1, "key": format!("gmclaw-approval:{}:1", approval.request_key) },
+                { "text": "拒绝全部", "style": 2, "key": format!("gmclaw-approval:{}:2", approval.request_key) }
+            ],
+            "task_id": gmclaw_approval_task_id(&approval.request_key)
+        });
+        self.api.send_template_card(target, card).await
+    }
+
+    pub(crate) async fn acknowledge_gmclaw_approval(
+        &self,
+        approval: &GmClawApproval,
+        option_index: usize,
+        message: &InboundMessage,
+    ) -> Result<bool> {
+        decision_label(option_index).context("invalid TianGong approval choice")?;
+        if approval.message_id.as_deref().is_none_or(str::is_empty)
+            || message.platform != crate::types::ImPlatformKind::Wecom
+            || message.callback_kind != Some(InboundCallbackKind::CardEvent)
+            || !matches!(&message.action, Some(InboundAction::GmClawApprovalDecision { request_key, option_index: received }) if request_key == &approval.request_key && *received == option_index)
+        {
+            return Ok(false);
+        }
+        let Some(callback_req_id) = message
+            .callback_req_id
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        else {
+            return Ok(false);
+        };
+        let Some((context_req_id, task_id)) = message
+            .card_message_id
+            .as_deref()
+            .and_then(|value| value.split_once('|'))
+        else {
+            return Ok(false);
+        };
+        if context_req_id != callback_req_id
+            || task_id != gmclaw_approval_task_id(&approval.request_key)
+        {
+            return Ok(false);
+        }
+        let body = resolved_text(option_index).context("invalid TianGong approval choice")?;
+        self.api
+            .update_template_card(
+                callback_req_id,
+                resolved_routing_card(task_id, "天工审批已提交", &body),
+                Some(&message.sender_id),
+            )
+            .await?;
+        Ok(true)
     }
 
     async fn send_thread_routing_choice_card_inner(
@@ -208,6 +280,10 @@ impl WecomAdapter {
     }
 }
 
+fn gmclaw_approval_task_id(request_key: &str) -> String {
+    format!("gmclaw_approval_{request_key}")
+}
+
 #[async_trait]
 impl TextChatAdapter for WecomAdapter {
     async fn send_text(
@@ -276,7 +352,7 @@ impl TextChatAdapter for WecomAdapter {
 fn thread_routing_choice_card(request_id: &str, text: ImText) -> serde_json::Value {
     serde_json::json!({
         "card_type": "button_interaction",
-        "source": { "desc": "TianCaiSpace Hub", "desc_color": 0 },
+        "source": { "desc": "TianCaiSpaceHub", "desc_color": 0 },
         "main_title": {
             "title": text.create_choice_title_feishu(),
             "desc": text.thread_list_title_feishu()
@@ -338,7 +414,7 @@ fn thread_routing_list_card(page: &ThreadRoutingPage, text: ImText) -> serde_jso
     };
     serde_json::json!({
         "card_type": "button_interaction",
-        "source": { "desc": "TianCaiSpace Hub", "desc_color": 0 },
+        "source": { "desc": "TianCaiSpaceHub", "desc_color": 0 },
         "main_title": {
             "title": text.thread_list_title_feishu(),
             "desc": text.page_label(page.page)
@@ -364,60 +440,88 @@ fn thread_create_settings_card(
     draft: &ThreadCreateDraftState,
     text: ImText,
 ) -> Result<serde_json::Value> {
+    let mut cwd_options = create_options_for_field(defaults, draft, "cwd", text)?.2;
+    cwd_options.push((
+        "__custom__".into(),
+        crate::im::core::thread::ThreadCreateOption {
+            label: text.custom_cwd_label().into(),
+            summary: None,
+        },
+    ));
     let model_options = create_options_for_field(defaults, draft, "model", text)?.2;
-    let effort_options = create_options_for_field(defaults, draft, "effort", text)?.2;
-    let permission_selected = draft
-        .permission
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .or(defaults.permission.as_deref())
-        .unwrap_or("workspace_user");
-    let (submit_text, submit_key) = if draft.cwd_custom.is_some() {
-        (
-            text.confirm_create_button(),
-            format!("thread-create-submit:{request_id}:{permission_selected}"),
-        )
+    let permission_selected = if defaults.capabilities.permissions {
+        draft
+            .permission
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .or(defaults.permission.as_deref())
+            .unwrap_or("workspace_user")
     } else {
-        (
-            text.custom_cwd_label(),
-            format!("thread-create-custom-cwd:{request_id}:{permission_selected}"),
-        )
+        "__default__"
     };
-    let cwd_display = draft
-        .cwd_custom
+    let submit_text = text.confirm_create_button();
+    let submit_key = format!("thread-create-submit:{request_id}:{permission_selected}");
+    let cwd_selected = if draft.cwd_custom.is_some() {
+        "__custom__"
+    } else {
+        draft.cwd_choice.as_deref().unwrap_or("__default__")
+    };
+    let mut select_list = vec![
+        create_selection("cwd", text.cwd_section(), &cwd_options, cwd_selected),
+        create_selection(
+            "model",
+            text.model_section(),
+            &model_options,
+            draft.model.as_deref().unwrap_or("__default__"),
+        ),
+    ];
+    if defaults.capabilities.reasoning {
+        let effort_options = create_options_for_field(defaults, draft, "effort", text)?.2;
+        select_list.push(create_selection(
+            "effort",
+            text.effort_section(),
+            &effort_options,
+            draft.effort.as_deref().unwrap_or("__default__"),
+        ));
+    }
+    let mut intro = text.create_settings_card_intro().to_string();
+    if cwd_options.len() > WECOM_SELECTION_MAX_OPTIONS {
+        intro.push_str("\n卡片仅展示部分目录。发送 1 或 /1 进入完整项目列表，按提示翻页选择；也可输入自定义目录。");
+    } else {
+        intro.push_str(
+            "\n选择自定义目录后点击创建，再按提示填写绝对路径；发送 1 或 /1 也可修改目录。",
+        );
+    }
+    if let Some(path) = draft.cwd_custom.as_deref() {
+        intro.push_str(&format!("\n自定义目录：{}", truncate_card_text(path, 120)));
+    }
+    if model_options.len() > WECOM_SELECTION_MAX_OPTIONS
+        && let Some(index) = create_settings_actions(defaults)
+            .iter()
+            .position(|action| *action == ThreadCreateSettingsAction::Edit("model"))
+    {
+        let command = index + 1;
+        intro.push_str(&format!(
+            "\n卡片仅展示部分模型。发送 {command} 或 /{command} 进入完整模型列表，按提示翻页选择。"
+        ));
+    }
+    if let Some(notice) = defaults
+        .settings_notice
         .as_deref()
-        .unwrap_or(text.waiting_custom_cwd());
+        .filter(|notice| !notice.trim().is_empty())
+    {
+        intro.push('\n');
+        intro.push_str(notice);
+    }
     Ok(serde_json::json!({
         "card_type": "multiple_interaction",
-        "source": { "desc": "TianCaiSpace Hub", "desc_color": 0 },
+        "source": { "desc": "TianCaiSpaceHub", "desc_color": 0 },
         "main_title": {
             "title": text.create_settings_card_title(),
             "desc": defaults.remote_name.as_deref().unwrap_or(text.not_connected())
         },
-        "sub_title_text": text.create_settings_card_intro(),
-        "select_list": [
-            {
-                "question_key": "cwd_display",
-                "title": text.cwd_section(),
-                "selected_id": "cwd_display",
-                "option_list": [{
-                    "id": "cwd_display",
-                    "text": truncate_card_text(cwd_display, 20)
-                }]
-            },
-            create_selection(
-                "model",
-                text.model_section(),
-                &model_options,
-                draft.model.as_deref().unwrap_or("__default__")
-            ),
-            create_selection(
-                "effort",
-                text.effort_section(),
-                &effort_options,
-                draft.effort.as_deref().unwrap_or("__default__")
-            )
-        ],
+        "sub_title_text": intro,
+        "select_list": select_list,
         "submit_button": {
             "text": submit_text,
             "key": submit_key
@@ -432,25 +536,86 @@ fn create_selection(
     options: &[(String, crate::im::core::thread::ThreadCreateOption)],
     selected_id: &str,
 ) -> serde_json::Value {
+    let selected_id = if selected_id.trim().is_empty() {
+        "__default__"
+    } else {
+        selected_id
+    };
+    let unavailable_selection = (
+        selected_id.to_string(),
+        crate::im::core::thread::ThreadCreateOption {
+            label: selected_id.to_string(),
+            summary: None,
+        },
+    );
+    let mut visible_options = options
+        .iter()
+        .take(WECOM_SELECTION_MAX_OPTIONS)
+        .collect::<Vec<_>>();
+    if !visible_options
+        .iter()
+        .any(|(value, _)| value == selected_id)
+    {
+        // Keep the default first and include selections made on later text-menu
+        // pages. If the catalog changed, retain the ID for backend validation
+        // instead of silently replacing the user's choice with the default.
+        let selected = options
+            .iter()
+            .find(|(value, _)| value == selected_id)
+            .unwrap_or(&unavailable_selection);
+        if visible_options.len() == WECOM_SELECTION_MAX_OPTIONS {
+            visible_options.pop();
+        }
+        visible_options.push(selected);
+    }
+    if question_key == "cwd"
+        && !visible_options
+            .iter()
+            .any(|(value, _)| value == "__custom__")
+        && let Some(custom) = options.iter().find(|(value, _)| value == "__custom__")
+    {
+        if visible_options.len() == WECOM_SELECTION_MAX_OPTIONS {
+            let replacement = visible_options
+                .iter()
+                .rposition(|(value, _)| value != selected_id && value != "__default__")
+                .unwrap_or(visible_options.len() - 1);
+            visible_options.remove(replacement);
+        }
+        visible_options.push(custom);
+    }
+    let labels = visible_options
+        .iter()
+        .map(|(_, option)| truncate_card_text(&option.label, 20))
+        .collect::<Vec<_>>();
+    let option_list = visible_options
+        .iter()
+        .enumerate()
+        .map(|(index, (value, option))| {
+            let label = if labels
+                .iter()
+                .filter(|label| *label == &labels[index])
+                .count()
+                > 1
+            {
+                truncate_card_text(&format!("{}. {}", index + 1, option.label), 20)
+            } else {
+                labels[index].clone()
+            };
+            serde_json::json!({"id": value, "text": label})
+        })
+        .collect::<Vec<_>>();
     serde_json::json!({
         "question_key": question_key,
         "title": title,
         "selected_id": selected_id,
-        "option_list": options
-            .iter()
-            .take(10)
-            .map(|(value, option)| serde_json::json!({
-                "id": value,
-                "text": truncate_card_text(&option.label, 20)
-            }))
-            .collect::<Vec<_>>()
+        "option_list": option_list
     })
 }
 
 fn resolved_routing_card(task_id: &str, title: &str, body: &str) -> serde_json::Value {
     serde_json::json!({
         "card_type": "text_notice",
-        "source": { "desc": "TianCaiSpace Hub", "desc_color": 0 },
+        "source": { "desc": "TianCaiSpaceHub", "desc_color": 0 },
         "main_title": { "title": title },
         "sub_title_text": body,
         "card_action": {
@@ -498,6 +663,109 @@ fn text_chunks(text: &str) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::im::core::{i18n::ImText, thread::ThreadListEntry, thread_list::ThreadRoutingPage};
+
+    #[test]
+    fn inherited_settings_do_not_emit_codex_permission_or_reasoning_controls() {
+        let defaults = ThreadCreateDefaults {
+            capabilities: crate::im::core::thread::ThreadCreateCapabilities {
+                reasoning: false,
+                permissions: false,
+            },
+            settings_notice: Some("模型与工具设置由当前执行端继承".into()),
+            ..Default::default()
+        };
+        let draft = ThreadCreateDraftState {
+            permission: Some("full_access".into()),
+            effort: Some("high".into()),
+            ..Default::default()
+        };
+        let card =
+            thread_create_settings_card("request-1", &defaults, &draft, ImText::zh_cn()).unwrap();
+        let controls = card["select_list"].as_array().unwrap();
+        assert_eq!(controls.len(), 2);
+        assert!(
+            controls
+                .iter()
+                .all(|control| control["question_key"] != "effort")
+        );
+        assert_eq!(
+            card["submit_button"]["key"],
+            "thread-create-custom-cwd:request-1:__default__"
+        );
+        assert!(
+            card["sub_title_text"]
+                .as_str()
+                .unwrap()
+                .contains(defaults.settings_notice.as_deref().unwrap())
+        );
+    }
+
+    #[test]
+    fn truncated_model_labels_remain_distinguishable_without_changing_ids() {
+        let choices = ["first-row", "second-row"].map(|id| {
+            (
+                id.to_string(),
+                crate::im::core::thread::ThreadCreateOption {
+                    label: format!("a-very-long-model-name · {id}"),
+                    summary: None,
+                },
+            )
+        });
+        let select = create_selection("model", "模型", &choices, "first-row");
+        assert_ne!(
+            select["option_list"][0]["text"],
+            select["option_list"][1]["text"]
+        );
+        assert_eq!(select["option_list"][0]["id"], "first-row");
+        assert_eq!(select["option_list"][1]["id"], "second-row");
+    }
+
+    #[test]
+    fn paged_model_selection_is_retained_in_the_limited_settings_card() {
+        let mut defaults = ThreadCreateDefaults {
+            models: (1..=15)
+                .map(|index| crate::im::core::thread::ThreadModelChoice {
+                    label: format!("Model {index}"),
+                    value: format!("model-{index}"),
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let draft = ThreadCreateDraftState {
+            model: Some("model-13".into()),
+            ..Default::default()
+        };
+        let card =
+            thread_create_settings_card("paged-model", &defaults, &draft, ImText::zh_cn()).unwrap();
+        let selection = &card["select_list"][1];
+        let options = selection["option_list"].as_array().unwrap();
+        assert_eq!(options.len(), WECOM_SELECTION_MAX_OPTIONS);
+        assert_eq!(options[0]["id"], "__default__");
+        assert_eq!(selection["selected_id"], "model-13");
+        assert!(options.iter().any(|option| option["id"] == "model-13"));
+        let command = create_settings_actions(&defaults)
+            .iter()
+            .position(|action| *action == ThreadCreateSettingsAction::Edit("model"))
+            .unwrap()
+            + 1;
+        assert!(
+            card["sub_title_text"]
+                .as_str()
+                .unwrap()
+                .contains(&format!("发送 {command} 或 /{command}"))
+        );
+
+        // Removing a selected entry must not silently turn it into the default.
+        defaults.models.retain(|model| model.value != "model-13");
+        let changed =
+            thread_create_settings_card("paged-model", &defaults, &draft, ImText::zh_cn()).unwrap();
+        let selection = &changed["select_list"][1];
+        let options = selection["option_list"].as_array().unwrap();
+        assert_eq!(options.len(), WECOM_SELECTION_MAX_OPTIONS);
+        assert_eq!(options[0]["id"], "__default__");
+        assert_eq!(selection["selected_id"], "model-13");
+        assert!(options.iter().any(|option| option["id"] == "model-13"));
+    }
 
     #[test]
     fn builds_initial_thread_choice_card() {
@@ -601,7 +869,7 @@ mod tests {
         assert_eq!(card["select_list"].as_array().unwrap().len(), 3);
         assert_eq!(
             card.pointer("/select_list/0/question_key"),
-            Some(&serde_json::json!("cwd_display"))
+            Some(&serde_json::json!("cwd"))
         );
         assert_eq!(
             card.pointer("/select_list/1/question_key"),
@@ -614,12 +882,16 @@ mod tests {
         assert_eq!(
             card.pointer("/select_list/0/option_list/0/text")
                 .and_then(|value| value.as_str()),
-            Some("等待输入自定义目录")
+            Some(
+                ImText::zh_cn()
+                    .selected_prefix(ImText::zh_cn().use_default_cwd())
+                    .as_str()
+            )
         );
         assert_eq!(
             card.pointer("/submit_button/key")
                 .and_then(|value| value.as_str()),
-            Some("thread-create-custom-cwd:thread-route-21:full_access")
+            Some("thread-create-submit:thread-route-21:full_access")
         );
         assert!(card.get("action_menu").is_none());
 
@@ -641,9 +913,43 @@ mod tests {
         );
         assert_eq!(
             configured_card
-                .pointer("/select_list/0/option_list/0/text")
+                .pointer("/select_list/0/selected_id")
                 .and_then(|value| value.as_str()),
-            Some("D:/new/project")
+            Some("__custom__")
+        );
+        assert!(
+            configured_card["sub_title_text"]
+                .as_str()
+                .unwrap()
+                .contains("D:/new/project")
+        );
+    }
+
+    #[test]
+    fn later_project_choices_and_custom_entry_survive_card_limits() {
+        let defaults = ThreadCreateDefaults {
+            projects: (0..40).map(|index| format!("D:/fixture/{index}")).collect(),
+            ..Default::default()
+        };
+        let draft = ThreadCreateDraftState {
+            cwd_choice: Some("D:/fixture/35".into()),
+            ..Default::default()
+        };
+        let card =
+            thread_create_settings_card("fixture-projects", &defaults, &draft, ImText::zh_cn())
+                .unwrap();
+        let field = &card["select_list"][0];
+        assert_eq!(field["selected_id"], "D:/fixture/35");
+        let options = field["option_list"].as_array().unwrap();
+        assert!(options.len() <= WECOM_SELECTION_MAX_OPTIONS);
+        for expected in ["__default__", "__custom__", "D:/fixture/35"] {
+            assert!(options.iter().any(|option| option["id"] == expected));
+        }
+        assert!(
+            card["sub_title_text"]
+                .as_str()
+                .unwrap()
+                .contains("完整项目列表")
         );
     }
 }

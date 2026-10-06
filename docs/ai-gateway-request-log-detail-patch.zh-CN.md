@@ -1,8 +1,20 @@
-﻿# AI Gateway 请求日志详情补丁说明
+# AI Gateway 请求日志详情补丁说明
 
-更新时间：2026-09-20
+更新时间：2026-10-06。下方 2026-09-20 及更早补丁、命令和测试数量为对应上游历史记录；本地二开产品与程序名为 `TianCaiSpaceHub`。当前改动与验证边界见新增章节。
 
 本文记录请求日志详情弹窗和 JSON 查看器补丁的具体实现。这个补丁的目标是让 AI Gateway 调试链路能直接查看三类关键数据：Codex 原始请求、转换后的上游请求、上游/网关返回内容。
+
+## 2026-10-06：客户端与上游流式模式
+
+纳入 `v0.4.30-3` 发布候选，实际发布与产物见 [交付记录](releases/v0.4.30-3.md)，关联 [TC-011 天工模型接入](customizations/gmclaw.md)。天工客户端发送 `stream=false`，Hub 的 OpenAI Responses 出站可能使用 `stream=true` 并将 SSE 聚合为完整 JSON；此前列表只读取客户端模式，显示 `No`，无法识别这段上游流式请求。
+
+- 保留数据库及 API 原 `stream` 的客户端请求语义；新增可空 `upstream_stream INTEGER`，列表/详情 API 对应 `upstreamStream: boolean | null`。出站 provider 在完成转换、准备发送最终请求时记录，Responses、Chat、Anthropic 按实际请求体取值；Responses WebSocket 记录流式传输。搜索与生图未新增上游模式记录，保持未知，不能用其 JSON 读取方式推断实际请求模式。多轮内部请求或兼容重试以最近一次记录为准，不提供每轮轨迹。
+- GUI 列表两端流式时显示 `Streaming`；仅上游流式显示 `Streaming (Upstream)`；仅客户端流式显示 `Streaming (Client)`；两端非流式显示 `No`。详情摘要改为同时显示 `client_stream` 和 `upstream_stream`，未记录的上游显示 `unknown`。这不代表天工客户端逐字接收 SSE；它继续接收聚合后的完整 Chat JSON。
+- 此字段属于概要，关闭「详细日志」仍记录；关闭整个请求日志功能则不产生日志。后续状态、用量和响应更新使用 `COALESCE` 保留已记录模式，显式 `false` 可覆盖 `true`。
+- 初始化自动为旧库补列，历史数据保持 `null`；未发往上游的失败请求也保持未知。缺少字段的旧 API 响应可继续读取，GUI 沿用原客户端模式显示。覆盖索引升级为 `idx_ai_gateway_request_logs_list_cover_v3`，包含新增字段，避免列表为此额外读取详细 JSON。降级程序忽略新增列，继续读写原字段；其新写入日志不会具有上游模式记录。
+- 关键代码：[落库/迁移与 API](../src/ai_gateway/request_log.rs)、[Responses 出站](../src/ai_gateway/providers/openai_responses.rs)、[Chat 出站](../src/ai_gateway/workbuddy.rs)、[列表](../src/gui/request_logs.rs)、[详情](../src/gui/request_log_detail.rs)。
+
+源码已实现，新增隔离内存 SQLite 夹具覆盖重复迁移、客户端字段保留、概要更新不依赖详情、后续状态更新保留和显式 `false`、旧 API 兼容。按用户测试分工未执行夹具、未启动应用、未发真实模型请求；本轮编译和产物状态由 [品牌与交付](customizations/desktop-and-packaging.md#当前交付状态) 单独登记，其他平台与异常场景待用户验收；当时开发未单独升版本，现随 `v0.4.30-3` 汇总发布，历史构建不替代本版 Actions 结果。
 
 ## 2026-09-20：上游响应头
 

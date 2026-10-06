@@ -463,6 +463,7 @@ pub async fn proxy_chat_completion(
 
     if let Some(log_context) = &log_context {
         let update = RequestLogUpdate {
+            upstream_stream: Some(stream),
             upstream_request_headers_json: log_context
                 .details_enabled
                 .then(|| request_log::headers_to_json(request.headers()))

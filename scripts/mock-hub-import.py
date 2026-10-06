@@ -57,7 +57,7 @@ class Handler(BaseHTTPRequestHandler):
                 TICKETS[ticket] = (now + (-1 if "expired" in query else 120), scenario)
             deeplink = "tiancaispacehub://import/v1?" + urlencode({"origin": self.origin, "ticket": ticket})
             self.send(200, '<!doctype html><meta charset="utf-8"><title>Open Hub</title><h1>导入测试渠道</h1>'
-                      f'<p><a href="{html.escape(deeplink)}">打开 TianCaiSpace Hub</a></p>'
+                      f'<p><a href="{html.escape(deeplink)}">打开 TianCaiSpaceHub</a></p>'
                       f'<p>开发调试链接（120 秒有效，仅含测试码）：</p><textarea cols="100" rows="4">{html.escape(deeplink)}</textarea>'
                       '<p>保存成功后返回首页再次导入，可测试重复来源。</p>', "text/html")
         elif parsed.path in ("/v1/models", "/empty/v1/models"):

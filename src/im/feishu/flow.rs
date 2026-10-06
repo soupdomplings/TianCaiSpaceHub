@@ -11,23 +11,25 @@ use crate::{
         i18n::im_text_for_state,
         outbound::ImOutboundSender,
         routing::{active_turn_for_message, remote_client_key_for_thread, route_for_message},
-        session::{create_and_bind_thread, resume_and_bind_thread},
+        session_backend,
         thread::{
-            ThreadCreateForm, is_approval_reply, load_thread_create_defaults_for_client,
-            next_thread_routing_request_id, summarize_thread_cwd, summarize_thread_start_options,
-            summarize_thread_status, summarize_thread_title,
-            thread_start_options_from_form_for_client, thread_start_options_with_current_provider,
+            ThreadCreateForm, is_approval_reply, next_thread_routing_request_id,
+            summarize_thread_cwd, summarize_thread_start_options, summarize_thread_status,
+            summarize_thread_title,
         },
-        thread_list::{empty_thread_routing_request, load_thread_routing_page},
+        thread_list::empty_thread_routing_request,
         turn::{TurnStartOutcome, start_turn_for_route},
     },
     im::{
         events,
         feishu::{FeishuAdapter, FeishuApi, renderer},
     },
-    im_runtime::{PendingApproval, RouteTarget, ThreadRoutingRequestState, TurnOrigin},
+    im_runtime::{
+        PendingApproval, RouteTarget, ThreadCreateDraftState, ThreadRoutingRequestState,
+        ThreadRoutingStage, TurnOrigin,
+    },
     remote_control_backend,
-    types::{InboundAction, InboundMessage, ThreadRouteDirection},
+    types::{InboundAction, InboundMessage, SessionUiEntry, ThreadRouteDirection},
 };
 
 pub(crate) async fn handle_inbound(
@@ -57,15 +59,41 @@ pub(crate) async fn handle_inbound(
     let trimmed = message.text.trim().to_string();
     let route = route_for_message(&message);
     let text = im_text_for_state(&state);
-    {
+    if message.session_scope.is_none() {
         let mut runtime = state.runtime.lock().await;
         runtime.last_route = Some(route.clone());
+    }
+    if let Some(entry) = message.session_entry.as_ref() {
+        return match entry {
+            SessionUiEntry::Choice => {
+                send_thread_routing_choice_card(&state, &api, &message, None).await
+            }
+            SessionUiEntry::Create => {
+                let mut request = empty_thread_routing_request(
+                    &route,
+                    next_thread_routing_request_id(),
+                    String::new(),
+                );
+                request.message_id = None;
+                state
+                    .runtime
+                    .lock()
+                    .await
+                    .remember_thread_routing_request(request.clone());
+                send_thread_create_settings_card(&state, &api, &message, request).await
+            }
+        };
     }
     if let Some(action) = message.action.clone() {
         return handle_inbound_action(state, api, outbound_tx, message, action).await;
     }
     if handle_control_message(&state, &api, &outbound_tx, &message, &trimmed).await? {
         return Ok(());
+    }
+    // Scoped messages reach this flow only when their selected backend needs
+    // the common session UI. Never send them through the Codex turn transport.
+    if message.session_scope.is_some() {
+        return send_thread_routing_choice_card(&state, &api, &message, None).await;
     }
     if active_turn_for_message(&state, &message).await.is_some() {
         send_text_to_message(&api, &message, text.turn_busy_notice()).await?;
@@ -289,10 +317,19 @@ pub(crate) async fn handle_inbound_action(
     action: InboundAction,
 ) -> Result<()> {
     match action {
-        InboundAction::ThreadRouteOpen => Ok(()),
+        InboundAction::ThreadRouteOpen => {
+            send_thread_routing_choice_card(&state, &api, &message, None).await
+        }
         InboundAction::ApprovalDecision { .. } => {
             let text = im_text_for_state(&state);
             send_text_to_message(&api, &message, text.unsupported_approval_callback()).await?;
+            Ok(())
+        }
+        InboundAction::GmClawApprovalDecision { .. } => {
+            // Only the GMClaw backend may consume its approval decisions.
+            // A stale callback must never become a Codex reply or prompt.
+            let text = im_text_for_state(&state);
+            send_text_to_message(&api, &message, text.approval_not_current()).await?;
             Ok(())
         }
         InboundAction::ThreadRouteChoice { request_id, action } => {
@@ -323,6 +360,55 @@ pub(crate) async fn handle_inbound_action(
         }
         InboundAction::ThreadRouteCreateDefault { request_id } => {
             handle_thread_route_create_default(state, api, message, &request_id).await
+        }
+        InboundAction::ThreadRouteCreateCwdPage {
+            request_id,
+            page,
+            direction,
+            cwd_choice,
+            cwd_custom,
+            model,
+            effort,
+            permission,
+        } => {
+            let Some(mut request) =
+                checked_thread_create_request(&state, &api, &message, &request_id).await?
+            else {
+                return Ok(());
+            };
+            if page != request.page
+                || request.stage != ThreadRoutingStage::CreateSettings
+                || !request
+                    .create_option_values_by_field_page
+                    .contains_key("cwd")
+            {
+                send_text_to_message(
+                    &api,
+                    &message,
+                    im_text_for_state(&state).thread_selection_expired(),
+                )
+                .await?;
+                return Ok(());
+            }
+            let draft = ThreadCreateDraftState {
+                cwd_choice,
+                cwd_custom,
+                model,
+                effort,
+                permission,
+            };
+            let Some((page, draft)) = project_page_navigation(&request, direction, draft) else {
+                send_text_to_message(
+                    &api,
+                    &message,
+                    im_text_for_state(&state).thread_selection_expired(),
+                )
+                .await?;
+                return Ok(());
+            };
+            request.page = page;
+            request.create_draft = draft;
+            send_thread_create_settings_card(&state, &api, &message, request).await
         }
         InboundAction::ThreadRouteCreateConfigured { .. }
         | InboundAction::ThreadRouteCreateEdit { .. }
@@ -358,23 +444,10 @@ async fn handle_thread_route_choice(
     request_id: &str,
     action: &str,
 ) -> Result<()> {
-    let request = {
-        state
-            .runtime
-            .lock()
-            .await
-            .thread_routing_request(request_id)
-    };
-    let Some(request) = request else {
-        let text = im_text_for_state(&state);
-        send_text_to_message(&api, &message, text.thread_choice_card_expired()).await?;
+    let Some(request) = checked_thread_routing_request(&state, &api, &message, request_id).await?
+    else {
         return Ok(());
     };
-    if request.conversation_key != message.conversation_key() {
-        let text = im_text_for_state(&state);
-        send_text_to_message(&api, &message, text.thread_choice_not_current()).await?;
-        return Ok(());
-    }
 
     let card_message_id = request
         .message_id
@@ -409,21 +482,19 @@ async fn handle_thread_route_create_default(
     message: InboundMessage,
     request_id: &str,
 ) -> Result<()> {
-    let Some(request) = checked_thread_routing_request(&state, &api, &message, request_id).await?
+    let Some(request) = checked_thread_create_request(&state, &api, &message, request_id).await?
     else {
         return Ok(());
     };
-    create_new_thread_for_route(
-        &state,
-        &api,
-        &message,
-        request_id,
-        request,
-        thread_start_options_with_current_provider(
-            remote_control_backend::ThreadStartOptions::default(),
-        ),
-    )
-    .await
+    let options = match session_backend::default_options(&state, &message).await {
+        Ok(options) => options,
+        Err(err) => {
+            let text = im_text_for_state(&state);
+            send_text_to_message(&api, &message, &text.invalid_create_form(&err)).await?;
+            return Ok(());
+        }
+    };
+    create_new_thread_for_route(&state, &api, &message, request_id, request, options).await
 }
 
 async fn handle_thread_route_create_submit(
@@ -431,23 +502,42 @@ async fn handle_thread_route_create_submit(
     api: FeishuApi,
     message: InboundMessage,
     request_id: &str,
-    form: ThreadCreateForm,
+    mut form: ThreadCreateForm,
 ) -> Result<()> {
-    let Some(request) = checked_thread_routing_request(&state, &api, &message, request_id).await?
+    let Some(request) = checked_thread_create_request(&state, &api, &message, request_id).await?
     else {
         return Ok(());
     };
-    let route = route_for_message(&message);
-    let remote_client_key = route.remote_client_key.clone();
-    let options =
-        match thread_start_options_from_form_for_client(&state, &remote_client_key, form).await {
-            Ok(options) => options,
-            Err(err) => {
-                let text = im_text_for_state(&state);
-                send_text_to_message(&api, &message, &text.invalid_create_form(&err)).await?;
-                return Ok(());
-            }
-        };
+    if let Some(pages) = request.create_option_values_by_field_page.get("cwd")
+        && form.cwd_choice.as_deref().is_some_and(|choice| {
+            !matches!(choice, "__default__" | "__custom__")
+                && !pages.iter().flatten().any(|value| value == choice)
+        })
+    {
+        send_text_to_message(
+            &api,
+            &message,
+            im_text_for_state(&state).thread_selection_expired(),
+        )
+        .await?;
+        return Ok(());
+    }
+    form.cwd_choice = form
+        .cwd_choice
+        .or_else(|| request.create_draft.cwd_choice.clone());
+    form.model = form.model.or_else(|| request.create_draft.model.clone());
+    form.effort = form.effort.or_else(|| request.create_draft.effort.clone());
+    form.permission = form
+        .permission
+        .or_else(|| request.create_draft.permission.clone());
+    let options = match session_backend::options_from_form(&state, &message, form).await {
+        Ok(options) => options,
+        Err(err) => {
+            let text = im_text_for_state(&state);
+            send_text_to_message(&api, &message, &text.invalid_create_form(&err)).await?;
+            return Ok(());
+        }
+    };
     create_new_thread_for_route(&state, &api, &message, request_id, request, options).await
 }
 
@@ -477,47 +567,86 @@ async fn checked_thread_routing_request(
     Ok(Some(request))
 }
 
+async fn checked_thread_create_request(
+    state: &SharedState,
+    api: &FeishuApi,
+    message: &InboundMessage,
+    request_id: &str,
+) -> Result<Option<ThreadRoutingRequestState>> {
+    let Some(request) = checked_thread_routing_request(state, api, message, request_id).await?
+    else {
+        return Ok(None);
+    };
+    if !matches!(
+        request.stage,
+        ThreadRoutingStage::Choice | ThreadRoutingStage::CreateSettings
+    ) {
+        send_text_to_message(
+            api,
+            message,
+            im_text_for_state(state).thread_selection_expired(),
+        )
+        .await?;
+        return Ok(None);
+    }
+    Ok(Some(request))
+}
+
 async fn send_thread_create_settings_card(
     state: &SharedState,
     api: &FeishuApi,
     message: &InboundMessage,
-    request: ThreadRoutingRequestState,
+    mut request: ThreadRoutingRequestState,
 ) -> Result<()> {
-    let route = route_for_message(message);
-    let remote_client_key = route.remote_client_key.clone();
-    let defaults = load_thread_create_defaults_for_client(state, &remote_client_key).await;
+    let mut defaults = session_backend::defaults(state, message).await;
+    if message.session_scope.is_some() {
+        // Do not redisplay a saved project snapshot after access changed while
+        // waiting for desktop metadata. The menu itself performs no writes.
+        crate::gmclaw_im::sessions::validate_menu_access(state, message).await?;
+    }
+    if request.stage != ThreadRoutingStage::CreateSettings {
+        request.page = 1;
+        request.create_draft = ThreadCreateDraftState::default();
+        request.create_option_values_by_field_page.clear();
+    }
+    if let Some(pages) = request.create_option_values_by_field_page.get("cwd") {
+        // Keep a stable menu snapshot across navigation. New desktop projects
+        // are picked up when the user opens a new settings request.
+        defaults.projects = pages.iter().flatten().cloned().collect();
+    } else {
+        request.create_option_values_by_field_page.insert(
+            "cwd".into(),
+            defaults
+                .projects
+                .chunks(renderer::FEISHU_PROJECT_PAGE_SIZE)
+                .map(|chunk| chunk.to_vec())
+                .collect(),
+        );
+    }
     let text = im_text_for_state(state);
     let adapter = FeishuAdapter::new(api.clone());
-    if let Some(message_id) = request
+    let existing_message_id = request
         .message_id
         .clone()
-        .or_else(|| message.card_message_id.clone())
-    {
-        adapter
-            .send_thread_create_settings(
-                &message.chat_id,
-                &request.request_id,
-                &defaults,
-                Some(&message_id),
-                text,
-            )
-            .await?;
-    } else {
-        let message_id = adapter
-            .send_thread_create_settings(
-                &message.chat_id,
-                &request.request_id,
-                &defaults,
-                None,
-                text,
-            )
-            .await?;
-        state
-            .runtime
-            .lock()
-            .await
-            .update_thread_routing_request_message_id(&request.request_id, message_id);
-    }
+        .or_else(|| message.card_message_id.clone());
+    let card = renderer::build_thread_create_settings_page_card(
+        &request.request_id,
+        &defaults,
+        &request.create_draft,
+        request.page,
+        text,
+    );
+    let message_id = adapter
+        .send_or_update_interactive(&message.chat_id, existing_message_id.as_deref(), &card)
+        .await?;
+    request.message_id = Some(message_id);
+    request.stage = ThreadRoutingStage::CreateSettings;
+    request.thread_ids_by_page.clear();
+    state
+        .runtime
+        .lock()
+        .await
+        .remember_thread_routing_request(request.clone());
     state
         .push_event(
             "info",
@@ -525,6 +654,110 @@ async fn send_thread_create_settings_card(
             format!("conversation={}", request.conversation_key),
         )
         .await;
+    Ok(())
+}
+
+fn project_page_navigation(
+    request: &ThreadRoutingRequestState,
+    direction: ThreadRouteDirection,
+    mut draft: ThreadCreateDraftState,
+) -> Option<(usize, ThreadCreateDraftState)> {
+    let pages = request.create_option_values_by_field_page.get("cwd")?;
+    if let Some(choice) = draft.cwd_choice.as_deref()
+        && !matches!(choice, "__default__" | "__custom__")
+        && !pages.iter().flatten().any(|value| value == choice)
+    {
+        return None;
+    }
+    // Feishu omits empty fields. Preserve a previous selection only if the
+    // component was absent; an explicitly cleared custom path stays cleared.
+    draft.cwd_choice = draft
+        .cwd_choice
+        .or_else(|| request.create_draft.cwd_choice.clone());
+    draft.model = draft.model.or_else(|| request.create_draft.model.clone());
+    draft.effort = draft.effort.or_else(|| request.create_draft.effort.clone());
+    draft.permission = draft
+        .permission
+        .or_else(|| request.create_draft.permission.clone());
+    let page = match direction {
+        ThreadRouteDirection::Prev => request.page.checked_sub(1)?,
+        ThreadRouteDirection::Next => request.page.checked_add(1)?,
+    };
+    (page > 0 && page <= pages.len()).then_some((page, draft))
+}
+
+async fn send_thread_operation_failed(
+    state: &SharedState,
+    api: &FeishuApi,
+    message: &InboundMessage,
+    request: &ThreadRoutingRequestState,
+    error: &anyhow::Error,
+) -> Result<()> {
+    let config = state.config.lock().await;
+    if !crate::gmclaw_im::sender_allowed(&config, message) {
+        return Ok(());
+    }
+    drop(config);
+    let route = route_for_message(message);
+    let text = im_text_for_state(state);
+    let request_id = next_thread_routing_request_id();
+    let body = format!(
+        "操作未完成：{error}\n\n{}",
+        text.create_choice_body_feishu()
+    );
+    let card = renderer::build_thread_routing_choice_card(
+        text.create_choice_title_feishu(),
+        &body,
+        &[
+            renderer::FeishuThreadRoutingAction {
+                label: text.create_new_session_button().to_string(),
+                description: text.create_new_description_feishu().to_string(),
+                value: serde_json::json!({
+                    "kind": "thread_route_choice",
+                    "requestId": request_id,
+                    "action": "create_new"
+                }),
+                primary: true,
+                selected: false,
+                resolved: false,
+            },
+            renderer::FeishuThreadRoutingAction {
+                label: text.restore_history_button().to_string(),
+                description: text.restore_history_description_feishu().to_string(),
+                value: serde_json::json!({
+                    "kind": "thread_route_choice",
+                    "requestId": request_id,
+                    "action": "resume_history"
+                }),
+                primary: false,
+                selected: false,
+                resolved: false,
+            },
+        ],
+        text,
+    );
+    let adapter = FeishuAdapter::new(api.clone());
+    let existing_message_id = request
+        .message_id
+        .as_deref()
+        .or(message.card_message_id.as_deref());
+    let message_id = match adapter
+        .send_or_update_interactive(&route.chat_id, existing_message_id, &card)
+        .await
+    {
+        Ok(message_id) => message_id,
+        Err(_) if existing_message_id.is_some() => {
+            // An old card may no longer be editable. Keep a fresh recovery
+            // entry available instead of leaving only a progress card behind.
+            adapter.send_interactive(&route.chat_id, &card).await?
+        }
+        Err(error) => return Err(error),
+    };
+    let mut runtime = state.runtime.lock().await;
+    runtime.clear_thread_routing_request(&request.request_id);
+    runtime.remember_thread_routing_request(empty_thread_routing_request(
+        &route, request_id, message_id,
+    ));
     Ok(())
 }
 
@@ -555,7 +788,12 @@ async fn create_new_thread_for_route(
 
     let route = route_for_message(message);
     let thread_id =
-        create_and_bind_thread(state, &route, options.clone(), Some(request_id)).await?;
+        match session_backend::create(state, message, options.clone(), Some(request_id)).await {
+            Ok(thread_id) => thread_id,
+            Err(error) => {
+                return send_thread_operation_failed(state, api, message, &request, &error).await;
+            }
+        };
     let body =
         text.created_new_session_body(&thread_id, &summarize_thread_start_options(&options, text));
     let _ = adapter
@@ -625,21 +863,19 @@ async fn handle_thread_route_resume_selected(
     request_id: &str,
     thread_id: &str,
 ) -> Result<()> {
-    let request = {
-        state
-            .runtime
-            .lock()
-            .await
-            .thread_routing_request(request_id)
-    };
-    let Some(request) = request else {
-        let text = im_text_for_state(&state);
-        send_text_to_message(&api, &message, text.thread_choice_card_expired()).await?;
+    let Some(request) = checked_thread_routing_request(&state, &api, &message, request_id).await?
+    else {
         return Ok(());
     };
-    if request.conversation_key != message.conversation_key() {
+    if request.stage != ThreadRoutingStage::ResumeList
+        || !request
+            .thread_ids_by_page
+            .iter()
+            .flatten()
+            .any(|listed_id| listed_id == thread_id)
+    {
         let text = im_text_for_state(&state);
-        send_text_to_message(&api, &message, text.thread_choice_not_current()).await?;
+        send_text_to_message(&api, &message, text.thread_selection_expired()).await?;
         return Ok(());
     }
 
@@ -661,7 +897,13 @@ async fn handle_thread_route_resume_selected(
     }
 
     let route = route_for_message(&message);
-    let thread = resume_and_bind_thread(&state, &route, thread_id, Some(request_id)).await?;
+    let thread = match session_backend::resume(&state, &message, thread_id, Some(request_id)).await
+    {
+        Ok(thread) => thread,
+        Err(error) => {
+            return send_thread_operation_failed(&state, &api, &message, &request, &error).await;
+        }
+    };
     let body = text.subscribed_session_body(
         thread_id,
         &summarize_thread_title(&thread, text),
@@ -694,23 +936,10 @@ async fn handle_thread_route_resume_index(
     page: usize,
     index: usize,
 ) -> Result<()> {
-    let request = {
-        state
-            .runtime
-            .lock()
-            .await
-            .thread_routing_request(request_id)
-    };
-    let Some(request) = request else {
-        let text = im_text_for_state(&state);
-        send_text_to_message(&api, &message, text.thread_choice_card_expired()).await?;
+    let Some(request) = checked_thread_routing_request(&state, &api, &message, request_id).await?
+    else {
         return Ok(());
     };
-    if request.conversation_key != message.conversation_key() {
-        let text = im_text_for_state(&state);
-        send_text_to_message(&api, &message, text.thread_choice_not_current()).await?;
-        return Ok(());
-    }
     let Some(thread_id) = request
         .thread_ids_by_page
         .get(page.saturating_sub(1))
@@ -731,23 +960,10 @@ async fn handle_thread_route_list_page(
     request_id: &str,
     direction: ThreadRouteDirection,
 ) -> Result<()> {
-    let request = {
-        state
-            .runtime
-            .lock()
-            .await
-            .thread_routing_request(request_id)
-    };
-    let Some(request) = request else {
-        let text = im_text_for_state(&state);
-        send_text_to_message(&api, &message, text.thread_choice_card_expired()).await?;
+    let Some(request) = checked_thread_routing_request(&state, &api, &message, request_id).await?
+    else {
         return Ok(());
     };
-    if request.conversation_key != message.conversation_key() {
-        let text = im_text_for_state(&state);
-        send_text_to_message(&api, &message, text.thread_list_not_current()).await?;
-        return Ok(());
-    }
 
     let target_page = match direction {
         ThreadRouteDirection::Prev => request.page.saturating_sub(1).max(1),
@@ -812,7 +1028,7 @@ async fn send_thread_routing_list(
         .and_then(|request| request.message_id.as_deref());
     let adapter = FeishuAdapter::new(api.clone());
     let loaded_page =
-        match load_thread_routing_page(state, &route, existing_request.as_ref(), cursor, page, 8)
+        match session_backend::page(state, message, existing_request.as_ref(), cursor, page, 8)
             .await
         {
             Ok(page) => page,
@@ -1179,5 +1395,63 @@ fn sanitize_file_stem(value: &str) -> String {
         "image".to_string()
     } else {
         out
+    }
+}
+
+#[cfg(test)]
+mod project_page_tests {
+    use super::*;
+
+    #[test]
+    fn navigation_keeps_saved_selections_but_honors_cleared_custom_path() {
+        let mut request = ThreadRoutingRequestState {
+            request_id: "fixture-menu".into(),
+            conversation_key: "fixture-chat".into(),
+            account_id: "fixture-account".into(),
+            chat_id: "fixture-chat".into(),
+            message_id: None,
+            stage: ThreadRoutingStage::CreateSettings,
+            page: 1,
+            page_cursors: Vec::new(),
+            thread_ids_by_page: Vec::new(),
+            create_draft: ThreadCreateDraftState {
+                cwd_choice: Some("D:/fixture/project".into()),
+                cwd_custom: Some("D:/old custom".into()),
+                model: Some("fixture-model".into()),
+                effort: Some("high".into()),
+                permission: Some("read_only".into()),
+            },
+            create_option_values_by_field_page: std::collections::HashMap::from([(
+                "cwd".into(),
+                vec![
+                    vec!["D:/fixture/project".into()],
+                    vec!["D:/fixture/other".into()],
+                ],
+            )]),
+            history_cursor: None,
+            history_has_next: false,
+        };
+        let (page, draft) = project_page_navigation(
+            &request,
+            ThreadRouteDirection::Next,
+            ThreadCreateDraftState::default(),
+        )
+        .unwrap();
+        assert_eq!(page, 2);
+        assert_eq!(draft.cwd_choice, request.create_draft.cwd_choice);
+        assert!(draft.cwd_custom.is_none());
+        assert_eq!(draft.model, request.create_draft.model);
+        assert_eq!(draft.effort, request.create_draft.effort);
+        assert_eq!(draft.permission, request.create_draft.permission);
+        assert!(
+            project_page_navigation(&request, ThreadRouteDirection::Prev, draft.clone()).is_none()
+        );
+        request.page = page;
+        assert!(project_page_navigation(&request, ThreadRouteDirection::Next, draft).is_none());
+        let invalid = ThreadCreateDraftState {
+            cwd_choice: Some("D:/not-in-snapshot".into()),
+            ..Default::default()
+        };
+        assert!(project_page_navigation(&request, ThreadRouteDirection::Prev, invalid).is_none());
     }
 }

@@ -227,6 +227,10 @@ pub fn config_path() -> PathBuf {
     if let Some(path) = env::var_os("GMCLAW_CONFIG_PATH").filter(|value| !value.is_empty()) {
         return PathBuf::from(path);
     }
+    native_config_path()
+}
+
+pub(crate) fn native_config_path() -> PathBuf {
     #[cfg(target_os = "windows")]
     let root = env::var_os("APPDATA")
         .map(PathBuf::from)
@@ -594,6 +598,82 @@ fn status_from_snapshot(
 
 pub fn load(config: &AppConfig) -> Result<GmClawConfigStatus> {
     load_selected(config, None)
+}
+
+/// Session model choices include native desktop rows as well as Hub-managed rows.
+/// Read only public selection fields: never load keys, endpoints, or backups.
+pub(crate) fn model_choices() -> Result<(
+    Vec<crate::im::core::thread::ThreadModelChoice>,
+    Option<String>,
+)> {
+    model_choices_at(&config_path())
+}
+
+/// Public model identity fields used to resume a real desktop task. No keys.
+pub(crate) fn session_model_metadata() -> Result<Vec<(String, String, bool)>> {
+    let path = config_path();
+    // Keep the same ID/default validation as the shared model chooser.
+    model_choices_at(&path)?;
+    let connection = open_existing(&path, false)?;
+    let mut statement = connection
+        .prepare("SELECT model_id, model_name, is_active FROM model_configs ORDER BY model_id")?;
+    Ok(statement
+        .query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get::<_, i64>(2)? == 1))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+fn model_choices_at(
+    path: &Path,
+) -> Result<(
+    Vec<crate::im::core::thread::ThreadModelChoice>,
+    Option<String>,
+)> {
+    let connection = open_existing(path, false)?;
+    let mut statement = connection
+        .prepare("SELECT model_id, model_name, is_active FROM model_configs ORDER BY is_active DESC, model_name, model_id")
+        .context("无法读取天工模型列表，请确认已完成天工模型配置")?;
+    let mut rows = statement.query([])?;
+    let mut choices = Vec::new();
+    let mut active_model = None;
+    while let Some(row) = rows.next()? {
+        let model_id = row.get::<_, String>(0)?;
+        ensure!(
+            !model_id.trim().is_empty()
+                && model_id.trim() == model_id
+                && model_id.len() <= 256
+                && !model_id.chars().any(char::is_control)
+                && !matches!(
+                    model_id.as_str(),
+                    "__default__" | "__custom__" | "default" | "默认"
+                ),
+            "天工模型列表包含无效模型 ID，请先在天工中修复"
+        );
+        let model_name = row
+            .get::<_, String>(1)?
+            .chars()
+            .filter(|character| !character.is_control())
+            .take(120)
+            .collect::<String>();
+        let label = if model_name.trim().is_empty() || model_name == model_id {
+            model_id.clone()
+        } else {
+            format!("{} · {model_id}", model_name.trim())
+        };
+        if row.get::<_, i64>(2)? == 1 {
+            ensure!(
+                active_model.is_none(),
+                "天工模型列表存在多个默认模型，请先在天工中修复"
+            );
+            active_model = Some(model_id.clone());
+        }
+        choices.push(crate::im::core::thread::ThreadModelChoice {
+            label,
+            value: model_id,
+        });
+    }
+    Ok((choices, active_model))
 }
 
 pub fn load_selected(config: &AppConfig, entry_id: Option<&str>) -> Result<GmClawConfigStatus> {
@@ -1278,6 +1358,41 @@ mod tests {
     use super::*;
     use crate::ai_gateway::config::GMCLAW_PROVIDER_NAME;
     use crate::ai_gateway::gmclaw::TemperatureMode;
+
+    #[test]
+    fn session_model_choices_read_native_and_managed_ids_without_secret_columns() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("models.db");
+        let connection = Connection::open(&database).unwrap();
+        connection.execute_batch(
+            "CREATE TABLE model_configs (model_id TEXT PRIMARY KEY, model_name TEXT NOT NULL, is_active INTEGER NOT NULL);
+             INSERT INTO model_configs VALUES ('native-row', 'shared-name', 1);
+             INSERT INTO model_configs VALUES ('tiancaispacehub-managed', 'shared-name', 0);"
+        ).unwrap();
+        drop(connection);
+
+        let (choices, active) = model_choices_at(&database).unwrap();
+        assert_eq!(active.as_deref(), Some("native-row"));
+        assert_eq!(choices.len(), 2);
+        assert_eq!(choices[0].value, "native-row");
+        assert_eq!(choices[1].value, "tiancaispacehub-managed");
+        assert_ne!(choices[0].label, choices[1].label);
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn session_model_choices_reject_ambiguous_defaults() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("models.db");
+        let connection = Connection::open(&database).unwrap();
+        connection.execute_batch(
+            "CREATE TABLE model_configs (model_id TEXT PRIMARY KEY, model_name TEXT NOT NULL, is_active INTEGER NOT NULL);
+             INSERT INTO model_configs VALUES ('row-one', 'model', 1);
+             INSERT INTO model_configs VALUES ('row-two', 'model', 1);"
+        ).unwrap();
+        drop(connection);
+        assert!(model_choices_at(&database).is_err());
+    }
 
     fn fixture() -> (tempfile::TempDir, PathBuf, PathBuf, AppConfig) {
         let directory = tempfile::tempdir().unwrap();

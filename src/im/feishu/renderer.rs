@@ -20,6 +20,7 @@ mod threads;
 
 #[allow(unused_imports)]
 pub use approval::{build_approval_card, build_resolved_approval_card};
+pub(crate) use approval::{build_gmclaw_approval_card, build_resolved_gmclaw_approval_card};
 #[allow(unused_imports)]
 pub use auth::{
     build_oauth_device_card, build_oauth_device_explanation, build_permission_required_card,
@@ -45,9 +46,10 @@ pub use streaming::{
     build_streaming_mcp_tool_card, build_streaming_plan_card, build_streaming_reasoning_card,
     build_streaming_reply_card, build_turn_completed_card, build_turn_terminal_mark_card,
 };
+pub(crate) use threads::FEISHU_PROJECT_PAGE_SIZE;
 #[allow(unused_imports)]
 pub use threads::{
     FeishuThreadListEntry, FeishuThreadRoutingAction, build_thread_create_settings_card,
-    build_thread_list_card, build_thread_list_loading_card, build_thread_routing_choice_card,
-    build_thread_routing_result_card,
+    build_thread_create_settings_page_card, build_thread_list_card, build_thread_list_loading_card,
+    build_thread_routing_choice_card, build_thread_routing_result_card,
 };

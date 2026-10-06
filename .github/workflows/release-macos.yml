@@ -1,4 +1,4 @@
-﻿name: release-macos
+name: release-macos
 
 on:
   workflow_dispatch:
@@ -69,8 +69,8 @@ jobs:
       - name: Build App Bundle
         run: |
           set -euo pipefail
-          APP_NAME="TianCaiSpace Hub"
-          EXECUTABLE_NAME="CodexHub"
+          APP_NAME="TianCaiSpaceHub"
+          EXECUTABLE_NAME="TianCaiSpaceHub"
           APP="target/dist/$APP_NAME.app"
           CONTENTS="$APP/Contents"
           MACOS="$CONTENTS/MacOS"
@@ -81,17 +81,17 @@ jobs:
 
           # Build wxWidgets as universal (arm64 + x86_64) and compile for native arch
           export WX_OSX_ARCHITECTURES="arm64;x86_64"
-          PATH="$(brew --prefix)/bin:$PATH" cargo build --locked --release --features gui --bin codexhub --target aarch64-apple-darwin
+          PATH="$(brew --prefix)/bin:$PATH" cargo build --locked --release --features gui --bin TianCaiSpaceHub --target aarch64-apple-darwin
 
           # Compile for Intel (wxWidgets libs are already fat, no rebuild needed)
-          PATH="$(brew --prefix)/bin:$PATH" cargo build --locked --release --features gui --bin codexhub --target x86_64-apple-darwin
+          PATH="$(brew --prefix)/bin:$PATH" cargo build --locked --release --features gui --bin TianCaiSpaceHub --target x86_64-apple-darwin
 
           # Create universal binary
           mkdir -p target/release
           lipo -create \
-            target/aarch64-apple-darwin/release/codexhub \
-            target/x86_64-apple-darwin/release/codexhub \
-            -output target/release/codexhub
+            target/aarch64-apple-darwin/release/TianCaiSpaceHub \
+            target/x86_64-apple-darwin/release/TianCaiSpaceHub \
+            -output target/release/TianCaiSpaceHub
 
           CARGO_VERSION="$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' Cargo.toml | head -n 1)"
           if [ -z "$CARGO_VERSION" ]; then
@@ -115,8 +115,9 @@ jobs:
           /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${CARGO_VERSION%%[-+]*}" "$CONTENTS/Info.plist"
           /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${GITHUB_RUN_NUMBER:-1}" "$CONTENTS/Info.plist"
           plutil -lint "$CONTENTS/Info.plist"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$CONTENTS/Info.plist")" = "$EXECUTABLE_NAME"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleURLTypes:0:CFBundleURLSchemes:0' "$CONTENTS/Info.plist")" = "tiancaispacehub"
-          ICONSET="$RUNNER_TEMP/TianCaiSpace Hub.iconset"
+          ICONSET="$RUNNER_TEMP/TianCaiSpaceHub.iconset"
           rm -rf "$ICONSET"
           mkdir -p "$ICONSET"
           for spec in "16:icon_16x16.png" "32:icon_16x16@2x.png" "32:icon_32x32.png" "64:icon_32x32@2x.png" "128:icon_128x128.png" "256:icon_128x128@2x.png" "256:icon_256x256.png" "512:icon_256x256@2x.png" "512:icon_512x512.png" "1024:icon_512x512@2x.png"; do
@@ -127,7 +128,7 @@ jobs:
           iconutil -c icns "$ICONSET" -o "$RESOURCES/AppIcon.icns"
           cp packaging/brand/*.png "$RESOURCES/brand/"
           cp docs/hub-external-import.md "$RESOURCES/WEB-IMPORT.md"
-          cp "target/release/codexhub" "$MACOS/$EXECUTABLE_NAME"
+          cp "target/release/TianCaiSpaceHub" "$MACOS/$EXECUTABLE_NAME"
           chmod +x "$MACOS/$EXECUTABLE_NAME"
           lipo "$MACOS/$EXECUTABLE_NAME" -verify_arch arm64 x86_64
 
@@ -145,8 +146,8 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
         run: |
           set -euo pipefail
-          APP="target/dist/TianCaiSpace Hub.app"
-          DMG="target/dist/TianCaiSpace Hub.dmg"
+          APP="target/dist/TianCaiSpaceHub.app"
+          DMG="target/dist/TianCaiSpaceHub.dmg"
           DMG_STAGING="target/dist/dmg"
           ZIP="target/dist/${MACOS_APP_ZIP_NAME}"
           NOTARY_ZIP="target/dist/TianCaiSpaceHub-notary.zip"
@@ -254,10 +255,10 @@ jobs:
 
           rm -rf "$DMG_STAGING"
           mkdir -p "$DMG_STAGING"
-          ditto "$APP" "$DMG_STAGING/TianCaiSpace Hub.app"
+          ditto "$APP" "$DMG_STAGING/TianCaiSpaceHub.app"
           ln -s /Applications "$DMG_STAGING/Applications"
 
-          hdiutil create -volname "TianCaiSpace Hub" -srcfolder "$DMG_STAGING" -ov -format UDZO "$DMG"
+          hdiutil create -volname "TianCaiSpaceHub" -srcfolder "$DMG_STAGING" -ov -format UDZO "$DMG"
           codesign --force --timestamp --sign "$APPLE_CODESIGN_IDENTITY" "$DMG"
           notary_submit "$DMG"
           xcrun stapler staple "$DMG"
@@ -273,8 +274,8 @@ jobs:
         if: env.HAS_APPLE_CERTIFICATE != 'true'
         run: |
           set -euo pipefail
-          APP="target/dist/TianCaiSpace Hub.app"
-          DMG="target/dist/TianCaiSpace Hub.dmg"
+          APP="target/dist/TianCaiSpaceHub.app"
+          DMG="target/dist/TianCaiSpaceHub.dmg"
           DMG_STAGING="target/dist/dmg"
           ZIP="target/dist/${MACOS_APP_ZIP_NAME}"
 
@@ -297,10 +298,10 @@ jobs:
 
           rm -rf "$DMG_STAGING"
           mkdir -p "$DMG_STAGING"
-          ditto "$APP" "$DMG_STAGING/TianCaiSpace Hub.app"
+          ditto "$APP" "$DMG_STAGING/TianCaiSpaceHub.app"
           ln -s /Applications "$DMG_STAGING/Applications"
 
-          hdiutil create -volname "TianCaiSpace Hub" -srcfolder "$DMG_STAGING" -ov -format UDZO "$DMG"
+          hdiutil create -volname "TianCaiSpaceHub" -srcfolder "$DMG_STAGING" -ov -format UDZO "$DMG"
           mv "$DMG" "target/dist/${MACOS_DMG_NAME}"
 
       - name: Write macOS Update Metadata

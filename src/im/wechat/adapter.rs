@@ -6,6 +6,7 @@ use tokio::time::{Duration, sleep};
 
 use crate::{
     app_state::SharedState, chain_log, im::core::i18n::ImText, im_runtime::PendingApproval,
+    types::InboundMessage,
 };
 
 use super::{api::WechatApi, store};
@@ -32,7 +33,7 @@ impl WechatAdapter {
         target: &str,
         text: &str,
     ) -> Result<String> {
-        self.send_text_inner(state, account_id, target, text, true)
+        self.send_text_inner(state, account_id, target, text, true, false, None)
             .await
     }
 
@@ -43,11 +44,11 @@ impl WechatAdapter {
         target: &str,
         text: &str,
     ) -> Result<String> {
-        self.send_text_inner(state, account_id, target, text, false)
+        self.send_text_inner(state, account_id, target, text, false, false, None)
             .await
     }
 
-    async fn send_text_inner(
+    pub(crate) async fn send_gmclaw_approval_text(
         &self,
         state: &SharedState,
         account_id: &str,
@@ -55,12 +56,60 @@ impl WechatAdapter {
         text: &str,
         use_context_token: bool,
     ) -> Result<String> {
+        self.send_text_inner(
+            state,
+            account_id,
+            target,
+            text,
+            use_context_token,
+            true,
+            None,
+        )
+        .await
+    }
+
+    pub(crate) async fn send_gmclaw_turn_text(
+        &self,
+        state: &SharedState,
+        account_id: &str,
+        target: &str,
+        text: &str,
+        use_context_token: bool,
+        scope: (&InboundMessage, &str),
+    ) -> Result<String> {
+        self.send_text_inner(
+            state,
+            account_id,
+            target,
+            text,
+            use_context_token,
+            true,
+            Some(scope),
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn send_text_inner(
+        &self,
+        state: &SharedState,
+        account_id: &str,
+        target: &str,
+        text: &str,
+        use_context_token: bool,
+        preserve_whitespace: bool,
+        delivery_scope: Option<(&InboundMessage, &str)>,
+    ) -> Result<String> {
         let context_token = if use_context_token {
             store::context_token_record(state, account_id, target).await
         } else {
             None
         };
-        let chunks = wechat_text_chunks(text);
+        let chunks = if preserve_whitespace {
+            gmclaw_approval_text_chunks(text)
+        } else {
+            wechat_text_chunks(text)
+        };
         let mut last_message_id = String::new();
         log_adapter(
             "send_text_begin",
@@ -81,14 +130,21 @@ impl WechatAdapter {
             ),
         );
         for (index, chunk) in chunks.iter().enumerate() {
-            last_message_id = self
-                .api
-                .send_text(
-                    target,
-                    context_token.as_ref().map(|record| record.token.as_str()),
-                    chunk,
-                )
-                .await?;
+            if let Some((inbound, fingerprint)) = delivery_scope {
+                let config = state.config.lock().await;
+                anyhow::ensure!(
+                    crate::gmclaw_im::turn_delivery_allowed(&config, inbound, fingerprint),
+                    "天工回复接入权限或连接配置已变化，未继续发送"
+                );
+            }
+            let token = context_token.as_ref().map(|record| record.token.as_str());
+            last_message_id = if preserve_whitespace {
+                self.api
+                    .send_gmclaw_approval_text(target, token, chunk)
+                    .await?
+            } else {
+                self.api.send_text(target, token, chunk).await?
+            };
             log_adapter(
                 "send_text_chunk_sent",
                 format!(
@@ -223,6 +279,13 @@ fn wechat_text_chunks(text: &str) -> Vec<String> {
     split_message(trimmed)
 }
 
+fn gmclaw_approval_text_chunks(text: &str) -> Vec<String> {
+    crate::im::core::executor_approval::text_chunks(text, WECHAT_TEXT_CHUNK_CHARS)
+        .into_iter()
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
 fn split_message(message: &str) -> Vec<String> {
     let mut chunks = Vec::new();
     let mut remaining = message;
@@ -287,7 +350,25 @@ fn token_stale_label(record: Option<&store::WechatContextTokenRecord>) -> &'stat
 
 #[cfg(test)]
 mod tests {
-    use super::{WECHAT_TEXT_CHUNK_CHARS, wechat_text_chunks};
+    use super::{WECHAT_TEXT_CHUNK_CHARS, gmclaw_approval_text_chunks, wechat_text_chunks};
+
+    #[test]
+    fn approval_chunks_preserve_whitespace_inside_long_json_strings() {
+        let text = format!(
+            "  {{\"command\":\"{}  \t{}\\n{}\"}} \n ",
+            "x".repeat(3490),
+            "天工🔧".repeat(1200),
+            " trailing spaces  ".repeat(400)
+        );
+        let chunks = gmclaw_approval_text_chunks(&text);
+        assert!(chunks.len() > 1);
+        assert!(
+            chunks
+                .iter()
+                .all(|chunk| chunk.len() <= WECHAT_TEXT_CHUNK_CHARS)
+        );
+        assert_eq!(chunks.concat(), text);
+    }
 
     #[test]
     fn chunks_long_unicode_text() {

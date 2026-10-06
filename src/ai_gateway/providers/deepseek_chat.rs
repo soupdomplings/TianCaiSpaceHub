@@ -6,6 +6,7 @@ use axum::{
     http::{HeaderName, HeaderValue, StatusCode},
     response::Response,
 };
+use serde_json::Value;
 use tracing::{debug, error};
 
 use crate::ai_gateway::config::{ProviderConfig, provider_api_root};
@@ -79,6 +80,12 @@ pub async fn handle(
 
     if let Some(log_context) = &log_context {
         let update = RequestLogUpdate {
+            upstream_stream: Some(
+                chat_body
+                    .get("stream")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+            ),
             upstream_request_headers_json: log_context
                 .details_enabled
                 .then(|| request_log::headers_to_json(upstream_req.headers()))

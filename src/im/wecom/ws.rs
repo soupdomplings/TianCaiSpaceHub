@@ -103,8 +103,9 @@ pub async fn listen_ws(
                                         "info",
                                         "wecom_card_event_received",
                                         format!(
-                                            "account={} chat={} action={:?}",
-                                            account_id, message.chat_id, message.action
+                                            "account={} chat={} action={}",
+                                            account_id, message.chat_id,
+                                            if matches!(message.action, Some(InboundAction::GmClawApprovalDecision { .. })) { "gmclaw_approval_decision".to_owned() } else { format!("{:?}", message.action) }
                                         ),
                                     )
                                     .await;
@@ -115,7 +116,7 @@ pub async fn listen_ws(
                                             .push_event(
                                                 "warn",
                                                 "wecom_event_ignored",
-                                                format!("{} raw={value}", event_summary(&value)),
+                                                if is_gmclaw_approval_event(&value) { event_summary(&value) } else { format!("{} raw={value}", event_summary(&value)) },
                                             )
                                             .await;
                             }
@@ -262,6 +263,8 @@ async fn normalize_message(
         remember_stream(state, account_id, &chat_id, &message_id, &callback_req_id).await;
     }
     Some(InboundMessage {
+        session_scope: None,
+        session_entry: None,
         platform: ImPlatformKind::Wecom,
         account_id: account_id.to_string(),
         sender_id: sender_id.to_string(),
@@ -317,6 +320,8 @@ fn normalize_card_event(
     }
     let chat_id = wecom_chat_target(&chat_type, &raw_chat_id);
     Some(InboundMessage {
+        session_scope: None,
+        session_entry: None,
         platform: ImPlatformKind::Wecom,
         account_id: account_id.to_string(),
         sender_id,
@@ -367,12 +372,39 @@ fn event_summary(value: &Value) -> String {
         .or_else(|| value.pointer("/body/event/template_card_event/event_key"))
         .and_then(Value::as_str)
         .unwrap_or("");
+    let event_key = if event_key.starts_with("gmclaw-approval:") {
+        "gmclaw-approval:[redacted]"
+    } else {
+        event_key
+    };
     format!("cmd={cmd} event_type={event_type} event_key={event_key}")
+}
+
+fn is_gmclaw_approval_event(value: &Value) -> bool {
+    value
+        .pointer("/body/event/event_key")
+        .or_else(|| value.pointer("/body/event/template_card_event/event_key"))
+        .and_then(Value::as_str)
+        .is_some_and(|key| key.starts_with("gmclaw-approval:"))
 }
 
 fn parse_card_event_key(value: &str) -> Option<InboundAction> {
     let parts = value.split(':').collect::<Vec<_>>();
     match parts.as_slice() {
+        ["gmclaw-approval", request_key, index] => {
+            if !crate::im::core::executor_approval::valid_request_key(request_key) {
+                return None;
+            }
+            let option_index = match *index {
+                "1" => 1,
+                "2" => 2,
+                _ => return None,
+            };
+            Some(InboundAction::GmClawApprovalDecision {
+                request_key: (*request_key).to_owned(),
+                option_index,
+            })
+        }
         ["approval", fingerprint, index] => Some(InboundAction::ApprovalDecision {
             request_fingerprint: (*fingerprint).to_string(),
             option_index: index.parse().ok()?,
@@ -724,6 +756,30 @@ mod tests {
     use super::*;
     use crate::im::wecom::types::WecomSettings;
     use crate::{app_state::AppState, config::AppConfig};
+
+    #[test]
+    fn gmclaw_card_keys_cannot_default_to_approve_or_cross_executors() {
+        for value in [
+            "gmclaw-approval::1",
+            "gmclaw-approval:fixture-key:0",
+            "gmclaw-approval:fixture-key:3",
+            "gmclaw-approval:fixture-key:01",
+            "gmclaw-approval:fixture:key:1",
+            "gmclaw-approval:fixture-key:-1",
+        ] {
+            assert!(parse_card_event_key(value).is_none());
+        }
+        assert!(
+            matches!(parse_card_event_key("gmclaw-approval:fixture-key:2"), Some(InboundAction::GmClawApprovalDecision { request_key, option_index: 2 }) if request_key == "fixture-key")
+        );
+        assert!(matches!(
+            parse_card_event_key("approval:fixture-key:1"),
+            Some(InboundAction::ApprovalDecision { .. })
+        ));
+        let invalid = json!({"body": {"event": {"eventtype": "template_card_event", "template_card_event": {"event_key": "gmclaw-approval:fixture-key:3"}}}});
+        assert!(is_gmclaw_approval_event(&invalid));
+        assert!(!event_summary(&invalid).contains("fixture-key"));
+    }
 
     fn api() -> WecomApi {
         WecomApi::new(WecomSettings {

@@ -15,8 +15,8 @@ use tracing::{info, warn};
 use crate::{
     app_state::{ImAccountRuntimeState, SharedState, im_account_key},
     types::{
-        ChatType, ImPlatformKind, InboundAction, InboundAttachment, InboundMessage,
-        ThreadRouteDirection, now_ms,
+        ChatType, ImPlatformKind, InboundAction, InboundAttachment, InboundCallbackKind,
+        InboundMessage, ThreadRouteDirection, now_ms,
     },
 };
 
@@ -388,6 +388,8 @@ async fn handle_event(
 
     update_last_inbound(state, account_id).await;
     tx.send(InboundMessage {
+        session_scope: None,
+        session_entry: None,
         platform: ImPlatformKind::Feishu,
         account_id: account_id.to_string(),
         sender_id,
@@ -487,6 +489,11 @@ async fn handle_card_action_event(
         .and_then(|v| v.as_str())
         .unwrap_or_default();
     let (text, approval_request_key, action) = match kind {
+        "gmclaw_approval_decision" => {
+            let action = parse_gmclaw_approval_action(&serde_json::Value::Object(value.clone()))
+                .ok_or_else(|| anyhow!("invalid TianGong approval callback"))?;
+            (String::new(), None, Some(action))
+        }
         "codex_approval_decision" => {
             let option = value
                 .get("option")
@@ -520,6 +527,9 @@ async fn handle_card_action_event(
             )
         }
         "thread_route_create_submit" => {
+            if !payload.action.form_value.is_object() {
+                return Err(anyhow!("thread create submission missing form values"));
+            }
             let request_id = value
                 .get("requestId")
                 .and_then(|v| v.as_str())
@@ -549,6 +559,40 @@ async fn handle_card_action_event(
                 String::new(),
                 None,
                 Some(InboundAction::ThreadRouteCreateDefault { request_id }),
+            )
+        }
+        "thread_route_create_cwd_page" => {
+            if !payload.action.form_value.is_object() {
+                return Err(anyhow!("project page action missing form values"));
+            }
+            let request_id = value
+                .get("requestId")
+                .and_then(|value| value.as_str())
+                .ok_or_else(|| anyhow!("project page action missing requestId"))?
+                .to_owned();
+            let direction = match value.get("direction").and_then(|value| value.as_str()) {
+                Some("prev") => ThreadRouteDirection::Prev,
+                Some("next") => ThreadRouteDirection::Next,
+                _ => return Err(anyhow!("invalid project page direction")),
+            };
+            (
+                String::new(),
+                None,
+                Some(InboundAction::ThreadRouteCreateCwdPage {
+                    request_id,
+                    page: value
+                        .get("page")
+                        .and_then(|value| value.as_u64())
+                        .and_then(|page| usize::try_from(page).ok())
+                        .filter(|page| *page > 0)
+                        .ok_or_else(|| anyhow!("project page action missing page"))?,
+                    direction,
+                    cwd_choice: form_string(&payload.action.form_value, "cwd_choice"),
+                    cwd_custom: form_string(&payload.action.form_value, "cwd_custom"),
+                    model: form_string(&payload.action.form_value, "model"),
+                    effort: form_string(&payload.action.form_value, "effort"),
+                    permission: form_string(&payload.action.form_value, "permission"),
+                }),
             )
         }
         "thread_route_resume_selected" => {
@@ -608,6 +652,8 @@ async fn handle_card_action_event(
     };
     update_last_inbound(state, account_id).await;
     tx.send(InboundMessage {
+        session_scope: None,
+        session_entry: None,
         platform: ImPlatformKind::Feishu,
         account_id: account_id.to_string(),
         sender_id,
@@ -628,7 +674,7 @@ async fn handle_card_action_event(
             .as_ref()
             .and_then(|context| context.open_message_id.clone()),
         callback_req_id: None,
-        callback_kind: None,
+        callback_kind: Some(InboundCallbackKind::CardEvent),
         attachments: vec![],
     })
     .await
@@ -641,6 +687,50 @@ fn form_string(form_value: &serde_json::Value, name: &str) -> Option<String> {
         .and_then(first_form_string)
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+fn parse_gmclaw_approval_action(value: &serde_json::Value) -> Option<InboundAction> {
+    if value.get("kind")?.as_str()? != "gmclaw_approval_decision" {
+        return None;
+    }
+    let request_key = value.get("requestKey")?.as_str()?;
+    if !crate::im::core::executor_approval::valid_request_key(request_key) {
+        return None;
+    }
+    let option_index = usize::try_from(value.get("option")?.as_u64()?).ok()?;
+    crate::im::core::executor_approval::decision_label(option_index)?;
+    Some(InboundAction::GmClawApprovalDecision {
+        request_key: request_key.to_owned(),
+        option_index,
+    })
+}
+
+#[cfg(test)]
+mod gmclaw_approval_callback_tests {
+    use super::parse_gmclaw_approval_action;
+    use crate::types::InboundAction;
+    use serde_json::json;
+
+    #[test]
+    fn callback_requires_exact_identity_and_one_of_two_choices() {
+        for option in [
+            json!(null),
+            json!(0),
+            json!(3),
+            json!(-1),
+            json!("1"),
+            json!(1.5),
+        ] {
+            assert!(parse_gmclaw_approval_action(&json!({"kind": "gmclaw_approval_decision", "requestKey": "fixture-key", "option": option})).is_none());
+        }
+        for request_key in [json!(null), json!(""), json!("key:other"), json!(1)] {
+            assert!(parse_gmclaw_approval_action(&json!({"kind": "gmclaw_approval_decision", "requestKey": request_key, "option": 1})).is_none());
+        }
+        assert!(parse_gmclaw_approval_action(&json!({"kind": "codex_approval_decision", "requestKey": "fixture-key", "option": 1})).is_none());
+        assert!(
+            matches!(parse_gmclaw_approval_action(&json!({"kind": "gmclaw_approval_decision", "requestKey": "fixture-key", "option": 2})), Some(InboundAction::GmClawApprovalDecision { request_key, option_index: 2 }) if request_key == "fixture-key")
+        );
+    }
 }
 
 fn first_form_string(value: &serde_json::Value) -> Option<String> {

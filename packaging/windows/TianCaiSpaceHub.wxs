@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+    Name="TianCaiSpaceHub"
+    Manufacturer="TianCaiSpaceHub"
+    Version="$(var.ProductVersion)"
+    UpgradeCode="{42B4BF3C-E660-4C83-96AA-56A4426B96A2}"
+    Scope="perMachine"
+    Compressed="yes">
+    <!-- Remove the old layout before installing renamed files, within the rollback transaction. -->
+    <MajorUpgrade
+      AllowSameVersionUpgrades="yes"
+      Schedule="afterInstallInitialize"
+      DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="TianCaiSpaceHubIcon" SourceFile="$(var.SourceDir)\AppIcon.ico" />
+    <Property Id="ARPPRODUCTICON" Value="TianCaiSpaceHubIcon" />
+
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="INSTALLFOLDER" Name="TianCaiSpaceHub">
+        <!-- New file paths require new component GUIDs; keep them stable in later releases. -->
+        <Component Id="TianCaiSpaceHubExecutable" Guid="{AF89396D-3CF1-48C8-817D-01AF68BB0F7F}">
+          <File Id="TianCaiSpaceHubExe" Source="$(var.SourceDir)\TianCaiSpaceHub.exe" KeyPath="yes" />
+        </Component>
+        <!-- The protocol registry key is unchanged, so its component identity stays compatible. -->
+        <Component Id="HubWebImportProtocol" Guid="{E62F8A91-CF58-4BCC-BDA4-D0C65BFEFB24}">
+          <RegistryKey Root="HKLM" Key="Software\Classes\tiancaispacehub">
+            <RegistryValue Type="string" Value="URL:TianCaiSpaceHub Import" />
+            <RegistryValue Name="URL Protocol" Type="string" Value="" KeyPath="yes" />
+            <RegistryValue Name="TianCaiSpaceHubOwner" Type="string" Value="&quot;[INSTALLFOLDER]TianCaiSpaceHub.exe&quot; import-url &quot;%1&quot;" />
+            <RegistryKey Key="DefaultIcon">
+              <RegistryValue Type="string" Value="&quot;[INSTALLFOLDER]TianCaiSpaceHub.exe&quot;,0" />
+            </RegistryKey>
+            <RegistryKey Key="shell\open\command">
+              <RegistryValue Type="string" Value="&quot;[INSTALLFOLDER]TianCaiSpaceHub.exe&quot; import-url &quot;%1&quot;" />
+            </RegistryKey>
+          </RegistryKey>
+        </Component>
+        <Component Id="TianCaiSpaceHubReadme" Guid="{FAB77E9C-76F3-4AB1-A2FC-6C35D5B39755}">
+          <File Id="ReadmeMd" Source="$(var.SourceDir)\README.md" KeyPath="yes" />
+        </Component>
+        <Component Id="TianCaiSpaceHubReadmeEn" Guid="{2693D123-1FA6-410C-AB7E-5B71318D26AB}">
+          <File Id="ReadmeEnMd" Source="$(var.SourceDir)\README.en.md" KeyPath="yes" />
+        </Component>
+        <Component Id="TianCaiSpaceHubConfigExample" Guid="{689018C1-C0BF-4877-AAA6-46367EC53506}">
+          <File Id="ConfigExampleToml" Source="$(var.SourceDir)\config.example.toml" KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="ApplicationProgramsFolder" Name="TianCaiSpaceHub">
+        <Component Id="TianCaiSpaceHubStartMenuShortcut" Guid="{71897EBB-DAFB-434E-B5D5-1547EBDF9004}">
+          <Shortcut
+            Id="TianCaiSpaceHubStartMenuShortcut"
+            Name="TianCaiSpaceHub"
+            Description="Open TianCaiSpaceHub"
+            Target="[INSTALLFOLDER]TianCaiSpaceHub.exe"
+            WorkingDirectory="INSTALLFOLDER"
+            Icon="TianCaiSpaceHubIcon" />
+          <RemoveFolder Id="RemoveApplicationProgramsFolder" On="uninstall" />
+          <RegistryValue
+            Root="HKCU"
+            Key="Software\TianCaiSpaceHub"
+            Name="StartMenuShortcut"
+            Type="integer"
+            Value="1"
+            KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="DesktopFolder">
+      <Component Id="TianCaiSpaceHubDesktopShortcut" Guid="{CD2C7DFE-1FEB-432D-B973-95E1B5F78D90}">
+        <Shortcut
+          Id="TianCaiSpaceHubDesktopShortcut"
+          Name="TianCaiSpaceHub"
+          Description="Open TianCaiSpaceHub"
+          Target="[INSTALLFOLDER]TianCaiSpaceHub.exe"
+          WorkingDirectory="INSTALLFOLDER"
+          Icon="TianCaiSpaceHubIcon" />
+        <RegistryValue
+          Root="HKCU"
+          Key="Software\TianCaiSpaceHub"
+          Name="DesktopShortcut"
+          Type="integer"
+          Value="1"
+          KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+
+    <Feature Id="MainFeature" Title="TianCaiSpaceHub" Level="1">
+      <ComponentRef Id="TianCaiSpaceHubExecutable" />
+      <ComponentRef Id="HubWebImportProtocol" />
+      <ComponentRef Id="TianCaiSpaceHubReadme" />
+      <ComponentRef Id="TianCaiSpaceHubReadmeEn" />
+      <ComponentRef Id="TianCaiSpaceHubConfigExample" />
+      <ComponentRef Id="TianCaiSpaceHubStartMenuShortcut" />
+      <ComponentRef Id="TianCaiSpaceHubDesktopShortcut" />
+    </Feature>
+  </Package>
+</Wix>

@@ -3597,7 +3597,12 @@ mod tests {
         assert_eq!(message.item_type.as_deref(), Some("mcpToolCall"));
         match message.payload {
             ImOutboundPayload::Image { path, .. } => assert!(path.is_file()),
-            ImOutboundPayload::Text(_) | ImOutboundPayload::Approval(_) => {
+            ImOutboundPayload::Text(_)
+            | ImOutboundPayload::Approval(_)
+            | ImOutboundPayload::GmClawApproval(_)
+            | ImOutboundPayload::GmClawApprovalResolved { .. }
+            | ImOutboundPayload::GmClawTurnStage { .. }
+            | ImOutboundPayload::GmClawTurnFinished { .. } => {
                 panic!("MCP aggregation must not queue an item text message")
             }
         }

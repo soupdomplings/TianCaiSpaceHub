@@ -12,6 +12,9 @@ use serde_json::{Value, json};
 use url::Url;
 
 pub const DEFAULT_ENDPOINT: &str = "http://127.0.0.1:7861";
+/// GMClaw 1.1.1's native renderer submits 1000 steps. This compatibility
+/// boundary is separate from the Hub's 1..=200 budget for new IM sessions.
+pub(crate) const MAX_SESSION_STEPS: u32 = 1000;
 const MAX_EVENT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_TEXT_BYTES: usize = 4 * 1024 * 1024;
@@ -34,7 +37,7 @@ pub struct GmClawProject {
 pub struct GmClawChatRequest {
     pub session_id: String,
     pub chat_id: String,
-    /// A Hub-owned identity for memory isolation, never the desktop's local user.
+    /// Preserve the desktop user identity to load this real session's memory.
     pub user_id: String,
     pub query: String,
     /// The GMClaw model_configs row ID, not its upstream model_name.
@@ -102,7 +105,10 @@ impl GmClawChatRequest {
         ensure!(!self.session_id.trim().is_empty(), "天工会话 ID 不能为空");
         ensure!(!self.chat_id.trim().is_empty(), "天工消息 ID 不能为空");
         ensure!(!self.user_id.trim().is_empty(), "天工用户 ID 不能为空");
-        ensure!(self.max_steps > 0, "天工执行步数必须大于 0");
+        ensure!(
+            (1..=MAX_SESSION_STEPS).contains(&self.max_steps),
+            "天工执行步数须在 1–1000 之间"
+        );
         ensure!(
             Path::new(&self.project.path).is_absolute(),
             "天工工作目录必须是绝对路径"
@@ -186,10 +192,22 @@ pub fn validate_endpoint(endpoint: &str) -> Result<Url> {
 
 impl GmClawClient {
     pub fn new(endpoint: &str, token: &str) -> Result<Self> {
-        let chat_url = validate_endpoint(endpoint)?;
-        ensure!(!token.trim().is_empty(), "请先配置天工连接 Token");
+        validate_endpoint(endpoint)?;
+        ensure!(
+            !token.trim().is_empty(),
+            "天工连接授权尚未准备好，请在聊天中发送 /tg 自动连接"
+        );
         let mut authorization = HeaderValue::from_str(&format!("Bearer {}", token.trim()))
             .context("天工连接 Token 格式无效")?;
+        authorization.set_sensitive(true);
+        Self::with_authorization(endpoint, authorization)
+    }
+
+    pub(crate) fn with_authorization(
+        endpoint: &str,
+        mut authorization: HeaderValue,
+    ) -> Result<Self> {
+        let chat_url = validate_endpoint(endpoint)?;
         authorization.set_sensitive(true);
         let http = Client::builder()
             .no_proxy()
@@ -228,7 +246,7 @@ impl GmClawClient {
             .context("无法连接天工执行端，请确认天工已启动；请求不会自动重试")?;
         match response.status().as_u16() {
             401 | 403 => {
-                bail!("天工连接授权失败，请核对 Token 与天工启动环境 GMCLAW_AUTH_TOKEN 是否一致")
+                bail!("天工运行授权已变化，请在聊天中发送 /tg 自动重新连接；本次请求不会重试")
             }
             status if !(200..300).contains(&status) => {
                 bail!("天工执行端返回 HTTP {status}；请求不会自动重试")
@@ -527,7 +545,7 @@ mod tests {
             user_id: "hub-im-isolated".into(),
             query: String::new(),
             model_id: Some("configured-row-id".into()),
-            max_steps: 20,
+            max_steps: 1000,
             project: GmClawProject {
                 id: "hub-im-project".into(),
                 name: "Hub IM".into(),
@@ -542,9 +560,15 @@ mod tests {
         assert_eq!(body["user_id"], "hub-im-isolated");
         assert_eq!(body["project"]["id"], "hub-im-project");
         assert_eq!(body["model_id"], "configured-row-id");
+        assert_eq!(body["max_steps"], 1000);
         assert_eq!(body["tool_execution_mode"], "confirm");
         assert_eq!(body["confirm_action"], "deny");
         assert_eq!(body["approved_call_ids"], json!(["call-exact"]));
+        for invalid_steps in [0, 1001, u32::MAX] {
+            request.max_steps = invalid_steps;
+            assert!(request.body().is_err());
+        }
+        request.max_steps = 1000;
         request.confirmation.as_mut().unwrap().call_ids.clear();
         assert!(request.body().is_err());
         request.confirmation = None;

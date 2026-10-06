@@ -36,6 +36,76 @@ pub struct ThreadCreateDefaults {
     pub projects: Vec<String>,
     pub models: Vec<ThreadModelChoice>,
     pub efforts: Vec<String>,
+    pub capabilities: ThreadCreateCapabilities,
+    /// Executor-provided explanation for settings inherited outside this form.
+    pub settings_notice: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ThreadCreateCapabilities {
+    pub reasoning: bool,
+    pub permissions: bool,
+}
+
+impl Default for ThreadCreateCapabilities {
+    fn default() -> Self {
+        Self {
+            reasoning: true,
+            permissions: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ThreadCreateSettingsAction {
+    Edit(&'static str),
+    Create,
+    Resume,
+}
+
+pub(crate) fn create_settings_actions(
+    defaults: &ThreadCreateDefaults,
+) -> Vec<ThreadCreateSettingsAction> {
+    use ThreadCreateSettingsAction::{Create, Edit, Resume};
+    let mut actions = vec![Edit("cwd"), Edit("model")];
+    if defaults.capabilities.reasoning {
+        actions.push(Edit("effort"));
+    }
+    if defaults.capabilities.permissions {
+        actions.push(Edit("perm"));
+    }
+    actions.extend([Create, Resume]);
+    actions
+}
+
+pub(crate) fn create_settings_menu_suffix(defaults: &ThreadCreateDefaults, text: ImText) -> String {
+    let mut lines = vec![String::new(), String::new()];
+    for (index, action) in create_settings_actions(defaults).into_iter().enumerate() {
+        let label = match action {
+            ThreadCreateSettingsAction::Edit(field) => text.change_create_setting(field),
+            ThreadCreateSettingsAction::Create => text.create_new_session_button(),
+            ThreadCreateSettingsAction::Resume => text.restore_history_button(),
+        };
+        lines.push(format!("{}. {label}", index + 1));
+    }
+    lines.push(String::new());
+    lines.push(text.create_settings_reply_hint().to_string());
+    lines.join("\n")
+}
+
+pub(crate) fn validate_thread_create_capabilities(
+    defaults: &ThreadCreateDefaults,
+    form: &ThreadCreateForm,
+) -> Result<()> {
+    if !defaults.capabilities.reasoning && !is_default_selection(form.effort.as_deref()) {
+        return Err(anyhow!(
+            "当前执行端不支持在会话中覆盖推理强度，请使用默认设置"
+        ));
+    }
+    if !defaults.capabilities.permissions && !is_default_selection(form.permission.as_deref()) {
+        return Err(anyhow!("当前执行端不支持在会话中覆盖权限，请使用默认设置"));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
@@ -170,6 +240,7 @@ pub(crate) async fn load_thread_create_defaults_for_client(
         projects: codex_project_paths(local_doc.as_ref()),
         models: thread_model_choices(model.as_deref(), &catalog),
         efforts: thread_reasoning_effort_choices(model.as_deref(), &catalog, effort.as_deref()),
+        ..Default::default()
     }
 }
 
@@ -185,7 +256,7 @@ pub(crate) fn load_codex_app_model_provider() -> Option<String> {
 
 pub(crate) fn next_thread_routing_request_id() -> String {
     let value = THREAD_ROUTING_REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    format!("thread-route-{value}")
+    format!("thread-route-{}-{value}", uuid::Uuid::new_v4().simple())
 }
 
 #[derive(Debug, Clone)]
@@ -285,7 +356,7 @@ pub(crate) fn thread_create_help_text(
     draft: &ThreadCreateDraftState,
     text: ImText,
 ) -> String {
-    let lines = vec![
+    let mut lines = vec![
         text.create_thread_heading().to_string(),
         String::new(),
         text.current_settings_heading().to_string(),
@@ -303,17 +374,27 @@ pub(crate) fn thread_create_help_text(
             text.model_label(),
             &selected_model_text(defaults, draft, text),
         ),
-        text.field_line(
+    ];
+    if defaults.capabilities.reasoning {
+        lines.push(text.field_line(
             text.effort_label(),
             &selected_effort_text(defaults, draft, text),
-        ),
-        text.field_line(
+        ));
+    }
+    if defaults.capabilities.permissions {
+        lines.push(text.field_line(
             text.permission_label_title(),
             &selected_permission_text(defaults, draft, text),
-        ),
-        String::new(),
-        text.create_help_footer().to_string(),
-    ];
+        ));
+    }
+    if let Some(notice) = defaults
+        .settings_notice
+        .as_deref()
+        .filter(|notice| !notice.trim().is_empty())
+    {
+        lines.push(notice.to_string());
+    }
+    lines.extend([String::new(), text.create_help_footer().to_string()]);
     lines.join("\n")
 }
 
@@ -326,8 +407,13 @@ pub(crate) fn create_options_for_field(
     match field {
         "cwd" => Ok(cwd_create_options(defaults, draft, text)),
         "model" => Ok(model_create_options(defaults, draft, text)),
-        "effort" => Ok(effort_create_options(defaults, draft, text)),
-        "perm" => Ok(permission_create_options(defaults, draft, text)),
+        "effort" if defaults.capabilities.reasoning => {
+            Ok(effort_create_options(defaults, draft, text))
+        }
+        "perm" if defaults.capabilities.permissions => {
+            Ok(permission_create_options(defaults, draft, text))
+        }
+        "effort" | "perm" => Err(anyhow!("{}", text.create_option_unavailable())),
         _ => Err(anyhow!("不支持的创建字段：{field}")),
     }
 }
@@ -1154,8 +1240,54 @@ fn push_path_once(paths: &mut Vec<PathBuf>, path: PathBuf) {
 mod tests {
     use serde_json::json;
 
-    use super::{build_thread_entries, thread_model_choices};
+    use super::{
+        ThreadCreateCapabilities, ThreadCreateDefaults, ThreadCreateForm,
+        ThreadCreateSettingsAction, build_thread_entries, create_options_for_field,
+        create_settings_actions, create_settings_menu_suffix, thread_model_choices,
+        validate_thread_create_capabilities,
+    };
     use crate::im::core::i18n::ImText;
+
+    #[test]
+    fn inherited_settings_are_absent_from_menu_and_rejected_on_submit() {
+        let defaults = ThreadCreateDefaults {
+            capabilities: ThreadCreateCapabilities {
+                reasoning: false,
+                permissions: false,
+            },
+            ..Default::default()
+        };
+        assert_eq!(
+            create_settings_actions(&defaults),
+            vec![
+                ThreadCreateSettingsAction::Edit("cwd"),
+                ThreadCreateSettingsAction::Edit("model"),
+                ThreadCreateSettingsAction::Create,
+                ThreadCreateSettingsAction::Resume,
+            ]
+        );
+        let menu = create_settings_menu_suffix(&defaults, ImText::zh_cn());
+        assert!(menu.contains("3. 创建新会话"));
+        assert!(!menu.contains("修改权限"));
+        assert!(!menu.contains("修改推理强度"));
+        let draft = Default::default();
+        for field in ["effort", "perm"] {
+            assert!(create_options_for_field(&defaults, &draft, field, ImText::zh_cn()).is_err());
+        }
+        let mut form = ThreadCreateForm::default();
+        assert!(validate_thread_create_capabilities(&defaults, &form).is_ok());
+        form.effort = Some("high".into());
+        assert!(validate_thread_create_capabilities(&defaults, &form).is_err());
+        form.effort = Some("__default__".into());
+        form.permission = Some("full_access".into());
+        assert!(validate_thread_create_capabilities(&defaults, &form).is_err());
+        form.permission = Some("__default__".into());
+        assert!(validate_thread_create_capabilities(&defaults, &form).is_ok());
+        assert_eq!(
+            create_settings_actions(&ThreadCreateDefaults::default()).len(),
+            6
+        );
+    }
 
     #[test]
     fn thread_entries_preserve_history_order() {

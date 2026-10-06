@@ -155,7 +155,10 @@ fn strip_codexhub_user_agent_suffix(value: &str) -> String {
     let Some((name, version)) = suffix.split_once(';') else {
         return value.to_string();
     };
-    if name.trim().eq_ignore_ascii_case("codexhub") && !version.trim().is_empty() {
+    if (name.trim().eq_ignore_ascii_case("codexhub")
+        || name.trim().eq_ignore_ascii_case("TianCaiSpaceHub"))
+        && !version.trim().is_empty()
+    {
         value[..prefix_end].trim_end().to_string()
     } else {
         value.to_string()

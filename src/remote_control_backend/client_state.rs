@@ -295,6 +295,7 @@ pub(in crate::remote_control_backend) fn source_kind_from_user_agent(
     } else if user_agent.starts_with("codex_vscode/") {
         RemoteControlSourceKind::Vscode
     } else if user_agent.starts_with("codexhub/")
+        || user_agent.starts_with("TianCaiSpaceHub/")
         || user_agent.contains("WindowsTerminal")
         || user_agent.contains("Terminal")
     {

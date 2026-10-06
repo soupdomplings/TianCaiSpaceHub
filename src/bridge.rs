@@ -603,9 +603,89 @@ async fn handle_inbound(
     state: SharedState,
     api_registry: ImApiRegistry,
     outbound_tx: outbound::ImOutboundSender,
-    message: InboundMessage,
+    mut message: InboundMessage,
 ) -> Result<()> {
-    if crate::gmclaw_im::handle_inbound(&state, &outbound_tx, &message).await? {
+    // Serialize executor selection and request admission within a chat.
+    // Telegram already has its own ordered worker and keeps its existing flow.
+    let mut dispatch = if message.platform != ImPlatformKind::Telegram {
+        let key = message.conversation_key();
+        let gate = {
+            let mut gates = state.im_dispatch.lock().await;
+            gates.retain(|_, gate| gate.strong_count() > 0);
+            match gates.get(&key).and_then(std::sync::Weak::upgrade) {
+                Some(gate) => gate,
+                None => {
+                    let gate = Arc::new(Mutex::new(()));
+                    gates.insert(key, Arc::downgrade(&gate));
+                    gate
+                }
+            }
+        };
+        match gate.try_lock_owned() {
+            Ok(guard) => Some(guard),
+            Err(_) => {
+                let config = state.config.lock().await.clone();
+                if crate::gmclaw_im::sender_allowed(&config, &message) {
+                    let interrupt = message.action.is_none()
+                        && matches!(
+                            message.callback_kind,
+                            None | Some(crate::types::InboundCallbackKind::Message)
+                        )
+                        && message.text.trim().eq_ignore_ascii_case("/s");
+                    let gmclaw = crate::gmclaw_im::is_selected(&state, &message).await;
+                    if interrupt
+                        && !gmclaw
+                        && interrupt_running_codex(&state, &outbound_tx, &message).await?
+                    {
+                        return Ok(());
+                    }
+                    let notice = if interrupt && gmclaw {
+                        "天工当前接口不支持远程停止任务；本次未停止执行，请到天工桌面处理。"
+                    } else if interrupt {
+                        "当前请求仍在启动或处理，尚无可停止的任务；请稍后再发送 /s。"
+                    } else {
+                        "当前聊天正在处理上一条请求，请等待完成后再发送或切换执行端。"
+                    };
+                    crate::gmclaw_im::reply(&outbound_tx, &message, notice)?;
+                }
+                return Ok(());
+            }
+        }
+    } else {
+        None
+    };
+    if message.platform != ImPlatformKind::Telegram
+        && message.action.is_none()
+        && matches!(
+            message.callback_kind,
+            None | Some(crate::types::InboundCallbackKind::Message)
+        )
+    {
+        use crate::im::executor_commands::{ExecutorCommand, ExecutorTarget, parse_command};
+        let notice = match parse_command(&message.text, false) {
+            ExecutorCommand::Switch(ExecutorTarget::WorkBuddy) => Some(
+                "WorkBuddy 桌面任务接入暂不支持，/wb 已保留，当前执行端未切换。可用 /tg 切到天工 Claw，或 /gpt 切到 ChatGPT（Codex）。",
+            ),
+            ExecutorCommand::InvalidArguments { command, .. }
+                if ["/tg", "/gmclaw", "/gpt", "/wb"]
+                    .iter()
+                    .any(|known| command.eq_ignore_ascii_case(known)) =>
+            {
+                Some(
+                    "指令参数无效。请单独发送 /tg、/gpt 或 /wb；天工帮助：/tg help。当前执行端未改变。",
+                )
+            }
+            _ => None,
+        };
+        if let Some(notice) = notice {
+            let config = state.config.lock().await.clone();
+            if crate::gmclaw_im::sender_allowed(&config, &message) {
+                crate::gmclaw_im::reply(&outbound_tx, &message, notice)?;
+            }
+            return Ok(());
+        }
+    }
+    if crate::gmclaw_im::handle_inbound(&state, &outbound_tx, &mut message, &mut dispatch).await? {
         return Ok(());
     }
     if message.platform == ImPlatformKind::Telegram {
@@ -646,6 +726,50 @@ async fn handle_inbound(
         );
     };
     feishu_flow::handle_inbound(state, api, outbound_tx, message).await
+}
+
+/// Stop the captured Codex turn even while another admission/menu RPC holds the
+/// chat gate. This path cannot create a session or send a prompt to another end.
+async fn interrupt_running_codex(
+    state: &SharedState,
+    outbound: &outbound::ImOutboundSender,
+    message: &InboundMessage,
+) -> Result<bool> {
+    use crate::im::core::routing::{active_turn_for_message, remote_client_key_for_thread};
+    let Some((thread_id, turn_id)) = active_turn_for_message(state, message).await else {
+        return Ok(false);
+    };
+    let Some(client_key) = remote_client_key_for_thread(state, &thread_id).await else {
+        return Ok(false);
+    };
+    match remote_control_backend::interrupt_turn_for_client(
+        state,
+        &client_key,
+        &thread_id,
+        &turn_id,
+    )
+    .await
+    {
+        Ok(()) => {
+            remote_control_backend::clear_turn_for_client(state, &client_key, Some(&turn_id)).await;
+            state
+                .runtime
+                .lock()
+                .await
+                .mark_turn_completed(&thread_id, Some(&turn_id));
+            crate::gmclaw_im::reply(
+                outbound,
+                message,
+                crate::im::core::i18n::im_text_for_state(state).interrupted(),
+            )?;
+        }
+        Err(_) => crate::gmclaw_im::reply(
+            outbound,
+            message,
+            "未确认 Codex 任务已停止，请稍后重试 /s 或在 Codex 中查看任务状态。",
+        )?,
+    }
+    Ok(true)
 }
 
 fn attachment_root(state_path: &PathBuf) -> PathBuf {

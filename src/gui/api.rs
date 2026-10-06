@@ -65,7 +65,7 @@ impl ApiClient {
         identity
             .is_codexhub()
             .then_some(identity)
-            .ok_or_else(|| "local service identity does not match TianCaiSpace Hub".to_string())
+            .ok_or_else(|| "local service identity does not match TianCaiSpaceHub".to_string())
     }
 
     pub(super) fn get_quick_json(&self, path: &str) -> Result<Value, String> {
@@ -151,7 +151,9 @@ impl ApiClient {
     }
 
     pub(super) fn dashboard(&self) -> DashboardSnapshot {
-        let dashboard = match self.get_quick::<GuiDashboardResponse>("/api/gui/dashboard") {
+        let dashboard = match self
+            .get_with_timeout::<GuiDashboardResponse>("/api/gui/dashboard", Duration::from_secs(3))
+        {
             Ok(dashboard) => dashboard,
             Err(_err) => {
                 return self.dashboard_fallback();
@@ -359,6 +361,39 @@ impl ApiClient {
         self.post_json_with_timeout("/api/config", config, GUI_CONFIG_TIMEOUT)
     }
 
+    pub(super) fn start_gmclaw_desktop(&self) -> Result<String, String> {
+        let config = self.get_app_config()?;
+        let revision = config
+            .revision
+            .filter(|revision| !revision.is_empty())
+            .ok_or_else(|| "无法读取最新配置版本，请刷新后重试".to_string())?;
+        let status: crate::gmclaw_runtime::GmClawRuntimeStatus = self.post_json_with_timeout(
+            "/api/gmclaw/runtime/start",
+            &serde_json::json!({"expectedRevision": revision}),
+            Duration::from_secs(45),
+        )?;
+        use crate::gmclaw_runtime::GmClawConnectionState;
+        match status.state {
+            GmClawConnectionState::Connected | GmClawConnectionState::Unverified => {
+                Ok(status.detail)
+            }
+            _ => Err(status.detail),
+        }
+    }
+
+    pub(super) fn start_workbuddy_desktop(&self) -> Result<String, String> {
+        #[derive(Deserialize)]
+        struct StartResult {
+            detail: String,
+        }
+        let result: StartResult = self.post_json_with_timeout(
+            "/api/workbuddy/runtime/start",
+            &serde_json::json!({"launch": true}),
+            Duration::from_secs(20),
+        )?;
+        Ok(result.detail)
+    }
+
     pub(super) fn get_workbuddy_config(
         &self,
         entry_id: Option<&str>,
@@ -488,6 +523,7 @@ pub(super) struct DashboardSnapshot {
     pub(super) codex_app: Option<CodexAppStatus>,
     pub(super) im_accounts: Option<ImAccountsResponse>,
     pub(super) ai_gateway: Option<AiGatewayConfig>,
+    pub(super) client_overview: Option<crate::client_overview::ClientOverview>,
 }
 
 impl DashboardSnapshot {
@@ -502,6 +538,7 @@ impl DashboardSnapshot {
             im_accounts: Some(dashboard.im_accounts),
             status: Some(dashboard.status),
             ai_gateway: Some(dashboard.ai_gateway),
+            client_overview: dashboard.client_overview,
         }
     }
 
@@ -531,6 +568,8 @@ struct GuiDashboardResponse {
     codex_app: CodexAppStatus,
     im_accounts: ImAccountsResponse,
     ai_gateway: AiGatewayConfig,
+    #[serde(default)]
+    client_overview: Option<crate::client_overview::ClientOverview>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -754,6 +793,8 @@ pub(super) struct RequestLogItem {
     pub(super) request_id: String,
     pub(super) model_id: String,
     pub(super) stream: bool,
+    #[serde(default)]
+    pub(super) upstream_stream: Option<bool>,
     pub(super) channel: String,
     pub(super) provider_type: String,
     pub(super) status: String,

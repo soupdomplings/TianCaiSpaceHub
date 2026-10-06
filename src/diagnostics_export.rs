@@ -36,7 +36,7 @@ pub fn export_connection_diagnostics(
     std::fs::create_dir_all(output_dir)
         .with_context(|| format!("failed to create {}", output_dir.display()))?;
     let path = output_dir.join(format!(
-        "codexhub-connection-diagnostics-{}.zip",
+        "TianCaiSpaceHub-connection-diagnostics-{}.zip",
         timestamp_for_filename()
     ));
     export_connection_diagnostics_to_path(input, &path)

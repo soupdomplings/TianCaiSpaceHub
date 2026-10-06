@@ -1018,12 +1018,15 @@ fn byte_len_to_i32(value: usize) -> i32 {
 
 fn summary_text(log: &RequestLogItem) -> String {
     format!(
-        "#{}   model={}   channel={}   protocol={}   stream={}   status={}   req_size={}   tokens={}   ttft={}   latency={}   created={}",
+        "#{}   model={}   channel={}   protocol={}   client_stream={}   upstream_stream={}   status={}   req_size={}   tokens={}   ttft={}   latency={}   created={}",
         log.id,
         log.model_id,
         log.channel,
         log.provider_type,
         if log.stream { "true" } else { "false" },
+        log.upstream_stream
+            .map(|value| if value { "true" } else { "false" })
+            .unwrap_or("unknown"),
         log.status,
         format_bytes(log.upstream_request_body_bytes),
         format_tokens(log),

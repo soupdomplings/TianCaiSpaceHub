@@ -1,4 +1,4 @@
-﻿use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow};
 use serde_json::{Value, json};
 use tracing::info;
 
@@ -103,8 +103,8 @@ pub(super) async fn send_initialize_for_client_on_connection(
         "method": "initialize",
         "params": {
             "clientInfo": {
-                "name": "codexhub",
-                "title": "TianCaiSpace Hub",
+                "name": "TianCaiSpaceHub",
+                "title": "TianCaiSpaceHub",
                 "version": env!("CARGO_PKG_VERSION")
             },
             "capabilities": {

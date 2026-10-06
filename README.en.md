@@ -1,10 +1,12 @@
-# TianCaiSpace Hub
+# TianCaiSpaceHub
 
 [中文说明](README.md)
 
 [Documentation index](docs/README.md) · [Customization inventory](docs/customizations/README.md) · [Customization changelog](docs/customizations/CHANGELOG.md) (maintained in Chinese)
 
-The current workspace version is `0.4.29-5` (in development, unpublished). macOS App URL registration, native URL events, and instance handoff are implemented in source, pending a macOS build and user acceptance. Imports share the Windows HTTP/HTTPS flow, fetch models before preview, and save channels disabled by default. See the [import guide](docs/hub-external-import.md). New development prioritizes Windows, followed by macOS; inherited Linux documentation does not imply support or acceptance of the new features on Linux.
+The release candidate is `v0.4.30-3`, based on upstream CodexHub v0.4.30. It includes the complete GMClaw IM session workflow, desktop history and message synchronization, automatic reconnection, approvals, full project selection, temporary reply status, and unified `TianCaiSpaceHub` program naming. Existing model isolation and WorkBuddy/GMClaw multi-model configuration are retained. The user reports no new issue in the latest local checks; other platforms and installation upgrades await acceptance. See the [delivery record](docs/releases/v0.4.30-3.md) for source, Actions, and publication status. Only `main` is used for source development; full customization versions use tags and Releases.
+
+GMClaw integration uses `/tg` to initially enable or select GMClaw through the existing platform session workflow. `/gpt` returns to Codex, `/q` returns to create/restore, and `/wb` remains unavailable without changing the executor. Enabled GMClaw reconnects after desktop restarts; IM sessions use real desktop tasks and original memory identities. Feishu and WeCom show temporary reply progress and platform approval controls; WeChat sends final text and numbered approval choices. GMClaw 1.1.1 desktop synchronization requires its supported local channel, first enabled by launching from Hub. If an old desktop inherited port 3847, exit it normally once before launching it with the new Hub. Windows is prioritized, followed by macOS; this release does not add Linux support. Installers are built by GitHub Actions, and prior build results retain their own version identity. See [GMClaw IM](docs/customizations/gmclaw-im.md) and [naming and packaging](docs/customizations/desktop-and-packaging.md#当前交付状态).
 
 ## Product Preview
 
@@ -17,7 +19,7 @@ The current workspace version is `0.4.29-5` (in development, unpublished). macOS
 | Built-in AI Gateway | Keep Codex App on its native Responses entry while routing model calls to OpenAI, DeepSeek, Anthropic/Claude, and Z.AI Anthropic (API / Coding Plan) from the local GUI. |
 
 <p align="center">
-  <img src="docs/assets/product/main.png" alt="TianCaiSpace Hub GUI status and config UI" width="900">
+  <img src="docs/assets/product/main.png" alt="TianCaiSpaceHub GUI status and config UI" width="900">
 </p>
 <p align="center">
   <img src="docs/assets/product/codex-app-chat.png" alt="Codex App session sync and image result" width="900">
@@ -26,7 +28,7 @@ The current workspace version is `0.4.29-5` (in development, unpublished). macOS
   <img src="docs/assets/product/deepseek.jpg" alt="Codex App using DeepSeek through AI Gateway" width="900">
 </p>
 
-AI Gateway is a local model entry built into `codexhub`. Codex App keeps sending normal Responses-style requests, while `codexhub` routes them to the provider you configured and converts the result back into the shape Codex expects. Providers, visible models, model aliases, request logs, and image-generation-tool filtering are managed in the GUI.
+AI Gateway is a local model entry built into `TianCaiSpaceHub`. Codex App keeps sending normal Responses-style requests, while `TianCaiSpaceHub` routes them to the provider you configured and converts the result back into the shape Codex expects. Providers, visible models, model aliases, request logs, and image-generation-tool filtering are managed in the GUI.
 
 <p align="center">
   <img src="docs/assets/product/feishu-mobile-image.jpg" alt="Feishu mobile Codex image result" width="360">
@@ -50,15 +52,15 @@ For Codex App and the VS Code extension, the usual flow is: download the app -> 
 
 ### 1. Install
 
-Download `TianCaiSpaceHub-*-macos-*.dmg` from GitHub Releases, drag it to Applications, then open it. On Windows, run `TianCaiSpace Hub.exe` from the release package. On Linux, download `TianCaiSpace Hub Linux x86_64.AppImage`, make it executable, then double-click it.
+Download the Windows MSI/portable ZIP or macOS DMG/App ZIP for the chosen version from GitHub Releases. On macOS, copy the App to Applications and confirm the system prompt if shown. On Windows, extract the portable ZIP and run its EXE. Current source uses `TianCaiSpaceHub.exe` and `TianCaiSpaceHub.app`; the published v0.4.30-2 packages retain `TianCaiSpace Hub.exe`, `CodexHub.exe` inside the MSI, and `TianCaiSpace Hub.app`. Renaming source does not alter previously published files. The app does not install startup items or start in the background automatically.
 
-If macOS warns that the app was downloaded from the internet, confirm the system prompt. If your Linux desktop does not mark the AppImage as executable automatically, run `chmod +x "TianCaiSpace Hub Linux x86_64.AppImage"` once. The app does not install startup items and does not run in the background automatically.
+Historical Linux reference only: use `chmod +x "TianCaiSpace Hub Linux x86_64.AppImage"` for that older AppImage. Current customization releases cover Windows and macOS; this iteration does not add Linux support.
 
 This customization removes update checks from Help, the tray, and startup. Upgrade using the chosen version's installer or portable package after exiting the old Hub and backing up configuration. See [desktop and packaging](docs/customizations/desktop-and-packaging.md).
 
 ### 2. Open The App
 
-Open `TianCaiSpace Hub`. The GUI starts the local backend automatically and stops the backend it started when the GUI exits.
+Open `TianCaiSpaceHub`. The GUI starts the local backend automatically and stops the backend it started when the GUI exits.
 
 Continue when the status overview shows the local service is running.
 
@@ -72,6 +74,18 @@ Open the `消息接入` page and choose one channel:
 - WeCom: click `添加企业微信机器人` and confirm by scanning with WeCom. Direct/group text, streaming and final replies, image/file transfer, initial/history thread selection cards, and interactive approval template cards are supported.
 
 After a channel is connected, the `IM 通道` status panel becomes available. Normal use does not require scanning or entering the token again unless you switch bots.
+
+The GMClaw integration in `v0.4.30-3` starts in chat: send `/tg` in connected Feishu, WeChat, or WeCom. Hub prepares authorization, checks the connection, and starts GMClaw when needed. The GMClaw tab contains model settings and a short guide; no bridge form is required. Choose the platform's existing **Create session** entry or send `/tg new` to open the same settings workflow. Feishu uses its existing directory dropdown, custom path field, and create button; WeChat and WeCom retain their existing interactions. Select a directory and model, then confirm through the current interface. Missing directories are created only when the session is created; each session keeps its directory and model ID.
+
+Model choices include native GMClaw settings and Hub-managed entries. GMClaw exposes directory and model selection; reasoning parameters follow the selected model configuration, and tool permissions follow GMClaw policy. The default directory uses a valid legacy setting when available, otherwise the `workspace` folder under GMClaw's data directory. See [GMClaw IM](docs/customizations/gmclaw-im.md) for defaults, isolation, and limits.
+
+You can open GMClaw normally, then send `/tg`. Once integration is enabled, Hub checks every 5 seconds and automatically identifies new runtime authorization for the same user's official desktop after a restart; another `/tg` is unnecessary. Runtime authorization stays in memory and is never saved back to configuration or shown in chat. Background reconnection, ordinary messages, and overview refreshes do not launch the desktop or replay tasks. An explicit `/tg` can start it when needed, waiting up to 30 seconds for shutdown or initialization without terminating processes or launching onto an occupied port. Model saves do not require a restart.
+
+The user confirmed automatic connection on 2026-10-06; history restoration, approvals, model calls and desktop display remain pending acceptance. This iteration fixes history restoration rejecting finished native sessions with a stale `processing` flag: it checks the last complete Harness turn, pending approvals, timestamps and stable repeated observations. Incomplete or unknown turns remain blocked; it does not rewrite desktop status or replay a task. Build and artifact identity are recorded in [naming and packaging](docs/customizations/desktop-and-packaging.md#当前交付状态).
+
+New IM sessions create real desktop scenarios/tasks and session metadata; user messages, replies, and approval notices are saved to the task. Restoration lists tasks across all desktop scenarios for senders admitted by the existing allowlists. Only one IM sender can claim a session at a time: `/q` releases it, while a successful `/gpt` switch retains the current session but releases its claim. Returning with `/tg` claims the retained session again; if another sender has claimed it, use `/tg new` to create a new session. Restoration preserves the original directory, model, and memory identity; running, approval-pending, or uncertain sessions cannot be restored normally. Hub persists session links and status, but cannot reconstruct older sessions that existed only in Hub memory without desktop messages. GMClaw 1.1.1 has no external UI refresh interface, so an already open window may need its own refresh or reopening to show new content. See [GMClaw IM](docs/customizations/gmclaw-im.md).
+
+The overview follows the Codex, WorkBuddy, or GMClaw integration tab and retains that view on shared tabs. This does not change IM executor selection. GMClaw model **Connected** means this Hub has received a request on the configured local model route and the desktop is still running; no request shows a waiting state, and a desktop exit or restart requires new evidence. This status is separate from IM Harness authorization and upstream model acceptance. Logs distinguish client streaming from the actual upstream request; upstream streaming aggregated into JSON is labeled `Streaming (Upstream)`. WorkBuddy external tasks and GMClaw Telegram remain unsupported. See [model integration](docs/customizations/gmclaw.md), [request logs](docs/ai-gateway-request-log-detail-patch.zh-CN.md), and [GMClaw IM](docs/customizations/gmclaw-im.md).
 
 ### 4. Configure AI Gateway
 
@@ -89,7 +103,7 @@ If a provider rejects Codex's image generation tool, enable `Filter image genera
 
 ### 5. Write Codex Config
 
-Click `Write Codex Config` on the `Codex 接入` page. This points Codex App and the Codex VS Code extension at the local `codexhub` service and routes model requests through the local AI Gateway.
+Click `Write Codex Config` on the `Codex 接入` page. This points Codex App and the Codex VS Code extension at the local `TianCaiSpaceHub` service and routes model requests through the local AI Gateway.
 
 To go back to the previous Codex connection, click `Restore Codex Config`. The restore action is shown only after Codex config has been written.
 
@@ -97,17 +111,17 @@ To go back to the previous Codex connection, click `Restore Codex Config`. The r
 
 Open Codex App or the Codex VS Code extension normally, then enable remote-control / control this computer.
 
-When connected, `TianCaiSpace Hub` shows the Codex control channel as connected.
+When connected, `TianCaiSpaceHub` shows the Codex control channel as connected.
 
-You do not need to see a remote device list in Codex App's connection settings. This project uses a local backend plus IM bridge. If the `TianCaiSpace Hub` status overview is normal, you can use it directly from the connected IM channel.
+You do not need to see a remote device list in Codex App's connection settings. This project uses a local backend plus IM bridge. If the `TianCaiSpaceHub` status overview is normal, you can use it directly from the connected IM channel.
 
-If Codex App, the Codex VS Code extension, and Codex CLI are connected to `TianCaiSpace Hub` at the same time, new or resumed IM sessions choose the execution endpoint by fixed priority: Codex App > Codex VS Code extension > Codex CLI. After a session is bound, later messages keep using the selected endpoint until the IM session exits or binds again.
+If Codex App, the Codex VS Code extension, and Codex CLI are connected to `TianCaiSpaceHub` at the same time, new or resumed IM sessions choose the execution endpoint by fixed priority: Codex App > Codex VS Code extension > Codex CLI. After a session is bound, later messages keep using the selected endpoint until the IM session exits or binds again.
 
 ### 7. Use Codex CLI
 
 If you want Codex CLI to work with Feishu / Telegram / WeChat, you do not need to replace the `codex` command or install a wrapper. Use the same three-step flow on macOS, Windows, and Linux.
 
-1. Open the `TianCaiSpace Hub` desktop app, finish IM channel setup and Codex access, and keep it running.
+1. Open the `TianCaiSpaceHub` desktop app, finish IM channel setup and Codex access, and keep it running.
 
 2. Open a terminal in the project directory and start Codex app-server:
 
@@ -133,15 +147,15 @@ The WeChat path depends on a context token issued by the WeChat client. During l
 
 ## Network and Proxy
 
-The Network menu provides three outbound modes: use the system proxy, connect directly, or use a custom HTTP/SOCKS5 proxy. This setting only affects requests TianCaiSpace Hub sends to model providers, WeChat, Telegram, Feishu HTTP APIs, and update endpoints. It does not modify macOS `launchctl`, Windows user environment variables, or networking for other applications.
+The Network menu provides three outbound modes: use the system proxy, connect directly, or use a custom HTTP/SOCKS5 proxy. This setting only affects requests TianCaiSpaceHub sends to model providers, WeChat, Telegram, Feishu HTTP APIs, and update endpoints. It does not modify macOS `launchctl`, Windows user environment variables, or networking for other applications.
 
-For a local Clash or V2Ray proxy, select the custom proxy option and enter `http://127.0.0.1:7890` or `socks5://127.0.0.1:1080`. The setting applies immediately while the daemon is running. Loopback communication between the GUI, Codex App, VS Code, and TianCaiSpace Hub does not use this outbound proxy.
+For a local Clash or V2Ray proxy, select the custom proxy option and enter `http://127.0.0.1:7890` or `socks5://127.0.0.1:1080`. The setting applies immediately while the daemon is running. Loopback communication between the GUI, Codex App, VS Code, and TianCaiSpaceHub does not use this outbound proxy.
 
 TUN and Network Extension VPNs operate below the HTTP proxy layer. If such a VPN intercepts loopback traffic, exclude `localhost`, `127.0.0.1`, and `::1` in the VPN application.
 
 ## AI Gateway
 
-AI Gateway solves one practical problem: Codex expects its native model entry, but users often want to use more model providers. After providers are configured in the GUI, Codex App still sees a normal model list; `codexhub` handles provider routing and protocol conversion locally.
+AI Gateway solves one practical problem: Codex expects its native model entry, but users often want to use more model providers. After providers are configured in the GUI, Codex App still sees a normal model list; `TianCaiSpaceHub` handles provider routing and protocol conversion locally.
 
 Current highlights:
 
@@ -169,7 +183,9 @@ The WeChat group is for issue feedback, usage discussion, and feature suggestion
 
 ## IM Commands
 
-Only `/q` is needed in normal use. Follow the card prompts for other actions.
+In `v0.4.30-3`, Feishu, WeChat, and WeCom accept `/tg` to initially enable or switch to GMClaw and `/gpt` to return to Codex; an enabled integration reconnects automatically after desktop restarts. `/wb` reports unavailable and keeps the current mode. In GMClaw mode, `/q` leaves and releases the current session while retaining GMClaw mode and returns to the platform's existing create/restore entry. `/tg new` opens the same session settings directly. Follow the current card buttons or text menu to choose a directory and model, then create a real desktop task. Restoration lists tasks across all desktop scenarios and preserves the selected task's session, directory, and memory identity. `/s` reports that the task has not been stopped and directs you to GMClaw desktop. Running tasks, approvals, claims by another IM sender, and unknown execution states have protective checks. See [GMClaw IM](docs/customizations/gmclaw-im.md). Telegram retains the Codex path.
+
+The following commands apply to the original Codex mode. Follow the card prompts for other actions.
 
 ```text
 /q         interrupt and clear the current binding
@@ -185,7 +201,7 @@ This does not uninstall Codex and does not delete Codex session history.
 
 ## Project Boundary
 
-`codexhub` only supports the clean official Codex remote-control path.
+`TianCaiSpaceHub` only supports the clean official Codex remote-control path.
 
 It does not:
 
@@ -212,7 +228,7 @@ official Codex app-server
   |
   | outbound remote-control websocket
   v
-codexhub local backend
+TianCaiSpaceHub local backend
   |
   | Feishu websocket events
   | Feishu message/card APIs
@@ -244,10 +260,12 @@ Thread binding model:
 
 ## Development
 
+The Cargo package is `tiancaispacehub` and the binary is `TianCaiSpaceHub`. The user currently handles functional testing. These commands compile code and create a debug EXE without launching the app or executing tests. Generate Windows/macOS release packages through GitHub Actions.
+
 ```powershell
-cargo fmt
-cargo test
-cargo build --release --features gui --bin codexhub
+cargo fmt --all -- --check
+cargo check --locked --target x86_64-pc-windows-msvc --features gui --tests --bin TianCaiSpaceHub
+cargo build --locked --target x86_64-pc-windows-msvc --features gui --bin TianCaiSpaceHub
 ```
 
 Useful status endpoints while the daemon is running:

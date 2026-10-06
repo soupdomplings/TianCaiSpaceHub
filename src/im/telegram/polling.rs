@@ -129,7 +129,7 @@ pub async fn listen_polling(
                         let _ = api
                             .send_text(
                                 &chat_id,
-                                "当前 Telegram 私聊未授权。请在本机 TianCaiSpace Hub 配置 allowedChatIds。",
+                                "当前 Telegram 私聊未授权。请在本机 TianCaiSpaceHub 配置 allowedChatIds。",
                             )
                             .await;
                     }
@@ -244,6 +244,8 @@ fn inbound_from_message(
         .unwrap_or_else(|| chat_id.clone());
 
     Some(InboundMessage {
+        session_scope: None,
+        session_entry: None,
         platform: ImPlatformKind::Telegram,
         account_id: settings.account_id(),
         sender_id,
@@ -696,6 +698,8 @@ fn inbound_from_callback(
     }
 
     Some(InboundMessage {
+        session_scope: None,
+        session_entry: None,
         platform: ImPlatformKind::Telegram,
         account_id: settings.account_id(),
         sender_id: callback.from.id.to_string(),

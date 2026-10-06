@@ -74,7 +74,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          cargo build --locked --release --features gui --bin codexhub
+          cargo build --locked --release --features gui --bin TianCaiSpaceHub
 
       - name: Sign Binaries
         if: env.HAS_WINDOWS_CODESIGN == 'true'
@@ -96,7 +96,7 @@ jobs:
           }
 
           $files = @(
-            "target\release\codexhub.exe"
+            "target\release\TianCaiSpaceHub.exe"
           )
           foreach ($file in $files) {
             & $signtool.FullName sign `
@@ -114,14 +114,14 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $distRoot = "target\dist"
-          $zipDist = Join-Path $distRoot "TianCaiSpace Hub Windows x64"
+          $zipDist = Join-Path $distRoot "TianCaiSpaceHub Windows x64"
           $msiSource = "target\msi-source"
           Remove-Item -Recurse -Force $distRoot -ErrorAction SilentlyContinue
           Remove-Item -Recurse -Force $msiSource -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force $zipDist | Out-Null
           New-Item -ItemType Directory -Force $msiSource | Out-Null
 
-          Copy-Item "target\release\codexhub.exe" (Join-Path $zipDist "TianCaiSpace Hub.exe")
+          Copy-Item "target\release\TianCaiSpaceHub.exe" (Join-Path $zipDist "TianCaiSpaceHub.exe")
           Copy-Item "README.md" $zipDist
           Copy-Item "README.en.md" $zipDist
           Copy-Item "docs\hub-external-import.md" (Join-Path $zipDist "WEB-IMPORT.md")
@@ -129,7 +129,7 @@ jobs:
             Copy-Item "config.example.toml" $zipDist
           }
 
-          Copy-Item "target\release\codexhub.exe" (Join-Path $msiSource "CodexHub.exe")
+          Copy-Item "target\release\TianCaiSpaceHub.exe" (Join-Path $msiSource "TianCaiSpaceHub.exe")
           Copy-Item "README.md" $msiSource
           Copy-Item "README.en.md" $msiSource
           Copy-Item "config.example.toml" $msiSource
@@ -160,7 +160,7 @@ jobs:
           }
           $sourceDir = (Resolve-Path "target\msi-source").Path
           $msiPath = Join-Path "target\dist" $env:WINDOWS_MSI_NAME
-          & $wix build "packaging\windows\CodexHub.wxs" `
+          & $wix build "packaging\windows\TianCaiSpaceHub.wxs" `
             -acceptEula wix7 `
             -arch x64 `
             -d "ProductVersion=$env:PRODUCT_VERSION" `
@@ -247,11 +247,11 @@ jobs:
           <?xml version="1.0" encoding="utf-8"?>
           <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
             <channel>
-              <title>TianCaiSpace Hub Windows Updates</title>
+              <title>TianCaiSpaceHub Windows Updates</title>
               <link>$xmlReleaseUrl</link>
-              <description>TianCaiSpace Hub Windows update feed</description>
+              <description>TianCaiSpaceHub Windows update feed</description>
               <item>
-                <title>TianCaiSpace Hub $xmlShortVersion</title>
+                <title>TianCaiSpaceHub $xmlShortVersion</title>
                 <link>$xmlReleaseUrl</link>
                 <pubDate>$pubDate</pubDate>
                 <sparkle:releaseNotesLink>$xmlReleaseUrl</sparkle:releaseNotesLink>

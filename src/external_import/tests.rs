@@ -484,9 +484,9 @@ async fn resolves_ticket_once_discovers_models_and_does_not_follow_redirects() {
 fn registration_quotes_spaced_paths_and_url_argument() {
     assert_eq!(
         registration::command_for(std::path::Path::new(
-            r"C:\Program Files\Hub\TianCaiSpace Hub.exe"
+            r"C:\Program Files\Hub\TianCaiSpaceHub.exe"
         ))
         .unwrap(),
-        "\"C:\\Program Files\\Hub\\TianCaiSpace Hub.exe\" import-url \"%1\""
+        "\"C:\\Program Files\\Hub\\TianCaiSpaceHub.exe\" import-url \"%1\""
     );
 }

@@ -41,23 +41,24 @@ const DEFAULT_BASE_URL: &str = "http://127.0.0.1:3847";
 #[cfg(not(target_os = "windows"))]
 const DEFAULT_BASE_URL: &str = "http://127.0.0.1:3847";
 const CODEX_APP_GUI_UNSUPPORTED: bool = !(cfg!(target_os = "macos") || cfg!(target_os = "windows"));
-const PROJECT_HOME_URL: &str = "https://github.com/happy-loki/codexhub";
+const PROJECT_HOME_URL: &str = "https://github.com/soupdomplings/TianCaiSpaceHub";
 #[cfg(all(test, target_os = "windows"))]
 const UPDATE_MANIFEST_URL: &str =
-    "https://github.com/happy-loki/codexhub/releases/latest/download/latest-windows.json";
+    "https://github.com/soupdomplings/TianCaiSpaceHub/releases/latest/download/latest-windows.json";
 #[cfg(test)]
 const MACOS_UPDATE_MANIFEST_URL: &str =
-    "https://github.com/happy-loki/codexhub/releases/latest/download/latest-macos.json";
+    "https://github.com/soupdomplings/TianCaiSpaceHub/releases/latest/download/latest-macos.json";
 #[cfg(all(test, target_os = "macos"))]
 const UPDATE_MANIFEST_URL: &str = MACOS_UPDATE_MANIFEST_URL;
 #[cfg(all(test, not(target_os = "windows"), not(target_os = "macos")))]
 const UPDATE_MANIFEST_URL: &str =
-    "https://github.com/happy-loki/codexhub/releases/latest/download/latest-linux.json";
+    "https://github.com/soupdomplings/TianCaiSpaceHub/releases/latest/download/latest-linux.json";
 #[cfg(test)]
 const LEGACY_UPDATE_MANIFEST_URL: &str =
-    "https://github.com/happy-loki/codexhub/releases/latest/download/latest.json";
+    "https://github.com/soupdomplings/TianCaiSpaceHub/releases/latest/download/latest.json";
 #[cfg(test)]
-const UPDATE_RELEASE_PAGE_URL: &str = "https://github.com/happy-loki/codexhub/releases/latest";
+const UPDATE_RELEASE_PAGE_URL: &str =
+    "https://github.com/soupdomplings/TianCaiSpaceHub/releases/latest";
 const DASHBOARD_REFRESH_INTERVAL_MS: i32 = 10_000;
 const REQUEST_LOG_REFRESH_INTERVAL_MS: i32 = 5_000;
 const REQUEST_LOG_TAB_INDEX: i32 = 3;
@@ -145,6 +146,7 @@ mod ai_gateway;
 mod api;
 mod browser;
 mod chatgpt;
+mod client_overview;
 mod codex_tab;
 mod daemon;
 mod external_import;
@@ -200,8 +202,7 @@ use self::widgets::{
     app_icon_bitmap, apply_dataview_theme, apply_notebook_theme, card_section,
     centered_status_panel, dataview_table_style, im_status_panel, lucide_icon_bitmap,
     provider_logo_bitmap, set_disabled_status_panel, set_im_channel_row, set_status_panel,
-    status_icon_bitmap, status_panel, table_cell_attr, text_field_row, topology_connector,
-    topology_splitter,
+    status_icon_bitmap, status_panel, table_cell_attr, text_field_row,
 };
 use self::workbuddy::WorkBuddyActionResult;
 
@@ -351,7 +352,7 @@ pub fn run() {
 
 pub fn run_with_import(initial: Option<crate::external_import::ImportLink>) {
     let Some(single_instance_guard) = GuiSingleInstanceGuard::acquire() else {
-        eprintln!("failed to create CodexHub GUI single instance checker");
+        eprintln!("failed to create TianCaiSpaceHub GUI single instance checker");
         return;
     };
     if single_instance_guard.is_another_running() {
@@ -370,7 +371,7 @@ pub fn run_with_import(initial: Option<crate::external_import::ImportLink>) {
     }
     let inbox = crate::external_import::ipc::start();
     if let Err(err) = wxdragon::main(|app| build_ui(app, single_instance_guard, inbox, initial)) {
-        eprintln!("failed to start CodexHub GUI: {err:?}");
+        eprintln!("failed to start TianCaiSpaceHub GUI: {err:?}");
     }
 }
 
@@ -403,7 +404,7 @@ fn build_ui(
     // forces scrolling to find them).
     let frame_size = initial_frame_size();
     let frame = Frame::builder()
-        .with_title("TianCaiSpace Hub")
+        .with_title("TianCaiSpaceHub")
         // Keep the first launch within smaller laptop work areas. The tab pages
         // own their scrolling, so the frame itself should not exceed the screen.
         .with_size(frame_size)
@@ -504,8 +505,8 @@ fn build_ui(
     );
     service_settings_button.hide();
     let im_status = im_status_panel(&status_box, text);
-    let entry_connector = topology_connector(&status_box);
-    let bridge_connector = topology_splitter(&status_box);
+    let entry_connector = client_overview::TopologyConnector::new(&status_box, false);
+    let bridge_connector = client_overview::TopologyConnector::new(&status_box, true);
     let entry_column = BoxSizer::builder(Orientation::Vertical).build();
     entry_column.add(
         &codex_status.panel,
@@ -520,11 +521,19 @@ fn build_ui(
         4,
     );
     entry_column.add(&cli_status.panel, 1, SizerFlag::Expand, 0);
+    let client_overview = client_overview::ClientOverviewUi::new(
+        &status_box,
+        root,
+        &entry_column,
+        entry_connector.clone(),
+        bridge_connector.clone(),
+        text,
+    );
     status_row.add_sizer(&entry_column, 1, SizerFlag::Expand | SizerFlag::All, 6);
     status_row.add(
-        &entry_connector,
+        &entry_connector.panel,
         0,
-        SizerFlag::AlignCenterVertical | SizerFlag::Left | SizerFlag::Right,
+        SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right,
         4,
     );
     status_row.add(
@@ -534,9 +543,9 @@ fn build_ui(
         6,
     );
     status_row.add(
-        &bridge_connector,
+        &bridge_connector.panel,
         0,
-        SizerFlag::AlignCenterVertical | SizerFlag::Left | SizerFlag::Right,
+        SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right,
         2,
     );
     status_row.add(&im_status.panel, 1, SizerFlag::Expand | SizerFlag::All, 6);
@@ -1072,7 +1081,7 @@ fn build_ui(
     request_log_list.append_text_column(
         text.request_log_col_stream(),
         2,
-        100,
+        190,
         DataViewAlign::Left,
         DataViewColumnFlags::Resizable,
     );
@@ -1213,6 +1222,7 @@ fn build_ui(
 
     let handles = UiHandles {
         text,
+        client_overview,
         service_status,
         service_settings_button,
         im_status,
@@ -1632,8 +1642,23 @@ fn build_ui(
         let request_log_clear_in_flight = request_log_clear_in_flight.clone();
         let request_logs_active = request_logs_active.clone();
         let request_log_timer_store = request_log_timer_store.clone();
+        let handles = handles.clone();
+        let dashboard_refresh = dashboard_refresh.clone();
         notebook.on_page_changed(move |event| {
-            let active = event.get_selection().unwrap_or(-1) == REQUEST_LOG_TAB_INDEX;
+            let page = event.get_selection().unwrap_or(-1);
+            if handles.client_overview.select_page(page) {
+                if let Some(snapshot) = cached_dashboard_snapshot(&dashboard_refresh) {
+                    update_dashboard(
+                        &handles,
+                        &snapshot,
+                        dashboard_refresh.daemon_starting.load(Ordering::SeqCst),
+                    );
+                } else {
+                    show_dashboard_starting(&handles);
+                }
+                schedule_dashboard_refresh(&api, &dashboard_refresh);
+            }
+            let active = page == REQUEST_LOG_TAB_INDEX;
             request_logs_active.set(active);
             if active {
                 if !request_log_clear_in_flight.load(Ordering::SeqCst) {
@@ -1897,6 +1922,7 @@ fn build_ui(
                             }
                             GuiMessage::GmClaw(result) => {
                                 gmclaw::apply_result(&gmclaw_tab, &frame, handles.text, result);
+                                needs_dashboard_refresh = true;
                             }
                             GuiMessage::WorkBuddy(result) => {
                                 workbuddy::apply_result(
@@ -1907,6 +1933,7 @@ fn build_ui(
                                     &gui_tx,
                                     result,
                                 );
+                                needs_dashboard_refresh = true;
                             }
                             GuiMessage::DashboardUpdate => {
                                 apply_pending_dashboard(
@@ -1916,6 +1943,11 @@ fn build_ui(
                                     &frame,
                                     &daemon_child_for_idle,
                                     &gui_timers_for_idle,
+                                );
+                                gmclaw::refresh_display(
+                                    &gmclaw_tab,
+                                    handles.text,
+                                    cached_dashboard_snapshot(&dashboard_refresh).as_ref(),
                                 );
                             }
                             GuiMessage::DiagnosticsExport => {
@@ -2240,7 +2272,7 @@ fn export_connection_diagnostics_now(text: GuiText, output_path: &Path) -> Resul
 
 fn default_diagnostics_export_path() -> PathBuf {
     default_user_export_dir().join(format!(
-        "codexhub-connection-diagnostics-{}.zip",
+        "TianCaiSpaceHub-connection-diagnostics-{}.zip",
         timestamp_ms()
     ))
 }
@@ -2254,7 +2286,7 @@ fn prompt_diagnostics_export_path(parent: &dyn WxWidget, text: GuiText) -> Optio
     let default_file = default_path
         .file_name()
         .map(|value| value.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "codexhub-connection-diagnostics.zip".to_string());
+        .unwrap_or_else(|| "TianCaiSpaceHub-connection-diagnostics.zip".to_string());
     let dialog = FileDialog::builder(parent)
         .with_message(text.diagnostics_export_save_dialog_title())
         .with_default_dir(&default_dir)
@@ -2416,7 +2448,7 @@ fn install_system_menu(
             text.export_connection_diagnostics_help(),
         )
         .append_separator()
-        .append_item(ID_ABOUT, text.about(), "About TianCaiSpace Hub")
+        .append_item(ID_ABOUT, text.about(), "About TianCaiSpaceHub")
         .build();
     let menu_bar = MenuBar::builder()
         .append(file_menu, text.file_menu())
@@ -5230,6 +5262,7 @@ fn handle_local_connection_selected(frame: &Frame, text: GuiText, mode: LocalCon
 #[derive(Clone)]
 struct UiHandles {
     text: GuiText,
+    client_overview: client_overview::ClientOverviewUi,
     service_status: StatusPanel,
     service_settings_button: Button,
     im_status: ImStatusPanel,
@@ -5666,6 +5699,7 @@ fn show_dashboard_starting(handles: &UiHandles) {
         StateTone::Muted,
     );
     set_actions_enabled(handles, false);
+    client_overview::refresh(handles, None, true);
 }
 
 fn show_dashboard_startup_error(handles: &UiHandles, detail: &str) {
@@ -5700,6 +5734,7 @@ fn show_dashboard_startup_error(handles: &UiHandles, detail: &str) {
         StateTone::Muted,
     );
     set_actions_enabled(handles, false);
+    client_overview::refresh(handles, None, false);
 }
 
 fn update_dashboard(handles: &UiHandles, snapshot: &DashboardSnapshot, daemon_starting: bool) {
@@ -5762,6 +5797,7 @@ fn update_dashboard(handles: &UiHandles, snapshot: &DashboardSnapshot, daemon_st
             StateTone::Muted,
         );
         set_actions_enabled(handles, false);
+        client_overview::refresh(handles, Some(snapshot), false);
         return;
     }
 
@@ -5841,6 +5877,7 @@ fn update_dashboard(handles: &UiHandles, snapshot: &DashboardSnapshot, daemon_st
     } else {
         refresh_ai_gw_provider_list(handles, None);
     }
+    client_overview::refresh(handles, Some(snapshot), false);
 }
 
 fn refresh_service_settings_button(handles: &UiHandles, snapshot: &DashboardSnapshot) {
@@ -6109,7 +6146,7 @@ enum EndpointStatusState {
 }
 
 fn show_about_dialog(parent: &Frame) {
-    let dialog = Dialog::builder(parent, "About TianCaiSpace Hub")
+    let dialog = Dialog::builder(parent, "About TianCaiSpaceHub")
         .with_style(DialogStyle::DefaultDialogStyle)
         .with_size(520, 260)
         .build();
@@ -6121,7 +6158,7 @@ fn show_about_dialog(parent: &Frame) {
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
 
     let title = StaticText::builder(&panel)
-        .with_label(&format!("TianCaiSpace Hub {}", env!("CARGO_PKG_VERSION")))
+        .with_label(&format!("TianCaiSpaceHub {}", env!("CARGO_PKG_VERSION")))
         .build();
     title.set_foreground_color(theme::theme().ink_primary);
     title.set_font(&theme::font(theme::TextRole::Title));
@@ -6179,14 +6216,14 @@ fn show_about_dialog(parent: &Frame) {
 }
 
 fn show_info(parent: &dyn WxWidget, message: &str) {
-    MessageDialog::builder(parent, message, "TianCaiSpace Hub")
+    MessageDialog::builder(parent, message, "TianCaiSpaceHub")
         .with_style(MessageDialogStyle::OK | MessageDialogStyle::IconInformation)
         .build()
         .show_modal();
 }
 
 fn show_error(parent: &dyn WxWidget, message: &str) {
-    MessageDialog::builder(parent, message, "TianCaiSpace Hub")
+    MessageDialog::builder(parent, message, "TianCaiSpaceHub")
         .with_style(MessageDialogStyle::OK | MessageDialogStyle::IconError)
         .build()
         .show_modal();

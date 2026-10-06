@@ -4,12 +4,14 @@
 
 当前版本：`v0.4.30-2`，已发布 GitHub 预发布版。实现 Sub2API 外部导入约定 v1，默认禁用保存；Windows/macOS Actions 原生构建和打包均通过，macOS 系统接入代码已随本版交付。功能测试、安装升级、实机导入及真实站点调用仍待用户验收；Linux 不在本次范围。安装包和验证边界见 [版本交付](releases/v0.4.30-2.md)。
 
+本地未发布命名调整：当前源码的产品及程序统一为 `TianCaiSpaceHub`，Windows 为 `TianCaiSpaceHub.exe`，macOS 为 `TianCaiSpaceHub.app`；已发布包仍保留旧名称。导入协议、数据及安装升级身份不变，程序路径变化后需从所需版本重新注册，macOS 注意移除多余的旧名称 App 副本，详见 [品牌与交付](customizations/desktop-and-packaging.md)。
+
 2026-10-03 接入点隔离：网页导入禁止创建或覆盖 `workbuddy`、`workbuddy:`、`gmclaw`、`gmclaw:` 整个保留命名空间，更新目标列表也排除这些渠道。导入普通渠道并启用后，可在对应客户端页签主动选择并保存；WorkBuddy 与天工可创建多个独立条目，见 [WorkBuddy](workbuddy.md)、[天工 Claw](customizations/gmclaw.md)及[用途标识](customizations/client-channel-scope.md)。
 
 ## 用户流程
 
-1. Windows MSI 安装版自动注册 `tiancaispacehub` 协议，便携版先在“文件 → 注册网页导入…”关联到当前程序位置。macOS 使用完整的 `TianCaiSpace Hub.app`，从 DMG/App ZIP 复制到“应用程序”并打开；必要时通过同一菜单重新注册当前 App，裸命令行二进制不能注册为 App。
-2. 在兼容站点的 API Key 页面选择导入 TianCaiSpace Hub。浏览器可能要求确认打开外部应用。
+1. Windows MSI 安装版自动注册 `tiancaispacehub` 协议，便携版先在“文件 → 注册网页导入…”关联到当前程序位置。macOS 使用完整的 `TianCaiSpaceHub.app`（已发布旧包为 `TianCaiSpace Hub.app`），从 DMG/App ZIP 复制到“应用程序”并打开；必要时通过同一菜单重新注册当前 App，裸命令行二进制不能注册为 App。
+2. 在兼容站点的 API Key 页面选择导入 TianCaiSpaceHub。浏览器可能要求确认打开外部应用。
 3. Hub 未运行时启动；已运行时将请求交给现有窗口。旧版 Hub 无法接收时明确提示关闭旧版并重新发起，不静默丢弃。
 4. 支持任意符合契约的 HTTP/HTTPS 站点，不设官方域名白名单，本机、局域网和自定义域名均可。自 `0.4.29-4` 起，所有来源直接兑换导入码，不再弹出来源确认、跨站模型查询确认或 HTTP 提示。来源和模型服务可以是不同域名。
 5. Hub 兑换短时码后，直接携带本次 Key 查询返回的模型列表地址，然后展示预览；主站给出的模型范围非空时，取远端结果与该范围的交集。只查询模型目录，不发起推理或付费测试。
@@ -35,7 +37,7 @@
 
 ## 协议关联、升级与回退
 
-- MSI 使用 `HKLM\Software\Classes\tiancaispacehub`，随 MSI 安装/升级/卸载管理。原有安装路径和产品 UpgradeCode 保持一致。
+- MSI 使用 `HKLM\Software\Classes\tiancaispacehub`，随 MSI 安装/升级/卸载管理。产品 UpgradeCode 保持一致；本地未发布版本安装路径改为 `TianCaiSpaceHub\TianCaiSpaceHub.exe`，升级与回滚待新包实机验收。
 - 便携注册使用 `HKCU\Software\Classes\tiancaispacehub`，不需要管理员权限。Windows 的用户级关联可能优先于 MSI 的系统级关联；改用安装版时，在原便携版解除注册，或在新程序中重新注册到新位置。
 - 移动便携文件后需重新注册。解除注册前同时核对 owner 和启动命令，只删除当前程序路径拥有的用户关联；不删除其他安装位置的关联。
 - macOS 在 App 的 `Info.plist` 声明 `CFBundleURLTypes` / `CFBundleURLSchemes=tiancaispacehub`，保持 Bundle ID `com.codexhub.app`。菜单/CLI 注册使用系统 `LSRegisterURL` 更新当前 App 路径，不改写已签名的 App 内容。保留多个版本时应先退出旧版并移除多余副本，再从保留版本注册，避免系统选到旧 App。
@@ -62,13 +64,15 @@
 
 ## 构建与验证
 
+当前源码编译使用 `--bin TianCaiSpaceHub`，示例见 [发布检查表](release-checklist.md)。以下旧 binary 的命令保留历史打包记录，不用于当前源码或后续发布：
+
 ```powershell
 cargo fmt --check
 cargo build --locked --release --features gui --bin codexhub
 ./scripts/package-hub-import.ps1
 ```
 
-当前功能测试由用户负责；上述本地打包命令仅为历史维护参考，不用于本版及后续发布安装包。发布包统一由 GitHub Actions 生成。需要运行已有自动测试时，使用 `cargo test --locked --features gui --bin codexhub`，不将用例更新视为测试通过。
+当前功能测试由用户负责；上述本地打包命令仅为历史维护参考，不用于本版及后续发布安装包。发布包统一由 GitHub Actions 生成。后续按约定需要运行已有自动测试时，当前源码使用 `cargo test --locked --features gui --bin TianCaiSpaceHub`，不将用例更新或编译视为测试通过。
 
 当前 `v0.4.30-2` 的 [Windows Actions 37092082347](https://github.com/soupdomplings/TianCaiSpaceHub/actions/runs/37092082347) 与 [macOS Actions 37092082348](https://github.com/soupdomplings/TianCaiSpaceHub/actions/runs/37092082348) 均成功，标签源码为 `5114002fceee61c7db6cc7709cbd99b0fecf672c`。Windows MSI/便携 ZIP 未签名；macOS DMG/App ZIP 为 universal、ad-hoc 签名、未公证。发布产物、哈希和静态核对见 [版本交付](releases/v0.4.30-2.md)。本轮未进行功能、安装升级、实机交互或真实调用验收，未替换用户现有安装与配置。
 

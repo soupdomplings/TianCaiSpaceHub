@@ -1,8 +1,16 @@
-# TianCaiSpace Hub 文档总入口
+# TianCaiSpaceHub 文档总入口
 
-维护日期：2026-10-03。当前版本：`v0.4.30-2`，已发布 GitHub 预发布版，新增 WorkBuddy 多模型及接入点用途标识；Windows/macOS Actions 原生构建和打包均通过，功能与实机行为待用户验收。上游基线仍为 CodexHub `v0.4.30`。本目录统一维护二开现状、使用说明、设计依据和开发记录。
+维护日期：2026-10-06。当前发布候选：`v0.4.30-3`，将 `v0.4.30-2` 之后的全部本地二开统一纳入唯一主分支 `main`，上游基线仍为 CodexHub `v0.4.30`。用户已授权提交 GitHub 并创建 Release；实际源码提交、Actions 与发布附件状态见 [v0.4.30-3 交付记录](releases/v0.4.30-3.md)。此前已发布的 `v0.4.30-2` 预发布包不包含本次后续改动，其历史记录保留在 [v0.4.30-2](releases/v0.4.30-2.md)。
 
-源码只维护 `main` 主分支；历史版本通过完整二开版本标签及 GitHub Releases 管理，不另建版本分支。当前发布与验收状态见 [版本交付](releases/v0.4.30-2.md)，分支收敛记录见 [仓库清理记录](development/repository-cleanup.md)。
+本版产品、程序及安装输出统一为 `TianCaiSpaceHub`，保留配置与升级身份。IM 使用 `/tg` 选择天工、`/gpt` 返回 ChatGPT（Codex），沿用各平台原有会话卡片或菜单选择目录和模型；`/wb` 保留入口并提示暂不支持外部执行。天工启用后自动重连，创建真实桌面任务、恢复原生历史并保存正文；限定官方 1.1.1 renderer 的局部同步更新精确对应窗口，保留原生运行、审批和未保存状态保护。飞书/企微审批沿用按钮，微信使用 `/1`、`/2` 文字选项。
+
+本版同时修复 Windows 监听和天工启动的句柄继承，保留天工运行时退出 Hub 只结束自有后台；目录候选包含没有任务的手动项目并完整分页；飞书临时准备卡最终更新为答复，企微仅有效消息回调收尾同一 stream，微信没有可撤回等待卡，直接最终文字。天工与 WorkBuddy 各有启动按钮，状态概览随接入页签变化；模型连接使用本次本地链路证据，请求日志区分客户端 `stream` 和实际 `upstreamStream`。
+
+升级时若旧天工已经继承 `3847` 监听句柄，需核对任务/审批后正常退出旧实例一次，再由新版 Hub 启动；新程序无法撤销旧进程已有句柄。桌面即时同步首次也需从 Hub 启动启用本机通道，资源不匹配时不修改窗口。细节、边界和回滚见 [天工外部消息](customizations/gmclaw-im.md)、[模型接入](customizations/gmclaw.md)、[品牌与交付](customizations/desktop-and-packaging.md)。
+
+用户对前阶段自动重连、历史对话、桌面消息更新及审批分别给出有限测试反馈；本轮 `c0952f61…` 本地调试程序交付后，用户反馈“目前看着没什么了”，并授权发布。仅登记此次本机实际操作，没有逐项或跨平台验收结论。该 EXE 的版本身份仍为 `0.4.30-2`，不能替代 `v0.4.30-3` Actions 包；新候选必要编译、安装包和实际验收分别记录。开发方不启动交互测试或真实业务调用；Windows 优先、macOS 次之，本轮不扩展 Linux。
+
+源码只维护 `main`；历史版本通过完整二开版本标签与 GitHub Releases 管理，不另建版本或 release 分支。各开发阶段原“未发布”记录保留当时事实，已归入本次候选不意味着当时曾发布或全功能验收。
 
 ## 从哪里开始
 
@@ -11,16 +19,17 @@
 | 了解全部二开内容、代码入口与保留项 | [二开功能总表](customizations/README.md) |
 | 查看每次二开开发变更 | [二开变更记录](customizations/CHANGELOG.md) |
 | 开发时知道必须更新哪些文档 | [文档规划与维护规范](development/documentation.md) |
-| 接入 WorkBuddy | [WorkBuddy 使用说明](workbuddy.md) |
+| 配置 WorkBuddy 模型、启动桌面及了解 `/wb` 边界 | [WorkBuddy 使用说明](workbuddy.md) |
 | 区分普通渠道与 WorkBuddy/天工专用渠道 | [接入点用途与隔离](customizations/client-channel-scope.md) |
-| 获取当前 GitHub 交付、安装包及验收边界 | [v0.4.30-2 Windows/macOS 预发布](releases/v0.4.30-2.md) |
+| 获取当前 GitHub 交付、安装包及验收边界 | [v0.4.30-3 发布交付](releases/v0.4.30-3.md) |
 | 管理天工 Claw 多模型、参数、备份及上游流式兼容 | [天工 Claw 模型接入](customizations/gmclaw.md) |
-| 通过飞书、微信或企业微信使用天工执行任务 | [天工外部消息执行端](customizations/gmclaw-im.md) |
+| 启停 Hub/天工、选择完整项目目录、回复状态、会话同步与审批 | [天工外部消息执行端](customizations/gmclaw-im.md) |
+| 区分天工模型配置、本地模型连接、IM 授权与上游流式 | [天工 Claw 模型接入](customizations/gmclaw.md)、[请求日志](ai-gateway-request-log-detail-patch.zh-CN.md) |
 | 设置自定义模型与能力继承 | [动态 Codex 可见模型](dynamic-codex-models.zh-CN.md) |
 | 从 Sub2API 网页导入渠道 | [网页导入](hub-external-import.md)、[两端接口约定](HUB_EXTERNAL_IMPORT_CONTRACT_V1.md) |
 | 查看品牌、桌面行为和打包约定 | [品牌、桌面与交付](customizations/desktop-and-packaging.md) |
 | 了解最新上游合并及待验收项 | [v0.4.30 整合记录](upstream-v0.4.30-integration.md) |
-| 查看 macOS 网页导入的历史开发状态 | [0.4.29-5 开发记录](releases/v0.4.29-5.md)，当前构建见 [v0.4.30-2](releases/v0.4.30-2.md) |
+| 查看 macOS 网页导入的历史开发状态 | [0.4.29-5 开发记录](releases/v0.4.29-5.md)，当前交付见 [v0.4.30-3](releases/v0.4.30-3.md) |
 | 获取上一版 Windows 导入流程调整的本地包信息 | [v0.4.29-4 Windows 交付版](releases/v0.4.29-4.md) |
 | 查看前一版本 HTTP 导入修复及验收记录 | [v0.4.29-3 Windows 修复版](releases/v0.4.29-3.md) |
 | 追溯早期 GitHub 版本交付信息 | [v0.4.29-2 Windows 历史预发布](releases/v0.4.29-2.md) |
@@ -34,15 +43,16 @@
 
 | 文档 | 用途与状态 |
 | --- | --- |
-| [WorkBuddy](workbuddy.md) | 多条目独立接入、备份撤销、协议、重试、思考和缓存；已随预发布交付，功能待用户验收 |
+| [WorkBuddy](workbuddy.md) | 模型多条目接入已预发布；v0.4.30-3 候选：接入页提供显式启动桌面按钮，用户本次反馈该按钮可启动，仅覆盖该次本机操作；其他机器及 macOS 待验收。`/wb` 仍提示不可用，外部任务执行尚未接通 |
 | [接入点用途与隔离](customizations/client-channel-scope.md) | 普通/专用渠道标识、各接入点及同模型条目的精确路由、保留名称与回滚注意项 |
-| [天工 Claw 模型](customizations/gmclaw.md) | 多条目与独立路由、保存/删除/默认切换恢复、厂商参数及上游流式聚合；Windows/macOS 构建通过并预发布，待用户验收；旧单模型保存无需重启已有有限反馈 |
-| [天工外部消息执行端](customizations/gmclaw-im.md) | 第二阶段首版：显式 `/gmclaw`、发送者会话隔离、文本和父会话工具审批；Windows/macOS 构建通过并预发布，待用户验收；MCP 设置继续由天工管理，不属于本轮范围 |
+| [天工 Claw 模型](customizations/gmclaw.md) | 多条目与独立路由、保存/删除/默认切换恢复、厂商参数及上游流式聚合已预发布；v0.4.30-3 候选：概览按当前专用模型请求、配置 URL 和桌面进程区分等待/已连接，与上游成功和 IM 授权独立。旧单模型保存无需重启已有有限反馈；新增行为待用户验收 |
+| [天工外部消息执行端](customizations/gmclaw-im.md) | v0.4.30-3 候选：Windows 监听/启动禁止句柄继承，退出只结束自有后台，旧继承实例需一次正常迁移；目录候选含无任务的原生项目并完整分页，飞书/有效企微回调显示临时准备状态并终态收尾、微信直接文字；启用后每 5 秒后台恢复同用户官方天工运行授权，不自行启动或重放；复用原平台会话交互，创建真实任务、保存消息及恢复全部场景任务。原记忆、精确模型、认领及运行/审批/未知保护保留，原生步数 `1..1000` 透传。`/gpt` 释放认领但保留会话，`/tg` 返回重新认领；`/s` 不伪造取消。本轮修复图标注册导致的安装误判，移除每轮固定等待回复，并加入限定 1.1.1 资源的局部消息同步；首次从 Hub 启动启用本机通道，普通手动实例仍可 IM 但无通道不能即时刷新。用户已有限反馈自动重连、飞书历史对话及 `fe48829e…` 桌面消息更新；用户已确认 `71c3043d…` 审批测试通过，仅属于该次操作，其他平台、失败回退和身份隔离待验收；本轮修复端口释放、补齐含无任务项目的目录候选，并新增按平台能力收尾的临时回复状态，这些新增行为待验收，不新增永久或单工具授权。原 `/gmclaw` 首版已预发布，本轮状态见品牌专题，开发方未执行测试 |
+| [请求日志详情](ai-gateway-request-log-detail-patch.zh-CN.md) | v0.4.30-3 候选：保留 `stream` 的客户端语义，新增可空 `upstreamStream` 记录实际最终上游请求；天工非流式客户端与上游流式聚合分别展示，旧日志上游模式未知 |
 | [OpenAI Chat Completions](openai-chat-completions.md) | 通用兼容渠道与按渠道关闭推理；已实现 |
 | [动态模型](dynamic-codex-models.zh-CN.md) | 手填、远端获取、路由补齐和能力继承；已实现 |
 | [网页导入](hub-external-import.md) | Windows/macOS 系统接入已随 v0.4.30-2 成功构建打包并预发布；本版实机导入待用户验收 |
 | [导入协议 v1](HUB_EXTERNAL_IMPORT_CONTRACT_V1.md) | Hub 与 Sub2API 联调契约；不表示主站已上线 |
-| [品牌、桌面与交付](customizations/desktop-and-packaging.md) | 天才空间品牌、窗口最大化、取消检查更新、平台和产物规则 |
+| [品牌、桌面与交付](customizations/desktop-and-packaging.md) | v0.4.30-3 候选：产品与程序统一 TianCaiSpaceHub；配置与升级身份兼容、改名后迁移和回滚；接入页签概览与天工/WorkBuddy 显式启动按钮不改变 IM 选择；窗口最大化、取消检查更新及平台产物规则 |
 | [v0.4.28 整合](upstream-v0.4.28-integration.md) | 历史上游整合记录 |
 | [v0.4.29 整合](upstream-v0.4.29-integration.md) | 历史上游整合记录 |
 | [v0.4.30 整合](upstream-v0.4.30-integration.md) | 当前上游基线、12 项二开保留矩阵、冲突取舍和验收边界 |

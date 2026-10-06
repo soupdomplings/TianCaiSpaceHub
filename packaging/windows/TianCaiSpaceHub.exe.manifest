@@ -3,9 +3,9 @@
   <assemblyIdentity
     version="0.2.0.0"
     processorArchitecture="*"
-    name="codexhub"
+    name="TianCaiSpaceHub"
     type="win32" />
-  <description>TianCaiSpace Hub</description>
+  <description>TianCaiSpaceHub</description>
   <dependency>
     <dependentAssembly>
       <assemblyIdentity

@@ -1,7 +1,7 @@
 ﻿use std::{
     collections::{HashMap, HashSet, VecDeque},
     path::PathBuf,
-    sync::Arc,
+    sync::{Arc, Weak},
 };
 
 use tokio::{
@@ -35,6 +35,9 @@ pub struct AppState {
     pub persisted: Mutex<PersistedState>,
     pub runtime: Mutex<RuntimeState>,
     pub gmclaw_im: crate::gmclaw_im::GmClawImState,
+    // Serialize admission and executor switches within each IM conversation.
+    // Weak entries do not retain idle conversations indefinitely.
+    pub im_dispatch: Mutex<HashMap<String, Weak<Mutex<()>>>>,
     pub remote_control: RemoteControlState,
     pub events: Mutex<Vec<EventRecord>>,
     pub bridge_task: Mutex<Option<JoinHandle<()>>>,
@@ -353,6 +356,7 @@ impl AppState {
             persisted: Mutex::new(persisted),
             runtime: Mutex::new(runtime),
             gmclaw_im: crate::gmclaw_im::GmClawImState::default(),
+            im_dispatch: Mutex::new(HashMap::new()),
             remote_control: RemoteControlState::new(),
             events: Mutex::new(Vec::new()),
             bridge_task: Mutex::new(None),

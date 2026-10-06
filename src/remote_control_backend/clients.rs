@@ -21,7 +21,7 @@ use super::{
     RemoteControlStatusResponse, format_rfc3339_utc, status_snapshot, unix_now_u64,
 };
 
-const CODEXHUB_REMOTE_DISPLAY_NAME: &str = "codexhub";
+const CODEXHUB_REMOTE_DISPLAY_NAME: &str = "TianCaiSpaceHub";
 
 #[derive(Debug, Deserialize)]
 pub(super) struct RenameEnvironmentRequest {

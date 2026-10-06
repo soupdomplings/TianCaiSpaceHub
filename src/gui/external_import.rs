@@ -30,7 +30,7 @@ enum Action {
 }
 
 pub(super) fn confirm(parent: &dyn WxWidget, message: &str) -> bool {
-    MessageDialog::builder(parent, message, "TianCaiSpace Hub")
+    MessageDialog::builder(parent, message, "TianCaiSpaceHub")
         .with_style(MessageDialogStyle::YesNo | MessageDialogStyle::IconQuestion)
         .build()
         .show_modal()

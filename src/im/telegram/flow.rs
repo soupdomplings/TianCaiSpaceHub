@@ -600,6 +600,16 @@ pub(crate) async fn handle_inbound_action(
 ) -> Result<()> {
     match action {
         InboundAction::ThreadRouteOpen => Ok(()),
+        InboundAction::GmClawApprovalDecision { .. } => {
+            // GMClaw approvals cannot fall through to the Codex transport.
+            adapter
+                .send_text(
+                    &message.chat_id,
+                    im_text_for_state(&state).approval_not_current(),
+                )
+                .await?;
+            Ok(())
+        }
         InboundAction::ApprovalDecision {
             request_fingerprint,
             option_index,
@@ -617,6 +627,15 @@ pub(crate) async fn handle_inbound_action(
         }
         InboundAction::ThreadRouteChoice { request_id, action } => {
             handle_telegram_thread_route_choice(state, adapter, message, &request_id, &action).await
+        }
+        InboundAction::ThreadRouteCreateCwdPage { .. } => {
+            adapter
+                .send_text(
+                    &message.chat_id,
+                    im_text_for_state(&state).thread_selection_expired(),
+                )
+                .await?;
+            Ok(())
         }
         InboundAction::ThreadRouteCreateSubmit {
             request_id,
@@ -1079,7 +1098,7 @@ async fn pending_telegram_thread_list_request(
 fn thread_routing_request_rank(request_id: &str) -> u64 {
     request_id
         .strip_prefix("thread-route-")
-        .and_then(|value| value.parse::<u64>().ok())
+        .and_then(|value| value.rsplit('-').next()?.parse::<u64>().ok())
         .unwrap_or_default()
 }
 

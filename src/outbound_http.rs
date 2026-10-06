@@ -75,7 +75,7 @@ pub fn apply_async_proxy(
                 tracing::warn!(
                     target: "codexhub::network",
                     local_port,
-                    "system proxy points to CodexHub; disabling it to avoid proxy recursion"
+                    "system proxy points to TianCaiSpaceHub; disabling it to avoid proxy recursion"
                 );
                 Ok(builder.no_proxy())
             } else {
@@ -135,7 +135,7 @@ fn reject_local_proxy_recursion(
 ) -> Result<()> {
     if local_port.is_some_and(|port| proxy_points_to_loopback_port(config.url.trim(), port)) {
         return Err(anyhow!(
-            "custom outbound proxy points to CodexHub's own local port"
+            "custom outbound proxy points to TianCaiSpaceHub's own local port"
         ));
     }
     Ok(())

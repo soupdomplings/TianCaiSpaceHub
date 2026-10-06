@@ -1,6 +1,6 @@
 # 二开交付与发布检查表
 
-维护日期：2026-09-30。开发交付和远程发布是两个动作；本表不自动授权推送、打标签、发布、安装或启动用户应用。当前用户负责测试，未执行的项记录为待验收。
+维护日期：2026-10-03。开发交付和远程发布是两个动作；本表不自动授权推送、打标签、发布、安装或启动用户应用。当前用户负责测试，未执行的项记录为待验收。
 
 ## 文档与版本
 
@@ -12,15 +12,18 @@
 
 ## 构建与交付
 
-Windows 构建参考：
+Windows 本地编译核对参考；Cargo package 为 `tiancaispacehub`，binary 为 `TianCaiSpaceHub`：
 
 ```powershell
-cargo build --locked --release --features gui --bin codexhub
-./scripts/package-hub-import.ps1
+cargo check --locked --target x86_64-pc-windows-msvc --features gui --tests --bin TianCaiSpaceHub
+cargo build --locked --target x86_64-pc-windows-msvc --features gui --bin TianCaiSpaceHub
 ```
+
+Windows/macOS 发布安装包统一由 GitHub Actions 生成，本地不打发布包；构建测试代码不表示已执行测试。产品名、文件名与升级兼容规则见 [品牌与交付](customizations/desktop-and-packaging.md)。
 
 - [ ] 记录具体平台与 profile，未构建的平台不写已验证。
 - [ ] 提供源提交/工作区变更、版本、签名状态和 SHA-256；保留可恢复的源状态。
+- [ ] 程序、App、CLI 帮助与安装资源使用 `TianCaiSpaceHub`；保留配置/环境变量/协议和升级身份，单独验收旧 MSI 升级和 macOS 旧名称 App 迁移。
 - [ ] 不覆盖已交付的同名包或其构建清单；文档整理无需重建二进制。
 - [ ] 检查配置、凭据、日志、私人截图及运行状态不进入代码提交或安装包。
 - [ ] 保留现有 LICENSE 及第三方资源来源；不把构建缓存清空作为每次发布的默认步骤。

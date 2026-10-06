@@ -603,7 +603,7 @@ async fn login_callback(
     if query.state.as_deref() != Some(state.session.state.as_str()) {
         return (
             StatusCode::BAD_REQUEST,
-            "Invalid login state. Return to TianCaiSpace Hub and start again.",
+            "Invalid login state. Return to TianCaiSpaceHub and start again.",
         )
             .into_response();
     }
@@ -647,9 +647,9 @@ async fn login_callback(
     }
     state.session.stop.notify_one();
     let message = if success {
-        "ChatGPT sign-in complete. You can close this page and return to TianCaiSpace Hub."
+        "ChatGPT sign-in complete. You can close this page and return to TianCaiSpaceHub."
     } else {
-        "ChatGPT sign-in failed. Return to TianCaiSpace Hub to retry."
+        "ChatGPT sign-in failed. Return to TianCaiSpaceHub to retry."
     };
     (
         [
@@ -657,7 +657,7 @@ async fn login_callback(
             ("referrer-policy", "no-referrer"),
         ],
         Html(format!(
-            "<!doctype html><meta charset=utf-8><title>TianCaiSpace Hub</title><p>{message}</p>"
+            "<!doctype html><meta charset=utf-8><title>TianCaiSpaceHub</title><p>{message}</p>"
         )),
     )
         .into_response()

@@ -1,8 +1,29 @@
 # WorkBuddy 多模型接入
 
-维护日期：2026-10-03。适用版本：`v0.4.30-2`（已发布 GitHub 预发布版）。关联 TC-002、TC-003、TC-004、TC-013；历史验证见 [二开变更记录](customizations/CHANGELOG.md)，本轮构建与安装包见 [版本交付](releases/v0.4.30-2.md)。
+维护日期：2026-10-06。当前发布候选：`v0.4.30-3`，本版纳入 WorkBuddy 启动按钮和 `/wb` 外部消息边界，模型多条目与隔离自 `v0.4.30-2` 已预发布。关联 TC-002、TC-003、TC-004、TC-007、TC-013；实际发布和安装包状态见 [本版交付](releases/v0.4.30-3.md)，前版构建保留 [原版本](releases/v0.4.30-2.md) 归属。
 
-TianCaiSpace Hub 在 WorkBuddy 页签逐条管理多个模型。每条可以选择自己的来源渠道、模型、协议和思考强度；WorkBuddy 调用本机 Chat Completions 地址，Hub 经该条目的专用渠道转发。同名模型可绑定不同来源，保存一个条目不再以单元素数组覆盖其他模型。
+TianCaiSpaceHub 在 WorkBuddy 页签逐条管理多个模型。每条可以选择自己的来源渠道、模型、协议和思考强度；WorkBuddy 调用本机 Chat Completions 地址，Hub 经该条目的专用渠道转发。同名模型可绑定不同来源，保存一个条目不再以单元素数组覆盖其他模型。
+
+## 外部消息执行端边界
+
+`v0.4.30-3` 为 IM 保留 `/wb` 指令。用户已选择先明确提示“WorkBuddy 外部任务执行暂不支持”，并保持当前执行端与会话；它不会发送模型请求、创建 WorkBuddy 任务或悄悄改用 Codex。`/tg`、`/gpt` 与天工会话菜单见 [外部消息执行端](customizations/gmclaw-im.md#指令会话和权限)。本页已有模型接入负责 WorkBuddy → Hub → 模型厂商的调用，不能据此推定 Hub 已能反向操控 WorkBuddy 桌面任务。
+
+2026-10-03 对本机 WorkBuddy **5.6.2** 的安装程序资源进行只读核对，确认内置 agent-cli **2.147.0** 与 ACP 执行能力，但尚未找到可供 Hub 授权连接、创建和选择现有桌面会话的稳定外部接口。核对限于程序资源，不读取用户凭据或私有会话，不启动应用。具体依据：
+
+- `resources/app.asar` 中 `main/server.js` 的 `DaemonServer` 不开放 HTTP listener；桌面会话记录由其数据库服务维护。
+- `main/index.js` 的桌面 daemon 使用进程内调用或父子进程 stdio，Renderer 使用 Electron MessagePort；这些内部传输不是可填写地址及令牌的公共会话接口。
+- `main/code-cache.js` 的 HTTP sidecar 使用进程内随机密码；本轮不发现或提取该密码。WBIPC 管道目前注册 `wb.request/http.fetch`，没有本地任务创建、选择和提示提交方法。
+- 独立运行内置 `cli/bin/codebuddy --acp` 不代表复用桌面会话；桌面另外提供模型选择、提示、MCP/连接器及安全宿主能力，本轮没有将独立引擎代替桌面接入。
+
+官方 [WorkBuddy Open API](https://open.workbuddy.cn/docs/openapi) 提供 OAuth 授权后的本地助理消息收发，但现有公开文档未列出本地多会话新建/选择接口。[CodeBuddy HTTP API](https://cloud.tencent.com.cn/document/product/1831/137064) 描述的是独立 CodeBuddy Code 服务，不能作为普通 WorkBuddy 桌面已开放同等接口的依据。本轮不创建开放平台应用、不发起 OAuth 或真实调用；`/wb` 保留入口没有新增凭据和配置字段。
+
+## 启动 WorkBuddy 桌面
+
+「WorkBuddy 接入」页新增「启动 WorkBuddy」按钮，通过后台线程调用 `POST /api/workbuddy/runtime/start`；未配置模型时也可使用。点击先识别已有桌面进程，已运行时不重复启动；同页操作忙时按钮暂不可点，服务端对全部启动请求串行处理，并在一次启动后提供 30 秒冷却，避免初始化期间重复启动。Windows 检查 `WorkBuddy.exe` 与配套 `resources/app.asar`，通过 App Paths/卸载注册表和常见安装目录定位，支持用户提供的 `D:\Program Files\WorkBuddy` 自定义盘符安装；macOS 检查完整 `WorkBuddy.app` 并用系统 `open -a` 打开。辅助进程不显示控制台，不改系统关联或安装资源。
+
+通常无需手填路径；自动发现失败时明确提示安装未找到。特殊安装可在启动 Hub 前设置 `WORKBUDDY_DESKTOP_PATH` 为完整桌面程序或安装目录（macOS 可用 App 或其所在目录）。该变量只用于启动定位，不改变 `WORKBUDDY_CONFIG_PATH`、模型配置或备份。已有进程优先处理；需要启动新进程时，无效覆盖值拒绝启动，不静默改用其他安装。GUI 请求最多等待 20 秒，界面区分“已发起启动”和“已运行”，不据此声明模型连接或 `/wb` 已接通。按钮不创建桌面会话、不执行任务；Hub 退出不会通过该功能关闭 WorkBuddy。
+
+本轮不新增持久配置字段或迁移；回退程序会移除按钮，已启动的 WorkBuddy 仍由用户管理。关键代码见 [桌面启动与安装发现](../src/web/workbuddy_launch.rs)、[GUI](../src/gui/workbuddy.rs)、[GUI API](../src/gui/api.rs)。Windows 本轮编译与产物身份见 [品牌与交付](customizations/desktop-and-packaging.md#当前交付状态)，重复点击、已有实例和自动路径发现待用户验收；macOS 待 Actions 原生构建和实机验收，不扩展 Linux。本轮未启动 WorkBuddy、读取用户模型凭据或会话，未执行测试/真实调用。
 
 ## 推荐配置
 
@@ -22,7 +43,7 @@ TianCaiSpace Hub 在 WorkBuddy 页签逐条管理多个模型。每条可以选�
 8. 保存当前条目。新增时生成 UUID 条目 ID、WorkBuddy 模型 ID `tiancaispacehub-<entryId>`、专用渠道 `workbuddy:<entryId>` 和对应地址；编辑沿用身份并保留其他条目、未知字段与未在页面编辑的能力选项。新保存条目的上游 Key 写入 Hub 专用渠道，在 `models.json` 及状态响应中清空；同目录的撤销备份仍可能包含渠道凭据，详见下文。来源渠道的导入元数据不复制到专用渠道。
 9. 删除只移除选中模型及其渠道；“还原备份”撤销最近一次成功保存或删除，恢复前另存 `models.json.before-restore.bak`，成功后消耗该次操作记录。新备份定点还原，不覆盖其他条目的后续修改；损坏文件及旧备份的限制见下文。
 
-按 WorkBuddy 自身方式重新加载配置后，在客户端选择所需模型。本机未定位到 WorkBuddy 安装资源，本轮未运行客户端；客户端对 UUID ID、多条同名模型和独立 URL 的识别待用户验收，不声称已验证其默认模型机制。Hub 为 `id/name/providerModel` 建立到来源实际模型的映射，避免向厂商发送 UUID；来源选择为别名时先解析真实目标。请求使用别名、条目 ID 或真实模型名时，默认思考和缓存参数均按该条目的专用渠道解析，不从另一个同名条目读取。
+按 WorkBuddy 自身方式重新加载配置后，在客户端选择所需模型。`v0.4.30-2` 开发与发布时未定位到 WorkBuddy 安装资源；之后按用户给出的目录只读确认 WorkBuddy 5.6.2 程序资源，本次仍未运行客户端。客户端对 UUID ID、多条同名模型和独立 URL 的识别待用户验收，不声称已验证其默认模型机制。Hub 为 `id/name/providerModel` 建立到来源实际模型的映射，避免向厂商发送 UUID；来源选择为别名时先解析真实目标。请求使用别名、条目 ID 或真实模型名时，默认思考和缓存参数均按该条目的专用渠道解析，不从另一个同名条目读取。
 
 ## 协议规则
 
@@ -63,6 +84,7 @@ macOS/Linux: $HOME/.workbuddy/models.json
 | `POST /api/workbuddy/config` | `{ entryId?, revision, model }`；省略/空 ID 新增，已有 ID 更新；来源及模型按最新普通渠道复核，不信任提交的上游 URL/Key |
 | `POST /api/workbuddy/config/delete` | `{ entryId, revision }`；删除单个模型和专用渠道 |
 | `POST /api/workbuddy/config/restore` | `{ revision }`；撤销最近操作或兼容旧备份 |
+| `POST /api/workbuddy/runtime/start` | JSON `{ "launch": true }`；仅显式启动桌面，返回 `detail/running/launched`；不接入 IM 任务 |
 
 状态保留 `path/exists/backupPath/backupExists/model`，新增 `entries/selectedEntryId/revision/error`。`model` 表示当前选择，条目包含 `entryId/model/configured/localUrl/sourceProvider`；返回模型清空上游 Key。文件或元数据损坏通过 `error` 显示，不误报为空的新配置。
 

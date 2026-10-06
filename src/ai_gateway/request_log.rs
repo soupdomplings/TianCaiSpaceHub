@@ -66,6 +66,8 @@ pub struct RequestLogRecord {
 #[derive(Debug, Clone, Default)]
 pub struct RequestLogUpdate {
     pub status: Option<String>,
+    /// The final upstream request mode, independent of the client's `stream`.
+    pub upstream_stream: Option<bool>,
     pub usage: Option<LogUsage>,
     pub cost_usd: Option<f64>,
     pub latency_ms: Option<i64>,
@@ -86,6 +88,9 @@ pub struct RequestLogEntry {
     pub request_id: String,
     pub model_id: String,
     pub stream: bool,
+    /// Unknown for historical rows and requests not sent to an upstream.
+    #[serde(default)]
+    pub upstream_stream: Option<bool>,
     pub channel: String,
     pub provider_type: String,
     pub status: String,
@@ -808,7 +813,8 @@ fn update_record_with_conn(
             response_json = ?16,
             write_cache_5m_tokens = ?18,
             write_cache_1h_tokens = ?19,
-            upstream_response_headers_json = COALESCE(?20, upstream_response_headers_json)
+            upstream_response_headers_json = COALESCE(?20, upstream_response_headers_json),
+            upstream_stream = COALESCE(?21, upstream_stream)
          WHERE id = ?17",
         params![
             update.status.as_deref().unwrap_or(&existing.0),
@@ -831,6 +837,7 @@ fn update_record_with_conn(
             usage.write_cache_5m_tokens,
             usage.write_cache_1h_tokens,
             &update.upstream_response_headers_json,
+            update.upstream_stream.map(i64::from),
         ],
     )?;
     Ok(())
@@ -854,7 +861,7 @@ fn list_recent_with_conn(
             ttft_ms, created_at_ms,
             datetime(created_at_ms / 1000, 'unixepoch', 'localtime') AS created_at,
             error_message, upstream_request_body_bytes,
-            write_cache_5m_tokens, write_cache_1h_tokens
+            write_cache_5m_tokens, write_cache_1h_tokens, upstream_stream
          FROM ai_gateway_request_logs
          ORDER BY created_at_ms DESC, id DESC
          LIMIT ?1",
@@ -883,6 +890,7 @@ fn list_recent_with_conn(
             upstream_request_body_bytes: row.get(19)?,
             write_cache_5m_tokens: row.get(20)?,
             write_cache_1h_tokens: row.get(21)?,
+            upstream_stream: row.get::<_, Option<i64>>(22)?.map(|value| value != 0),
         })
     })?;
 
@@ -956,7 +964,8 @@ fn get_detail_with_conn(conn: &Connection, id: i64) -> rusqlite::Result<Option<R
             error_message, request_headers_json, request_json,
             upstream_request_body_bytes, upstream_request_headers_json, upstream_request_json,
             upstream_response_sse, response_json,
-            write_cache_5m_tokens, write_cache_1h_tokens, upstream_response_headers_json
+            write_cache_5m_tokens, write_cache_1h_tokens, upstream_response_headers_json,
+            upstream_stream
          FROM ai_gateway_request_logs
          WHERE id = ?1",
         params![id],
@@ -985,6 +994,7 @@ fn get_detail_with_conn(conn: &Connection, id: i64) -> rusqlite::Result<Option<R
                     upstream_request_body_bytes: row.get(21)?,
                     write_cache_5m_tokens: row.get(26)?,
                     write_cache_1h_tokens: row.get(27)?,
+                    upstream_stream: row.get::<_, Option<i64>>(29)?.map(|value| value != 0),
                 },
                 request_headers_json: row.get(19)?,
                 request_json: row.get(20)?,
@@ -1364,6 +1374,7 @@ fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
             request_id TEXT NOT NULL,
             model_id TEXT NOT NULL,
             stream INTEGER NOT NULL,
+            upstream_stream INTEGER,
             channel TEXT NOT NULL,
             provider_type TEXT NOT NULL,
             status TEXT NOT NULL,
@@ -1394,6 +1405,7 @@ fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
 
     add_text_column_if_missing(conn, "request_headers_json")?;
     add_integer_column_if_missing(conn, "upstream_request_body_bytes")?;
+    add_integer_column_if_missing(conn, "upstream_stream")?;
     add_text_column_if_missing(conn, "upstream_request_headers_json")?;
     add_text_column_if_missing(conn, "upstream_request_json")?;
     add_text_column_if_missing(conn, "upstream_response_headers_json")?;
@@ -1419,11 +1431,11 @@ fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
         -- 200-row list query cost ~170 ms and spin the daemon at ~12% CPU while
         -- the dashboard polled it every 1.5 s. Carrying all listed columns here
         -- keeps the scan inside the index and drops the query to well under 1 ms.
-        -- The v2 suffix forces a fresh covering index after the write-cache
-        -- 5m/1h columns were added; the old index is dropped just below so the
-        -- list query stays covered without carrying a stale duplicate.
+        -- The v3 index also carries the upstream request mode. Older indexes
+        -- are dropped so the list stays covered without stale duplicates.
         DROP INDEX IF EXISTS idx_ai_gateway_request_logs_list_cover;
-        CREATE INDEX IF NOT EXISTS idx_ai_gateway_request_logs_list_cover_v2
+        DROP INDEX IF EXISTS idx_ai_gateway_request_logs_list_cover_v2;
+        CREATE INDEX IF NOT EXISTS idx_ai_gateway_request_logs_list_cover_v3
             ON ai_gateway_request_logs(
                 created_at_ms DESC, id DESC,
                 request_id, model_id, stream, channel, provider_type, status,
@@ -1431,7 +1443,7 @@ fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
                 read_cache_hit_rate, write_cache_tokens,
                 write_cache_5m_tokens, write_cache_1h_tokens,
                 cost_usd, latency_ms,
-                ttft_ms, error_message, upstream_request_body_bytes
+                ttft_ms, error_message, upstream_request_body_bytes, upstream_stream
             );
         "#,
     )
@@ -1828,6 +1840,79 @@ mod tests {
             Some(r#"{"x-request-id":"new"}"#)
         );
         assert_eq!(updated.response_json, old.response_json);
+    }
+
+    #[test]
+    fn upstream_stream_migration_preserves_client_mode_and_later_updates() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        conn.execute("INSERT INTO ai_gateway_request_logs (id,request_id,model_id,stream,channel,provider_type,status,created_at_ms,request_json) VALUES (1,'old','test-model',0,'gmclaw','openai_responses','running',1,'{\"stream\":false}')", []).unwrap();
+        conn.execute_batch(
+            "DROP INDEX idx_ai_gateway_request_logs_list_cover_v3;
+             ALTER TABLE ai_gateway_request_logs DROP COLUMN upstream_stream",
+        )
+        .unwrap();
+        init_schema(&conn).unwrap();
+        init_schema(&conn).unwrap();
+        let old = get_detail_with_conn(&conn, 1).unwrap().unwrap();
+        assert!(!old.summary.stream);
+        assert_eq!(old.summary.upstream_stream, None);
+
+        // Recording the upstream mode does not require saving request details.
+        update_record_with_conn(
+            &conn,
+            1,
+            &RequestLogUpdate {
+                upstream_stream: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        update_record_with_conn(
+            &conn,
+            1,
+            &RequestLogUpdate {
+                status: Some("completed".into()),
+                latency_ms: Some(42),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let row = list_recent_with_conn(&conn, 1).unwrap().remove(0);
+        assert!(!row.stream);
+        assert_eq!(row.upstream_stream, Some(true));
+        let detail = get_detail_with_conn(&conn, 1).unwrap().unwrap();
+        assert_eq!(detail.summary.upstream_stream, Some(true));
+        assert_eq!(detail.request_json, old.request_json);
+        assert!(detail.upstream_request_json.is_none());
+
+        // A later explicit non-streaming upstream request is not treated as NULL.
+        update_record_with_conn(
+            &conn,
+            1,
+            &RequestLogUpdate {
+                upstream_stream: Some(false),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            get_detail_with_conn(&conn, 1)
+                .unwrap()
+                .unwrap()
+                .summary
+                .upstream_stream,
+            Some(false)
+        );
+
+        let mut old_api = serde_json::to_value(&old.summary).unwrap();
+        old_api.as_object_mut().unwrap().remove("upstreamStream");
+        assert_eq!(
+            serde_json::from_value::<RequestLogEntry>(old_api)
+                .unwrap()
+                .upstream_stream,
+            None
+        );
     }
 
     #[tokio::test]

@@ -5,7 +5,7 @@ mod macos;
 pub fn show_startup_error(message: &str) {
     use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
     let body: Vec<u16> = message.encode_utf16().chain(Some(0)).collect();
-    let title: Vec<u16> = "TianCaiSpace Hub".encode_utf16().chain(Some(0)).collect();
+    let title: Vec<u16> = "TianCaiSpaceHub".encode_utf16().chain(Some(0)).collect();
     unsafe {
         MessageBoxW(
             std::ptr::null_mut(),
@@ -22,7 +22,7 @@ pub fn show_startup_error(message: &str) {
     // Callers pass only redacted local errors, never URLs or remote response text.
     let result = std::process::Command::new("/usr/bin/osascript")
         .arg("-e")
-        .arg("on run argv\n display alert \"TianCaiSpace Hub\" message (item 1 of argv) as critical\nend run")
+        .arg("on run argv\n display alert \"TianCaiSpaceHub\" message (item 1 of argv) as critical\nend run")
         .arg(message)
         .output();
     if !result.is_ok_and(|output| output.status.success()) {
@@ -53,7 +53,7 @@ pub fn register() -> Result<(), String> {
             .create_subkey(r"Software\Classes\tiancaispacehub")
             .map_err(|_| "无法注册网页导入 / Registration failed")?;
         let write = || -> std::io::Result<()> {
-            key.set_value("", &"URL:TianCaiSpace Hub Import")?;
+            key.set_value("", &"URL:TianCaiSpaceHub Import")?;
             key.set_value("URL Protocol", &"")?;
             key.set_value("TianCaiSpaceHubOwner", &command)?;
             key.create_subkey("DefaultIcon")?

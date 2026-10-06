@@ -1,8 +1,8 @@
 [Desktop Entry]
 Type=Application
-Name=TianCaiSpace Hub
+Name=TianCaiSpaceHub
 Comment=Remote-control Codex from Feishu, WeChat, and Telegram
-Exec=codexhub
-Icon=codexhub
+Exec=TianCaiSpaceHub
+Icon=TianCaiSpaceHub
 Terminal=false
 Categories=Development;Utility;

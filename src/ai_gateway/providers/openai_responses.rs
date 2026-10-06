@@ -315,6 +315,7 @@ async fn passthrough_to_endpoint(
 
         if let Some(log_context) = &log_context {
             let update = RequestLogUpdate {
+                upstream_stream: Some(is_stream),
                 upstream_request_headers_json: log_context
                     .details_enabled
                     .then(|| {

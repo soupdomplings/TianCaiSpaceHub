@@ -1,4 +1,4 @@
-﻿use std::time::{Duration, Instant};
+use std::time::{Duration, Instant};
 use std::{fs, path::Path};
 
 use anyhow::{Result, anyhow};
@@ -72,11 +72,89 @@ pub(super) struct WsEndpoint {
 #[derive(Clone)]
 pub struct FeishuApi {
     settings: FeishuSettings,
+    sensitive_message_logging: bool,
 }
 
 impl FeishuApi {
     pub fn new(settings: FeishuSettings) -> Self {
-        Self { settings }
+        Self {
+            settings,
+            sensitive_message_logging: false,
+        }
+    }
+
+    /// Approvals can be echoed in successful API responses. Keep their payload,
+    /// callback identity, compatibility code and error body out of diagnostics.
+    pub(crate) fn for_sensitive_messages(&self) -> Self {
+        Self {
+            settings: self.settings.clone(),
+            sensitive_message_logging: true,
+        }
+    }
+
+    async fn read_message_response(
+        &self,
+        response: reqwest::Response,
+    ) -> Result<serde_json::Value> {
+        if !self.sensitive_message_logging {
+            return Ok(response.json().await?);
+        }
+        let body = response
+            .text()
+            .await
+            .map_err(|_| anyhow!("feishu sensitive message response cannot be read"))?;
+        serde_json::from_str(&body)
+            .map_err(|_| anyhow!("feishu sensitive message returned invalid JSON"))
+    }
+
+    fn log_message_response(
+        &self,
+        operation: &str,
+        status: reqwest::StatusCode,
+        payload: &serde_json::Value,
+    ) {
+        if !self.sensitive_message_logging {
+            log_feishu_api_response(operation, status, payload);
+            return;
+        }
+        let operation = operation
+            .split_whitespace()
+            .next()
+            .unwrap_or("sensitive_message");
+        let code = payload
+            .get("code")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(-1);
+        chain_log::write_line(format!(
+            "[feishu_api] operation={operation} http_status={} code={code} sensitive=true",
+            status.as_u16()
+        ));
+        if status.is_success() && code == 0 {
+            info!(target: "codexhub::feishu", operation, http_status = status.as_u16(), code, "Sensitive Feishu message sent");
+        } else {
+            warn!(target: "codexhub::feishu", operation, http_status = status.as_u16(), code, "Sensitive Feishu message failed");
+        }
+    }
+
+    fn ensure_message_success(
+        &self,
+        operation: &str,
+        status: reqwest::StatusCode,
+        payload: &serde_json::Value,
+    ) -> Result<()> {
+        if !self.sensitive_message_logging {
+            return ensure_feishu_api_success(operation, status, payload);
+        }
+        let code = payload
+            .get("code")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(-1);
+        anyhow::ensure!(
+            status.is_success() && code == 0,
+            "feishu {operation} failed: http={} code={code}",
+            status.as_u16()
+        );
+        Ok(())
     }
 
     fn http_client(&self) -> reqwest::Client {
@@ -464,8 +542,8 @@ impl FeishuApi {
             .await?;
 
         let status = response.status();
-        let payload: serde_json::Value = response.json().await?;
-        log_feishu_api_response(
+        let payload = self.read_message_response(response).await?;
+        self.log_message_response(
             &format!(
                 "send_text_message receive_id_type={receive_id_type} receive_id={receive_id} text_len={}",
                 text.len()
@@ -473,7 +551,7 @@ impl FeishuApi {
             status,
             &payload,
         );
-        ensure_feishu_api_success("send_text_message", status, &payload)?;
+        self.ensure_message_success("send_text_message", status, &payload)?;
         Ok(())
     }
 
@@ -509,15 +587,15 @@ impl FeishuApi {
             .await?;
 
         let status = response.status();
-        let payload: serde_json::Value = response.json().await?;
-        log_feishu_api_response(
+        let payload = self.read_message_response(response).await?;
+        self.log_message_response(
             &format!(
                 "send_interactive_message receive_id_type={receive_id_type} receive_id={receive_id}"
             ),
             status,
             &payload,
         );
-        ensure_feishu_api_success("send_interactive_message", status, &payload)?;
+        self.ensure_message_success("send_interactive_message", status, &payload)?;
         payload
             .get("data")
             .and_then(|v| v.get("message_id"))
@@ -597,9 +675,9 @@ impl FeishuApi {
             .await?;
 
         let status = response.status();
-        let payload: serde_json::Value = response.json().await?;
-        log_feishu_api_response("update_interactive_message", status, &payload);
-        ensure_feishu_api_success("update_interactive_message", status, &payload)?;
+        let payload = self.read_message_response(response).await?;
+        self.log_message_response("update_interactive_message", status, &payload);
+        self.ensure_message_success("update_interactive_message", status, &payload)?;
         Ok(())
     }
 

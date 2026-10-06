@@ -301,7 +301,10 @@ pub(super) fn stop_daemon_on_exit(api: &ApiClient, daemon_child: &Rc<RefCell<Opt
         let _ = api.shutdown();
     }
     if let Some(mut child) = child {
-        kill_child(&mut child);
+        // Give the owned Hub daemon time to release its listeners/lock. The
+        // fallback terminates only this child, never an independently usable
+        // desktop client launched by it.
+        wait_or_kill_child(&mut child, DAEMON_GRACEFUL_STOP_TIMEOUT);
     }
 }
 
@@ -395,7 +398,17 @@ fn fallback_port_is_available(port: u16) -> bool {
 fn command_is_codexhub(command: &str) -> bool {
     let command = command.trim().replace('\\', "/");
     let executable = command.rsplit('/').next().unwrap_or_default();
-    executable.eq_ignore_ascii_case("codexhub") || executable.eq_ignore_ascii_case("codexhub.exe")
+    // Keep recognizing earlier installed and portable builds during upgrades.
+    [
+        "TianCaiSpaceHub",
+        "TianCaiSpaceHub.exe",
+        "TianCaiSpace Hub",
+        "TianCaiSpace Hub.exe",
+        "codexhub",
+        "codexhub.exe",
+    ]
+    .iter()
+    .any(|name| executable.eq_ignore_ascii_case(name))
 }
 
 #[cfg(unix)]
@@ -539,7 +552,9 @@ fn terminate_daemon_processes(pids: &[u32], force: bool) {
 fn terminate_daemon_processes(pids: &[u32], _force: bool) {
     for pid in pids {
         let mut command = Command::new("taskkill");
-        command.args(["/PID", &pid.to_string(), "/F", "/T"]);
+        // Desktop clients launched by Hub outlive Hub. /T would terminate
+        // TianGong/WorkBuddy and their tasks while recovering our own daemon.
+        command.args(["/PID", &pid.to_string(), "/F"]);
         hide_command_window(&mut command);
         let _ = command.status();
     }
@@ -806,12 +821,21 @@ mod tests {
                 },
             ]
         );
+        assert!(command_is_codexhub("TianCaiSpaceHub"));
+        assert!(command_is_codexhub("TianCaiSpaceHub.exe"));
+        assert!(command_is_codexhub("tiancaispacehub.exe"));
+        assert!(command_is_codexhub("TianCaiSpace Hub.exe"));
+        assert!(command_is_codexhub(
+            "C:\\Program Files\\TianCaiSpaceHub\\TianCaiSpaceHub.exe"
+        ));
         assert!(command_is_codexhub("CodexHub"));
         assert!(command_is_codexhub("codexhub"));
         assert!(command_is_codexhub(
             "C:\\Program Files\\CodexHub\\codexhub.exe"
         ));
         assert!(!command_is_codexhub("codexhub-helper"));
+        assert!(!command_is_codexhub("TianCaiSpaceHub-helper.exe"));
+        assert!(!command_is_codexhub("not-TianCaiSpaceHub.exe"));
         assert!(!command_is_codexhub("not-codexhub.exe"));
         assert!(!command_is_codexhub("other"));
     }

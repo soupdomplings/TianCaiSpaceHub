@@ -88,6 +88,8 @@
 
 ## 信息质量
 
+当前二开产品名统一为 `TianCaiSpaceHub`，Cargo package 为 `tiancaispacehub`，binary 为 `TianCaiSpaceHub`；Windows 程序为 `TianCaiSpaceHub.exe`，macOS 为 `TianCaiSpaceHub.app`。当前构建和使用示例采用新名称；历史交付包、文件哈希及当时实际执行命令保留原名，注明所属版本。配置目录、`CODEXHUB_*` 环境变量、协议标识和升级身份按兼容规则保留，详见 [品牌与交付](../customizations/desktop-and-packaging.md)。
+
 只写可核对的事实。使用“已实现”“构建完成”“模拟测试通过”“用户验收通过”“已发布”等具体状态，不以单一“完成”替代全部阶段。历史截图、性能估算或某次调试结果不能推导出当前版本已验证。
 
 文档不得新增真实 API Key、ticket、账号令牌、个人配置、私有日志或付款调用记录。源码和同仓库文档使用相对链接；大型构建物、临时日志、截图保留在忽略目录，构建清单仅记产物身份和哈希。

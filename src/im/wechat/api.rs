@@ -1,4 +1,4 @@
-﻿use std::{
+use std::{
     fs,
     path::Path,
     sync::atomic::{AtomicU64, Ordering},
@@ -33,6 +33,7 @@ const MESSAGE_STATE_FINISH: i64 = 2;
 const MESSAGE_ITEM_TYPE_TEXT: i64 = 1;
 const MESSAGE_ITEM_TYPE_IMAGE: i64 = 2;
 const WECHAT_CDN_BASE_URL: &str = "https://novac2c.cdn.weixin.qq.com/c2c";
+const GMCLAW_APPROVAL_SEND_LABEL: &str = "wechat_gmclaw_approval";
 
 static WECHAT_CLIENT_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -141,6 +142,27 @@ impl WechatApi {
         context_token: Option<&str>,
         text: &str,
     ) -> Result<String> {
+        self.send_text_with_label(to_user_id, context_token, text, "wechat_send_message")
+            .await
+    }
+
+    pub(crate) async fn send_gmclaw_approval_text(
+        &self,
+        to_user_id: &str,
+        context_token: Option<&str>,
+        text: &str,
+    ) -> Result<String> {
+        self.send_text_with_label(to_user_id, context_token, text, GMCLAW_APPROVAL_SEND_LABEL)
+            .await
+    }
+
+    async fn send_text_with_label(
+        &self,
+        to_user_id: &str,
+        context_token: Option<&str>,
+        text: &str,
+        label: &'static str,
+    ) -> Result<String> {
         if !self.is_configured() {
             return Err(anyhow!("wechat bot_token is empty"));
         }
@@ -170,7 +192,7 @@ impl WechatApi {
                     "base_info": base_info(),
                 }),
                 Duration::from_millis(API_TIMEOUT_MS),
-                "wechat_send_message",
+                label,
             )
             .await?;
         Ok(client_id)
@@ -515,6 +537,9 @@ where
         text.len(),
         response_preview_suffix(label, &text)
     ));
+    if label == GMCLAW_APPROVAL_SEND_LABEL {
+        return decode_gmclaw_approval_response(status.as_u16(), &text);
+    }
     if !status.is_success() {
         return Err(anyhow!(
             "wechat api {label} failed: status={} body={}",
@@ -534,6 +559,25 @@ where
             "wechat api {label} response decode failed: {}",
             truncate_log(&text, 300)
         )
+    })
+}
+
+fn decode_gmclaw_approval_response<T>(status: u16, text: &str) -> Result<T>
+where
+    T: DeserializeOwned,
+{
+    let value: Value = serde_json::from_str(text).map_err(|_| {
+        anyhow!("wechat api {GMCLAW_APPROVAL_SEND_LABEL} response decode failed: status={status}")
+    })?;
+    let code = response_business_code(&value);
+    if !(200..300).contains(&status) || code.is_some_and(|code| code != 0) {
+        let numeric_code = code.map_or_else(|| "unknown".to_owned(), |code| code.to_string());
+        return Err(anyhow!(
+            "wechat api {GMCLAW_APPROVAL_SEND_LABEL} failed: status={status} ret={numeric_code}"
+        ));
+    }
+    serde_json::from_value(value).map_err(|_| {
+        anyhow!("wechat api {GMCLAW_APPROVAL_SEND_LABEL} response decode failed: status={status}")
     })
 }
 
@@ -626,7 +670,7 @@ fn build_common_headers() -> Result<HeaderMap> {
 fn base_info() -> Value {
     json!({
         "channel_version": env!("CARGO_PKG_VERSION"),
-        "bot_agent": format!("CodexHub/{}", env!("CARGO_PKG_VERSION")),
+        "bot_agent": format!("TianCaiSpaceHub/{}", env!("CARGO_PKG_VERSION")),
     })
 }
 
@@ -712,6 +756,32 @@ pub(crate) fn default_long_poll_timeout_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gmclaw_approval_response_hides_echoed_parameters_but_keeps_recovery_codes() {
+        for code in [-2, -14] {
+            let body = json!({
+                "ret": code,
+                "errmsg": "fixture-key fixture-code sensitive command parameters",
+                "msg": { "text": "fixture-key fixture-code sensitive command parameters" },
+            })
+            .to_string();
+            assert!(response_preview_suffix(GMCLAW_APPROVAL_SEND_LABEL, &body).is_empty());
+            let error = decode_gmclaw_approval_response::<Value>(200, &body)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(&format!("ret={code}")));
+            assert!(!error.contains("fixture-key"));
+            assert!(!error.contains("fixture-code"));
+            assert!(!error.contains("sensitive command parameters"));
+        }
+        let invalid = decode_gmclaw_approval_response::<Value>(502, "fixture-key fixture-code")
+            .unwrap_err()
+            .to_string();
+        assert!(invalid.contains("status=502"));
+        assert!(!invalid.contains("fixture-key"));
+        assert!(decode_gmclaw_approval_response::<Value>(200, "{\"ret\":0}").is_ok());
+    }
 
     #[test]
     fn business_success_accepts_empty_or_zero_code() {

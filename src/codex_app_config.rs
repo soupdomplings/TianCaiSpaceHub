@@ -48,7 +48,7 @@ const CODEX_APP_INSTALLATION_ID: &str = "installation_id";
 const CODEX_APP_SERVER_DAEMON_DIR: &str = "app-server-daemon";
 const CODEX_APP_SERVER_DAEMON_SETTINGS: &str = "settings.json";
 const CODEX_APP_REMOTE_CONTROL_FEATURE: &str = "remote_control";
-const CODEX_APP_REMOTE_CONTROL_SERVER_NAME: &str = "TianCaiSpace Hub";
+const CODEX_APP_REMOTE_CONTROL_SERVER_NAME: &str = "TianCaiSpaceHub";
 const CODEX_MODELS_CACHE_FILE: &str = "models_cache.json";
 const CODEX_CONNECTOR_DIRECTORY_CACHE_DIR: &str = "cache/codex_app_directory";
 const SQLITE_WRITE_BUSY_TIMEOUT: Duration = Duration::from_secs(2);
@@ -1551,7 +1551,7 @@ fn inspect_auth_json(path: &Path) -> (bool, Option<String>) {
     } else {
         (
             false,
-            Some("auth.json is not codexhub local auth".to_string()),
+            Some("auth.json is not TianCaiSpaceHub local auth".to_string()),
         )
     }
 }
@@ -3269,7 +3269,7 @@ fn local_chatgpt_jwt(identity: &LocalAuthIdentity) -> Result<String> {
                 "id": identity.account_id,
                 "is_default": true,
                 "role": "owner",
-                "title": "TianCaiSpace Hub Local",
+                "title": "TianCaiSpaceHub Local",
             }]
         },
         "scp": [

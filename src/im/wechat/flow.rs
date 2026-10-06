@@ -15,26 +15,25 @@ use crate::{
                 active_turn_for_message, clear_thread_binding, remote_client_key_for_thread,
                 route_for_message,
             },
-            session::{create_and_bind_thread, resume_and_bind_thread},
+            session_backend,
             text_adapter::TextChatAdapter,
             thread::{
-                ThreadCreateOption, apply_thread_create_draft_value, create_options_for_field,
-                expand_home_prefix, is_approval_reply, load_thread_create_defaults_for_client,
-                next_thread_routing_request_id, normalize_thread_create_field,
-                summarize_thread_cwd, summarize_thread_start_options, summarize_thread_title,
+                ThreadCreateOption, ThreadCreateSettingsAction, apply_thread_create_draft_value,
+                create_options_for_field, create_settings_actions, create_settings_menu_suffix,
+                expand_home_prefix, is_approval_reply, next_thread_routing_request_id,
+                normalize_thread_create_field, summarize_thread_cwd,
+                summarize_thread_start_options, summarize_thread_title,
                 thread_create_form_from_draft, thread_create_help_text,
-                thread_start_options_from_form_for_client,
-                thread_start_options_with_current_provider,
             },
-            thread_list::{empty_thread_routing_request, load_thread_routing_page},
+            thread_list::empty_thread_routing_request,
             turn::{TurnStartOutcome, start_turn_for_route},
         },
         events,
         wechat::{adapter::WechatAdapter, api::WechatApi, types::WechatSettings},
     },
-    im_runtime::{RouteTarget, ThreadRoutingRequestState, ThreadRoutingStage, TurnOrigin},
+    im_runtime::{ThreadRoutingRequestState, ThreadRoutingStage, TurnOrigin},
     remote_control_backend,
-    types::{InboundAction, InboundMessage, ThreadRouteDirection},
+    types::{InboundAction, InboundMessage, SessionUiEntry, ThreadRouteDirection},
 };
 
 const WECHAT_CREATE_OPTION_PAGE_SIZE: usize = 8;
@@ -90,9 +89,21 @@ pub(crate) async fn handle_text_inbound(
     let account_id = message.account_id.clone();
     let route = route_for_message(&message);
     let text = im_text_for_state(&state);
-    {
+    if message.session_scope.is_none() {
         let mut runtime = state.runtime.lock().await;
         runtime.last_route = Some(route.clone());
+    }
+
+    if let Some(entry) = message.session_entry.as_ref() {
+        match entry {
+            SessionUiEntry::Choice => {
+                send_thread_routing_choice(&state, adapter, &message, None).await?
+            }
+            SessionUiEntry::Create => {
+                send_thread_create_settings(&state, adapter, &message, None).await?
+            }
+        }
+        return Ok(());
     }
 
     let trimmed = message.text.trim();
@@ -111,10 +122,11 @@ pub(crate) async fn handle_text_inbound(
         menu_command.as_deref().unwrap_or("")
     ));
 
-    if let Some(InboundAction::ApprovalDecision {
-        request_fingerprint,
-        option_index,
-    }) = message.action.clone()
+    if message.session_scope.is_none()
+        && let Some(InboundAction::ApprovalDecision {
+            request_fingerprint,
+            option_index,
+        }) = message.action.clone()
     {
         handle_approval_outcome(
             &state,
@@ -134,7 +146,8 @@ pub(crate) async fn handle_text_inbound(
         return Ok(());
     }
 
-    if let Some(command) = menu_command.as_deref()
+    if message.session_scope.is_none()
+        && let Some(command) = menu_command.as_deref()
         && is_approval_reply(command)
         && state
             .runtime
@@ -203,6 +216,13 @@ pub(crate) async fn handle_text_inbound(
             "[wechat_flow] event=inbound_handled stage=thread_list chat={} command={}",
             message.chat_id, command
         ));
+        return Ok(());
+    }
+
+    // GMClaw owns active sessions, turns and approvals. It reaches this shared
+    // flow only for its scoped session menus; never fall through to Codex RPCs.
+    if message.session_scope.is_some() {
+        send_thread_routing_choice(&state, adapter, &message, None).await?;
         return Ok(());
     }
 
@@ -432,10 +452,11 @@ pub(crate) async fn handle_text_inbound(
 async fn create_wechat_thread_for_route(
     state: &SharedState,
     adapter: &dyn TextChatAdapter,
-    route: &RouteTarget,
+    message: &InboundMessage,
     options: remote_control_backend::ThreadStartOptions,
     request_id: Option<&str>,
-) -> Result<String> {
+) -> Result<()> {
+    let route = route_for_message(message);
     let text = im_text_for_state(state);
     adapter
         .send_text(
@@ -445,7 +466,21 @@ async fn create_wechat_thread_for_route(
             text.creating_new_thread(),
         )
         .await?;
-    let thread_id = create_and_bind_thread(state, route, options.clone(), request_id).await?;
+    let thread_id = match session_backend::create(state, message, options.clone(), request_id).await
+    {
+        Ok(thread_id) => thread_id,
+        Err(error) => {
+            adapter
+                .send_text(
+                    state,
+                    &message.account_id,
+                    &message.chat_id,
+                    &text.session_operation_failed(text.create_new_session_button(), &error),
+                )
+                .await?;
+            return Ok(());
+        }
+    };
     adapter
         .send_text(
             state,
@@ -468,7 +503,7 @@ async fn create_wechat_thread_for_route(
             format!("conversation={} thread={thread_id}", route.conversation_key),
         )
         .await;
-    Ok(thread_id)
+    Ok(())
 }
 
 async fn send_thread_create_settings(
@@ -486,8 +521,7 @@ async fn send_thread_create_settings(
         .as_ref()
         .map(|request| request.create_draft.clone())
         .unwrap_or_default();
-    let remote_client_key = route.remote_client_key.clone();
-    let defaults = load_thread_create_defaults_for_client(state, &remote_client_key).await;
+    let defaults = session_backend::defaults(state, message).await;
     let im_text = im_text_for_state(state);
     let message_id = if let Some(message_id) = adapter
         .send_thread_create_settings_card(
@@ -503,7 +537,7 @@ async fn send_thread_create_settings(
         message_id
     } else {
         let mut text = thread_create_help_text(&defaults, &create_draft, im_text);
-        text.push_str(im_text.create_settings_menu_suffix());
+        text.push_str(&create_settings_menu_suffix(&defaults, im_text));
         adapter
             .send_text(state, &message.account_id, &message.chat_id, &text)
             .await?
@@ -571,32 +605,24 @@ async fn handle_thread_create_settings_text_reply(
         return Ok(true);
     }
 
-    match command.and_then(numeric_command_index) {
-        Some(0) => {
-            send_thread_create_options(state, adapter, message, request, "cwd", 1).await?;
+    let Some(index) = command.and_then(numeric_command_index) else {
+        return Ok(false);
+    };
+    let defaults = session_backend::defaults(state, message).await;
+    match create_settings_actions(&defaults).get(index) {
+        Some(ThreadCreateSettingsAction::Edit(field)) => {
+            send_thread_create_options(state, adapter, message, request, field, 1).await?;
             Ok(true)
         }
-        Some(1) => {
-            send_thread_create_options(state, adapter, message, request, "model", 1).await?;
-            Ok(true)
-        }
-        Some(2) => {
-            send_thread_create_options(state, adapter, message, request, "effort", 1).await?;
-            Ok(true)
-        }
-        Some(3) => {
-            send_thread_create_options(state, adapter, message, request, "perm", 1).await?;
-            Ok(true)
-        }
-        Some(4) => {
+        Some(ThreadCreateSettingsAction::Create) => {
             create_wechat_thread_from_request(state, adapter, message, request).await?;
             Ok(true)
         }
-        Some(5) => {
+        Some(ThreadCreateSettingsAction::Resume) => {
             send_thread_routing_list(state, adapter, message, Some(request), None, 1).await?;
             Ok(true)
         }
-        Some(_) => {
+        None => {
             adapter
                 .send_text(
                     state,
@@ -607,7 +633,6 @@ async fn handle_thread_create_settings_text_reply(
                 .await?;
             Ok(true)
         }
-        None => Ok(false),
     }
 }
 
@@ -617,11 +642,9 @@ async fn create_wechat_thread_from_request(
     message: &InboundMessage,
     request: ThreadRoutingRequestState,
 ) -> Result<()> {
-    let route = route_for_message(message);
-    let remote_client_key = route.remote_client_key.clone();
-    let options = match thread_start_options_from_form_for_client(
+    let options = match session_backend::options_from_form(
         state,
-        &remote_client_key,
+        message,
         thread_create_form_from_draft(&request.create_draft),
     )
     .await
@@ -640,7 +663,7 @@ async fn create_wechat_thread_from_request(
             return Ok(());
         }
     };
-    create_wechat_thread_for_route(state, adapter, &route, options, Some(&request.request_id))
+    create_wechat_thread_for_route(state, adapter, message, options, Some(&request.request_id))
         .await?;
     Ok(())
 }
@@ -664,8 +687,7 @@ async fn send_thread_create_options(
             .await?;
         return Ok(());
     };
-    let remote_client_key = route_for_message(message).remote_client_key;
-    let defaults = load_thread_create_defaults_for_client(state, &remote_client_key).await;
+    let defaults = session_backend::defaults(state, message).await;
     let text = im_text_for_state(state);
     let (title, body, mut options) =
         create_options_for_field(&defaults, &request.create_draft, field, text)?;
@@ -834,7 +856,7 @@ async fn handle_thread_create_custom_cwd_text_input(
         send_thread_create_settings(state, adapter, message, Some(request)).await?;
         return Ok(true);
     }
-    if command(text).is_some() {
+    if cwd_input_is_command(text) {
         request.create_draft.cwd_choice = None;
         request.create_draft.cwd_custom = None;
         state
@@ -1070,9 +1092,9 @@ async fn send_thread_routing_list(
     page: usize,
 ) -> Result<()> {
     let route = route_for_message(message);
-    let loaded_page = match load_thread_routing_page(
+    let loaded_page = match session_backend::page(
         state,
-        &route,
+        message,
         existing_request.as_ref(),
         cursor,
         page,
@@ -1169,8 +1191,25 @@ async fn handle_thread_routing_action(
     action: InboundAction,
 ) -> Result<bool> {
     match action {
+        InboundAction::GmClawApprovalDecision { .. } => {
+            // This shared WeChat/WeCom flow cannot authorize GMClaw tools.
+            // Consume stale callbacks before any text/menu/Codex handling.
+            adapter
+                .send_text(
+                    state,
+                    &message.account_id,
+                    &message.chat_id,
+                    im_text_for_state(state).approval_not_current(),
+                )
+                .await?;
+            Ok(true)
+        }
         InboundAction::ThreadRouteOpen => {
-            if crate::im::core::routing::live_thread_for_route(state, &route_for_message(message))
+            if message.session_scope.is_some()
+                || crate::im::core::routing::live_thread_for_route(
+                    state,
+                    &route_for_message(message),
+                )
                 .await
                 .is_none()
             {
@@ -1213,6 +1252,17 @@ async fn handle_thread_routing_action(
             }
             Ok(true)
         }
+        InboundAction::ThreadRouteCreateCwdPage { .. } => {
+            adapter
+                .send_text(
+                    state,
+                    &message.account_id,
+                    &message.chat_id,
+                    im_text_for_state(state).thread_selection_expired(),
+                )
+                .await?;
+            Ok(true)
+        }
         InboundAction::ThreadRouteCreateSubmit {
             request_id,
             cwd_choice,
@@ -1226,7 +1276,16 @@ async fn handle_thread_routing_action(
             else {
                 return Ok(true);
             };
-            if cwd_choice.as_deref() == Some("__custom__") && cwd_custom.is_none() {
+            if cwd_choice.as_deref() == Some("__custom__")
+                && cwd_custom
+                    .as_deref()
+                    .is_none_or(|path| path.trim().is_empty())
+                && request
+                    .create_draft
+                    .cwd_custom
+                    .as_deref()
+                    .is_none_or(|path| path.trim().is_empty())
+            {
                 let mut request = request;
                 request.stage = ThreadRoutingStage::CreateOptions;
                 request.create_draft.cwd_choice = Some("__custom__".to_string());
@@ -1242,21 +1301,23 @@ async fn handle_thread_routing_action(
                 send_thread_create_custom_cwd_prompt(state, adapter, message).await?;
                 return Ok(true);
             }
-            let route = route_for_message(message);
+            let cwd_choice = cwd_choice.or_else(|| request.create_draft.cwd_choice.clone());
+            let inherited_custom = if cwd_choice
+                .as_deref()
+                .is_none_or(|choice| choice == "__custom__")
+            {
+                request.create_draft.cwd_custom.clone()
+            } else {
+                None
+            };
             let form = crate::im::core::thread::ThreadCreateForm {
-                cwd_choice: request.create_draft.cwd_choice.clone(),
-                cwd_custom: cwd_custom.or_else(|| request.create_draft.cwd_custom.clone()),
+                cwd_choice,
+                cwd_custom: cwd_custom.or(inherited_custom),
                 model,
                 effort,
                 permission,
             };
-            let options = match thread_start_options_from_form_for_client(
-                state,
-                &route.remote_client_key,
-                form,
-            )
-            .await
-            {
+            let options = match session_backend::options_from_form(state, message, form).await {
                 Ok(options) => options,
                 Err(err) => {
                     adapter
@@ -1273,7 +1334,7 @@ async fn handle_thread_routing_action(
             create_wechat_thread_for_route(
                 state,
                 adapter,
-                &route,
+                message,
                 options,
                 Some(&request.request_id),
             )
@@ -1286,14 +1347,25 @@ async fn handle_thread_routing_action(
             else {
                 return Ok(true);
             };
-            let route = route_for_message(message);
+            let options = match session_backend::default_options(state, message).await {
+                Ok(options) => options,
+                Err(error) => {
+                    adapter
+                        .send_text(
+                            state,
+                            &message.account_id,
+                            &message.chat_id,
+                            &im_text_for_state(state).invalid_create_form(&error),
+                        )
+                        .await?;
+                    return Ok(true);
+                }
+            };
             create_wechat_thread_for_route(
                 state,
                 adapter,
-                &route,
-                thread_start_options_with_current_provider(
-                    remote_control_backend::ThreadStartOptions::default(),
-                ),
+                message,
+                options,
                 Some(&request.request_id),
             )
             .await?;
@@ -1494,9 +1566,22 @@ async fn resume_thread_for_request(
     thread_id: &str,
 ) -> Result<()> {
     let route = route_for_message(message);
-    let thread =
-        resume_and_bind_thread(state, &route, thread_id, Some(&request.request_id)).await?;
     let text = im_text_for_state(state);
+    let thread =
+        match session_backend::resume(state, message, thread_id, Some(&request.request_id)).await {
+            Ok(thread) => thread,
+            Err(error) => {
+                adapter
+                    .send_text(
+                        state,
+                        &message.account_id,
+                        &message.chat_id,
+                        &text.session_operation_failed(text.restore_history_button(), &error),
+                    )
+                    .await?;
+                return Ok(());
+            }
+        };
     adapter
         .send_text(
             state,
@@ -1624,32 +1709,7 @@ async fn handle_thread_list_text_reply(
             .await?;
         return Ok(true);
     };
-    let route = route_for_message(message);
-    let thread =
-        resume_and_bind_thread(state, &route, &thread_id, Some(&request.request_id)).await?;
-    let text = im_text_for_state(state);
-    adapter
-        .send_text(
-            state,
-            &message.account_id,
-            &message.chat_id,
-            &format!(
-                "{}\n\n{}",
-                text.resumed_session_title(),
-                text.resumed_session_body(
-                    &summarize_thread_title(&thread, text),
-                    &summarize_thread_cwd(&thread, text)
-                )
-            ),
-        )
-        .await?;
-    state
-        .push_event(
-            "info",
-            "wechat_thread_route_resumed",
-            format!("conversation={} thread={thread_id}", route.conversation_key),
-        )
-        .await;
+    resume_thread_for_request(state, adapter, message, request, &thread_id).await?;
     Ok(true)
 }
 
@@ -1851,6 +1911,30 @@ fn command(text: &str) -> Option<String> {
     lower.starts_with('/').then_some(lower)
 }
 
+fn cwd_input_is_command(text: &str) -> bool {
+    use crate::im::executor_commands::{ExecutorCommand, parse_command};
+
+    let Some(command) = command(text) else {
+        return false;
+    };
+    let known_control = !matches!(
+        parse_command(text, false),
+        ExecutorCommand::UnknownSlash { .. } | ExecutorCommand::Text(_)
+    ) || matches!(
+        command.as_str(),
+        "/y" | "/n"
+            | "/cancel"
+            | "/codexhub-new"
+            | "/codexhub-history"
+            | "/codexhub-back"
+            | "/codexhub-next"
+            | "/codexhub-prev"
+    ) || command.starts_with("/codexhub-thread-");
+    // On macOS an ordinary absolute path also starts with '/'. Preserve known
+    // controls, but let absolute paths (including spaces) reach path validation.
+    known_control || !expand_home_prefix(text.trim()).is_absolute()
+}
+
 fn menu_command(text: &str) -> Option<String> {
     let first = text.split_whitespace().next()?.trim();
     if first
@@ -1903,7 +1987,18 @@ fn truncate_line(text: &str, max_chars: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{command, menu_command, wecom_card_command};
+    use super::{command, cwd_input_is_command, menu_command, wecom_card_command};
+
+    #[test]
+    fn custom_cwd_input_distinguishes_native_paths_from_controls() {
+        let project = std::env::temp_dir().join("Hub Projects").join("example");
+        assert!(!cwd_input_is_command(&project.to_string_lossy()));
+        assert!(!cwd_input_is_command("~/Hub Projects/example"));
+        assert!(cwd_input_is_command("/q"));
+        assert!(cwd_input_is_command("/tg new"));
+        assert!(cwd_input_is_command("/back"));
+        assert!(cwd_input_is_command("/cancel"));
+    }
 
     #[test]
     fn command_keeps_bare_numbers_as_user_text() {

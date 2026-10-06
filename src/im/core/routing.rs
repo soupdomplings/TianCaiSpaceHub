@@ -1,14 +1,18 @@
 use crate::{app_state::SharedState, im_runtime::RouteTarget, types::InboundMessage};
 
 pub(crate) fn route_for_message(message: &InboundMessage) -> RouteTarget {
-    RouteTarget {
+    let route = RouteTarget {
         platform: message.platform,
         conversation_key: message.conversation_key(),
         account_id: message.account_id.clone(),
         chat_id: message.chat_id.clone(),
-        remote_client_key: String::new(),
+        remote_client_key: message.session_scope.clone().unwrap_or_default(),
+    };
+    if message.session_scope.is_some() {
+        route
+    } else {
+        route.with_deterministic_remote_client_key()
     }
-    .with_deterministic_remote_client_key()
 }
 
 pub(crate) async fn live_thread_for_route(

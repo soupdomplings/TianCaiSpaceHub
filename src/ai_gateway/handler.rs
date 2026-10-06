@@ -760,6 +760,7 @@ async fn handle_client_chat_completions(
     let started_at = Instant::now();
     let created_at_ms = request_log::now_ms();
     let config = state.config.lock().await;
+    let gmclaw_activity_config = (chat_client == ChatClient::GmClaw).then(|| config.clone());
     let gw_config = config.ai_gateway.clone();
     let request_logging_enabled = gw_config.request_logging_enabled;
     let request_log_details_enabled = gw_config.request_log_details_enabled;
@@ -929,6 +930,11 @@ async fn handle_client_chat_completions(
         client = chat_client.namespace(),
         "client chat request routed"
     );
+
+    if let Some(config) = gmclaw_activity_config.as_ref() {
+        crate::client_overview::record_model_activity(config, client_entry.as_deref(), &headers)
+            .await;
+    }
 
     let client = crate::outbound_http::get();
     let gmclaw_replay = if chat_client == ChatClient::GmClaw

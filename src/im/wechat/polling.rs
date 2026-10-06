@@ -219,6 +219,8 @@ async fn inbound_from_message(
         .or(message.client_id)
         .unwrap_or_else(|| now_ms().to_string());
     Ok(Some(InboundMessage {
+        session_scope: None,
+        session_entry: None,
         platform: ImPlatformKind::Wechat,
         account_id: account_id.to_string(),
         sender_id: peer_id.clone(),

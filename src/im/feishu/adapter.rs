@@ -1,5 +1,6 @@
 use anyhow::Result;
 
+use crate::im::core::executor_approval::{GmClawApproval, valid_request_key};
 use crate::im::core::{i18n::ImText, thread::ThreadCreateDefaults};
 use crate::im_runtime::PendingApproval;
 
@@ -92,6 +93,47 @@ impl FeishuAdapter {
             text,
         );
         self.send_interactive(target, &card).await
+    }
+
+    pub(crate) fn for_sensitive_messages(&self) -> Self {
+        Self::new(self.api.for_sensitive_messages())
+    }
+
+    pub(crate) async fn send_gmclaw_approval(
+        &self,
+        target: &str,
+        approval: &GmClawApproval,
+        text: ImText,
+    ) -> Result<String> {
+        anyhow::ensure!(
+            valid_request_key(&approval.request_key),
+            "invalid TianGong approval identity"
+        );
+        let card = renderer::build_gmclaw_approval_card(approval, text);
+        self.for_sensitive_messages()
+            .send_interactive(target, &card)
+            .await
+    }
+
+    pub(crate) async fn update_resolved_gmclaw_approval(
+        &self,
+        approval: &GmClawApproval,
+        option_index: usize,
+        text: ImText,
+    ) -> Result<bool> {
+        let Some(message_id) = approval
+            .message_id
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        else {
+            return Ok(false);
+        };
+        let card = renderer::build_resolved_gmclaw_approval_card(approval, option_index, text)
+            .ok_or_else(|| anyhow::anyhow!("invalid TianGong approval choice"))?;
+        self.for_sensitive_messages()
+            .update_interactive(message_id, &card)
+            .await?;
+        Ok(true)
     }
 
     pub async fn send_thread_routing_choice(

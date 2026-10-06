@@ -19,7 +19,6 @@ use crate::{
     },
     config::AppConfig,
     gmclaw_config::{GmClawConfigStatus, GmClawEntryRequest, GmClawSaveRequest},
-    gmclaw_im::GmClawBridgeConfig,
 };
 
 use super::{
@@ -70,431 +69,31 @@ pub(super) struct GmClawTab {
     temperature_mode: Choice,
     temperature: TextCtrl,
     status: StaticText,
+    display_status: StaticText,
     selection_hint: StaticText,
     parameter_hint: StaticText,
     reload_button: Button,
     save_button: Button,
     restore_button: Button,
+    start_button: Button,
     state: Rc<RefCell<SelectionState>>,
-    in_flight: Arc<AtomicBool>,
-    bridge: GmClawBridgeTab,
-}
-
-#[derive(Clone)]
-struct GmClawBridgeTab {
-    enabled: CheckBox,
-    endpoint: TextCtrl,
-    auth_token: TextCtrl,
-    project_path: TextCtrl,
-    model_id: TextCtrl,
-    max_steps: TextCtrl,
-    status: StaticText,
-    reload_button: Button,
-    save_button: Button,
-    original: Rc<RefCell<Option<AppConfig>>>,
     in_flight: Arc<AtomicBool>,
 }
 
 #[derive(Debug)]
 pub(super) enum GmClawActionResult {
+    Start(Result<String, String>),
     Refresh(Result<(Vec<GmClawProviderOption>, GmClawConfigStatus), String>),
     Save(Result<GmClawConfigStatus, String>),
     Restore(Result<GmClawConfigStatus, String>),
     Activate(Result<GmClawConfigStatus, String>),
     Delete(Result<GmClawConfigStatus, String>),
-    BridgeRefresh(Result<AppConfig, String>),
-    BridgeSave(Result<Option<AppConfig>, String>),
 }
 
 fn tr(text: GuiText, zh: &'static str, en: &'static str) -> &'static str {
     match text.locale {
         GuiLocale::ZhCn => zh,
         GuiLocale::EnUs => en,
-    }
-}
-
-fn create_bridge_section(page: &ScrolledWindow, root: &BoxSizer, text: GuiText) -> GmClawBridgeTab {
-    let (section, section_sizer) = card_section(page, tr(text, "天工 IM 桥接", "GMClaw IM bridge"));
-    let hint = StaticText::builder(&section).with_label(tr(text,
-        "通过 Hub 已接入的飞书、微信、企业微信通道使用天工。先配置并连接 IM 账号，再启用此桥接。",
-        "Use GMClaw through Feishu, WeChat, and WeCom channels connected to Hub. Configure and connect an IM account before enabling this bridge.")).build();
-    hint.set_foreground_color(theme::theme().ink_muted);
-    hint.wrap(920);
-    section_sizer.add(&hint, 0, SizerFlag::Expand | SizerFlag::All, 10);
-    let enabled = CheckBox::builder(&section)
-        .with_label(tr(text, "启用天工 IM 桥接", "Enable GMClaw IM bridge"))
-        .build();
-    section_sizer.add(&enabled, 0, SizerFlag::All, 10);
-    let grid = FlexGridSizer::builder(0, 2)
-        .with_vgap(10)
-        .with_hgap(14)
-        .build();
-    grid.add_growable_col(1, 1);
-    let endpoint = text_field_row(
-        &section,
-        &grid,
-        tr(text, "天工 Harness 地址", "GMClaw Harness URL"),
-        "http://127.0.0.1:7861",
-    );
-    let token_label = StaticText::builder(&section)
-        .with_label(tr(text, "连接 Token", "Connection token"))
-        .build();
-    token_label.set_foreground_color(theme::theme().ink_secondary);
-    grid.add(&token_label, 0, SizerFlag::AlignCenterVertical, 0);
-    let auth_token = TextCtrl::builder(&section)
-        .with_style(TextCtrlStyle::Password)
-        .build();
-    auth_token.set_background_color(theme::theme().bg_muted);
-    auth_token.set_foreground_color(theme::theme().ink_primary);
-    auth_token.set_min_size(Size::new(420, 30));
-    grid.add(&auth_token, 1, SizerFlag::Expand, 0);
-    let project_path = text_field_row(
-        &section,
-        &grid,
-        tr(text, "项目目录", "Project directory"),
-        "",
-    );
-    let model_id = text_field_row(
-        &section,
-        &grid,
-        tr(
-            text,
-            "天工模型 ID（留空用默认模型）",
-            "GMClaw model ID (blank uses default)",
-        ),
-        "",
-    );
-    let max_steps = text_field_row(
-        &section,
-        &grid,
-        tr(text, "每次任务最大步数", "Maximum steps per task"),
-        "30",
-    );
-    section_sizer.add_sizer(&grid, 0, SizerFlag::Expand | SizerFlag::All, 10);
-    let directory_hint = StaticText::builder(&section).with_label(tr(text,
-        "请选择允许天工操作的目录；工具是否需确认由天工策略决定，目录内部分读写可直接执行。",
-        "Choose a directory GMClaw may work in. Its policies decide when tools require confirmation; some reads and writes within this directory can run directly.")).build();
-    directory_hint.set_foreground_color(theme::theme().ink_muted);
-    directory_hint.wrap(920);
-    section_sizer.add(&directory_hint, 0, SizerFlag::Expand | SizerFlag::All, 10);
-    let commands = StaticText::builder(&section).with_label(tr(text,
-        "首次使用：以 GMCLAW_AUTH_TOKEN 环境变量设置 Token 后启动天工，此处填写相同值。\n在已连接的 IM 会话中发送 /gmclaw 开始使用天工；/gmclaw new 新建会话；/gmclaw off 返回 Codex。遇到审批时，按消息提示发送 approve 或 reject 及对应代码。",
-        "First use: start GMClaw with the GMCLAW_AUTH_TOKEN environment variable, and enter the same token here.\nSend /gmclaw in a connected IM conversation to start; /gmclaw new creates a conversation; /gmclaw off returns to Codex. For approvals, send approve or reject with the code shown in the message.")).build();
-    commands.set_foreground_color(theme::theme().ink_muted);
-    commands.wrap(920);
-    section_sizer.add(&commands, 0, SizerFlag::Expand | SizerFlag::All, 10);
-    let status = StaticText::builder(&section)
-        .with_label(tr(
-            text,
-            "正在读取桥接配置…",
-            "Loading bridge configuration…",
-        ))
-        .build();
-    status.set_foreground_color(theme::theme().ink_muted);
-    section_sizer.add(&status, 0, SizerFlag::Expand | SizerFlag::All, 10);
-    let actions = BoxSizer::builder(Orientation::Horizontal).build();
-    let reload_button = Button::builder(&section)
-        .with_label(tr(text, "刷新桥接配置", "Refresh bridge configuration"))
-        .build();
-    let save_button = Button::builder(&section)
-        .with_label(tr(text, "保存桥接配置", "Save bridge configuration"))
-        .build();
-    actions.add(&reload_button, 0, SizerFlag::Right, 8);
-    actions.add(&save_button, 0, SizerFlag::Right, 0);
-    section_sizer.add_sizer(&actions, 0, SizerFlag::All, 10);
-    root.add(&section, 0, SizerFlag::Expand | SizerFlag::All, 10);
-    GmClawBridgeTab {
-        enabled,
-        endpoint,
-        auth_token,
-        project_path,
-        model_id,
-        max_steps,
-        status,
-        reload_button,
-        save_button,
-        original: Rc::new(RefCell::new(None)),
-        in_flight: Arc::new(AtomicBool::new(false)),
-    }
-}
-
-fn bind_bridge_actions(
-    tab: &GmClawTab,
-    api: &ApiClient,
-    frame: &Frame,
-    text: GuiText,
-    gui_tx: &tokio::sync::mpsc::UnboundedSender<super::GuiMessage>,
-) {
-    let reload_tab = tab.bridge.clone();
-    let reload_api = api.clone();
-    let reload_tx = gui_tx.clone();
-    tab.bridge
-        .reload_button
-        .on_click(move |_| refresh_bridge(&reload_tab, &reload_api, text, &reload_tx, false));
-
-    let save_tab = tab.bridge.clone();
-    let save_api = api.clone();
-    let save_tx = gui_tx.clone();
-    let save_frame = *frame;
-    tab.bridge.save_button.on_click(move |_| {
-        if save_tab.in_flight.load(Ordering::SeqCst) {
-            return;
-        }
-        let (original, updated) = match bridge_save_config(&save_tab, text) {
-            Ok(config) => config,
-            Err(error) => {
-                show_error(&save_frame, &error);
-                return;
-            }
-        };
-        if save_tab.in_flight.swap(true, Ordering::SeqCst) {
-            return;
-        }
-        save_tab.status.set_label(tr(
-            text,
-            "正在保存桥接配置…",
-            "Saving bridge configuration…",
-        ));
-        update_bridge_controls(&save_tab);
-        let api = save_api.clone();
-        let tx = save_tx.clone();
-        thread::spawn(move || {
-            // Merge only the bridge into the latest configuration. Model edits
-            // do not invalidate this form; bridge edits still require refresh.
-            // The latest revision protects any change after this GET as well.
-            let result = api.get_app_config().and_then(|latest| {
-                let config = merge_bridge_config(latest, &original, updated, text)?;
-                api.save_app_config(&config)
-                    .map(|_| api.get_app_config().ok())
-            });
-            let _ = tx.send(super::GuiMessage::GmClaw(GmClawActionResult::BridgeSave(
-                result,
-            )));
-            wxdragon::wake_up_idle();
-        });
-    });
-    refresh_bridge(&tab.bridge, api, text, gui_tx, true);
-}
-
-fn refresh_bridge(
-    tab: &GmClawBridgeTab,
-    api: &ApiClient,
-    text: GuiText,
-    gui_tx: &tokio::sync::mpsc::UnboundedSender<super::GuiMessage>,
-    startup: bool,
-) {
-    if tab.in_flight.swap(true, Ordering::SeqCst) {
-        return;
-    }
-    tab.status.set_label(tr(
-        text,
-        "正在读取桥接配置…",
-        "Loading bridge configuration…",
-    ));
-    update_bridge_controls(tab);
-    let api = api.clone();
-    let tx = gui_tx.clone();
-    thread::spawn(move || {
-        let mut result = api.get_app_config();
-        if startup {
-            for _ in 1..30 {
-                if result.is_ok() {
-                    break;
-                }
-                thread::sleep(Duration::from_millis(250));
-                result = api.get_app_config();
-            }
-        }
-        let _ = tx.send(super::GuiMessage::GmClaw(
-            GmClawActionResult::BridgeRefresh(result),
-        ));
-        wxdragon::wake_up_idle();
-    });
-}
-
-fn bridge_save_config(
-    tab: &GmClawBridgeTab,
-    text: GuiText,
-) -> Result<(GmClawBridgeConfig, GmClawBridgeConfig), String> {
-    let config = tab
-        .original
-        .borrow()
-        .clone()
-        .filter(|config| {
-            config
-                .revision
-                .as_ref()
-                .is_some_and(|revision| !revision.is_empty())
-        })
-        .ok_or_else(|| {
-            tr(
-                text,
-                "请先刷新桥接配置。",
-                "Refresh bridge configuration first.",
-            )
-            .to_string()
-        })?;
-    let max_steps = tab
-        .max_steps
-        .get_value()
-        .trim()
-        .parse::<u32>()
-        .ok()
-        .filter(|value| *value > 0)
-        .ok_or_else(|| {
-            tr(
-                text,
-                "最大步数必须是大于 0 的整数。",
-                "Maximum steps must be a positive integer.",
-            )
-            .to_string()
-        })?;
-    let model_id = tab.model_id.get_value().trim().to_string();
-    let updated = GmClawBridgeConfig {
-        enabled: tab.enabled.is_checked(),
-        endpoint: tab.endpoint.get_value().trim().to_string(),
-        auth_token: tab.auth_token.get_value(),
-        project_path: tab.project_path.get_value().trim().to_string(),
-        model_id: (!model_id.is_empty()).then_some(model_id),
-        max_steps,
-    };
-    Ok((config.gmclaw_bridge, updated))
-}
-
-fn merge_bridge_config(
-    mut latest: AppConfig,
-    original: &GmClawBridgeConfig,
-    updated: GmClawBridgeConfig,
-    text: GuiText,
-) -> Result<AppConfig, String> {
-    let previous = serde_json::to_value(original).map_err(|error| error.to_string())?;
-    let current = serde_json::to_value(&latest.gmclaw_bridge).map_err(|error| error.to_string())?;
-    if current != previous {
-        return Err(tr(
-            text,
-            "桥接配置已被其他操作修改，请刷新并核对后重试。",
-            "Bridge configuration changed elsewhere. Refresh and review it before retrying.",
-        )
-        .to_string());
-    }
-    if latest
-        .revision
-        .as_ref()
-        .is_none_or(|revision| revision.is_empty())
-    {
-        return Err(tr(
-            text,
-            "未能读取有效的配置版本，请刷新后重试。",
-            "Could not load a valid configuration revision. Refresh before retrying.",
-        )
-        .to_string());
-    }
-    updated.validate().map_err(|error| error.to_string())?;
-    latest.gmclaw_bridge = updated;
-    Ok(latest)
-}
-
-#[cfg(test)]
-mod bridge_config_tests {
-    use super::*;
-
-    #[test]
-    fn bridge_save_preserves_model_edits_and_latest_revision() {
-        let original = GmClawBridgeConfig::default();
-        let mut latest = AppConfig::default();
-        latest.revision = Some("latest-after-model-save".into());
-        latest
-            .ai_gateway
-            .providers
-            .push(crate::ai_gateway::config::ProviderConfig {
-                name: "gmclaw:new-entry".into(),
-                models: vec!["new-model".into()],
-                ..Default::default()
-            });
-        let providers = serde_json::to_value(&latest.ai_gateway.providers).unwrap();
-        let updated = GmClawBridgeConfig {
-            model_id: Some("tiancaispacehub-new-entry".into()),
-            max_steps: 40,
-            ..original.clone()
-        };
-        let merged =
-            merge_bridge_config(latest, &original, updated, GuiText::new(GuiLocale::ZhCn)).unwrap();
-        assert_eq!(merged.revision.as_deref(), Some("latest-after-model-save"));
-        assert_eq!(
-            serde_json::to_value(&merged.ai_gateway.providers).unwrap(),
-            providers
-        );
-        assert_eq!(merged.gmclaw_bridge.max_steps, 40);
-        assert_eq!(
-            merged.gmclaw_bridge.model_id.as_deref(),
-            Some("tiancaispacehub-new-entry")
-        );
-    }
-
-    #[test]
-    fn bridge_save_rejects_external_bridge_edit_or_missing_revision() {
-        let original = GmClawBridgeConfig::default();
-        let mut latest = AppConfig::default();
-        latest.revision = Some("concurrent-bridge-edit".into());
-        latest.gmclaw_bridge.auth_token = "fixture-external-token".into();
-        let failure = merge_bridge_config(
-            latest,
-            &original,
-            original.clone(),
-            GuiText::new(GuiLocale::ZhCn),
-        )
-        .unwrap_err();
-        assert!(failure.contains("桥接配置已被其他操作修改"));
-        assert!(!failure.contains("fixture-external-token"));
-        assert!(
-            merge_bridge_config(
-                AppConfig::default(),
-                &original,
-                original.clone(),
-                GuiText::new(GuiLocale::ZhCn),
-            )
-            .is_err()
-        );
-    }
-}
-
-fn apply_bridge_config(tab: &GmClawBridgeTab, text: GuiText, config: AppConfig) {
-    let bridge = &config.gmclaw_bridge;
-    tab.enabled.set_value(bridge.enabled);
-    tab.endpoint.set_value(&bridge.endpoint);
-    tab.auth_token.set_value(&bridge.auth_token);
-    tab.project_path.set_value(&bridge.project_path);
-    tab.model_id
-        .set_value(bridge.model_id.as_deref().unwrap_or(""));
-    tab.max_steps.set_value(&bridge.max_steps.to_string());
-    tab.status.set_label(if bridge.enabled {
-        tr(text, "桥接已启用。天工需保持运行，并使用与上方一致的连接 Token。", "Bridge enabled. Keep GMClaw running with the matching connection token.")
-    } else {
-        tr(text, "桥接未启用。填写连接信息并保存后，可在已接入的 IM 通道使用天工。", "Bridge disabled. Save the connection settings to use GMClaw through connected IM channels.")
-    });
-    *tab.original.borrow_mut() = Some(config);
-}
-
-fn update_bridge_controls(tab: &GmClawBridgeTab) {
-    let busy = tab.in_flight.load(Ordering::SeqCst);
-    let ready = !busy
-        && tab.original.borrow().as_ref().is_some_and(|config| {
-            config
-                .revision
-                .as_ref()
-                .is_some_and(|revision| !revision.is_empty())
-        });
-    tab.reload_button.enable(!busy);
-    tab.save_button.enable(ready);
-    tab.enabled.enable(ready);
-    for field in [
-        tab.endpoint,
-        tab.auth_token,
-        tab.project_path,
-        tab.model_id,
-        tab.max_steps,
-    ] {
-        field.enable(ready);
     }
 }
 
@@ -680,6 +279,9 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> GmClawTab {
         20,
     );
     let actions = BoxSizer::builder(Orientation::Horizontal).build();
+    let start_button = Button::builder(&page)
+        .with_label(tr(text, "启动天工 Claw", "Start GMClaw"))
+        .build();
     let reload_button = Button::builder(&page)
         .with_label(tr(text, "刷新", "Refresh"))
         .build();
@@ -695,13 +297,43 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> GmClawTab {
     let delete_button = Button::builder(&page)
         .with_label(tr(text, "删除所选模型", "Delete selected model"))
         .build();
+    actions.add(&start_button, 0, SizerFlag::Right, 8);
     actions.add(&reload_button, 0, SizerFlag::Right, 8);
     actions.add(&restore_button, 0, SizerFlag::Right, 8);
     actions.add(&save_button, 0, SizerFlag::Right, 8);
     actions.add(&activate_button, 0, SizerFlag::Right, 8);
     actions.add(&delete_button, 0, SizerFlag::Right, 0);
     root.add_sizer(&actions, 0, SizerFlag::All, 20);
-    let bridge = create_bridge_section(&page, &root, text);
+    let display_status = StaticText::builder(&page)
+        .with_label(tr(
+            text,
+            "桌面对话同步：等待本地服务状态",
+            "Desktop message sync: waiting for local service status",
+        ))
+        .build();
+    display_status.set_foreground_color(theme::theme().ink_secondary);
+    display_status.wrap(920);
+    root.add(
+        &display_status,
+        0,
+        SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Bottom,
+        20,
+    );
+    let im_hint = StaticText::builder(&page)
+        .with_label(tr(
+            text,
+            "点击“启动天工 Claw”即可打开桌面并自动准备本地连接。要在天工窗口同步外部对话，首次请正常退出已经手动打开的天工，再通过此按钮打开一次。在已连接的飞书、微信或企业微信中发送 /tg 选择天工执行端，沿用会话卡片或菜单选择项目目录和模型。启用后自动重连，发送 /gpt 返回 ChatGPT（Codex）。",
+            "Click Start GMClaw to open the desktop and prepare its local connection. To sync external messages into the desktop window, first close an already manually opened GMClaw and launch it once with this button. Send /tg in connected Feishu, WeChat, or WeCom to select GMClaw, then use the existing session card or menu to choose a project directory and model. Enabled connections recover automatically. Send /gpt to return to ChatGPT (Codex).",
+        ))
+        .build();
+    im_hint.set_foreground_color(theme::theme().ink_muted);
+    im_hint.wrap(920);
+    root.add(
+        &im_hint,
+        0,
+        SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Bottom,
+        20,
+    );
     page.set_sizer(root, true);
     page.set_scroll_rate(0, 10);
     page.layout();
@@ -726,22 +358,62 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> GmClawTab {
         temperature_mode,
         temperature,
         status,
+        display_status,
         selection_hint,
         parameter_hint,
         reload_button,
         save_button,
         restore_button,
+        start_button,
         state: Rc::new(RefCell::new(SelectionState {
             reasoning_efforts: vec!["auto"],
             ..SelectionState::default()
         })),
         in_flight: Arc::new(AtomicBool::new(false)),
-        bridge,
     };
     update_parameter_hint(&tab, text);
     update_controls(&tab);
-    update_bridge_controls(&tab.bridge);
     tab
+}
+
+pub(super) fn refresh_display(
+    tab: &GmClawTab,
+    text: GuiText,
+    snapshot: Option<&super::api::DashboardSnapshot>,
+) {
+    let detail = snapshot
+        .filter(|snapshot| snapshot.service_online)
+        .and_then(|snapshot| snapshot.client_overview.as_ref())
+        .map(|overview| &overview.gmclaw.bridge)
+        .map(|bridge| {
+            if !bridge.enabled {
+                tr(
+                    text,
+                    "尚未启用；启动天工或在聊天中发送 /tg 后准备同步",
+                    "Not enabled; start GMClaw or send /tg to prepare sync",
+                )
+            } else {
+                bridge
+                    .detail
+                    .split_once("；桌面对话同步：")
+                    .map(|(_, detail)| detail)
+                    .unwrap_or_else(|| {
+                        tr(text, "尚未取得窗口更新结果", "No window update result yet")
+                    })
+            }
+        })
+        .unwrap_or_else(|| tr(text, "等待本地服务状态", "Waiting for local service status"));
+    let label = format!(
+        "{}{}",
+        tr(text, "桌面对话同步：", "Desktop message sync: "),
+        detail
+    );
+    if tab.display_status.get_label() != label {
+        tab.display_status.set_label(&label);
+        tab.display_status.wrap(920);
+        tab.page.layout();
+        tab.page.fit_inside();
+    }
 }
 
 pub(super) fn bind_actions(
@@ -751,6 +423,28 @@ pub(super) fn bind_actions(
     text: GuiText,
     gui_tx: &tokio::sync::mpsc::UnboundedSender<super::GuiMessage>,
 ) {
+    let start_tab = tab.clone();
+    let start_api = api.clone();
+    let start_tx = gui_tx.clone();
+    tab.start_button.on_click(move |_| {
+        if !begin_action(
+            &start_tab,
+            tr(
+                text,
+                "正在启动并连接天工 Claw…",
+                "Starting and connecting GMClaw…",
+            ),
+        ) {
+            return;
+        }
+        let api = start_api.clone();
+        let tx = start_tx.clone();
+        thread::spawn(move || {
+            let result = api.start_gmclaw_desktop();
+            let _ = tx.send(super::GuiMessage::GmClaw(GmClawActionResult::Start(result)));
+            wxdragon::wake_up_idle();
+        });
+    });
     let entry_tab = tab.clone();
     tab.entry.on_selection_changed(move |_| {
         let mut status = match entry_tab.state.borrow().status.clone() {
@@ -897,7 +591,6 @@ pub(super) fn bind_actions(
         refresh(&reload_tab, &reload_api, text, &reload_tx, false);
     });
     refresh(tab, api, text, gui_tx, true);
-    bind_bridge_actions(tab, api, frame, text, gui_tx);
 }
 
 fn refresh(
@@ -976,50 +669,17 @@ pub(super) fn apply_result(
     text: GuiText,
     result: GmClawActionResult,
 ) {
-    // Keep the operation busy until its result is applied on the GUI thread.
-    if !matches!(
-        &result,
-        GmClawActionResult::BridgeRefresh(_) | GmClawActionResult::BridgeSave(_)
-    ) {
-        tab.in_flight.store(false, Ordering::SeqCst);
-    }
+    // Keep the model action busy until its result reaches the GUI thread.
+    tab.in_flight.store(false, Ordering::SeqCst);
     match result {
-        GmClawActionResult::BridgeRefresh(result) => {
-            tab.bridge.in_flight.store(false, Ordering::SeqCst);
-            match result {
-                Ok(config) => apply_bridge_config(&tab.bridge, text, config),
-                Err(error) => {
-                    *tab.bridge.original.borrow_mut() = None;
-                    tab.bridge.status.set_label(&format!(
-                        "{}\n{error}",
-                        tr(
-                            text,
-                            "桥接配置读取失败，请刷新重试。",
-                            "Could not load bridge configuration. Refresh to retry."
-                        )
-                    ));
-                }
-            }
-            update_bridge_controls(&tab.bridge);
-        }
-        GmClawActionResult::BridgeSave(result) => {
-            tab.bridge.in_flight.store(false, Ordering::SeqCst);
-            match result {
-                Ok(Some(config)) => {
-                    apply_bridge_config(&tab.bridge, text, config);
-                    tab.bridge.status.set_label(tr(text, "桥接配置已保存。请确认天工已使用相同 Token 启动，然后在已接入的 IM 会话中发送 /gmclaw。", "Bridge configuration saved. Start GMClaw with the same token, then send /gmclaw in a connected IM conversation."));
-                }
-                Ok(None) => {
-                    *tab.bridge.original.borrow_mut() = None;
-                    tab.bridge.status.set_label(tr(text, "桥接配置已保存，重新读取配置失败；再次保存前请刷新。", "Bridge configuration was saved, but could not be reloaded. Refresh before saving again."));
-                }
-                Err(error) => {
-                    *tab.bridge.original.borrow_mut() = None;
-                    tab.bridge.status.set_label(tr(text, "桥接配置未保存，请刷新后重试；当前输入仍保留。", "Bridge configuration was not saved. Refresh before retrying; your inputs are retained."));
-                    show_error(frame, &error);
-                }
-            }
-            update_bridge_controls(&tab.bridge);
+        GmClawActionResult::Start(Ok(detail)) => tab.status.set_label(&detail),
+        GmClawActionResult::Start(Err(error)) => {
+            tab.status.set_label(tr(
+                text,
+                "启动或连接未完成。",
+                "Startup or connection did not complete.",
+            ));
+            show_error(frame, &error);
         }
         GmClawActionResult::Refresh(Ok((providers, status))) => {
             tab.state.borrow_mut().providers = providers;
@@ -1076,7 +736,6 @@ pub(super) fn apply_result(
     }
     update_controls(tab);
     tab.status.wrap(920);
-    tab.bridge.status.wrap(920);
     tab.page.layout();
     tab.page.fit_inside();
 }
@@ -1552,6 +1211,7 @@ fn update_controls(tab: &GmClawTab) {
             .any(|model| model.eq_ignore_ascii_case(&tab.model.get_value()))
     });
     tab.reload_button.enable(!busy);
+    tab.start_button.enable(!busy);
     tab.entry.enable(ready);
     tab.make_active.enable(ready);
     let selected = state

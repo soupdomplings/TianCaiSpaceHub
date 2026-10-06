@@ -304,7 +304,7 @@ fn fetch_update_manifest(
 fn fetch_update_text(text: GuiText, client: &Client, url: &str) -> Result<String, String> {
     let response = client
         .get(url)
-        .header("User-Agent", "codexhub")
+        .header("User-Agent", "TianCaiSpaceHub")
         .header("Accept", "application/json")
         .send()
         .map_err(|err| {
@@ -615,7 +615,7 @@ fn download_update(
     .map_err(|err| text.update_client_failed(&update_error_details(&err)))?;
     let mut response = client
         .get(url)
-        .header("User-Agent", "codexhub")
+        .header("User-Agent", "TianCaiSpaceHub")
         .send()
         .map_err(|err| text.update_download_failed(url, &update_error_details(&err)))?;
     let status = response.status();
@@ -703,33 +703,33 @@ fn update_download_path(url: &str, asset_type: Option<&str>) -> Result<PathBuf, 
         })
         .collect::<String>();
     Ok(std::env::temp_dir()
-        .join("CodexHubUpdates")
+        .join("TianCaiSpaceHubUpdates")
         .join(safe_filename))
 }
 
 fn default_update_filename(asset_type: Option<&str>) -> &'static str {
     match asset_type.unwrap_or_default().to_ascii_lowercase().as_str() {
-        "msi" => "CodexHub-update.msi",
-        "dmg" => "CodexHub-update.dmg",
-        "app-zip" => "CodexHub-update.app.zip",
-        "zip" => "CodexHub-update.zip",
+        "msi" => "TianCaiSpaceHub-update.msi",
+        "dmg" => "TianCaiSpaceHub-update.dmg",
+        "app-zip" => "TianCaiSpaceHub-update.app.zip",
+        "zip" => "TianCaiSpaceHub-update.zip",
         _ => default_platform_update_filename(),
     }
 }
 
 #[cfg(target_os = "windows")]
 fn default_platform_update_filename() -> &'static str {
-    "CodexHub-update.msi"
+    "TianCaiSpaceHub-update.msi"
 }
 
 #[cfg(target_os = "macos")]
 fn default_platform_update_filename() -> &'static str {
-    "CodexHub-update.dmg"
+    "TianCaiSpaceHub-update.dmg"
 }
 
 #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
 fn default_platform_update_filename() -> &'static str {
-    "CodexHub-update"
+    "TianCaiSpaceHub-update"
 }
 
 fn launch_downloaded_update(
@@ -1027,7 +1027,7 @@ mod update_tests {
         assert!(windows.contains("make_latest: false"));
         assert!(linux.contains("make_latest: false"));
         assert!(macos.contains("make_latest: ${{ contains(github.ref_name, '-')"));
-        assert!(macos.contains("required=(latest-windows.json latest-linux.json)"));
+        assert!(macos.contains("required=(latest-windows.json)"));
         assert!(macos.contains("refusing to promote it to Latest"));
     }
 
@@ -1043,7 +1043,7 @@ mod update_tests {
         assets.insert(
             "macos-universal".to_string(),
             UpdateAsset {
-                url: Some("https://example.test/CodexHub.dmg".to_string()),
+                url: Some("https://example.test/TianCaiSpaceHub.dmg".to_string()),
                 sha256: None,
                 asset_type: Some("dmg".to_string()),
             },
@@ -1051,7 +1051,7 @@ mod update_tests {
         assets.insert(
             "macos-sparkle-universal".to_string(),
             UpdateAsset {
-                url: Some("https://example.test/CodexHub.app.zip".to_string()),
+                url: Some("https://example.test/TianCaiSpaceHub.app.zip".to_string()),
                 sha256: None,
                 asset_type: Some("app-zip".to_string()),
             },
@@ -1066,7 +1066,7 @@ mod update_tests {
             platform_download_for_platform(UpdatePlatform::Macos, &manifest)
                 .expect("macOS manifest download")
                 .url,
-            "https://example.test/CodexHub.dmg"
+            "https://example.test/TianCaiSpaceHub.dmg"
         );
     }
 
@@ -1097,7 +1097,7 @@ mod update_tests {
         assets.insert(
             "windows-x86_64".to_string(),
             UpdateAsset {
-                url: Some("https://example.test/CodexHub.msi".to_string()),
+                url: Some("https://example.test/TianCaiSpaceHub.msi".to_string()),
                 sha256: None,
                 asset_type: Some("msi".to_string()),
             },
@@ -1105,7 +1105,7 @@ mod update_tests {
         assets.insert(
             "linux-x86_64".to_string(),
             UpdateAsset {
-                url: Some("https://example.test/CodexHub.tar.gz".to_string()),
+                url: Some("https://example.test/TianCaiSpaceHub.tar.gz".to_string()),
                 sha256: None,
                 asset_type: Some("tar.gz".to_string()),
             },
@@ -1121,13 +1121,13 @@ mod update_tests {
             platform_download_for_platform(UpdatePlatform::Windows, &manifest)
                 .expect("windows download")
                 .url,
-            "https://example.test/CodexHub.msi"
+            "https://example.test/TianCaiSpaceHub.msi"
         );
         assert_eq!(
             platform_download_for_platform(UpdatePlatform::Linux, &manifest)
                 .expect("linux download")
                 .url,
-            "https://example.test/CodexHub.tar.gz"
+            "https://example.test/TianCaiSpaceHub.tar.gz"
         );
     }
 
@@ -1135,7 +1135,7 @@ mod update_tests {
     #[test]
     fn windows_update_launcher_waits_for_current_process_before_msi() {
         let script = windows_deferred_msi_script(
-            std::path::Path::new(r"C:\Temp\CodexHub Update's.msi"),
+            std::path::Path::new(r"C:\Temp\TianCaiSpaceHub Update's.msi"),
             4242,
         );
 
@@ -1144,7 +1144,7 @@ mod update_tests {
 
         assert!(wait_index < start_index);
         assert!(script.contains("Get-Process -Id 4242"));
-        assert!(script.contains("'C:\\Temp\\CodexHub Update''s.msi'"));
+        assert!(script.contains("'C:\\Temp\\TianCaiSpaceHub Update''s.msi'"));
         assert!(script.contains("'msiexec.exe'"));
     }
 }

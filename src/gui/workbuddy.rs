@@ -67,6 +67,7 @@ pub(super) struct WorkBuddyTab {
     delete_button: Button,
     restore_button: Button,
     reload_button: Button,
+    start_button: Button,
     status: StaticText,
     in_flight: Arc<AtomicBool>,
     provider_options: WorkBuddyProviderOptions,
@@ -81,6 +82,7 @@ struct WorkBuddySelection {
 
 #[derive(Debug)]
 pub(super) enum WorkBuddyActionResult {
+    Start(Result<String, String>),
     Save(Result<WorkBuddyConfigStatus, String>),
     Restore(Result<WorkBuddyConfigStatus, String>),
     Delete(Result<WorkBuddyConfigStatus, String>),
@@ -109,8 +111,8 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> WorkBuddyTab {
     let (connection_box, connection_section) = card_section(&page, text.workbuddy_connection());
     let hint = StaticText::builder(&connection_box)
         .with_label(tr(text,
-            "每个模型独立选择来源渠道、协议与思考设置，保存后在 WorkBuddy 中选择使用。同一模型可通过不同渠道重复添加。这里的选择只决定编辑对象，不改变 WorkBuddy 默认模型。",
-            "Each model has its own source, protocol, and reasoning settings. Select it in WorkBuddy after saving. You can add the same model through multiple sources. This selector chooses what to edit; it does not change WorkBuddy's default model."))
+            "每个模型独立选择来源渠道、协议与思考设置，保存后在 WorkBuddy 中选择使用。同一模型可通过不同渠道重复添加。这里的选择只决定编辑对象，不改变 WorkBuddy 默认模型。\n飞书、微信、企业微信中的 /wb 目前仅保留入口，尚不支持 WorkBuddy 桌面任务接入，不会改变当前执行端。",
+            "Each model has its own source, protocol, and reasoning settings. Select it in WorkBuddy after saving. You can add the same model through multiple sources. This selector chooses what to edit; it does not change WorkBuddy's default model.\nIn Feishu, WeChat, and WeCom, /wb is reserved. WorkBuddy desktop task integration is unavailable and the selected executor stays unchanged."))
         .build();
     hint.set_foreground_color(theme::theme().ink_muted);
     hint.wrap(920);
@@ -307,6 +309,9 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> WorkBuddyTab {
     let reload_button = Button::builder(&page)
         .with_label(text.workbuddy_reload())
         .build();
+    let start_button = Button::builder(&page)
+        .with_label(tr(text, "启动 WorkBuddy", "Start WorkBuddy"))
+        .build();
     let restore_button = Button::builder(&page)
         .with_label(tr(text, "撤销上次操作", "Undo last operation"))
         .build();
@@ -316,6 +321,7 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> WorkBuddyTab {
     let delete_button = Button::builder(&page)
         .with_label(tr(text, "删除所选模型", "Delete selected model"))
         .build();
+    actions.add(&start_button, 0, SizerFlag::Right, 8);
     actions.add(&reload_button, 0, SizerFlag::Right, 8);
     actions.add(&restore_button, 0, SizerFlag::Right, 8);
     actions.add(&save_button, 0, SizerFlag::Right, 8);
@@ -368,6 +374,7 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> WorkBuddyTab {
         delete_button,
         restore_button,
         reload_button,
+        start_button,
         status,
         in_flight: Arc::new(AtomicBool::new(false)),
         provider_options: Rc::new(RefCell::new(Vec::new())),
@@ -387,6 +394,26 @@ pub(super) fn bind_actions(
     text: GuiText,
     gui_tx: &tokio::sync::mpsc::UnboundedSender<super::GuiMessage>,
 ) {
+    let start_tab = tab.clone();
+    let start_api = api.clone();
+    let start_tx = gui_tx.clone();
+    tab.start_button.on_click(move |_| {
+        if !begin_action(
+            &start_tab,
+            tr(text, "正在启动 WorkBuddy…", "Starting WorkBuddy…"),
+        ) {
+            return;
+        }
+        let api = start_api.clone();
+        let tx = start_tx.clone();
+        thread::spawn(move || {
+            let result = api.start_workbuddy_desktop();
+            let _ = tx.send(super::GuiMessage::WorkBuddy(WorkBuddyActionResult::Start(
+                result,
+            )));
+            wxdragon::wake_up_idle();
+        });
+    });
     let entry_tab = tab.clone();
     tab.entry.on_selection_changed(move |_| {
         if entry_tab.in_flight.load(Ordering::SeqCst) {
@@ -533,6 +560,12 @@ pub(super) fn apply_result(
     // Only release the busy state after applying the reply on the GUI thread.
     tab.in_flight.store(false, Ordering::SeqCst);
     match result {
+        WorkBuddyActionResult::Start(Ok(detail)) => tab.status.set_label(&detail),
+        WorkBuddyActionResult::Start(Err(error)) => {
+            tab.status
+                .set_label(tr(text, "启动未完成。", "Startup did not complete."));
+            show_error(frame, &error);
+        }
         WorkBuddyActionResult::Save(Ok(status)) => {
             apply_status(tab, status);
             tab.status.set_label(text.workbuddy_saved());
@@ -577,6 +610,9 @@ pub(super) fn apply_result(
         }
     }
     update_controls(tab);
+    tab.status.wrap(920);
+    tab.page.layout();
+    tab.page.fit_inside();
 }
 
 fn refresh_configuration(
@@ -1011,6 +1047,7 @@ fn update_controls(tab: &WorkBuddyTab) {
             .any(|model| model.eq_ignore_ascii_case(&tab.model.get_value()))
     });
     tab.reload_button.enable(!busy);
+    tab.start_button.enable(!busy);
     tab.entry.enable(editable);
     tab.provider.enable(editable);
     tab.model.enable(editable && provider.is_some());

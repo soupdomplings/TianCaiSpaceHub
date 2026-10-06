@@ -5,6 +5,7 @@ mod app_state;
 mod bridge;
 mod chain_log;
 mod cli;
+mod client_overview;
 mod codex;
 mod codex_app_config;
 mod codex_app_enhanced;
@@ -14,8 +15,10 @@ mod daemon_process;
 mod diagnostics_export;
 mod external_import;
 mod gmclaw_config;
+mod gmclaw_desktop;
 mod gmclaw_executor;
 mod gmclaw_im;
+mod gmclaw_runtime;
 #[cfg(feature = "gui")]
 mod gui;
 mod im;
@@ -103,7 +106,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
     tracing::info!(
         target: "codexhub::logging",
         path = %log_path.display(),
-        "codexhub chain log initialized"
+        "TianCaiSpaceHub chain log initialized"
     );
     if should_save_config {
         config.save(&config_path)?;
@@ -191,7 +194,7 @@ fn run_gui_command() -> anyhow::Result<()> {
 
     #[cfg(not(feature = "gui"))]
     {
-        anyhow::bail!("this codexhub build does not include GUI support")
+        anyhow::bail!("this TianCaiSpaceHub build does not include GUI support")
     }
 }
 
@@ -235,8 +238,8 @@ async fn run_daemon(config_path: PathBuf, config: AppConfig) -> anyhow::Result<(
         .parse()
         .with_context(|| format!("invalid bind address `{bind}`"))?;
     tracing::info!(target: "codexhub::startup", addr = %addr, "binding local service");
-    let listener = TcpListener::bind(addr).await?;
-    println!("codexhub web: http://{addr}");
+    let listener = bind_service_listener(addr).await?;
+    println!("TianCaiSpaceHub web: http://{addr}");
     tracing::info!(target: "codexhub::startup", addr = %addr, "local service listener ready");
 
     // Environment-variable updates can synchronously broadcast WM_SETTINGCHANGE
@@ -303,13 +306,17 @@ async fn run_daemon(config_path: PathBuf, config: AppConfig) -> anyhow::Result<(
         }
     });
     tokio::spawn(run_daemon_startup_tasks(state.clone()));
+    tokio::spawn(gmclaw_runtime::run_connection_monitor(
+        state.clone(),
+        server_shutdown_rx.clone(),
+    ));
 
     let companion = compatible_loopback_addr(addr);
     let mut companion_tasks = Vec::new();
     if let Some(companion_addr) = companion {
-        match TcpListener::bind(companion_addr).await {
+        match bind_service_listener(companion_addr).await {
             Ok(companion_listener) => {
-                println!("codexhub web: http://{companion_addr}");
+                println!("TianCaiSpaceHub web: http://{companion_addr}");
                 companion_tasks.push(tokio::spawn(serve_http(
                     companion_listener,
                     app.clone(),
@@ -385,6 +392,31 @@ fn compatible_loopback_addr(addr: SocketAddr) -> Option<SocketAddr> {
             Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port))
         }
         _ => None,
+    }
+}
+
+async fn bind_service_listener(addr: SocketAddr) -> std::io::Result<TcpListener> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawSocket;
+        use windows_sys::Win32::Foundation::{HANDLE, HANDLE_FLAG_INHERIT, SetHandleInformation};
+
+        // Mio's Windows socket() listener is inheritable. Rust's std listener
+        // is created with WSA_FLAG_NO_HANDLE_INHERIT, avoiding the interval
+        // between socket creation and flag clearing in a concurrent spawn.
+        let listener = std::net::TcpListener::bind(addr)?;
+        let cleared = unsafe {
+            SetHandleInformation(listener.as_raw_socket() as HANDLE, HANDLE_FLAG_INHERIT, 0)
+        };
+        if cleared == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        listener.set_nonblocking(true)?;
+        TcpListener::from_std(listener)
+    }
+    #[cfg(not(windows))]
+    {
+        TcpListener::bind(addr).await
     }
 }
 
@@ -575,7 +607,11 @@ fn init_logging(config: &AppConfig) -> anyhow::Result<PathBuf> {
     )?;
 
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env().add_directive("codexhub=info".parse()?))
+        .with_env_filter(
+            EnvFilter::from_default_env()
+                .add_directive("codexhub=info".parse()?)
+                .add_directive("TianCaiSpaceHub=info".parse()?),
+        )
         .with_ansi(false)
         .init();
     Ok(path)
@@ -604,7 +640,7 @@ async fn set_bridge_enabled(config_path: &Path, enabled: bool) -> anyhow::Result
     config.save(&config_path.to_path_buf())?;
     let _ = notify_daemon_bridge(&config, enabled).await;
     println!(
-        "codexhub Feishu bridge {}",
+        "TianCaiSpaceHub Feishu bridge {}",
         if enabled { "enabled" } else { "disabled" }
     );
     Ok(())
@@ -714,5 +750,25 @@ mod tests {
         let public_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 3847);
 
         assert_eq!(compatible_loopback_addr(public_addr), None);
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn service_listeners_do_not_pass_their_sockets_to_children() {
+        use std::os::windows::io::AsRawSocket;
+        use windows_sys::Win32::Foundation::{GetHandleInformation, HANDLE, HANDLE_FLAG_INHERIT};
+
+        for ip in [
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            IpAddr::V6(Ipv6Addr::LOCALHOST),
+        ] {
+            let listener = bind_service_listener(SocketAddr::new(ip, 0)).await.unwrap();
+            let mut flags = 0;
+            assert_ne!(
+                unsafe { GetHandleInformation(listener.as_raw_socket() as HANDLE, &mut flags) },
+                0
+            );
+            assert_eq!(flags & HANDLE_FLAG_INHERIT, 0);
+        }
     }
 }

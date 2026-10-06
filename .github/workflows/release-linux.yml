@@ -1,4 +1,4 @@
-﻿name: release-linux
+name: release-linux
 
 on:
   # Historical Linux packaging is available only when explicitly requested.
@@ -56,29 +56,29 @@ jobs:
       - name: Build Release
         run: |
           set -euo pipefail
-          cargo build --release --features gui --bin codexhub
-          strip target/release/codexhub
+          cargo build --release --features gui --bin TianCaiSpaceHub
+          strip target/release/TianCaiSpaceHub
 
       - name: Package Tarball
         run: |
           set -euo pipefail
           DIST_ROOT="target/dist"
-          PACKAGE_DIR="$DIST_ROOT/TianCaiSpace Hub Linux x86_64"
+          PACKAGE_DIR="$DIST_ROOT/TianCaiSpaceHub Linux x86_64"
           rm -rf "$DIST_ROOT"
           mkdir -p \
             "$PACKAGE_DIR/bin" \
             "$PACKAGE_DIR/share/applications" \
             "$PACKAGE_DIR/share/icons/hicolor/256x256/apps"
 
-          cp target/release/codexhub "$PACKAGE_DIR/bin/codexhub"
-          cp packaging/linux/codexhub.desktop "$PACKAGE_DIR/share/applications/codexhub.desktop"
-          cp assets/tci-hub-icon.png "$PACKAGE_DIR/share/icons/hicolor/256x256/apps/codexhub.png"
+          cp target/release/TianCaiSpaceHub "$PACKAGE_DIR/bin/TianCaiSpaceHub"
+          cp packaging/linux/TianCaiSpaceHub.desktop "$PACKAGE_DIR/share/applications/TianCaiSpaceHub.desktop"
+          cp assets/tci-hub-icon.png "$PACKAGE_DIR/share/icons/hicolor/256x256/apps/TianCaiSpaceHub.png"
           cp README.md README.en.md "$PACKAGE_DIR/"
           if [ -f config.example.toml ]; then
             cp config.example.toml "$PACKAGE_DIR/"
           fi
 
-          tar -C "$DIST_ROOT" -czf "$DIST_ROOT/TianCaiSpaceHub.Linux.x86_64.tar.gz" "TianCaiSpace Hub Linux x86_64"
+          tar -C "$DIST_ROOT" -czf "$DIST_ROOT/TianCaiSpaceHub.Linux.x86_64.tar.gz" "TianCaiSpaceHub Linux x86_64"
 
       - name: Build AppImage
         env:
@@ -93,10 +93,10 @@ jobs:
             "$APPDIR/usr/share/applications" \
             "$APPDIR/usr/share/icons/hicolor/256x256/apps"
 
-          cp target/release/codexhub "$APPDIR/usr/bin/codexhub"
-          cp packaging/linux/codexhub.desktop "$APPDIR/usr/share/applications/codexhub.desktop"
-          cp assets/tci-hub-icon.png "$APPDIR/usr/share/icons/hicolor/256x256/apps/codexhub.png"
-          desktop-file-validate "$APPDIR/usr/share/applications/codexhub.desktop"
+          cp target/release/TianCaiSpaceHub "$APPDIR/usr/bin/TianCaiSpaceHub"
+          cp packaging/linux/TianCaiSpaceHub.desktop "$APPDIR/usr/share/applications/TianCaiSpaceHub.desktop"
+          cp assets/tci-hub-icon.png "$APPDIR/usr/share/icons/hicolor/256x256/apps/TianCaiSpaceHub.png"
+          desktop-file-validate "$APPDIR/usr/share/applications/TianCaiSpaceHub.desktop"
 
           wget -q "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage"
           wget -q "https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh"
@@ -105,9 +105,9 @@ jobs:
           export LINUXDEPLOY_OUTPUT_VERSION="${VERSION#v}"
           ./linuxdeploy-x86_64.AppImage \
             --appdir "$APPDIR" \
-            --executable "$APPDIR/usr/bin/codexhub" \
-            --desktop-file "$APPDIR/usr/share/applications/codexhub.desktop" \
-            --icon-file "$APPDIR/usr/share/icons/hicolor/256x256/apps/codexhub.png" \
+            --executable "$APPDIR/usr/bin/TianCaiSpaceHub" \
+            --desktop-file "$APPDIR/usr/share/applications/TianCaiSpaceHub.desktop" \
+            --icon-file "$APPDIR/usr/share/icons/hicolor/256x256/apps/TianCaiSpaceHub.png" \
             --plugin gtk \
             --output appimage
 

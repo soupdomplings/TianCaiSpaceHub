@@ -297,11 +297,6 @@ impl Theme {
             Self::light()
         }
     }
-
-    /// `[u8; 4]` RGBA for use with the `IconCanvas` self-drawn bitmaps.
-    pub(super) fn rgba(colour: Colour, alpha: u8) -> [u8; 4] {
-        [colour.r, colour.g, colour.b, alpha]
-    }
 }
 
 // ---------------------------------------------------------------------------
