@@ -7,7 +7,7 @@ TianCaiSpaceHub v0.4.30-4
 - 保留同用户进程、精确页面与任务/会话保护，以及原生执行、审批、未保存消息与自有回复来源保护；同步不重载页面、不重启天工、不重放模型或工具任务。首次同步通道仍通过 Hub 启动天工启用。
 - 保留 Codex/WorkBuddy/天工多模型与专用入口隔离、自动重连、平台会话和审批流程、端口释放、完整项目目录、回复状态及全部既有二开。无配置迁移，回退 `v0.4.30-3` 会恢复原版本限制。
 
-发布进度：唯一 `main`、`v0.4.30-4` 注释标签及非草稿 Pre-release 已发布。Windows Actions 构建、上传及四个附件的下载静态核验通过，Windows 包未签名。macOS 首次双架构构建和 ad-hoc 验证通过，但 DMG 内部卷空间不足导致打包失败；工作流改用显式 HFS+ 容量并验证映像，支持以新工作流重建原标签，标签和已通过的 Windows 包保持原身份，macOS 重建待完成。源码、Actions 与附件见 [本版交付](docs/releases/v0.4.30-4.md)。两平台消息同步、新版天工兼容及安装升级待用户验收，未启动客户端或执行业务测试。
+已推送唯一 `main` 和 `v0.4.30-4` 注释标签，并创建非草稿 Pre-release（`Latest=false`）。Windows/macOS GitHub Actions 原生构建与打包均成功；四个安装包及四份更新附件已上传、下载并通过哈希、清单和结构静态核验。macOS 首次 DMG 容量不足失败，修复工作流后重建原标签成功，源码标签与已核验 Windows 包保持原身份。Windows 包未签名，macOS universal App 为 ad-hoc 签名且未公证；完整源码、Actions 和产物身份见 [本版交付](docs/releases/v0.4.30-4.md)。本轮 Windows locked GUI/测试代码编译通过，保留程序 36 条及测试代码 59 条（20 条重复）警告；开发方未执行测试夹具、启动客户端或真实业务。构建与包核验不替代用户实机验收，两平台消息同步、新版天工兼容及安装升级仍待验收。
 
 实现与回滚见 [天工外部消息](docs/customizations/gmclaw-im.md)、[模型接入](docs/customizations/gmclaw.md) 及 [品牌与交付](docs/customizations/desktop-and-packaging.md)。此前发布历史保留原版本事实。
 

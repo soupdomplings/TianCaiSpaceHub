@@ -4,6 +4,15 @@
 
 追溯依据为本地 Git 历史、现有专题和发布说明。历史条目的版本、提交可定位，不补造发布或验收结论；测试数量只属于原记录对应的代码。
 
+## v0.4.30-4 发布核验 · 2026-10-07 · Windows 与 macOS 附件齐备
+
+关联 TC-007、TC-012；产品源码 `7b5dd6e02d135bf1109cab9c5632853728f6a487`、原注释标签 `v0.4.30-4` 和非草稿 Pre-release 保持不变。CI 修复提交 `1bd8ffd6a5bae243a3513325fcf23bb4d2c48bce` 已进入唯一 `main`，Mac 同标签 dispatch [37492460126](https://github.com/soupdomplings/TianCaiSpaceHub/actions/runs/37492460126)（运行号 `17`）成功，31 分 4 秒；实际 checkout 与 Prepare Source 日志确认产品来源仍为原标签 `7b5dd6e…`，工作流身份另记，不移动产品标签。
+
+- 最终结果：Windows [37485845155](https://github.com/soupdomplings/TianCaiSpaceHub/actions/runs/37485845155) 与 Mac 重建均成功，四个安装包及四份更新附件已上传、下载到 `outputs/releases/v0.4.30-4/` 并核对 GitHub digest、大小、哈希及更新清单；Mac 两清单的 Intel 映射与 universal 对象一致。Windows EXE/MSI 品牌/版本/PE/只读表通过，均未签名；Mac ZIP CRC、bundle/plist、arm64/x86_64 两切片及 ad-hoc 签名结构通过，实际 codesign 核验来自 Actions，Developer ID/公证跳过。DMG 本机仅核 UDIF，不挂载或解包。
+- 打包修复验证：实际逻辑字节数 `88,148,046`，新 HFS+ 容量 `297 MiB` 与公式一致，Actions `hdiutil verify` checksum `VALID`。首次 Mac [37485845411](https://github.com/soupdomplings/TianCaiSpaceHub/actions/runs/37485845411) 的 DMG 失败与 2026-10-06 修复过程保留原事实，不将成功结果回写为首次成功；Windows 已核验资产不替换。
+- 兼容与验收：旧 `e7b3fba8…`/`c0952f61…` 调试 EXE 与 `v0.4.30-3` 八项附件重新核对后保持原身份，配置/安装资源/系统关联不变。没有本地生成安装包、执行应用/测试或真实业务；两平台同步、天工升级/重打包、只读/未知结构、原生执行/审批/草稿及安装升级/回滚仍待用户验收，构建和包静态核验不等于功能通过。
+- 文档：同步 [本版交付](../releases/v0.4.30-4.md)、[品牌与交付](desktop-and-packaging.md)、索引/总表和有关专题及根发布摘要；发布后核验文档使用单独提交进入 `main`，不移动产品标签或改包，具体文档提交身份由交付清单保存。
+
 ## v0.4.30-4 CI 修复 · 2026-10-06 · macOS DMG 容量与同标签重建
 
 关联 TC-007；本版产品源码 `7b5dd6e02d135bf1109cab9c5632853728f6a487` 已推送唯一 `main`，注释标签 `v0.4.30-4` 与非草稿 Pre-release 已公开。Windows Actions [37485845155](https://github.com/soupdomplings/TianCaiSpaceHub/actions/runs/37485845155) 成功，四项附件下载/哈希/清单/PE/MSI 静态核验通过，EXE/MSI 未签名；macOS 首次 [37485845411](https://github.com/soupdomplings/TianCaiSpaceHub/actions/runs/37485845411) 完成双架构编译/ad-hoc 签名，但 DMG 创建时镜像卷空间不足，跨平台交付待完成。源码发布不等于 Mac 包已交付，首次失败事实保留。

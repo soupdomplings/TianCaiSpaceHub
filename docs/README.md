@@ -1,6 +1,6 @@
 # TianCaiSpaceHub 文档总入口
 
-维护日期：2026-10-06。`v0.4.30-4` 源码 `7b5dd6e…`、注释标签与非草稿 Pre-release 已推送/公开，只维护唯一 `main`，不建版本分支。本版 Windows locked GUI/测试代码编译及 Windows Actions 成功，MSI/ZIP 与两份更新附件已下载静态核验；macOS 双架构编译和 ad-hoc 签名完成，但首次 DMG 创建因镜像卷容量不足失败，当前准备修复 CI 并按原标签重建。完整两平台交付仍未完成，实际来源、Actions 与产物见 [v0.4.30-4 交付记录](releases/v0.4.30-4.md)。上游仍为 CodexHub `v0.4.30`，前版历史见 [v0.4.30-3](releases/v0.4.30-3.md) 与 [v0.4.30-2](releases/v0.4.30-2.md)。
+维护日期：2026-10-07。`v0.4.30-4` 产品源码 `7b5dd6e…`、注释标签与非草稿 Pre-release 已公开，只维护唯一 `main`。Windows Actions 与 macOS 修复后按原标签重建均成功，四个安装包和四份更新附件已下载并静态核验；Windows 未签名，Mac universal 为 ad-hoc 签名、未公证。首次 Mac DMG 失败、工作流修复 `1bd8ffd6…` 与原产品源码分别保留，实机行为仍待用户验收；发布后核验文档使用单独提交进入 `main`，不移动标签或改包。实际来源、运行与产物见 [v0.4.30-4 交付记录](releases/v0.4.30-4.md)，上游仍为 CodexHub `v0.4.30`，前版历史见 [v0.4.30-3](releases/v0.4.30-3.md) 与 [v0.4.30-2](releases/v0.4.30-2.md)。
 
 `v0.4.30-4` 承接此前未发布修改：天工桌面即时同步移除 `1.1.1` 版本号、固定 renderer 文件名和资源 SHA-256 白名单，改按已安装天工的应用身份、renderer HTML 脚本入口及运行时字段能力识别；组件名称/Closure 与 Block 布局不再单独决定兼容，实际写入 Ref 与缓存须可写，异步读取后重新核对。兼容结构的天工版本均可尝试同步；未知或只读结构仅停止页面更新，保留已保存消息与 IM 执行。此修改未包含在已下载的 `v0.4.30-3` 包中；前版限制、构建与用户反馈保留原归属，不作为本轮验收。发布前 `e7b3fba8…` 调试 EXE 的版本仍为 `0.4.30-3`，不能代替本版 Actions 包。
 
@@ -23,7 +23,7 @@
 | 开发时知道必须更新哪些文档 | [文档规划与维护规范](development/documentation.md) |
 | 配置 WorkBuddy 模型、启动桌面及了解 `/wb` 边界 | [WorkBuddy 使用说明](workbuddy.md) |
 | 区分普通渠道与 WorkBuddy/天工专用渠道 | [接入点用途与隔离](customizations/client-channel-scope.md) |
-| 获取当前 GitHub 交付、安装包及验收边界 | [v0.4.30-4 交付（Windows 已核验，Mac 重建待完成）](releases/v0.4.30-4.md) |
+| 获取当前 GitHub 交付、两平台安装包与验收边界 | [v0.4.30-4 发布交付](releases/v0.4.30-4.md) |
 | 查看此前已发布包及原版本身份 | [v0.4.30-3 发布交付](releases/v0.4.30-3.md) |
 | 管理天工 Claw 多模型、参数、备份及上游流式兼容 | [天工 Claw 模型接入](customizations/gmclaw.md) |
 | 启停 Hub/天工、选择完整项目目录、回复状态、会话同步与审批 | [天工外部消息执行端](customizations/gmclaw-im.md) |

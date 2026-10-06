@@ -1,8 +1,8 @@
 # 天才空间品牌、桌面行为与交付
 
-维护日期：2026-10-06。当前预发布 `v0.4.30-3` 汇总 `v0.4.30-2` 之后全部本地二开：统一命名、接入页概览与启动、自动授权/重连、共用会话、真实桌面历史/消息、原生状态/步数、局部显示同步、平台审批、退出端口/完整项目/临时回复状态。关联 TC-001、TC-007、TC-011、TC-012；实际发布进度见 [v0.4.30-3](../releases/v0.4.30-3.md)，已发布前版仍见 [v0.4.30-2](../releases/v0.4.30-2.md)。网页导入见 [专门说明](../hub-external-import.md)，上游来源见 [v0.4.30 整合](../upstream-v0.4.30-integration.md)。
+维护日期：2026-10-07。当前预发布 `v0.4.30-4` 承接统一命名、接入页概览/启动、自动重连、共用会话、原生历史/消息/状态、平台审批、退出端口/完整项目/临时回复等二开；新增天工同步版本/固定资源解锁与可写保护。关联 TC-001、TC-007、TC-011、TC-012；完整产物身份见 [v0.4.30-4](../releases/v0.4.30-4.md)，前版 [v0.4.30-3](../releases/v0.4.30-3.md) 与 [v0.4.30-2](../releases/v0.4.30-2.md) 保留原事实。网页导入见 [专门说明](../hub-external-import.md)，上游来源见 [v0.4.30 整合](../upstream-v0.4.30-integration.md)。
 
-`v0.4.30-4` 产品源码 `7b5dd6e…`、注释标签与非草稿 Pre-release 已推送/公开，承接天工版本/固定资源解锁及可写保护。Windows locked 编译与 Windows Actions 成功，四项附件下载静态核验通过；Mac 双架构编译/ad-hoc 签名完成但首次 DMG 因镜像卷容量不足失败，当前修复 CI 并准备同标签重建，完整交付见 [v0.4.30-4](../releases/v0.4.30-4.md)。该行为不在前版包中，旧版与发布前调试 EXE 的构建/验收保持原身份，不覆盖历史产物。
+`v0.4.30-4` 产品源码 `7b5dd6e…`、注释标签与非草稿 Pre-release 已公开。Windows Actions 与 Mac 修复后同标签重建均成功，八项附件下载静态核验通过；Windows 未签名，Mac universal ad-hoc 且未公证。首次 DMG 失败、工作流修复 `1bd8ffd6…` 与产品源码分开记录，运行程序和升级/同步效果仍待用户验收。旧版与调试 EXE 保持原身份，发布后核验文档使用单独提交进入 `main`，不移动产品标签或改变安装包。
 
 ## 名称与兼容身份
 
@@ -83,9 +83,9 @@ macOS 保持 `com.codexhub.app` 的安装身份，完整 App 声明导入协议�
 
 ## 当前交付状态
 
-### 本轮：v0.4.30-4 预发布，macOS 重建待完成
+### 本轮：v0.4.30-4 预发布，两平台包已核验
 
-基线为唯一 `main` 的 `8cfebe6`，产品源码 `7b5dd6e02d135bf1109cab9c5632853728f6a487`（20 个变更文件）已快进推送唯一 `main`；注释标签对象 `e020eda…` 指向该源码，`v0.4.30-4` 非草稿 Pre-release 已公开、`Latest=false`，不建版本分支。本版 Windows locked GUI/测试代码编译通过，Windows Actions [37485845155](https://github.com/soupdomplings/TianCaiSpaceHub/actions/runs/37485845155) 成功；MSI/ZIP 与两份更新附件已下载并静态核验，EXE/MSI `NotSigned`。首次 Mac Actions [37485845411](https://github.com/soupdomplings/TianCaiSpaceHub/actions/runs/37485845411) 完成双架构编译和 ad-hoc 签名，但 DMG 创建失败，修复后同标签重建及最终包核验待完成。实际文件、哈希、来源与签名见 [本版交付](../releases/v0.4.30-4.md)，前版结果不作为本版证据。
+基线为唯一 `main` 的 `8cfebe6`，产品源码 `7b5dd6e02d135bf1109cab9c5632853728f6a487`（20 个变更文件）已推送；注释标签对象 `e020eda…` 指向该源码，非草稿 Pre-release `Latest=false`，不建版本分支。Windows [37485845155](https://github.com/soupdomplings/TianCaiSpaceHub/actions/runs/37485845155) 成功；Mac 首次 [37485845411](https://github.com/soupdomplings/TianCaiSpaceHub/actions/runs/37485845411) 失败于 DMG，工作流修复 `1bd8ffd6…` 后按原标签重建 [37492460126](https://github.com/soupdomplings/TianCaiSpaceHub/actions/runs/37492460126) 成功，运行号 `17`、31 分 4 秒，产品源码仍 `7b5dd6e…`。八项附件已上传/下载并静态核验，Windows EXE/MSI 未签名，Mac universal ad-hoc 且未公证；安装运行与功能验收另列，完整哈希/身份见 [交付记录](../releases/v0.4.30-4.md)。
 
 本版承接此前去除同步 `version == 1.1.1`、固定 renderer JS 文件名与 SHA-256 门槛的修改，改核对已安装天工应用身份、renderer HTML 声明的本地脚本入口和 App/ChatPanel 运行时字段能力；版本变化或重新打包但结构兼容时不再被版本白名单阻止。保留同用户/监听归属、唯一准确页面、精确任务/会话、原生执行/审批/未保存状态和自有回复行来源保护。没有稳定接口且运行时结构不兼容时仍停止页面修改，不能推定所有未来版本均已验收。
 
@@ -93,13 +93,13 @@ macOS 保持 `com.codexhub.app` 的安装身份，完整 App 声明导入协议�
 
 不新增 TOML 或关联文件字段，不迁移天工数据库，不修改安装资源、运行配置、系统环境或持久启动项。回退已发布 `v0.4.30-3` 会恢复固定版本和资源门槛，已经保存的模型、任务和消息保留；退出或回退 Hub 不会取消天工任务。初次使用同步通道仍需从 Hub 启动天工，既有运行中实例不强制重启。
 
-#### 本版 macOS 打包修复（待重建）
+#### 本版 macOS 打包修复与成功重建
 
-首次 DMG 失败时宿主仍有约 43 GiB 空闲，报错来自新镜像内卷容量不足。CI 改按 staging 中常规文件逻辑字节数生成明确 HFS+ 大小：`max(256, ceil(逻辑字节数 × 2 / MiB) + 128)` MiB，忽略 `/Applications` 符号链接，Developer ID 和 ad-hoc 路径复用 builder；创建 UDZO 后执行 `hdiutil verify`。新增可选 `workflow_dispatch.release_tag`，从新版 `main` 工作流重建既有完整标签，checkout 原标签源码并核对 Cargo 完整版本与源提交；清单和上传均绑定该标签。不移动产品标签或替换已核验 Windows 附件，工作流提交与产品源码 `7b5dd6e…` 分开登记；修复提交、实际重建运行与 Mac 包核验待完成。输入留空时普通分支构建继续只上传 artifact。
+首次 DMG 失败时宿主仍有约 43 GiB 空闲，报错来自新镜像内卷容量不足。CI 改按 staging 中常规文件逻辑字节数生成明确 HFS+ 大小：`max(256, ceil(逻辑字节数 × 2 / MiB) + 128)` MiB，忽略 `/Applications` 符号链接，Developer ID 和 ad-hoc 路径复用 builder；创建 UDZO 后执行 `hdiutil verify`。新增可选 `workflow_dispatch.release_tag`，从更新后 `main` 工作流 checkout 既有完整标签源码，核对 Cargo/标签与实际提交；清单和上传绑定该标签，不移标签或替换 Windows 资产。修复提交 `1bd8ffd6a5bae243a3513325fcf23bb4d2c48bce` 已推送，重建 `37492460126` 使用产品源码 `7b5dd6e…`；实际逻辑文件 `88,148,046` 字节、明确容量 `297 MiB`，Actions `hdiutil verify` 的 checksum 为 `VALID`，打包/清单/上传均成功。输入留空的普通分支构建仍只上传 artifact。
 
 回退该 CI 修改可撤销工作流修复，不能重写产品标签或已交付包；再次使用原容量估算可能重现 DMG 失败。发布包仍全部由 Actions 生成，本机不打包、挂载或运行 Mac App。该修复不修改运行配置、桌面安装资源或天工同步协议。
 
-工作流 YAML 解析、10 个 run 块 `bash -n` 和 3 个内嵌 Python 语法编译已通过，未执行工作流命令或真实业务；Mac 实际打包/镜像验证仍待修复提交后的新 Actions。Windows 既有核验与产品标签保持不变，不将静态脚本通过记录成 Mac 打包成功。
+修复前本地 YAML 解析、10 个 run 块 `bash -n` 和 3 个内嵌 Python 语法编译通过，未本地执行工作流命令；实际 Mac 打包/镜像验证来自上述成功 Actions。下载的 App ZIP CRC/结构、plist 品牌与短版本 `0.4.30`/build `17`、完整 `0.4.30-4`、arm64/x86_64 两切片和 ad-hoc 签名结构均通过；实际 codesign 校验来自 Actions，Developer ID/公证跳过。Mac 程序 `84,799,456` 字节、SHA-256 `e90b3ade…`，DMG 本机只核 UDIF 不挂载/解包。八项附件与旧版包核验见交付记录；这些结果不替代实机同步或安装验收。
 
 #### 发布前实现阶段核对（0.4.30-3 调试身份）
 
@@ -107,7 +107,7 @@ macOS 保持 `com.codexhub.app` 的安装身份，完整 App 声明导入协议�
 
 该阶段独立 Windows 调试程序为 `target/tg-version-independent-sync-20261006/x86_64-pc-windows-msvc/debug/TianCaiSpaceHub.exe`，大小 `58,543,616` 字节，SHA-256 `e7b3fba8bfae44da0d5d5ad4bce0bf81fca36f408d2d7931558e97c7d969268d`。PE 身份为 AMD64 `0x8664` / PE32+ `0x020b` / GUI subsystem `2`，品牌为 `TianCaiSpaceHub`、`OriginalFilename=TianCaiSpaceHub.exe`、`FileVersion=0.4.30-3`。这是发布前功能核对的本地调试 EXE，既不是已发布 `v0.4.30-3` 的 Actions 安装包，也不是本版 `0.4.30-4` 程序；同版号不能代替来源与哈希核对。忽略目录记录为 `.build-tools/tg-version-independent-check-final.log`、`tg-version-independent-build-final.log` 与 `tg-version-independent-build-manifest.json`；此前 `c0952f61…` 调试 EXE 和已下载的 8 个前版 Release 附件均保持不变。
 
-功能已实现，发布前实现阶段完成上述 Windows 必要编译与静态产物核对；本版候选 Windows locked GUI/测试代码编译已通过（31.28 秒，程序 36 条警告、测试代码 59 条，其中 20 条重复），日志 `.build-tools/release-v0.4.30-4-check.log`，只执行 check、不生成或覆盖 debug EXE。本版 272 个指定源码/资源文件指纹为 `46d4b650efd4f6dd158def2f1722243ab4f09315fefb62794a276e584065cec2`，源码提交前 12 份文档 607 个本地文件链接有效；Windows Actions 包核验通过、Mac 重建待完成，不复用旧源码或产物身份。测试夹具和 renderer 函数不执行，未启动应用或真实业务，没有读取用户私有数据库/日志/运行口令或修改运行配置、安装资源、系统环境/关联。两平台实机同步、天工升级/重新打包兼容及未知结构、执行/审批/草稿保护仍待用户验收；不本地生成安装包，不覆盖此前交付 EXE 或旧版 Actions 产物。
+功能已实现，发布前实现阶段完成上述 Windows 必要编译与静态产物核对；本版候选 Windows locked GUI/测试代码编译已通过（31.28 秒，程序 36 条警告、测试代码 59 条，其中 20 条重复），日志 `.build-tools/release-v0.4.30-4-check.log`，只执行 check、不生成或覆盖 debug EXE。本版 272 个指定源码/资源文件指纹为 `46d4b650efd4f6dd158def2f1722243ab4f09315fefb62794a276e584065cec2`，源码提交前 12 份文档 607 个本地文件链接有效；Windows Actions 与 Mac 修复重建的八项包/附件核验通过，不复用旧源码或产物身份。测试夹具和 renderer 函数不执行，未启动应用或真实业务，没有读取用户私有数据库/日志/运行口令或修改运行配置、安装资源、系统环境/关联。两平台实机同步、天工升级/重新打包兼容及未知结构、执行/审批/草稿保护仍待用户验收；不本地生成安装包，不覆盖此前交付 EXE 或旧版 Actions 产物。
 
 ### 已发布：v0.4.30-3 预发布
 

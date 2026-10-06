@@ -4,9 +4,9 @@
 
 [文档总入口](docs/README.md) · [二开功能总表](docs/customizations/README.md) · [二开变更记录](docs/customizations/CHANGELOG.md)
 
-当前预发布 `v0.4.30-4` 已推送唯一 `main` 和标签，并创建 [GitHub Release](https://github.com/soupdomplings/TianCaiSpaceHub/releases/tag/v0.4.30-4)。Windows Actions 构建及四个附件下载静态核验通过；macOS 双架构编译和 ad-hoc 验证通过，DMG 内部容量不足失败，工作流已加入显式容量与映像校验，原标签重建待完成。天工桌面同步取消版本、脚本名与指纹限制并核对界面可写能力。源码、构建和附件见 [本版交付](docs/releases/v0.4.30-4.md)，实现与回退见 [天工外部消息](docs/customizations/gmclaw-im.md)；实机兼容待用户验收。
+当前预发布 `v0.4.30-4` 已推送到唯一 `main` 并发布 [GitHub Release](https://github.com/soupdomplings/TianCaiSpaceHub/releases/tag/v0.4.30-4)，Windows/macOS Actions 构建、打包及八个附件的下载静态核验通过。天工桌面同步已移除 `1.1.1` 版本号、固定界面文件名和指纹限制，改识别实际安装与界面能力，并核对消息状态和会话缓存的可写能力；兼容接口和字段的新版本可直接同步。Windows 包未签名，macOS 为 ad-hoc 签名且未公证，两平台实机兼容与安装升级待用户验收。源码、构建及附件身份见 [本版交付](docs/releases/v0.4.30-4.md)，实现和回退见 [天工外部消息](docs/customizations/gmclaw-im.md)。上一版已有包保留当时限制。
 
-上一版 `v0.4.30-3` 已推送到 `main` 并创建 [GitHub 预发布版](https://github.com/soupdomplings/TianCaiSpaceHub/releases/tag/v0.4.30-3)，Windows/macOS 安装包已由 Actions 构建、上传并下载静态核验通过；本版纳入天工外部消息完整接入、平台会话与审批交互、桌面消息同步、自动重连、完整项目目录和临时回复状态，以及统一的 `TianCaiSpaceHub` 程序名称。Codex、WorkBuddy、天工专用模型入口隔离和多模型配置继续保留，上游仍为 CodexHub `v0.4.30`。当前本机测试用户反馈未发现新增问题，其他平台与安装升级待验收；构建、源码和发布状态见 [版本交付](docs/releases/v0.4.30-3.md)，上游来源见 [整合记录](docs/upstream-v0.4.30-integration.md)。源码只维护 `main`，完整二开版本通过标签和 Releases 管理。
+上一版 `v0.4.30-3` 已推送到 `main` 并创建 [GitHub 预发布版](https://github.com/soupdomplings/TianCaiSpaceHub/releases/tag/v0.4.30-3)，Windows/macOS 安装包已由 Actions 构建、上传并下载静态核验通过；该版纳入天工外部消息完整接入、平台会话与审批交互、桌面消息同步、自动重连、完整项目目录和临时回复状态，以及统一的 `TianCaiSpaceHub` 程序名称。Codex、WorkBuddy、天工专用模型入口隔离和多模型配置继续保留，上游仍为 CodexHub `v0.4.30`。当前本机测试用户反馈未发现新增问题，其他平台与安装升级待验收；构建、源码和发布状态见 [版本交付](docs/releases/v0.4.30-3.md)，上游来源见 [整合记录](docs/upstream-v0.4.30-integration.md)。源码只维护 `main`，完整二开版本通过标签和 Releases 管理。
 
 已发布 `v0.4.30-3` 安装包由 GitHub Actions 构建 Windows x64 MSI/便携 ZIP 和 macOS Apple Silicon/Intel universal DMG/App ZIP。该发布版的 Windows GUI/测试代码编译、两平台 Actions 构建及附件核验通过；Windows 包未签名，macOS 为 ad-hoc 签名且未公证，详见版本交付记录。本版新增修改的构建与验收另见 [当前开发记录](docs/customizations/desktop-and-packaging.md#当前交付状态)。上一版 `v0.4.30-2` 包和哈希保持历史归属，不以旧构建替代本版结果。网页导入沿用平台协议、URL 事件及同用户实例转交，见 [导入说明](docs/hub-external-import.md)。
 
