@@ -4,7 +4,7 @@
 
 [文档总入口](docs/README.md) · [二开功能总表](docs/customizations/README.md) · [二开变更记录](docs/customizations/CHANGELOG.md)
 
-当前发布候选 `v0.4.30-4`：天工桌面同步已移除 `1.1.1` 版本号、固定界面文件名和指纹限制，改为识别已安装天工与实际界面能力；兼容接口和字段的新版本可直接同步，并核对实际写入状态和会话缓存的可写能力。用户已授权更新 GitHub 并重新运行 Windows/macOS Actions，源码、构建及附件状态见 [本版交付](docs/releases/v0.4.30-4.md)。两平台实机兼容待用户验收，上一版 `v0.4.30-3` 的已有安装包仍保留旧限制。实现和回退见 [天工外部消息](docs/customizations/gmclaw-im.md)。
+当前预发布 `v0.4.30-4` 已推送唯一 `main` 和标签，并创建 [GitHub Release](https://github.com/soupdomplings/TianCaiSpaceHub/releases/tag/v0.4.30-4)。Windows Actions 构建及四个附件下载静态核验通过；macOS 双架构编译和 ad-hoc 验证通过，DMG 内部容量不足失败，工作流已加入显式容量与映像校验，原标签重建待完成。天工桌面同步取消版本、脚本名与指纹限制并核对界面可写能力。源码、构建和附件见 [本版交付](docs/releases/v0.4.30-4.md)，实现与回退见 [天工外部消息](docs/customizations/gmclaw-im.md)；实机兼容待用户验收。
 
 上一版 `v0.4.30-3` 已推送到 `main` 并创建 [GitHub 预发布版](https://github.com/soupdomplings/TianCaiSpaceHub/releases/tag/v0.4.30-3)，Windows/macOS 安装包已由 Actions 构建、上传并下载静态核验通过；本版纳入天工外部消息完整接入、平台会话与审批交互、桌面消息同步、自动重连、完整项目目录和临时回复状态，以及统一的 `TianCaiSpaceHub` 程序名称。Codex、WorkBuddy、天工专用模型入口隔离和多模型配置继续保留，上游仍为 CodexHub `v0.4.30`。当前本机测试用户反馈未发现新增问题，其他平台与安装升级待验收；构建、源码和发布状态见 [版本交付](docs/releases/v0.4.30-3.md)，上游来源见 [整合记录](docs/upstream-v0.4.30-integration.md)。源码只维护 `main`，完整二开版本通过标签和 Releases 管理。
 

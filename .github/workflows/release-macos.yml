@@ -2,6 +2,11 @@ name: release-macos
 
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Existing release tag to rebuild with this workflow (optional)"
+        required: false
+        type: string
   push:
     tags:
       - "v*"
@@ -29,9 +34,60 @@ jobs:
       MACOS_MANIFEST_NAME: ${{ matrix.manifest_name }}
       MACOS_INTEL_MANIFEST_NAME: ${{ matrix.intel_manifest_name }}
       HAS_APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 != '' }}
+      RELEASE_TAG: ${{ inputs.release_tag || (github.ref_type == 'tag' && github.ref_name) || '' }}
     steps:
+      - name: Validate Release Tag
+        run: |
+          set -euo pipefail
+          if [ -n "$RELEASE_TAG" ] && ! [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9][A-Za-z0-9.-]*)?$ ]]; then
+            echo "Release tag must be a complete version tag." >&2
+            exit 1
+          fi
+
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag && format('refs/tags/{0}', inputs.release_tag) || github.ref }}
+
+      - name: Prepare Source And DMG Builder
+        run: |
+          set -euo pipefail
+          CARGO_VERSION="$(python3 -c 'import pathlib, tomllib; print(tomllib.loads(pathlib.Path("Cargo.toml").read_text())["package"]["version"])')"
+          if [ -n "$RELEASE_TAG" ] && [ "$RELEASE_TAG" != "v$CARGO_VERSION" ]; then
+            echo "Release tag does not match the checked-out Cargo version." >&2
+            exit 1
+          fi
+          SOURCE_COMMIT="$(git rev-parse HEAD)"
+          if [ -n "$RELEASE_TAG" ]; then
+            test "$SOURCE_COMMIT" = "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")"
+          fi
+          echo "Release source commit: $SOURCE_COMMIT"
+          echo "SOURCE_COMMIT=$SOURCE_COMMIT" >> "$GITHUB_ENV"
+          cat > "$RUNNER_TEMP/create-hub-dmg.py" <<'PY'
+          import math
+          from pathlib import Path
+          import stat
+          import subprocess
+          import sys
+
+          staging = Path(sys.argv[1]).resolve(strict=True)
+          target = Path(sys.argv[2]).resolve()
+          logical_bytes = sum(
+              item.lstat().st_size
+              for item in staging.rglob("*")
+              if stat.S_ISREG(item.lstat().st_mode)
+          )
+          # Account for logical size instead of APFS allocated blocks. Leave
+          # room for HFS+ metadata and ignore the /Applications symlink.
+          capacity_mib = max(256, math.ceil(logical_bytes * 2 / (1024 * 1024)) + 128)
+          print(f"DMG logical bytes: {logical_bytes}; HFS+ capacity: {capacity_mib} MiB", flush=True)
+          subprocess.run([
+              "hdiutil", "create", "-size", f"{capacity_mib}m", "-fs", "HFS+",
+              "-volname", "TianCaiSpaceHub", "-srcfolder", str(staging),
+              "-ov", "-format", "UDZO", str(target),
+          ], check=True)
+          subprocess.run(["hdiutil", "verify", str(target)], check=True)
+          PY
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -98,8 +154,8 @@ jobs:
             echo "Could not read package version from Cargo.toml" >&2
             exit 1
           fi
-          if [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
-            APP_VERSION="$GITHUB_REF_NAME"
+          if [ -n "$RELEASE_TAG" ]; then
+            APP_VERSION="$RELEASE_TAG"
           else
             APP_VERSION="v$CARGO_VERSION"
           fi
@@ -258,7 +314,7 @@ jobs:
           ditto "$APP" "$DMG_STAGING/TianCaiSpaceHub.app"
           ln -s /Applications "$DMG_STAGING/Applications"
 
-          hdiutil create -volname "TianCaiSpaceHub" -srcfolder "$DMG_STAGING" -ov -format UDZO "$DMG"
+          python3 "$RUNNER_TEMP/create-hub-dmg.py" "$DMG_STAGING" "$DMG"
           codesign --force --timestamp --sign "$APPLE_CODESIGN_IDENTITY" "$DMG"
           notary_submit "$DMG"
           xcrun stapler staple "$DMG"
@@ -301,13 +357,12 @@ jobs:
           ditto "$APP" "$DMG_STAGING/TianCaiSpaceHub.app"
           ln -s /Applications "$DMG_STAGING/Applications"
 
-          hdiutil create -volname "TianCaiSpaceHub" -srcfolder "$DMG_STAGING" -ov -format UDZO "$DMG"
+          python3 "$RUNNER_TEMP/create-hub-dmg.py" "$DMG_STAGING" "$DMG"
           mv "$DMG" "target/dist/${MACOS_DMG_NAME}"
 
       - name: Write macOS Update Metadata
-        if: startsWith(github.ref, 'refs/tags/')
+        if: env.RELEASE_TAG != ''
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
           RELEASE_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
@@ -393,10 +448,9 @@ jobs:
             target/dist/${{ matrix.intel_manifest_name }}
 
       - name: Verify Windows Update Manifest
-        if: startsWith(github.ref, 'refs/tags/')
+        if: env.RELEASE_TAG != ''
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           # Windows and macOS are the supported release targets. Linux is
@@ -421,13 +475,14 @@ jobs:
           exit 1
 
       - name: Publish GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: env.RELEASE_TAG != ''
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.RELEASE_TAG }}
           overwrite_files: true
           body_path: RELEASE_NOTES.md
-          prerelease: ${{ contains(github.ref_name, '-') }}
-          make_latest: ${{ contains(github.ref_name, '-') && 'false' || 'true' }}
+          prerelease: ${{ contains(env.RELEASE_TAG, '-') }}
+          make_latest: ${{ contains(env.RELEASE_TAG, '-') && 'false' || 'true' }}
           files: |
             target/dist/TianCaiSpaceHub-*-macos-${{ matrix.file_slug }}.dmg
             target/dist/TianCaiSpaceHub-*-macos-${{ matrix.file_slug }}.app.zip
