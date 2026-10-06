@@ -6,7 +6,7 @@
 
 ## 2026-10-06：客户端与上游流式模式
 
-纳入 `v0.4.30-3` 发布候选，实际发布与产物见 [交付记录](releases/v0.4.30-3.md)，关联 [TC-011 天工模型接入](customizations/gmclaw.md)。天工客户端发送 `stream=false`，Hub 的 OpenAI Responses 出站可能使用 `stream=true` 并将 SSE 聚合为完整 JSON；此前列表只读取客户端模式，显示 `No`，无法识别这段上游流式请求。
+已随 `v0.4.30-3` 的 `main` 源码与 Release 预发布，两平台 Actions 构建打包及附件下载静态核验通过，实际产物和验收边界见 [交付记录](releases/v0.4.30-3.md)，关联 [TC-011 天工模型接入](customizations/gmclaw.md)。天工客户端发送 `stream=false`，Hub 的 OpenAI Responses 出站可能使用 `stream=true` 并将 SSE 聚合为完整 JSON；此前列表只读取客户端模式，显示 `No`，无法识别这段上游流式请求。
 
 - 保留数据库及 API 原 `stream` 的客户端请求语义；新增可空 `upstream_stream INTEGER`，列表/详情 API 对应 `upstreamStream: boolean | null`。出站 provider 在完成转换、准备发送最终请求时记录，Responses、Chat、Anthropic 按实际请求体取值；Responses WebSocket 记录流式传输。搜索与生图未新增上游模式记录，保持未知，不能用其 JSON 读取方式推断实际请求模式。多轮内部请求或兼容重试以最近一次记录为准，不提供每轮轨迹。
 - GUI 列表两端流式时显示 `Streaming`；仅上游流式显示 `Streaming (Upstream)`；仅客户端流式显示 `Streaming (Client)`；两端非流式显示 `No`。详情摘要改为同时显示 `client_stream` 和 `upstream_stream`，未记录的上游显示 `unknown`。这不代表天工客户端逐字接收 SSE；它继续接收聚合后的完整 Chat JSON。

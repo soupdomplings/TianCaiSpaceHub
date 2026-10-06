@@ -1,6 +1,6 @@
 # WorkBuddy 多模型接入
 
-维护日期：2026-10-06。当前发布候选：`v0.4.30-3`，本版纳入 WorkBuddy 启动按钮和 `/wb` 外部消息边界，模型多条目与隔离自 `v0.4.30-2` 已预发布。关联 TC-002、TC-003、TC-004、TC-007、TC-013；实际发布和安装包状态见 [本版交付](releases/v0.4.30-3.md)，前版构建保留 [原版本](releases/v0.4.30-2.md) 归属。
+维护日期：2026-10-06。当前预发布：`v0.4.30-3`，两平台 Actions 构建打包及附件下载静态核验通过。本版纳入 WorkBuddy 启动按钮和 `/wb` 外部消息边界，模型多条目与隔离自 `v0.4.30-2` 已预发布。关联 TC-002、TC-003、TC-004、TC-007、TC-013；实际产物、签名和验收见 [本版交付](releases/v0.4.30-3.md)，前版证据保留 [原版本](releases/v0.4.30-2.md) 归属。
 
 TianCaiSpaceHub 在 WorkBuddy 页签逐条管理多个模型。每条可以选择自己的来源渠道、模型、协议和思考强度；WorkBuddy 调用本机 Chat Completions 地址，Hub 经该条目的专用渠道转发。同名模型可绑定不同来源，保存一个条目不再以单元素数组覆盖其他模型。
 
@@ -23,7 +23,7 @@ TianCaiSpaceHub 在 WorkBuddy 页签逐条管理多个模型。每条可以选�
 
 通常无需手填路径；自动发现失败时明确提示安装未找到。特殊安装可在启动 Hub 前设置 `WORKBUDDY_DESKTOP_PATH` 为完整桌面程序或安装目录（macOS 可用 App 或其所在目录）。该变量只用于启动定位，不改变 `WORKBUDDY_CONFIG_PATH`、模型配置或备份。已有进程优先处理；需要启动新进程时，无效覆盖值拒绝启动，不静默改用其他安装。GUI 请求最多等待 20 秒，界面区分“已发起启动”和“已运行”，不据此声明模型连接或 `/wb` 已接通。按钮不创建桌面会话、不执行任务；Hub 退出不会通过该功能关闭 WorkBuddy。
 
-本轮不新增持久配置字段或迁移；回退程序会移除按钮，已启动的 WorkBuddy 仍由用户管理。关键代码见 [桌面启动与安装发现](../src/web/workbuddy_launch.rs)、[GUI](../src/gui/workbuddy.rs)、[GUI API](../src/gui/api.rs)。Windows 本轮编译与产物身份见 [品牌与交付](customizations/desktop-and-packaging.md#当前交付状态)，重复点击、已有实例和自动路径发现待用户验收；macOS 待 Actions 原生构建和实机验收，不扩展 Linux。本轮未启动 WorkBuddy、读取用户模型凭据或会话，未执行测试/真实调用。
+本轮不新增持久配置字段或迁移；回退程序会移除按钮，已启动的 WorkBuddy 仍由用户管理。关键代码见 [桌面启动与安装发现](../src/web/workbuddy_launch.rs)、[GUI](../src/gui/workbuddy.rs)、[GUI API](../src/gui/api.rs)。Windows 本轮编译与产物身份见 [品牌与交付](customizations/desktop-and-packaging.md#当前交付状态)，重复点击、已有实例和自动路径发现待用户验收；macOS 本版 Actions 原生构建通过，实机行为仍待用户验收，不扩展 Linux。本轮未启动 WorkBuddy、读取用户模型凭据或会话，未执行测试/真实调用。
 
 ## 推荐配置
 
@@ -108,4 +108,4 @@ OpenAI Responses / Chat Completions provider 会发送 `prompt_cache_key`，并�
 
 降级到 `0.4.30-1` 前，先在当前版本撤销或删除新增 WorkBuddy 条目并确认对应渠道移除，再备份两端配置。旧版不认识 `workbuddy:<entryId>`，可能把它当成普通 Codex 候选，不能仅替换程序而保留新渠道；旧保存功能也可能覆盖多模型数组。不要让新旧 Hub 同时写配置。
 
-`v0.4.30-2` 已通过 Windows/macOS Actions 原生构建和打包，并发布预发布安装包；Windows 未签名，macOS 为 universal、ad-hoc 签名且未公证。当前用户负责测试，本轮未执行功能测试、启动 WorkBuddy 或发起真实调用。待验收：多模型加载、同名不同源、思考/协议切换、删除/撤销、其他模型与字段保留、冲突与隔离，以及两平台安装升级与实机交互。已有回归属于原版本，当前构建及发布结果见 [版本交付](releases/v0.4.30-2.md)。
+`v0.4.30-2` 已通过 Windows/macOS Actions 原生构建和打包，并发布预发布安装包；Windows 未签名，macOS 为 universal、ad-hoc 签名且未公证。当前用户负责测试，本轮未执行功能测试、启动 WorkBuddy 或发起真实调用。待验收：多模型加载、同名不同源、思考/协议切换、删除/撤销、其他模型与字段保留、冲突与隔离，以及两平台安装升级与实机交互。已有回归属于原版本，前版构建见 [原版本交付](releases/v0.4.30-2.md)，当前 `v0.4.30-3` 的两平台构建、包静态核验与发布结果见 [本版交付](releases/v0.4.30-3.md)。

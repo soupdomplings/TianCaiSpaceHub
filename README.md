@@ -4,11 +4,11 @@
 
 [文档总入口](docs/README.md) · [二开功能总表](docs/customizations/README.md) · [二开变更记录](docs/customizations/CHANGELOG.md)
 
-当前发布候选为 `v0.4.30-3`，纳入天工外部消息完整接入、平台会话与审批交互、桌面消息同步、自动重连、完整项目目录和临时回复状态，以及统一的 `TianCaiSpaceHub` 程序名称。Codex、WorkBuddy、天工专用模型入口隔离和多模型配置继续保留，上游仍为 CodexHub `v0.4.30`。当前本机测试用户反馈未发现新增问题，其他平台与安装升级待验收；构建、源码和发布状态见 [版本交付](docs/releases/v0.4.30-3.md)，上游来源见 [整合记录](docs/upstream-v0.4.30-integration.md)。源码只维护 `main`，完整二开版本通过标签和 Releases 管理。
+当前版本 `v0.4.30-3` 已推送到 `main` 并创建 [GitHub 预发布版](https://github.com/soupdomplings/TianCaiSpaceHub/releases/tag/v0.4.30-3)，Windows/macOS 安装包已由 Actions 构建、上传并下载静态核验通过；本版纳入天工外部消息完整接入、平台会话与审批交互、桌面消息同步、自动重连、完整项目目录和临时回复状态，以及统一的 `TianCaiSpaceHub` 程序名称。Codex、WorkBuddy、天工专用模型入口隔离和多模型配置继续保留，上游仍为 CodexHub `v0.4.30`。当前本机测试用户反馈未发现新增问题，其他平台与安装升级待验收；构建、源码和发布状态见 [版本交付](docs/releases/v0.4.30-3.md)，上游来源见 [整合记录](docs/upstream-v0.4.30-integration.md)。源码只维护 `main`，完整二开版本通过标签和 Releases 管理。
 
-本版安装包由 GitHub Actions 构建 Windows x64 MSI/便携 ZIP 和 macOS Apple Silicon/Intel universal DMG/App ZIP。新版本源码的 Windows GUI/测试代码编译通过；Actions 与附件状态以版本交付记录为准。上一版 `v0.4.30-2` 包和哈希保持历史归属，不以旧构建替代本版结果。网页导入沿用平台协议、URL 事件及同用户实例转交，见 [导入说明](docs/hub-external-import.md)。
+本版安装包由 GitHub Actions 构建 Windows x64 MSI/便携 ZIP 和 macOS Apple Silicon/Intel universal DMG/App ZIP。新版本源码的 Windows GUI/测试代码编译通过；两平台 Actions 构建及附件核验通过；Windows 包未签名，macOS 为 ad-hoc 签名且未公证，详见版本交付记录。上一版 `v0.4.30-2` 包和哈希保持历史归属，不以旧构建替代本版结果。网页导入沿用平台协议、URL 事件及同用户实例转交，见 [导入说明](docs/hub-external-import.md)。
 
-本地后续改动尚未发布：在 IM 发送 `/tg` 首次启用或切换天工，使用与 Codex 相同的平台会话入口、目录表单和模型选择流程；`/gpt` 返回 ChatGPT（Codex），`/wb` 暂不可用且保持原模式。2026-10-06 后续开发加入启用后的后台自动重连：天工重启后无需重复 `/tg`。IM 会话创建真实桌面任务并保存消息，恢复列表读取全部桌面场景的任务，恢复原会话记忆。天工 `/q` 释放当前会话并返回平台入口，`/s` 明确当前不能远程取消任务；模型连接状态及客户端/上游流式日志区分继续保留。天工页保留模型配置与聊天指引，产品/程序统一为 `TianCaiSpaceHub`，概览随接入页签切换但不改变 IM 选择。本轮构建与产物身份以 [品牌与交付](docs/customizations/desktop-and-packaging.md#当前交付状态) 为准，前阶段构建各保留原归属；测试未执行，macOS 原生构建待 Actions，功能待用户验收。天工 1.1.1 已打开窗口可能需要自身刷新或重开才能看到新增任务/消息，不承诺即时界面刷新。已发布包不含这些改动，详见 [天工外部消息](docs/customizations/gmclaw-im.md) 与 [模型接入](docs/customizations/gmclaw.md)。
+`v0.4.30-3` 的天工外部消息使用与 Codex 相同的平台会话入口、目录表单和模型选择流程。启用后后台自动重连；IM 创建真实桌面任务、保存正文并恢复全部原生场景历史，保留会话目录、模型与记忆身份。飞书/企微使用按钮审批，微信使用文字选项；桌面消息局部同步限定天工 1.1.1 已核验资源与首次从 Hub 启用的本机通道。正式回复结束临时等待状态；其他平台与异常场景待验收。旧 `v0.4.30-2` 包不含这些后续改动，完整使用、构建与回滚见 [天工外部消息](docs/customizations/gmclaw-im.md)、[模型接入](docs/customizations/gmclaw.md) 及 [本版交付](docs/releases/v0.4.30-3.md)。
 
 ## 产品预览
 

@@ -1,5 +1,7 @@
 TianCaiSpaceHub v0.4.30-3
 
+已推送 `main` 和 `v0.4.30-3` 注释标签并创建非草稿 Pre-release。Windows/macOS GitHub Actions 构建与打包均成功，Windows x64 MSI/便携 ZIP、macOS Apple Silicon/Intel universal DMG/App ZIP 及四份更新附件已上传、下载并通过哈希与结构静态核验。Windows 包未签名，macOS 为 ad-hoc 签名且未公证；构建及产物核验不替代实机功能与安装升级验收。
+
 汇总官方 CodexHub v0.4.30 基线之上的全部后续二开，产品、程序及安装输出统一为 TianCaiSpaceHub，保留既有配置和升级身份。
 
 - 外部消息发送 `/tg` 选择天工、`/gpt` 返回 ChatGPT（Codex），沿用各平台原有新建/恢复会话界面；`/wb` 保留入口并提示暂不支持外部执行。天工启用后自动重连，创建真实桌面任务、恢复原生历史并保存对话；桌面即时更新限定已核验 1.1.1 renderer 与本机通道。
@@ -7,7 +9,7 @@ TianCaiSpaceHub v0.4.30-3
 - Windows Hub 监听与天工启动禁止句柄继承，退出只结束 Hub 自有后台；新建会话项目列表包含天工手动创建、没有任务的项目，并按平台完整分页。旧天工若已继承 3847，核对任务后正常退出旧实例一次，再从新版 Hub 启动。
 - 天工/WorkBuddy 增加启动按钮，状态概览随接入页签变化；天工模型本地连接与真实上游效果分别显示，请求日志区分客户端与上游流式模式。保留两客户端多模型、接入点专用渠道隔离、OpenAI/Claude/DeepSeek 适配、有限网关重试及网页导入等既有二开。
 
-Windows 和 macOS 安装包统一由 GitHub Actions 生成，源码、构建、产物签名与发布状态见 [v0.4.30-3 交付记录](docs/releases/v0.4.30-3.md)。用户对此前 Windows 本机测试反馈“目前看着没什么了”，仅覆盖实际操作，不等于全部平台、安装升级和异常场景验收；开发方未主动运行交互测试或真实业务。使用与回滚见 [天工外部消息](docs/customizations/gmclaw-im.md)、[模型接入](docs/customizations/gmclaw.md)、[品牌与交付](docs/customizations/desktop-and-packaging.md)。
+Windows 和 macOS 安装包统一由 GitHub Actions 生成，源码、构建、产物签名与发布状态见 [v0.4.30-3 交付记录](docs/releases/v0.4.30-3.md)。此前 Windows 本机已有有限用户测试反馈；macOS 实机、安装升级与异常场景仍待用户验收，开发方未主动运行交互测试或真实业务。使用与回滚见 [天工外部消息](docs/customizations/gmclaw-im.md)、[模型接入](docs/customizations/gmclaw.md)、[品牌与交付](docs/customizations/desktop-and-packaging.md)。
 
 以下保留原版本历史，其测试、构建和发布结果不归属本版。
 
