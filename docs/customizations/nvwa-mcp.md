@@ -139,4 +139,6 @@ NVWA 不复用模型 API Key、IM 授权或普通网关渠道。普通 profile �
 
 本轮完成源码实现、静态资料核对、文档更新与 Windows locked GUI 编译；最终编译记录见 [v5 交付](../releases/v0.4.30-5.md)。macOS 原生编译待 GitHub Actions。未执行测试、未启动 Hub/Codex/WorkBuddy/天工/NVWA、未访问真实认证/MCP/模型接口、未读取实际用户配置/凭据/私有日志或业务数据库。本地不生成发布安装包；后续 Windows/macOS 包由 GitHub Actions 生成，源码推送、构建、用户验收和发布分别记录。
 
+用户询问测试入口后已补生成 Windows x64 debug 测试 EXE，位于本机 `outputs/nvwa-v0.4.30-5-windows/TianCaiSpaceHub.exe`，版本/哈希/PE 导入核对通过，未运行。先从托盘正常退出旧 Hub，再双击测试 EXE；× 只隐藏旧窗口。实际产物身份见 [v5 交付](../releases/v0.4.30-5.md#本机-windows-测试程序)，本机测试 EXE 与 Actions 发布安装包分别记录。
+
 用户验收重点为动态 RSA/SM2 部署、本人密码与正确租户、captcha 手动 ID、204 双因子、201/202 改密、两 token 实际有效期、浏览器注册地址与晚到/重放 callback、后台恢复时同一身份、本机凭据端隔离、分页工具目录与权限失败、各端原生刷新/信任、并发目标保护、移除/恢复以及写调用断连后的未知结果。以上是待验收范围，不是开发方已执行的测试清单。

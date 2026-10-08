@@ -1,5 +1,11 @@
 # 二开变更记录
 
+## v0.4.30-5 未发布 · 2026-10-08 · 补交 Windows 本机测试 EXE
+
+关联 TC-014、TC-007；用户询问测试程序位置，核对原有 target EXE 为 `0.4.30-2`，上轮 `cargo check` 没有产出 v5 程序。本轮在产品源码 `e9bcdda2…`、文档 checkout `50b9244…` 上补 `cargo build --locked --target x86_64-pc-windows-msvc --features gui --bin TianCaiSpaceHub`，1 分 56 秒、38 条警告，生成 `0.4.30-5` x64 debug EXE，复制到本机 `outputs/nvwa-v0.4.30-5-windows/` 并附启动说明/身份清单。
+
+产品版本、源码/功能、现有用户配置和安装关联不因此改变；旧编译产物先保留本机忽略快照，新 EXE 的版本、60,887,552 字节、SHA-256 与 PE 导入静态核对通过。未启动测试程序或客户端、未执行夹具/真实登录/MCP/模型/业务；验收由用户负责。没有本地生成发布安装包，不创建标签/Release，macOS 原生编译仍待 Actions。交付身份及正常退出旧 Hub 后启动方式见 [v5 交付](../releases/v0.4.30-5.md#本机-windows-测试程序)，同步 [NVWA 专题](nvwa-mcp.md)。
+
 ## v0.4.30-5 未发布 · 2026-10-08 · NVWA MCP 接入与最终基线统一
 
 关联 TC-014；承接最终 main `8d1ccea7e65ac18a210d25c6b59561179c8a1644`（v4 产品、CI 修复与发布核验文档），保留 TC-001～TC-013。本轮 Cargo manifest/lock 统一 `0.4.30-5`，只维护 main，本地与 live origin 没有其他待合并/删除分支。源码提交/推送、编译、用户测试和发布按 [本轮交付](../releases/v0.4.30-5.md) 分别登记；尚未发布 Release，不改写旧标签或包。
