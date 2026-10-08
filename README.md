@@ -4,13 +4,11 @@
 
 [文档总入口](docs/README.md) · [二开功能总表](docs/customizations/README.md) · [二开变更记录](docs/customizations/CHANGELOG.md)
 
-当前预发布 `v0.4.30-4` 已推送到唯一 `main` 并发布 [GitHub Release](https://github.com/soupdomplings/TianCaiSpaceHub/releases/tag/v0.4.30-4)，Windows/macOS Actions 构建、打包及八个附件的下载静态核验通过。天工桌面同步已移除 `1.1.1` 版本号、固定界面文件名和指纹限制，改识别实际安装与界面能力，并核对消息状态和会话缓存的可写能力；兼容接口和字段的新版本可直接同步。Windows 包未签名，macOS 为 ad-hoc 签名且未公证，两平台实机兼容与安装升级待用户验收。源码、构建及附件身份见 [本版交付](docs/releases/v0.4.30-4.md)，实现和回退见 [天工外部消息](docs/customizations/gmclaw-im.md)。上一版已有包保留当时限制。
+当前开发基线为 `v0.4.30-5`，只维护唯一 `main`，上游来源仍为 CodexHub `v0.4.30`。本轮新增 [NVWA MCP](docs/customizations/nvwa-mcp.md)：在 Hub 输入账号密码或完成浏览器授权，也可明确选择应用代表用户；经独立本机桥分别配置 Codex、WorkBuddy 和天工 Claw。两类 token 按实际认证头和期限管理，客户端修改先预览、按指纹写入并保护备份。Windows 必要 GUI 编译已通过，最终复核、真实验收和发布状态见 [本轮交付](docs/releases/v0.4.30-5.md)；本轮尚未发布安装包，测试由用户负责。
 
-上一版 `v0.4.30-3` 已推送到 `main` 并创建 [GitHub 预发布版](https://github.com/soupdomplings/TianCaiSpaceHub/releases/tag/v0.4.30-3)，Windows/macOS 安装包已由 Actions 构建、上传并下载静态核验通过；该版纳入天工外部消息完整接入、平台会话与审批交互、桌面消息同步、自动重连、完整项目目录和临时回复状态，以及统一的 `TianCaiSpaceHub` 程序名称。Codex、WorkBuddy、天工专用模型入口隔离和多模型配置继续保留，上游仍为 CodexHub `v0.4.30`。当前本机测试用户反馈未发现新增问题，其他平台与安装升级待验收；构建、源码和发布状态见 [版本交付](docs/releases/v0.4.30-3.md)，上游来源见 [整合记录](docs/upstream-v0.4.30-integration.md)。源码只维护 `main`，完整二开版本通过标签和 Releases 管理。
+既有多模型与专用入口隔离、网页导入、天工自动重连/真实任务/完整历史/局部消息同步继续保留。IM 使用 `/tg` 选择天工、`/gpt` 返回 ChatGPT（Codex），沿用平台会话、目录和模型流程；飞书/企微以按钮审批，微信使用文字选项，`/wb` 仍提示暂不支持外部任务。桌面消息同步按实际安装与运行能力识别，首次从 Hub 启用本机通道，保留身份、原生执行、审批和未保存消息保护。
 
-已发布 `v0.4.30-3` 安装包由 GitHub Actions 构建 Windows x64 MSI/便携 ZIP 和 macOS Apple Silicon/Intel universal DMG/App ZIP。该发布版的 Windows GUI/测试代码编译、两平台 Actions 构建及附件核验通过；Windows 包未签名，macOS 为 ad-hoc 签名且未公证，详见版本交付记录。本版新增修改的构建与验收另见 [当前开发记录](docs/customizations/desktop-and-packaging.md#当前交付状态)。上一版 `v0.4.30-2` 包和哈希保持历史归属，不以旧构建替代本版结果。网页导入沿用平台协议、URL 事件及同用户实例转交，见 [导入说明](docs/hub-external-import.md)。
-
-当前天工外部消息使用与 Codex 相同的平台会话入口、目录表单和模型选择流程。启用后后台自动重连；IM 创建真实桌面任务、保存正文并恢复全部原生场景历史，保留会话目录、模型与记忆身份。飞书/企微使用按钮审批，微信使用文字选项；桌面消息局部同步按天工安装身份与实际运行能力识别，首次仍从 Hub 启用本机通道。正式回复结束临时等待状态；其他平台与异常场景待验收。已发布 `v0.4.30-3` 包的固定版本限制不因源码修改自动解除，完整使用、构建与回滚见 [天工外部消息](docs/customizations/gmclaw-im.md)、[模型接入](docs/customizations/gmclaw.md) 及 [已发布版交付](docs/releases/v0.4.30-3.md)。
+Windows 优先、macOS 次之；发布包统一由 GitHub Actions 构建，本地不生成发布安装包。此前 [v0.4.30-4 交付](docs/releases/v0.4.30-4.md) 及已发布包保留原身份；旧编译/反馈不等于本轮 NVWA 验收。完整版本通过标签和 Releases 管理，不建立额外开发或版本分支。
 
 ## 产品预览
 
@@ -133,16 +131,16 @@ Linux 仅保留历史用法参考：旧包 `TianCaiSpace Hub Linux x86_64.AppIma
 2. 在要操作的项目目录打开终端，启动 Codex app-server：
 
 ```bash
-codex app-server --listen ws://127.0.0.1:3849 --remote-control
+codex app-server --listen ws://127.0.0.1:3850 --remote-control
 ```
 
 3. 再在同一个项目目录打开一个终端，连接本地 Codex TUI：
 
 ```bash
-codex --remote ws://127.0.0.1:3849
+codex --remote ws://127.0.0.1:3850
 ```
 
-完成后可以在 IM 里给机器人发消息，也可以在本地 Codex TUI 里继续使用同一个 Codex app-server。端口 `3849` 被占用时可以换成其它本机端口，但第 2 步和第 3 步里的地址必须一致。
+完成后可以在 IM 里给机器人发消息，也可以在本地 Codex TUI 里继续使用同一个 Codex app-server。NVWA 默认使用 `3849`，此示例的 Codex app-server 使用 `3850`；可换成其它未占用的本机端口，但第 2 步和第 3 步里的地址必须一致。
 
 ### 8. 在 IM 里开始使用
 

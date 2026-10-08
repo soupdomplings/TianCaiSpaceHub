@@ -123,6 +123,7 @@ enum GuiMessage {
     AiGwAction(AiGwActionResult),
     WorkBuddy(WorkBuddyActionResult),
     GmClaw(gmclaw::GmClawActionResult),
+    Nvwa(nvwa::NvwaActionResult),
     DashboardUpdate,
     DiagnosticsExport,
 }
@@ -152,6 +153,7 @@ mod daemon;
 mod external_import;
 mod gmclaw;
 mod im_accounts;
+mod nvwa;
 mod onboarding;
 mod provider;
 mod request_log_detail;
@@ -1169,6 +1171,8 @@ fn build_ui(
     enable_full_repaint_on_resize(&workbuddy_tab.page);
     let gmclaw_tab = gmclaw::create(&notebook, text);
     enable_full_repaint_on_resize(&gmclaw_tab.page);
+    let nvwa_tab = nvwa::create(&notebook, text);
+    enable_full_repaint_on_resize(&nvwa_tab.page);
 
     notebook.add_page(&codex_tab.page, text.codex_tab(), true, tab_icons[0]);
     notebook.add_page(&ai_gw_page, text.ai_gateway_tab(), false, tab_icons[1]);
@@ -1194,6 +1198,7 @@ fn build_ui(
         false,
         tab_icons[5],
     );
+    notebook.add_page(&nvwa_tab.page, "NVWA MCP", false, None);
 
     root_sizer.add(
         &notebook,
@@ -1271,6 +1276,7 @@ fn build_ui(
 
     workbuddy::bind_actions(&workbuddy_tab, &api, &frame, text, &gui_tx);
     gmclaw::bind_actions(&gmclaw_tab, &api, &frame, text, &gui_tx);
+    nvwa::bind_actions(&nvwa_tab, &frame, text, &gui_tx);
 
     bind_service_connection_settings(&frame, &handles);
 
@@ -1847,6 +1853,7 @@ fn build_ui(
         let request_log_clear_all_button = request_log_clear_all_button;
         let workbuddy_tab = workbuddy_tab.clone();
         let gmclaw_tab = gmclaw_tab.clone();
+        let nvwa_tab = nvwa_tab.clone();
         frame.on_idle(move |event| {
             // Kick off any toggles queued from the data views.
             process_pending_im_toggle(
@@ -1924,6 +1931,15 @@ fn build_ui(
                                 gmclaw::apply_result(&gmclaw_tab, &frame, handles.text, result);
                                 needs_dashboard_refresh = true;
                             }
+                            GuiMessage::Nvwa(result) => {
+                                nvwa::apply_result(
+                                    &nvwa_tab,
+                                    &frame,
+                                    handles.text,
+                                    &gui_tx,
+                                    result,
+                                );
+                            }
                             GuiMessage::WorkBuddy(result) => {
                                 workbuddy::apply_result(
                                     &workbuddy_tab,
@@ -1936,6 +1952,7 @@ fn build_ui(
                                 needs_dashboard_refresh = true;
                             }
                             GuiMessage::DashboardUpdate => {
+                                nvwa::refresh_if_needed(&nvwa_tab, &gui_tx);
                                 apply_pending_dashboard(
                                     &handles,
                                     &dashboard_refresh,

@@ -23,6 +23,7 @@ mod gmclaw_runtime;
 mod gui;
 mod im;
 mod im_runtime;
+mod nvwa;
 mod outbound_http;
 mod remote_control_backend;
 mod store;
@@ -310,6 +311,20 @@ async fn run_daemon(config_path: PathBuf, config: AppConfig) -> anyhow::Result<(
         state.clone(),
         server_shutdown_rx.clone(),
     ));
+    let nvwa_state = state.clone();
+    let nvwa_shutdown = server_shutdown_rx.clone();
+    let mut nvwa_task = tokio::spawn(async move {
+        match nvwa::NvwaService::new(&nvwa_state.config_path, nvwa_state.clone()) {
+            Ok(service) => {
+                if service.serve(nvwa_shutdown).await.is_err() {
+                    tracing::warn!(target: "codexhub::nvwa", "NVWA local service unavailable");
+                }
+            }
+            Err(_) => {
+                tracing::warn!(target: "codexhub::nvwa", "NVWA local service could not be prepared")
+            }
+        }
+    });
 
     let companion = compatible_loopback_addr(addr);
     let mut companion_tasks = Vec::new();
@@ -341,6 +356,13 @@ async fn run_daemon(config_path: PathBuf, config: AppConfig) -> anyhow::Result<(
 
     let primary_result = serve_http(listener, app, server_shutdown_rx).await;
     let _ = server_shutdown_tx.send(true);
+    if tokio::time::timeout(Duration::from_millis(1200), &mut nvwa_task)
+        .await
+        .is_err()
+    {
+        nvwa_task.abort();
+        let _ = nvwa_task.await;
+    }
     for task in companion_tasks {
         match task.await {
             Ok(Ok(())) => {}

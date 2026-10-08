@@ -1,3 +1,18 @@
+TianCaiSpaceHub v0.4.30-5（开发完成状态另见交付记录，未发布）
+
+新增 Hub 内 NVWA MCP 接入，承接最终 main 与全部既有二开。
+
+- 独立 NVWA MCP 页签支持账号密码、浏览器个人授权和显式应用代表用户；登录 token 使用 `Authorization`，换票 token 使用 `authorization-ticket-token`，身份/租户及两类有效期分别管理。
+- 新增默认 `127.0.0.1:3849` 的本机桥、每环境每端凭据、认证代次与请求 ID 映射。旧授权撤销、未知工具结果不自动重放；重启恢复后先核验身份。
+- Codex、WorkBuddy 只维护受管 MCP 项，天工只通过已核验官方 DataServer 的 connection 接口；先预览、核对指纹、系统保护目标备份，拒绝覆盖用户修改。
+- 密码/应用密钥默认不记住；Windows DPAPI、macOS Keychain 保护秘密。保留既有模型、IM、天工同步和配置兼容，完整版本统一 `0.4.30-5`，本地及远端仅有 main。
+
+Windows 必要 locked GUI 编译已通过，最终复核见 [本轮交付](docs/releases/v0.4.30-5.md)。开发方未运行测试、客户端或真实登录/MCP/模型/业务；macOS 原生编译待 Actions，功能测试由用户自行完成。本轮尚未发布 Release 或生成安装包；源码、编译、验收和发布状态分别记录。浏览器回环白名单、完整换票和三端原生加载/信任/调用需真实联调；当前桥只支持 stateless JSON MCP。
+
+使用、配置、回滚与限制见 [NVWA MCP](docs/customizations/nvwa-mcp.md)。此前版本摘要保留历史事实。
+
+---
+
 TianCaiSpaceHub v0.4.30-4
 
 取消天工 Claw 桌面即时同步的固定版本门槛，在官方 CodexHub v0.4.30 基线和全部既有二开上继续发布。

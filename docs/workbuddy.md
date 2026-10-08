@@ -1,8 +1,18 @@
 # WorkBuddy 多模型接入
 
-维护日期：2026-10-06。当前预发布：`v0.4.30-3`，两平台 Actions 构建打包及附件下载静态核验通过。本版纳入 WorkBuddy 启动按钮和 `/wb` 外部消息边界，模型多条目与隔离自 `v0.4.30-2` 已预发布。关联 TC-002、TC-003、TC-004、TC-007、TC-013；实际产物、签名和验收见 [本版交付](releases/v0.4.30-3.md)，前版证据保留 [原版本](releases/v0.4.30-2.md) 归属。
+维护日期：2026-10-08。当前开发版本 `0.4.30-5` 新增独立 [NVWA MCP 接入](customizations/nvwa-mcp.md)，关联 TC-014；Windows locked GUI 编译核对已通过，最终整合复核另记，macOS 本版原生构建和实机行为待验收，未发布。已有模型管理关联 TC-002、TC-003、TC-004、TC-007、TC-013；历史构建、产物和签名保持 [v0.4.30-4](releases/v0.4.30-4.md)、[v0.4.30-3](releases/v0.4.30-3.md)、[v0.4.30-2](releases/v0.4.30-2.md) 各自归属。
 
 TianCaiSpaceHub 在 WorkBuddy 页签逐条管理多个模型。每条可以选择自己的来源渠道、模型、协议和思考强度；WorkBuddy 调用本机 Chat Completions 地址，Hub 经该条目的专用渠道转发。同名模型可绑定不同来源，保存一个条目不再以单元素数组覆盖其他模型。
+
+## NVWA MCP 独立接入（0.4.30-5）
+
+“NVWA MCP”页签支持本人密码、浏览器个人授权和显式应用代表用户，核验真实身份/租户后，为 WorkBuddy 写入一个 Hub 受管的本机 HTTP MCP 条目。它与本页 `models.json` 多模型/专用渠道独立，使用 `mcp.json` 的 `mcpServers`，仅改受管 `nvwa-<profileId哈希前16位>`，保留其他条目和审批文件，不修改 `mcp-approvals.json` 绕过信任。
+
+MCP 路径优先 `WORKBUDDY_CONFIG_DIR` 或 `CODEBUDDY_CONFIG_DIR`，否则为用户 `.workbuddy[-实例号]/mcp.json`；`WORKBUDDY_CONFIG_PATH` 仍只管理模型，不改为 MCP 路径。品牌/专享版可在 NVWA 页显式指定绝对 `mcp.json` 路径，先预览、核对指纹和系统保护的定向备份，再确认接入/移除/恢复。同名未受管或被用户修改的目标拒绝覆盖。
+
+WorkBuddy 配置只含默认 `127.0.0.1:3849` 桥地址和该端本地连接凭据，远端密码、应用密钥、token 由 Hub 系统保护存储持有。Hub 需运行；原生 refresh/重启、信任和已有会话何时热加载由 WorkBuddy 决定，外部写盘不保证即时生效。文件可配置不证明应用安装、已加载或真实 MCP 连接；Hub 检测也不代替客户端调用证据。认证及工具失效不套用下文模型 `502/503` 重试，已发送工具不自动重放。
+
+每端预览、凭据、退出、删除与回滚见 [TC-014 完整专题](customizations/nvwa-mcp.md)。本轮没有启动 WorkBuddy、测试真实认证/MCP/模型或读取用户配置，待用户验收。
 
 ## 外部消息执行端边界
 

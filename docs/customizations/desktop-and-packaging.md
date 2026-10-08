@@ -1,6 +1,6 @@
 # 天才空间品牌、桌面行为与交付
 
-维护日期：2026-10-07。当前预发布 `v0.4.30-4` 承接统一命名、接入页概览/启动、自动重连、共用会话、原生历史/消息/状态、平台审批、退出端口/完整项目/临时回复等二开；新增天工同步版本/固定资源解锁与可写保护。关联 TC-001、TC-007、TC-011、TC-012；完整产物身份见 [v0.4.30-4](../releases/v0.4.30-4.md)，前版 [v0.4.30-3](../releases/v0.4.30-3.md) 与 [v0.4.30-2](../releases/v0.4.30-2.md) 保留原事实。网页导入见 [专门说明](../hub-external-import.md)，上游来源见 [v0.4.30 整合](../upstream-v0.4.30-integration.md)。
+维护日期：2026-10-08。当前开发 `0.4.30-5` 新增独立 [NVWA MCP 页签与后台桥](nvwa-mcp.md)，关联 TC-014；Windows locked GUI 编译核对已通过，最终整合复核另记，macOS 本版原生构建/实机验收待验证，未发布。保留 TC-001、TC-007、TC-011、TC-012 的命名、启动、概览与天工功能；最近已发布产物仍为 [v0.4.30-4](../releases/v0.4.30-4.md)，前版 [v0.4.30-3](../releases/v0.4.30-3.md)、[v0.4.30-2](../releases/v0.4.30-2.md) 保留原事实。网页导入见 [说明](../hub-external-import.md)，上游见 [v0.4.30 整合](../upstream-v0.4.30-integration.md)。
 
 `v0.4.30-4` 产品源码 `7b5dd6e…`、注释标签与非草稿 Pre-release 已公开。Windows Actions 与 Mac 修复后同标签重建均成功，八项附件下载静态核验通过；Windows 未签名，Mac universal ad-hoc 且未公证。首次 DMG 失败、工作流修复 `1bd8ffd6…` 与产品源码分开记录，运行程序和升级/同步效果仍待用户验收。旧版与调试 EXE 保持原身份，发布后核验文档使用单独提交进入 `main`，不移动产品标签或改变安装包。
 
@@ -26,6 +26,8 @@
 早期上游曾由 `codex-remote` 改名为 CodexHub。该迁移已经结束，不再执行旧分支合并、远端仓库改名或目录迁移步骤；原始记录可从 Git 历史追溯。
 
 ## 当前桌面行为
+
+- `0.4.30-5` 新增“NVWA MCP”独立页签：多环境、遮罩凭据、本人密码/浏览器/应用认证、挑战、真实身份/两 token expiry、只读工具检测及三端确认前预览。后台默认 `127.0.0.1:3849`，系统保护管理引导和每端授权；仅改 NVWA 受管条目，原生刷新/信任保留，见 [TC-014](nvwa-mcp.md)。
 
 - 主窗口每次启动最大化到系统工作区；不要求用户手动拖大。
 - 关闭窗口隐藏到托盘/菜单栏；需要结束程序时使用“退出”。退出流程停止 GUI 定时器并处理本次启动的后台进程。
@@ -83,7 +85,15 @@ macOS 保持 `com.codexhub.app` 的安装身份，完整 App 声明导入协议�
 
 ## 当前交付状态
 
-### 本轮：v0.4.30-4 预发布，两平台包已核验
+### 本轮：0.4.30-5 源码实现，未发布
+
+基线为唯一 `main` 的 `8d1ccea7…`，包含上一版产品、CI 修复与交付核验文档。原混合工作区先完整快照，逐项比对并确认主线包含后安全对齐，见 [整理记录](../development/repository-cleanup.md)。本版新增 TC-014、普通引用配置、系统保护恢复、各端定向备份及 GUI 操作，不本地生成发布安装包，不覆盖已交付程序或包。
+
+Windows 第二轮 `cargo check --locked --target x86_64-pc-windows-msvc --features gui --bin TianCaiSpaceHub` 已通过，27.61 秒、38 条警告；只编译，不执行测试、不启动应用或访问真实业务。后续格式/静态调整与最终编译复核单独登记，不把中途通过等同于最终整合核对。macOS Keychain 源码/API 已静态核对，本轮原生 Mac 编译、Windows/macOS Actions 安装包、签名及实机行为尚未核验。
+
+当前 `0.4.30-5` 未发布，不创建版本/release 分支；安装包仍仅由 GitHub Actions 生成。登录/验证码/双因子、回调注册、两 token 真实 TTL、原生刷新/信任、目录加载、并发写入、移除/恢复及工具未知结果均待用户测试。下节保留历史 `v0.4.30-4` 已发布身份和结果。
+
+### 已发布：v0.4.30-4 预发布，两平台包已核验
 
 基线为唯一 `main` 的 `8cfebe6`，产品源码 `7b5dd6e02d135bf1109cab9c5632853728f6a487`（20 个变更文件）已推送；注释标签对象 `e020eda…` 指向该源码，非草稿 Pre-release `Latest=false`，不建版本分支。Windows [37485845155](https://github.com/soupdomplings/TianCaiSpaceHub/actions/runs/37485845155) 成功；Mac 首次 [37485845411](https://github.com/soupdomplings/TianCaiSpaceHub/actions/runs/37485845411) 失败于 DMG，工作流修复 `1bd8ffd6…` 后按原标签重建 [37492460126](https://github.com/soupdomplings/TianCaiSpaceHub/actions/runs/37492460126) 成功，运行号 `17`、31 分 4 秒，产品源码仍 `7b5dd6e…`。八项附件已上传/下载并静态核验，Windows EXE/MSI 未签名，Mac universal ad-hoc 且未公证；安装运行与功能验收另列，完整哈希/身份见 [交付记录](../releases/v0.4.30-4.md)。
 

@@ -4,8 +4,11 @@ There are two separate config surfaces:
 
 - `TianCaiSpaceHub` config, usually this repository's `config.toml`
 - Codex App config, usually `~/.codex/config.toml`
+- NVWA MCP 独立环境 `<Hub config stem>.nvwa.json` 与系统保护目录 `<Hub config stem>.nvwa-secrets`（v0.4.30-5 新增）
 
 Do not mix them. `TianCaiSpaceHub` stores IM channel and bridge settings. Codex App stores model provider, auth, and `chatgpt_base_url`.
+
+维护日期：2026-10-08。当前开发基线为 v0.4.30-5，独立 [NVWA MCP](customizations/nvwa-mcp.md) 页签管理认证环境和三端受管 MCP 配置；普通 JSON 只存地址、身份选择和系统保护引用，秘密/令牌/目标备份不写 Hub TOML、日志或连接诊断。集合 version 1、`_revision` 并发保存，默认本机端口 3849；未知非敏感字段保留，未知字段中的秘密拒绝保存。环境/账号修改先保存才能登录或写客户端，变更会撤销旧授权。运行状态、编译和用户验收见 [本轮交付](releases/v0.4.30-5.md)。下文 v4 构建/产物描述保持历史归属。
 
 ## TianCaiSpace customization fields and concurrent saves
 
@@ -15,6 +18,7 @@ Do not mix them. `TianCaiSpaceHub` stores IM channel and bridge settings. Codex 
 
 | Configuration area | Current contract | Detail |
 | --- | --- | --- |
+| NVWA MCP 独立环境/凭据 | `<stem>.nvwa.json`、`<stem>.nvwa.lock`、`<stem>.nvwa-secrets/`；默认 `127.0.0.1:3849`，64 环境/1 MiB；DPAPI/Keychain 存 secret/token/连接凭据/目标前像；普通配置不接受秘密，回退前移除/恢复客户端 | [NVWA MCP](customizations/nvwa-mcp.md) |
 | `aiGateway.codexVisibleModels` | Saved model IDs displayed to Codex; visibility and provider routing are separate | [Dynamic models](dynamic-codex-models.zh-CN.md) |
 | `aiGateway.codexModelProfiles` | Explicit model capability overrides take priority over inferred family defaults | [Dynamic models](dynamic-codex-models.zh-CN.md) |
 | Provider `compatibility` / `chatDisableReasoning` | `openai_chat` identifies general Chat Completions; disabling reasoning is per provider | [Chat Completions](openai-chat-completions.md) |

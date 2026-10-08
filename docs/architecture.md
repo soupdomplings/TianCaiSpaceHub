@@ -1,12 +1,15 @@
 ﻿# Architecture
 
-`codexhub` bridges three systems:
+维护日期：2026-10-08。当前开发 `0.4.30-5` 新增独立 TC-014 [NVWA MCP](customizations/nvwa-mcp.md)，Windows locked GUI 编译已核对通过，最终整合复核另记；macOS 本版原生构建/实机行为待验证，未发布。以下 remote-control、AI Gateway 与 IM 协议保持各自职责，新 MCP 认证不与模型/IM 授权混用。
+
+`TianCaiSpaceHub` bridges these systems:
 
 - Codex App / official Codex app-server remote-control protocol
 - A local ChatGPT backend-shaped base URL
-- IM channel adapters: Feishu websocket/message APIs, Telegram Bot API, and WeChat iLink APIs
+- IM channel adapters: Feishu websocket/message APIs, Telegram Bot API, WeChat iLink APIs, and WeCom
+- An independent authenticated loopback bridge for NVWA product HTTP MCP
 
-The planned AI Gateway is documented separately in
+The implemented AI Gateway is documented separately in
 [`ai-gateway-architecture.zh-CN.md`](ai-gateway-architecture.zh-CN.md). It is an
 independent model API layer for Codex Responses requests and must not be mixed
 with the existing remote-control backend.
@@ -18,6 +21,16 @@ The design target is strict:
 - Codex owns threads, turns, cwd, approvals, tools, and execution semantics.
 - `codexhub` owns only bridge-local transport state.
 - IM channels are remote interaction surfaces attached to selected Codex threads, not a second source of truth.
+
+## NVWA MCP：独立产品认证与本机桥（0.4.30-5）
+
+“NVWA MCP”页签调用后台专用 `127.0.0.1:3849` 管理入口，采用系统保护的实例凭据；模型网关默认 `3847` 与既有公开 API 不承载 NVWA 登录。客户端通过 `/mcp/<profileId>/<client>` 和每端本地 Bearer 接入，后台发送真实登录 token 或 ticket token，产品 Subject/NpContext 继续负责身份、租户、权限和业务，不从客户端自报头生成身份。
+
+password/browser/application 认证独立于模型 Key 和 IM 授权。普通 `<Hub配置stem>.nvwa.json` 只存环境/引用，Windows 用户域 DPAPI 或 macOS Keychain 保存凭据、token、本地凭据和定向备份；恢复核验环境与真实身份。明确过期时仅有保存凭据且保持同身份，才可在后续请求前重新认证，已发送工具不重放。
+
+本地 session、协议与 RPC ID 绑定 profile/client/登录代次；Hub 检测严格 initialize 和分页 tools/list，不执行工具、不冒充客户端已连接。Codex 定向 TOML、WorkBuddy 独立 `mcp.json`、天工官方 DataServer 窄 CRUD，仅改 NVWA 受管目标，原生刷新/信任/审批保留。天工 MCP 不复用模型 SQLite 链路，不接管其他 MCP/OAuth 条目。
+
+桥当前支持 stateless JSON POST/DELETE，独立 SSE GET 流不纳入；写断连/解析失败准确报未知结果，不因 401 换票自动重发。字段、限制、恢复与待用户验收见 [TC-014](customizations/nvwa-mcp.md)，实现位于 [src/nvwa](../src/nvwa/mod.rs)。
 
 ## Process Model
 
@@ -36,7 +49,7 @@ official Codex app-server
   | GET /backend-api/wham/remote/control/server
   | outbound websocket
   v
-codexhub daemon
+TianCaiSpaceHub daemon
   |
   | Feishu websocket listener
   | Feishu message/card APIs
@@ -49,7 +62,7 @@ IM channel
 The daemon runs separately:
 
 ```text
-codexhub daemon
+TianCaiSpaceHub daemon
 ```
 
 It owns:
@@ -59,6 +72,7 @@ It owns:
 - local ChatGPT backend compatibility endpoints needed by the app
 - IM channel listeners
 - in-memory route/thread/approval/card state
+- independent NVWA authentication, protected credentials, and MCP sessions
 
 ## Remote-Control Backend
 

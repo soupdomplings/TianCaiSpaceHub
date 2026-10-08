@@ -16,6 +16,10 @@ use crate::gmclaw_executor::MAX_SESSION_STEPS;
 
 const DATA_ENDPOINT: &str = "http://127.0.0.1:18768";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+// Native MCP discovery can perform three sequential requests of up to 30s.
+// Keep this budget separate from the short desktop task/storage requests.
+const MCP_REQUEST_TIMEOUT: Duration = Duration::from_secs(100);
+const MAX_MCP_BYTES: usize = 4 * 1024 * 1024;
 const OPERATION_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_LIST_BYTES: usize = 8 * 1024 * 1024;
 const MAX_METADATA_BYTES: usize = 256 * 1024;
@@ -28,6 +32,7 @@ pub(crate) const MAX_PROJECTS: usize = 20_000;
 #[derive(Clone)]
 pub(crate) struct DesktopClient {
     http: Client,
+    mcp_http: Client,
     base_url: Url,
     authorization: HeaderValue,
 }
@@ -216,12 +221,117 @@ impl DesktopClient {
             .timeout(REQUEST_TIMEOUT)
             .build()
             .map_err(|_| anyhow::anyhow!("无法准备天工桌面本地连接"))?;
+        let mcp_http = Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(Duration::from_secs(1))
+            .read_timeout(MCP_REQUEST_TIMEOUT)
+            .timeout(MCP_REQUEST_TIMEOUT)
+            .build()
+            .map_err(|_| anyhow::anyhow!("无法准备天工 MCP 本地连接"))?;
         Ok(Self {
             http,
+            mcp_http,
             base_url: Url::parse(DATA_ENDPOINT)
                 .map_err(|_| anyhow::anyhow!("天工桌面本地地址无效"))?,
             authorization,
         })
+    }
+
+    /// Read only one connection. The returned value can contain local secrets;
+    /// callers must never serialize it into public status or diagnostics.
+    pub(crate) async fn mcp_connection(&self, name: &str) -> Result<Option<Value>> {
+        validate_id(name)?;
+        self.request_json(
+            Method::GET,
+            &["data", "mcp", "connections", name],
+            None,
+            None,
+            MAX_MCP_BYTES,
+            true,
+        )
+        .await
+    }
+
+    pub(crate) async fn mcp_create_connection(&self, connection: Value) -> Result<()> {
+        validate_mcp_changes(&connection, true)?;
+        self.request_json(
+            Method::POST,
+            &["data", "mcp", "connections"],
+            None,
+            Some(connection),
+            MAX_METADATA_BYTES,
+            false,
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// PUT preserves omitted fields; POST would reset them to native defaults.
+    pub(crate) async fn mcp_update_connection(&self, name: &str, changes: Value) -> Result<()> {
+        validate_id(name)?;
+        validate_mcp_changes(&changes, false)?;
+        self.request_json(
+            Method::PUT,
+            &["data", "mcp", "connections", name],
+            None,
+            Some(changes),
+            MAX_METADATA_BYTES,
+            false,
+        )
+        .await?;
+        Ok(())
+    }
+
+    pub(crate) async fn mcp_delete_connection(&self, name: &str) -> Result<()> {
+        validate_id(name)?;
+        self.request_json(
+            Method::DELETE,
+            &["data", "mcp", "connections", name],
+            None,
+            None,
+            MAX_METADATA_BYTES,
+            true,
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Native ok only indicates its weak probe result, never strict MCP success.
+    pub(crate) async fn mcp_test_connection(&self, request: Value) -> Result<Value> {
+        self.mcp_probe(&["data", "mcp", "test"], request).await
+    }
+
+    /// Native discovery can report ok with an empty list after a protocol error.
+    /// The caller must use its own strict bridge handshake for connection status.
+    pub(crate) async fn mcp_discover_tools(&self, request: Value) -> Result<Value> {
+        self.mcp_probe(&["data", "mcp", "tools", "discover"], request)
+            .await
+    }
+
+    async fn mcp_probe(&self, path: &[&str], request: Value) -> Result<Value> {
+        let object = request
+            .as_object()
+            .ok_or_else(|| anyhow::anyhow!("MCP 探测参数无效"))?;
+        ensure!(
+            object.keys().all(|key| matches!(
+                key.as_str(),
+                "server_url" | "token" | "headers" | "timeout_ms" | "server_name"
+            )),
+            "MCP 探测包含不支持的字段"
+        );
+        self.request_json_with_budget(
+            &self.mcp_http,
+            MCP_REQUEST_TIMEOUT,
+            Method::POST,
+            path,
+            None,
+            Some(request),
+            MAX_MCP_BYTES,
+            false,
+        )
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("天工 MCP 响应缺失"))
     }
 
     /// The desktop exposes tasks through scenarios, not GET /data/tasks/:id.
@@ -613,6 +723,31 @@ impl DesktopClient {
         max_bytes: usize,
         allow_not_found: bool,
     ) -> Result<Option<Value>> {
+        self.request_json_with_budget(
+            &self.http,
+            REQUEST_TIMEOUT,
+            method,
+            path,
+            query,
+            body,
+            max_bytes,
+            allow_not_found,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn request_json_with_budget(
+        &self,
+        http: &Client,
+        timeout: Duration,
+        method: Method,
+        path: &[&str],
+        query: Option<&[(&str, String)]>,
+        body: Option<Value>,
+        max_bytes: usize,
+        allow_not_found: bool,
+    ) -> Result<Option<Value>> {
         let mut url = self.base_url.clone();
         url.path_segments_mut()
             .map_err(|_| anyhow::anyhow!("天工桌面本地地址无效"))?
@@ -622,8 +757,7 @@ impl DesktopClient {
             url.query_pairs_mut()
                 .extend_pairs(query.iter().map(|(key, value)| (*key, value.as_str())));
         }
-        let mut request = self
-            .http
+        let mut request = http
             .request(method, url)
             .header(reqwest::header::AUTHORIZATION, self.authorization.clone())
             .header(reqwest::header::ACCEPT, "application/json");
@@ -676,10 +810,47 @@ impl DesktopClient {
                 .map(Some)
                 .map_err(|_| anyhow::anyhow!("天工桌面响应格式无效"))
         };
-        tokio::time::timeout(REQUEST_TIMEOUT, operation)
+        tokio::time::timeout(timeout, operation)
             .await
             .map_err(|_| anyhow::anyhow!("天工桌面本地服务响应超时；写入不会自动重试"))?
     }
+}
+
+fn validate_mcp_changes(value: &Value, create: bool) -> Result<()> {
+    const FIELDS: &[&str] = &[
+        "server_id",
+        "description",
+        "server_url",
+        "connect_type",
+        "timeout_ms",
+        "token_encrypted",
+        "header_config",
+        "config_param",
+        "tools_json",
+        "status",
+        "is_connected",
+        "conn_last_error",
+        "retry_count",
+    ];
+    let object = value
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("天工 MCP 保存参数无效"))?;
+    ensure!(
+        !object.is_empty()
+            && object
+                .keys()
+                .all(|key| FIELDS.contains(&key.as_str()) || (create && key == "server_name")),
+        "天工 MCP 保存包含不支持的字段"
+    );
+    if create {
+        validate_id(
+            object
+                .get("server_name")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+        )?;
+    }
+    Ok(())
 }
 
 fn flatten_tasks(scenarios: Vec<Scenario>) -> Result<Vec<DesktopTask>> {

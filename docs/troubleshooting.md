@@ -124,8 +124,8 @@ Use matching app-server and TUI ports:
 
 ```powershell
 codexhub --config config.toml daemon
-codex -c 'chatgpt_base_url="http://127.0.0.1:3847/backend-api"' app-server --listen ws://127.0.0.1:3849 --remote-control
-codex --remote ws://127.0.0.1:3849 -C D:\path\to\project
+codex -c 'chatgpt_base_url="http://127.0.0.1:3847/backend-api"' app-server --listen ws://127.0.0.1:3850 --remote-control
+codex --remote ws://127.0.0.1:3850 -C D:\path\to\project
 ```
 
 This is for protocol debugging. Codex App should normally connect directly through `chatgpt_base_url`.

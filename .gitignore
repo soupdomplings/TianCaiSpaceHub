@@ -28,3 +28,8 @@ assets/tci-hub-icon.icns
 ai-gateway-request-logs.sqlite
 *.sqlite-shm
 *.sqlite-wal
+*.nvwa.json
+*.nvwa.lock
+*.nvwa-secrets/
+# 用户提供的完整规范快照含未核对凭据示例，仅在本机保留作参考。
+/docs/nvwa/all-in-one.md
