@@ -4,6 +4,8 @@
 
 关联 TC-014；承接最终 main `8d1ccea7e65ac18a210d25c6b59561179c8a1644`（v4 产品、CI 修复与发布核验文档），保留 TC-001～TC-013。本轮 Cargo manifest/lock 统一 `0.4.30-5`，只维护 main，本地与 live origin 没有其他待合并/删除分支。源码提交/推送、编译、用户测试和发布按 [本轮交付](../releases/v0.4.30-5.md) 分别登记；尚未发布 Release，不改写旧标签或包。
 
+产品源码 `e9bcdda2fcbd62a18a737641a27e694d4340aca3` 已快进推送唯一 origin/main，40 个文件；本条与交付核验文档随后单独提交，不修改源提交或历史标签。本轮未创建 v5 标签/Release、未触发发布 Actions。18 份 Markdown 的 640 个本地链接、UTF-8/空白与完整版本核对通过。
+
 - 问题与结果：新增独立 NVWA MCP 页签，支持 Hub 输入账号密码、浏览器个人授权、显式应用代表用户。动态 RSA/SM2 公钥加密，不回退明文；改密/图形验证码/双因子未完成不开放 MCP。密码 token 用原始 Authorization，ticket 交换 token 用 authorization-ticket-token；真实登录上下文核对稳定用户/身份/租户，两类期限独立、未知保持未知。GUI 修改资料先保存，后台操作与当前环境/操作号匹配，登录可取消并拒绝迟到结果。
 - 桥与安全：独立回环服务默认 3849，管理 bootstrap 与客户端 bearer 分离并系统保护；每 profile/client/代次 session，唯一上游 RPC ID 及取消映射，stateless JSON 协议检测和分页工具目录。退出/重新登录/换身份撤旧访问；密封快照重启后先核验身份，60 秒身份核验缓存，仅显式保存凭据才能按同身份有限重认证。工具调用、401、断线与未知结果不自动重放；取消或本地 DELETE 不承诺远端写入回滚。
 - 三端配置：Codex TOML 和 WorkBuddy MCP JSON 仅改受管项，天工只通过已核验官方 DataServer 的 connection 窄接口，不访问其 MCP SQLite。预览后按目标指纹与本轮归属写入，系统保护目标前像；失败补偿只覆盖仍精确匹配本轮后像的目标，未知结果保留 pending，用户改动拒绝覆盖。每端可检测本机桥，天工目录更新再次核对启用、完整指纹、代次和 bearer；原生无 CAS 的最终读写窗口与客户端加载/信任仍明确记录。
