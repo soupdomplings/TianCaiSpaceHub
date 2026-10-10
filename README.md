@@ -4,6 +4,10 @@
 
 [文档总入口](docs/README.md) · [二开功能总表](docs/customizations/README.md) · [二开变更记录](docs/customizations/CHANGELOG.md)
 
+当前 MCP 入口为 **Dumpling-MCP**：在“帮助 → 显示 Dumpling-MCP”勾选后显示，默认隐藏并保存选择，使用 Hub 品牌透明线条图标。Codex 连接按环境名称显示（如 `MCP196`），已有旧名称可通过更新接入迁移；五个客户端按钮有悬浮说明，工具目录显示服务返回的中文简介、说明与原始代码，来源为 MCP `tools/list`。用户已反馈通过 Hub 接入 Codex MCP，本轮新行为待验收，产物以 [最新 v5 交付](docs/releases/v0.4.30-5.md) 为准。
+
+Windows 关机/注销明确放行，普通 × 仍隐藏到托盘；MSI 完整交互安装成功页提供“打开 TianCaiSpaceHub”和“完成”，仅点击打开才启动。关机实机效果与 Actions MSI 生成/安装待用户验收，见 [桌面与交付](docs/customizations/desktop-and-packaging.md)。
+
 维护日期：2026-10-10。当前开发基线为 `v0.4.30-5`，只维护唯一 `main`，上游来源仍为 CodexHub `v0.4.30`。[NVWA MCP](docs/customizations/nvwa-mcp.md) 的认证入口为“账号密码”和“认证服务连接”；新环境默认密码，新切到认证服务连接默认勾选共享应用，主区填写代表账号、`ClientID`、`ClientSecret`，取消勾选才使用浏览器页面授权。说明为“在认证服务管理添加应用服务，获取ClientID和ClientSecret”，页面 `?` 原生帮助提供完整配置步骤及共享身份含义。旧已保存认证方式加载不变，下拉保持可切；密码不要求应用 ID，签名算法仅共享模式在高级设置显示，浏览器限定账号为高级可选项。
 
 仍只填一个 NVWA 服务地址，认证地址默认同服务。高级 MCP 输入默认直接显示 `/mcp`，可改路径或完整 HTTP(S) 地址；空值与 `/mcp` 同义，路径跟随部署前缀、完整 URL 独立覆盖。独立认证地址、租户和登录单位仍在高级设置。
@@ -12,7 +16,7 @@
 
 密码登录默认闲置 30 分钟超时，正常认证访问更新会话，Hub 不按登录后 30 分钟硬判到期；换票 token 默认固定 24 小时、调用不延长，应用 `tokenValidTime` 可覆盖。准确固定期限显示 UTC 到期时间和剩余时间，没有服务时间则只说明规则；真实会话由服务决定。默认租户、账号/返回租户展示及易懂预览继续保留。显式登录 HTTP 401 按取票/换票/读取账号租户等步骤说明，仅改善诊断，不代表真实问题已修复。
 
-**最终 Windows locked GUI build 16.59 秒、38 条警告通过，新 auth-expiry EXE 版本/x64 PE/导入/哈希静态核对通过、未运行**，目录 `outputs/nvwa-v0.4.30-5-windows-auth-expiry-20261010/`，见 [v5 交付](docs/releases/v0.4.30-5.md)。此前 25.52 秒 readable 构建与旧 EXE 保持原归属。不创建标签、Release 或安装包，保存、真实期限及认证仍待用户验收。
+本轮 Windows locked GUI build 22.88 秒、38 条警告通过，独立 EXE 版本/x64 PE/导入/复制哈希核对通过、未运行，目录 `outputs/dumpling-v0.4.30-5-windows-20261010/`；包含页签、名称迁移、工具说明和关机调整。此前 auth-expiry 等历史 EXE 保持原归属，最新源码与产物身份见 [v5 交付](docs/releases/v0.4.30-5.md)。不创建标签、Release 或发布安装包，新增行为、真实期限及安装流程待用户验收。
 
 既有多模型与专用入口隔离、网页导入、天工自动重连/真实任务/完整历史/局部消息同步继续保留。IM 使用 `/tg` 选择天工、`/gpt` 返回 ChatGPT（Codex），沿用平台会话、目录和模型流程；飞书/企微以按钮审批，微信使用文字选项，`/wb` 仍提示暂不支持外部任务。桌面消息同步按实际安装与运行能力识别，首次从 Hub 启用本机通道，保留身份、原生执行、审批和未保存消息保护。
 

@@ -93,12 +93,21 @@ const ID_MENU_PROXY_DIRECT: i32 = 10_013;
 const ID_MENU_PROXY_CUSTOM: i32 = 10_014;
 const ID_MENU_REGISTER_IMPORT: i32 = 10_015;
 const ID_MENU_UNREGISTER_IMPORT: i32 = 10_016;
+const ID_MENU_SHOW_DUMPLING_MCP: i32 = 10_017;
 
 type ImAccountRows = Rc<RefCell<Vec<[String; 5]>>>;
 type ImAccountModel = Rc<RefCell<CustomDataViewVirtualListModel>>;
 type PendingImToggle = Rc<RefCell<Option<ImAccountToggle>>>;
 type ModelMappingRows = Rc<RefCell<Vec<ModelMappingRow>>>;
 type ModelMappingModel = Rc<RefCell<CustomDataViewVirtualListModel>>;
+
+#[derive(Clone)]
+struct DumplingMcpPage {
+    notebook: Notebook,
+    tab: nvwa::NvwaTab,
+    icon: Option<i32>,
+    visible: Rc<Cell<bool>>,
+}
 
 #[derive(Clone, Copy)]
 struct ZaiAccessControls {
@@ -183,7 +192,7 @@ use self::api::{
 use self::codex_tab::{CodexActionResult, CodexTab};
 use self::daemon::{
     app_support_config_path, daemon_config_path, start_daemon_for_gui_async, stop_daemon_on_exit,
-    stop_pending_startup_daemon,
+    stop_owned_daemons_on_session_end, stop_pending_startup_daemon,
 };
 use self::im_accounts::{
     apply_pending_im_action, im_platform_key, refresh_im_account_list, selected_im_account,
@@ -202,9 +211,9 @@ use self::theme::ThemeMode;
 use self::widgets::{
     ImStatusPanel, LucideIconKind, ProviderLogoKind, StateTone, StatusIconKind, StatusPanel,
     app_icon_bitmap, apply_dataview_theme, apply_notebook_theme, card_section,
-    centered_status_panel, dataview_table_style, im_status_panel, lucide_icon_bitmap,
-    provider_logo_bitmap, set_disabled_status_panel, set_im_channel_row, set_status_panel,
-    status_icon_bitmap, status_panel, table_cell_attr, text_field_row,
+    centered_status_panel, dataview_table_style, dumpling_mcp_icon_bitmap, im_status_panel,
+    lucide_icon_bitmap, provider_logo_bitmap, set_disabled_status_panel, set_im_channel_row,
+    set_status_panel, status_icon_bitmap, status_panel, table_cell_attr, text_field_row,
 };
 use self::workbuddy::WorkBuddyActionResult;
 
@@ -291,6 +300,27 @@ impl GuiTimers {
             }
         }
         timers.clear();
+    }
+
+    fn stop_for_session_end(&self) {
+        // An OS event can arrive from a nested modal event loop. If a timer
+        // callback currently holds a RefCell borrow, leave that slot to native
+        // teardown instead of panicking or delaying the committed shutdown.
+        if let Ok(panel_timers) = self.panel_timers.try_borrow() {
+            for timer in panel_timers.iter() {
+                timer.stop();
+            }
+        }
+        if let Ok(mut timers) = self.timers.try_borrow_mut() {
+            for tracked in timers.iter() {
+                if let Ok(store) = tracked.store.try_borrow()
+                    && let Some(timer) = store.as_ref()
+                {
+                    timer.stop();
+                }
+            }
+            timers.clear();
+        }
     }
 }
 
@@ -393,6 +423,7 @@ fn build_ui(
 
     let locale = load_gui_locale();
     let text = GuiText::new(locale);
+    let dumpling_mcp_visible = Rc::new(Cell::new(load_dumpling_mcp_visibility()));
     let api = ApiClient::new(default_base_url(), text);
     let gui_timers = GuiTimers::new();
 
@@ -418,16 +449,8 @@ fn build_ui(
     frame.set_icon(&app_icon_bitmap(48));
     let quitting = Rc::new(AtomicBool::new(false));
     let diagnostics_export_result: DiagnosticsExportResultStore = Arc::new(Mutex::new(None));
-    install_system_menu(
-        &frame,
-        &gui_timers,
-        text,
-        api.clone(),
-        quitting.clone(),
-        gui_tx.clone(),
-        diagnostics_export_result.clone(),
-    );
-    let tray_controller = tray::install(&frame, &gui_timers, text, quitting.clone());
+    let tray_controller = Rc::new(tray::install(&frame, &gui_timers, text, quitting.clone()));
+    let session_ending = Rc::new(AtomicBool::new(false));
     #[cfg(target_os = "macos")]
     {
         let frame = frame;
@@ -1198,7 +1221,11 @@ fn build_ui(
         false,
         tab_icons[5],
     );
-    notebook.add_page(&nvwa_tab.page, "NVWA MCP", false, None);
+    if dumpling_mcp_visible.get() {
+        notebook.add_page(&nvwa_tab.page, "Dumpling-MCP", false, tab_icons[6]);
+    } else {
+        nvwa_tab.page.show(false);
+    }
 
     root_sizer.add(
         &notebook,
@@ -1277,6 +1304,22 @@ fn build_ui(
     workbuddy::bind_actions(&workbuddy_tab, &api, &frame, text, &gui_tx);
     gmclaw::bind_actions(&gmclaw_tab, &api, &frame, text, &gui_tx);
     nvwa::bind_actions(&nvwa_tab, &frame, text, &gui_tx);
+
+    install_system_menu(
+        &frame,
+        &gui_timers,
+        text,
+        api.clone(),
+        quitting.clone(),
+        gui_tx.clone(),
+        diagnostics_export_result.clone(),
+        DumplingMcpPage {
+            notebook,
+            tab: nvwa_tab.clone(),
+            icon: tab_icons[6],
+            visible: dumpling_mcp_visible.clone(),
+        },
+    );
 
     bind_service_connection_settings(&frame, &handles);
 
@@ -1854,6 +1897,7 @@ fn build_ui(
         let workbuddy_tab = workbuddy_tab.clone();
         let gmclaw_tab = gmclaw_tab.clone();
         let nvwa_tab = nvwa_tab.clone();
+        let dumpling_mcp_visible = dumpling_mcp_visible.clone();
         frame.on_idle(move |event| {
             // Kick off any toggles queued from the data views.
             process_pending_im_toggle(
@@ -1952,7 +1996,9 @@ fn build_ui(
                                 needs_dashboard_refresh = true;
                             }
                             GuiMessage::DashboardUpdate => {
-                                nvwa::refresh_if_needed(&nvwa_tab, &gui_tx);
+                                if dumpling_mcp_visible.get() {
+                                    nvwa::refresh_if_needed(&nvwa_tab, &gui_tx);
+                                }
                                 apply_pending_dashboard(
                                     &handles,
                                     &dashboard_refresh,
@@ -2001,6 +2047,36 @@ fn build_ui(
         &gui_timers,
     );
 
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    {
+        // wxApp's default query closes every top-level window, which would
+        // mistake a shutdown query for our ordinary close-to-tray operation.
+        // Allow and consume the query without changing state: another app or
+        // the user can still cancel the OS shutdown/logout afterwards.
+        app.on_query_end_session(|event| {
+            event.set_can_veto(false);
+            event.skip(false);
+        });
+
+        let session_ending = session_ending.clone();
+        let quitting = quitting.clone();
+        let dashboard_refresh = dashboard_refresh.clone();
+        let gui_timers = gui_timers.clone();
+        let tray_controller = tray_controller.clone();
+        let daemon_child = daemon_child.clone();
+        app.on_end_session(move |event| {
+            session_ending.store(true, Ordering::SeqCst);
+            quitting.store(true, Ordering::SeqCst);
+            dashboard_refresh.closing.store(true, Ordering::SeqCst);
+            gui_timers.stop_for_session_end();
+            tray_controller.remove_icon();
+            stop_owned_daemons_on_session_end(&daemon_child, &dashboard_refresh);
+            // Keep native termination. wxMSW performs final app cleanup;
+            // wxOSX force-closes the top window and uses the branch below.
+            event.skip(true);
+        });
+    }
+
     {
         let api = api.clone();
         let daemon_child = daemon_child.clone();
@@ -2008,24 +2084,34 @@ fn build_ui(
         let gui_timers = gui_timers.clone();
         let frame = frame;
         let app = app;
-        let tray_controller = Rc::new(tray_controller);
+        let tray_controller = tray_controller.clone();
+        let session_ending = session_ending.clone();
         let quitting = quitting.clone();
         frame.on_close(move |event| {
             let _single_instance_guard = &single_instance_guard;
-            if !quitting.load(Ordering::SeqCst) {
-                if let WindowEventData::General(raw_event) = &event
-                    && raw_event.can_veto()
-                {
+            let can_veto = matches!(&event,
+                WindowEventData::General(raw_event) if raw_event.can_veto());
+            let was_quitting = quitting.load(Ordering::SeqCst);
+            if !was_quitting && can_veto {
+                if let WindowEventData::General(raw_event) = &event {
                     raw_event.veto();
                 }
                 tray::hide_main_window(&frame, handles.text, &gui_timers);
                 return;
             }
+            let session_exit =
+                session_ending.load(Ordering::SeqCst) || (!was_quitting && !can_veto);
+            quitting.store(true, Ordering::SeqCst);
             dashboard_refresh.closing.store(true, Ordering::SeqCst);
-            gui_timers.stop_all();
             tray_controller.remove_icon();
-            stop_pending_startup_daemon(&dashboard_refresh);
-            stop_daemon_on_exit(&api, &daemon_child);
+            if session_exit {
+                gui_timers.stop_for_session_end();
+                stop_owned_daemons_on_session_end(&daemon_child, &dashboard_refresh);
+            } else {
+                gui_timers.stop_all();
+                stop_pending_startup_daemon(&dashboard_refresh);
+                stop_daemon_on_exit(&api, &daemon_child);
+            }
             frame.destroy();
             widgets::clear_icon_cache();
             app.exit_main_loop();
@@ -2118,10 +2204,10 @@ fn screen_work_area_size() -> Option<(i32, i32)> {
     None
 }
 
-fn create_main_tab_icons(notebook: &Notebook) -> [Option<i32>; 6] {
+fn create_main_tab_icons(notebook: &Notebook) -> [Option<i32>; 7] {
     // Use 24x24 for better quality on high-DPI displays
     let size = 24;
-    let image_list = ImageList::new(size, size, true, 6);
+    let image_list = ImageList::new(size, size, true, 7);
     let image_ids = [
         image_list.add_bitmap(&status_icon_bitmap(StatusIconKind::Codex, size as usize)),
         image_list.add_bitmap(&lucide_icon_bitmap(LucideIconKind::Router, size as usize)),
@@ -2135,6 +2221,7 @@ fn create_main_tab_icons(notebook: &Notebook) -> [Option<i32>; 6] {
         )),
         image_list.add_bitmap(&lucide_icon_bitmap(LucideIconKind::Router, size as usize)),
         image_list.add_bitmap(&lucide_icon_bitmap(LucideIconKind::Router, size as usize)),
+        image_list.add_bitmap(&dumpling_mcp_icon_bitmap(size as usize)),
     ];
     let icons = image_ids.map(|id| (id >= 0).then_some(id));
     if icons.iter().any(Option::is_some) {
@@ -2199,6 +2286,73 @@ fn save_gui_theme(mode: ThemeMode) -> Result<(), String> {
     let mut config = AppConfig::load_or_default(&path).map_err(|err| err.to_string())?;
     config.theme = Some(mode.code().to_string());
     config.save(&path).map_err(|err| err.to_string())
+}
+
+fn load_dumpling_mcp_visibility() -> bool {
+    daemon_config_path()
+        .and_then(|path| AppConfig::load_or_default(&path).ok())
+        .is_some_and(|config| config.show_dumpling_mcp)
+}
+
+fn save_dumpling_mcp_visibility(visible: bool) -> Result<(), String> {
+    let path = daemon_config_path().unwrap_or_else(app_support_config_path);
+    let mut config = AppConfig::load_or_default(&path).map_err(|err| err.to_string())?;
+    config.show_dumpling_mcp = visible;
+    config.save(&path).map_err(|err| err.to_string())
+}
+
+fn toggle_dumpling_mcp_page(
+    frame: &Frame,
+    text: GuiText,
+    page: &DumplingMcpPage,
+    gui_tx: &tokio_mpsc::UnboundedSender<GuiMessage>,
+) {
+    let previous = page.visible.get();
+    let visible = !previous;
+    let result = save_dumpling_mcp_visibility(visible).and_then(|()| {
+        let changed = if visible {
+            page.notebook.add_page(&page.tab.page, "Dumpling-MCP", true, page.icon)
+        } else {
+            // RemovePage detaches without destroying the page. In-flight GUI
+            // results retain valid controls, and showing it again keeps the form.
+            let index = (0..page.notebook.get_page_count()).find(|&index| {
+                page.notebook.get_page(index).is_some_and(|window| {
+                    window.get_handle() == page.tab.page.get_handle()
+                })
+            });
+            index.is_some_and(|index| {
+                if page.notebook.selection() == index as i32 {
+                    page.notebook.set_selection(0);
+                }
+                page.notebook.remove_page(index)
+            })
+        };
+        if !changed {
+            let restored = save_dumpling_mcp_visibility(previous).is_ok();
+            return Err(if text.locale == GuiLocale::ZhCn {
+                if restored { "页签显示未能更新，请重新打开 Hub 后重试。" }
+                else { "页签显示未能更新，显示偏好也未能还原；请重新打开 Hub 后核对帮助菜单。" }
+            } else if restored {
+                "Could not update the tab. Reopen Hub and try again."
+            } else {
+                "Could not update the tab or restore its preference. Reopen Hub and check the Help menu."
+            }.to_owned());
+        }
+        page.tab.page.show(visible);
+        page.visible.set(visible);
+        page.notebook.layout();
+        frame.layout();
+        if visible {
+            nvwa::refresh_if_needed(&page.tab, gui_tx);
+        }
+        Ok(())
+    });
+    if let Some(menu) = frame.get_menu_bar() {
+        menu.check_item(ID_MENU_SHOW_DUMPLING_MCP, page.visible.get());
+    }
+    if let Err(error) = result {
+        show_error(frame, &error);
+    }
 }
 
 fn load_outbound_proxy_config() -> OutboundProxyConfig {
@@ -2360,6 +2514,7 @@ fn install_system_menu(
     quitting: Rc<AtomicBool>,
     gui_tx: tokio_mpsc::UnboundedSender<GuiMessage>,
     diagnostics_export_result: DiagnosticsExportResultStore,
+    dumpling: DumplingMcpPage,
 ) {
     let file_menu = Menu::builder();
     #[cfg(any(windows, target_os = "macos"))]
@@ -2459,6 +2614,20 @@ fn install_system_menu(
         outbound_proxy.mode == OutboundProxyMode::Custom,
     );
     let help_menu = Menu::builder()
+        .append_check_item(
+            ID_MENU_SHOW_DUMPLING_MCP,
+            if text.locale == GuiLocale::ZhCn {
+                "显示 Dumpling-MCP"
+            } else {
+                "Show Dumpling-MCP"
+            },
+            if text.locale == GuiLocale::ZhCn {
+                "勾选后显示 MCP 配置页签"
+            } else {
+                "Show the MCP configuration tab when checked"
+            },
+        )
+        .append_separator()
         .append_item(
             ID_MENU_EXPORT_CONNECTION_DIAGNOSTICS,
             text.export_connection_diagnostics(),
@@ -2467,6 +2636,7 @@ fn install_system_menu(
         .append_separator()
         .append_item(ID_ABOUT, text.about(), "About TianCaiSpaceHub")
         .build();
+    help_menu.check_item(ID_MENU_SHOW_DUMPLING_MCP, dumpling.visible.get());
     let menu_bar = MenuBar::builder()
         .append(file_menu, text.file_menu())
         .append(language_menu, text.language_menu())
@@ -2479,6 +2649,9 @@ fn install_system_menu(
     let frame = *frame;
     let gui_timers = gui_timers.clone();
     frame.on_menu_selected(move |event| match event.get_id() {
+        ID_MENU_SHOW_DUMPLING_MCP => {
+            toggle_dumpling_mcp_page(&frame, text, &dumpling, &gui_tx);
+        }
         ID_MENU_REGISTER_IMPORT | ID_MENU_UNREGISTER_IMPORT => {
             let register = event.get_id() == ID_MENU_REGISTER_IMPORT;
             let message = if register { "将当前 Hub 注册为网页导入应用？移动程序后可重新注册。\nRegister this Hub installation for web imports?" } else { "解除当前程序的网页导入关联？\nRemove this executable's web import association?" };

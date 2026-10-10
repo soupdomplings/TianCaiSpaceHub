@@ -1,6 +1,8 @@
 # TianCaiSpaceHub 文档总入口
 
-维护日期：2026-10-10。当前开发基线统一为 `v0.4.30-5`、唯一 `main`，上游仍 CodexHub `v0.4.30`。[NVWA MCP（TC-014）](customizations/nvwa-mcp.md) 本轮在勾选保存应用密钥后“保存环境”立即系统保护保存 ClientSecret，显示已保存状态；密码记住仍成功后存，API 不返回秘密。密码 token 默认闲置 30 分钟、正常认证访问延长，换票 token 默认固定 24 小时、应用可覆盖，界面区分期限策略与 UTC 准确到期。显式登录 HTTP 401 按步骤说明，仅改善诊断、未验证真实根因。原认证、默认租户、操作预览、本机桥及三端隔离继续保留。**最终 Windows locked GUI build 16.59 秒、38 条警告通过，独立 auth-expiry EXE 静态身份核对通过、未运行**；此前 readable 与旧包保持原归属。保存、真实期限/认证和三端行为待用户验收，不创建标签、Release 或安装包；状态见 [v0.4.30-5 交付](releases/v0.4.30-5.md)。
+维护日期：2026-10-10。当前开发基线统一为 `v0.4.30-5`、唯一 `main`，上游仍 CodexHub `v0.4.30`。[Dumpling-MCP / NVWA MCP（TC-014）](customizations/nvwa-mcp.md) 页签改名并使用透明线条品牌图标，帮助菜单勾选“显示 Dumpling-MCP”后显示，默认隐藏并保存偏好。Codex 连接使用环境名称（如 `MCP196`），更新接入兼容旧哈希名称；按钮有悬浮说明，工具清单展示服务返回的中文简介、说明和原代码。应用密钥立即保护保存、两类期限、认证/默认租户与每端隔离继续保留。用户已反馈通过 Hub 接入 Codex MCP，仅覆盖该次接入；本轮名称迁移、页签与工具展示待验收。构建、独立 EXE 身份及此前产物归属见 [v0.4.30-5 交付](releases/v0.4.30-5.md)，不创建标签、Release 或发布安装包。
+
+同轮修正 [Windows 关机放行与安装成功入口](customizations/desktop-and-packaging.md)：普通 × 仍隐藏，系统结束会话不再 veto；MSI 完整交互安装成功页提供“打开 TianCaiSpaceHub”和“完成”。安装包生成/安装与关机实机行为待用户验收，发布包只由 GitHub Actions 生成。
 
 此前最终 `v0.4.30-4` 产品、CI 修复和发布核验已整体并入当前基线；桌面能力识别、专用模型入口、IM 会话与审批、天工任务/历史/消息同步及全部既有二开继续保留。历史标签、包和用户反馈保持原身份，见 [v4 交付](releases/v0.4.30-4.md)，不作为新增 NVWA 功能的验收证据。Windows 优先、macOS 次之，不扩展 Linux；本地不生成发布安装包。
 
@@ -40,7 +42,7 @@
 
 | 文档 | 用途与状态 |
 | --- | --- |
-| [NVWA MCP](customizations/nvwa-mcp.md) | TC-014 / v0.4.30-5：保存环境立即保护保存应用密钥、保存状态/引用复用/取消移除；密码仍成功后记住，密码闲置/换票固定期限与 401 诊断；Windows 最终 build 16.59 秒/38 警告与 auth-expiry EXE 静态核对通过、未运行，待用户验收，未发布 |
+| [Dumpling-MCP / NVWA MCP](customizations/nvwa-mcp.md) | TC-014 / v0.4.30-5：帮助菜单控制页签显示、透明品牌线条图标；Codex 按环境名接入及旧名迁移；按钮说明、工具中文简介与 tools/list 来源。认证/密钥/期限行为保留，用户有限反馈 Codex 接入，新增行为待验收、未发布 |
 | [WorkBuddy](workbuddy.md) | 模型多条目接入已预发布；v0.4.30-3：接入页提供显式启动桌面按钮，用户本次反馈该按钮可启动，仅覆盖该次本机操作；其他机器及 macOS 待验收。`/wb` 仍提示不可用，外部任务执行尚未接通 |
 | [接入点用途与隔离](customizations/client-channel-scope.md) | 普通/专用渠道标识、各接入点及同模型条目的精确路由、保留名称与回滚注意项 |
 | [天工 Claw 模型](customizations/gmclaw.md) | 多条目与独立路由、保存/删除/默认切换恢复、厂商参数及上游流式聚合已预发布；v0.4.30-3：概览按当前专用模型请求、配置 URL 和桌面进程区分等待/已连接，与上游成功和 IM 授权独立。旧单模型保存无需重启已有有限反馈；新增行为待用户验收 |
@@ -50,7 +52,7 @@
 | [动态模型](dynamic-codex-models.zh-CN.md) | 手填、远端获取、路由补齐和能力继承；已实现 |
 | [网页导入](hub-external-import.md) | Windows/macOS 系统接入已随 v0.4.30-2 成功构建打包并预发布；本版实机导入待用户验收 |
 | [导入协议 v1](HUB_EXTERNAL_IMPORT_CONTRACT_V1.md) | Hub 与 Sub2API 联调契约；不表示主站已上线 |
-| [品牌、桌面与交付](customizations/desktop-and-packaging.md) | v0.4.30-3：产品与程序统一 TianCaiSpaceHub；配置与升级身份兼容、改名后迁移和回滚；接入页签概览与天工/WorkBuddy 显式启动按钮不改变 IM 选择；窗口最大化、取消检查更新及平台产物规则 |
+| [品牌、桌面与交付](customizations/desktop-and-packaging.md) | 产品与程序统一 TianCaiSpaceHub，配置/升级身份兼容；v0.4.30-5：系统关机放行、普通 × 隐藏托盘，Windows MSI 完整交互成功页提供“打开”和“完成”。Windows EXE 编译与静态核对通过，关机/安装待验收、包由 Actions 生成 |
 | [v0.4.28 整合](upstream-v0.4.28-integration.md) | 历史上游整合记录 |
 | [v0.4.29 整合](upstream-v0.4.29-integration.md) | 历史上游整合记录 |
 | [v0.4.30 整合](upstream-v0.4.30-integration.md) | 当前上游基线、12 项二开保留矩阵、冲突取舍和验收边界 |

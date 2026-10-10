@@ -1,6 +1,6 @@
 # NVWA 同仓参考资料
 
-维护日期：2026-10-10。当前 Hub 功能以 [NVWA MCP 专题](../customizations/nvwa-mcp.md) 为准，关联 TC-014、适用 `0.4.30-5`。本轮将应用密钥保护保存提前到“保存环境”、显示保存状态，区分密码闲置/换票固定期限，并按步骤说明 HTTP 401；**最终 Windows locked GUI build 16.59 秒、38 条警告通过，独立 auth-expiry EXE 静态身份核对通过、未运行**，目录 `outputs/nvwa-v0.4.30-5-windows-auth-expiry-20261010/`。此前 25.52 秒 readable 构建及其他 EXE 保持原归属，身份见 [v5 交付](../releases/v0.4.30-5.md)。实机保存/期限/认证行为及真实 401 原因待用户验收，未发布。
+维护日期：2026-10-10。当前 Hub 功能以 [Dumpling-MCP / NVWA MCP 专题](../customizations/nvwa-mcp.md) 为准，关联 TC-014、适用 `0.4.30-5`。页签由帮助菜单勾选显示，默认隐藏/保存选择，图标为透明品牌线条版。Codex 按环境名接入并兼容旧名称迁移，按钮有悬浮说明，工具清单展示服务 `tools/list` 返回的中文简介/说明及原代码。此前密钥立即保护保存、期限区分与 401 诊断保留；历史 auth-expiry EXE 等产物身份不变，最新构建与独立 EXE 见 [v5 交付](../releases/v0.4.30-5.md)。用户已反馈通过 Hub 接入 Codex MCP，仅覆盖该次接入；本轮新行为及真实期限待用户验收、未发布。
 
 | 资料 | 来源与用途 |
 | --- | --- |

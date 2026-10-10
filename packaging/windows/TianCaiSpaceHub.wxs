@@ -4,6 +4,8 @@
     Name="TianCaiSpaceHub"
     Manufacturer="TianCaiSpaceHub"
     Version="$(var.ProductVersion)"
+    Language="1033"
+    Codepage="936"
     UpgradeCode="{42B4BF3C-E660-4C83-96AA-56A4426B96A2}"
     Scope="perMachine"
     Compressed="yes">
@@ -16,6 +18,48 @@
 
     <Icon Id="TianCaiSpaceHubIcon" SourceFile="$(var.SourceDir)\AppIcon.ico" />
     <Property Id="ARPPRODUCTICON" Value="TianCaiSpaceHubIcon" />
+
+    <!-- Preserve the existing ProductLanguage/upgrade match; zh-CN resources control the UI text. -->
+    <!-- A user-selected launch belongs only to the successful full-UI exit page. -->
+    <Property Id="WixUnelevatedShellExecTarget" Value="[#TianCaiSpaceHubExe]" />
+    <CustomAction
+      Id="OpenTianCaiSpaceHub"
+      BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)"
+      DllEntry="WixUnelevatedShellExec"
+      Execute="immediate"
+      Return="ignore" />
+
+    <!-- Common dialogs supply progress, errors and cancellation without adding a license/welcome wizard. -->
+    <UIRef Id="WixUI_Common" />
+    <UI Id="TianCaiSpaceHubUI">
+      <TextStyle Id="WixUI_Font_Normal" FaceName="Microsoft YaHei UI" Size="9" />
+      <TextStyle Id="WixUI_Font_Bigger" FaceName="Microsoft YaHei UI" Size="12" />
+      <TextStyle Id="WixUI_Font_Title" FaceName="Microsoft YaHei UI" Size="10" Bold="yes" />
+      <Property Id="DefaultUIFont" Value="WixUI_Font_Normal" />
+      <DialogRef Id="ErrorDlg" />
+      <DialogRef Id="FatalError" />
+      <DialogRef Id="FilesInUse" />
+      <DialogRef Id="MsiRMFilesInUse" />
+      <DialogRef Id="ProgressDlg" />
+      <DialogRef Id="UserExit" />
+
+      <Dialog Id="TianCaiSpaceHubSuccessDlg" Width="370" Height="180" Title="[ProductName] 安装程序">
+        <Control Id="Title" Type="Text" X="20" Y="20" Width="330" Height="25" NoPrefix="yes" Text="{\WixUI_Font_Bigger}安装成功" />
+        <Control Id="Description" Type="Text" X="20" Y="55" Width="330" Height="55" NoPrefix="yes" Text="TianCaiSpaceHub 已安装成功。点击“打开 TianCaiSpaceHub”立即使用，或点击“完成”关闭安装程序。" />
+        <Control Id="BottomLine" Type="Line" X="0" Y="135" Width="370" Height="0" />
+        <Control Id="Open" Type="PushButton" X="20" Y="150" Width="220" Height="20" Text="打开 TianCaiSpaceHub">
+          <Publish Event="DoAction" Value="OpenTianCaiSpaceHub" Order="1" Condition="UILevel = 5 AND NOT Installed AND NOT REMOVE AND NOT REINSTALL AND NOT UPGRADINGPRODUCTCODE AND &amp;MainFeature = 3" />
+          <Publish Event="EndDialog" Value="Return" Order="2" />
+        </Control>
+        <Control Id="Finish" Type="PushButton" X="275" Y="150" Width="75" Height="20" Default="yes" Cancel="yes" Text="完成">
+          <Publish Event="EndDialog" Value="Return" />
+        </Control>
+      </Dialog>
+
+      <InstallUISequence>
+        <Show Dialog="TianCaiSpaceHubSuccessDlg" OnExit="success" Condition="UILevel = 5 AND NOT Installed AND NOT REMOVE AND NOT REINSTALL AND NOT UPGRADINGPRODUCTCODE AND &amp;MainFeature = 3" />
+      </InstallUISequence>
+    </UI>
 
     <StandardDirectory Id="ProgramFiles6432Folder">
       <Directory Id="INSTALLFOLDER" Name="TianCaiSpaceHub">

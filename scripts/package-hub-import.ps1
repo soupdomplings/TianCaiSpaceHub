@@ -28,7 +28,7 @@ foreach ($name in @('README.md','README.en.md','config.example.toml')) {
 Copy-Item -LiteralPath (Join-Path $projectRoot 'docs\hub-external-import.md') -Destination (Join-Path $stage 'WEB-IMPORT.md')
 Copy-Item -LiteralPath (Join-Path $projectRoot 'packaging\icons\AppIcon.ico') -Destination $msiSource
 $wix = Join-Path $env:USERPROFILE '.dotnet\tools\wix.exe'
-& $wix build (Join-Path $projectRoot 'packaging\windows\TianCaiSpaceHub.wxs') -acceptEula wix7 -arch x64 -d "ProductVersion=$productVersion" -d "SourceDir=$msiSource" -out $msi
+& $wix build (Join-Path $projectRoot 'packaging\windows\TianCaiSpaceHub.wxs') -acceptEula wix7 -arch x64 -ext WixToolset.UI.wixext -ext WixToolset.Util.wixext -culture zh-CN -d "ProductVersion=$productVersion" -d "SourceDir=$msiSource" -out $msi
 if ($LASTEXITCODE -ne 0) { throw 'WiX build failed' }
 Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip
 $baseCommit = git -C $projectRoot rev-parse HEAD

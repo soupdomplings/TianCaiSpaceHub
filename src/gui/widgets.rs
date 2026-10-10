@@ -77,6 +77,7 @@ pub(super) enum LucideIconKind {
 enum IconCacheKey {
     Status(StatusIconKind, usize, bool),
     App(usize),
+    DumplingMcp(usize),
     ImChannel(ImChannelKind, usize, bool),
     Provider(ProviderLogoKind, i32),
     Lucide(LucideIconKind, usize),
@@ -537,6 +538,17 @@ fn render_disabled_status_icon_bitmap(kind: StatusIconKind, size: usize) -> Bitm
 pub(super) fn app_icon_bitmap(size: usize) -> Bitmap {
     cached_icon(IconCacheKey::App(size), || {
         png_brand_bitmap(HUB_ICON_FILE_NAME, HUB_ICON_BYTES, size)
+    })
+}
+
+/// Brand line art with a transparent canvas, using the current theme's ink.
+pub(super) fn dumpling_mcp_icon_bitmap(size: usize) -> Bitmap {
+    cached_icon(IconCacheKey::DumplingMcp(size), || {
+        let color = theme::theme().ink_primary;
+        let stroke = format!("#{:02x}{:02x}{:02x}", color.r, color.g, color.b);
+        let svg =
+            include_str!("../../packaging/brand/dumpling-mcp.svg").replace("currentColor", &stroke);
+        svg_brand_bitmap("dumpling-mcp.svg", svg.as_bytes(), size)
     })
 }
 

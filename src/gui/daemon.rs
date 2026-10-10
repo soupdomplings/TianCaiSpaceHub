@@ -207,6 +207,20 @@ pub(super) fn start_daemon_for_gui_async(
                     } else {
                         wait_or_kill_child(&mut child, Duration::from_millis(250));
                     }
+                    // EndSession uses try_lock so it never waits for startup.
+                    // Release the publication lock before checking `closing`
+                    // again: if shutdown skipped a locked slot after the first
+                    // check, this worker must collect the child it just stored.
+                    // If shutdown starts after this check, its try_lock can now
+                    // take the published child itself.
+                    drop(pending_child);
+                    if closing.load(Ordering::SeqCst)
+                        && let Ok(mut slot) = pending_startup_child.lock()
+                        && let Some(mut child) = slot.take()
+                    {
+                        drop(slot);
+                        wait_or_kill_child(&mut child, Duration::from_millis(250));
+                    }
                     Ok(StartupResult)
                 }
                 Err(err) => Err(err),
@@ -311,6 +325,26 @@ pub(super) fn stop_daemon_on_exit(api: &ApiClient, daemon_child: &Rc<RefCell<Opt
 pub(super) fn stop_pending_startup_daemon(dashboard_refresh: &DashboardRefresh) {
     if let Some(mut child) = take_pending_startup_daemon(dashboard_refresh) {
         wait_or_kill_child(&mut child, Duration::from_millis(250));
+    }
+}
+
+/// The OS has committed to ending this session. Use only the child handles
+/// owned by this GUI; do not query the local API, inspect PIDs, or wait for exit.
+pub(super) fn stop_owned_daemons_on_session_end(
+    daemon_child: &Rc<RefCell<Option<Child>>>,
+    dashboard_refresh: &DashboardRefresh,
+) {
+    if let Ok(mut slot) = daemon_child.try_borrow_mut()
+        && let Some(mut child) = slot.take()
+    {
+        let _ = child.kill();
+    }
+    // Startup may still own this lock. Its worker checks `closing` and disposes
+    // of a late child itself; the GUI must not wait for that worker here.
+    if let Ok(mut slot) = dashboard_refresh.pending_startup_child.try_lock()
+        && let Some(mut child) = slot.take()
+    {
+        let _ = child.kill();
     }
 }
 

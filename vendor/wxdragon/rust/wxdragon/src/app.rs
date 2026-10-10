@@ -9,6 +9,8 @@ use std::ffi::{CStr, CString, c_char, c_void};
 use std::sync::{Arc, LazyLock, Mutex};
 use wxdragon_sys as ffi; // Import Window and WxWidget trait
 
+use crate::event::{Event, EventToken, EventType, WxEvtHandler};
+
 // Type alias to reduce complexity
 type CallbackQueue = Arc<Mutex<VecDeque<Box<dyn FnOnce() + Send + 'static>>>>;
 
@@ -127,6 +129,29 @@ impl App {
     pub(crate) fn new() -> Option<Self> {
         let handle = unsafe { ffi::wxd_GetApp() };
         if handle.is_null() { None } else { Some(App { handle }) }
+    }
+
+    /// Binds the OS session-ending query on platforms that deliver it to wxApp.
+    ///
+    /// Consume the event with `skip(false)` to replace wxWidgets' default window
+    /// close/prompt behaviour. Do not tear down resources during this query:
+    /// the OS may cancel shutdown or logout after the application allows it.
+    pub fn on_query_end_session<F>(&self, callback: F) -> EventToken
+    where
+        F: FnMut(Event) + 'static,
+    {
+        self.bind_internal(EventType::QUERY_END_SESSION, callback)
+    }
+
+    /// Binds the committed OS session-ending event. It cannot be vetoed.
+    ///
+    /// Cleanup should avoid blocking. Use `skip(true)` after cleanup to keep
+    /// the platform's native wxWidgets session termination behaviour.
+    pub fn on_end_session<F>(&self, callback: F) -> EventToken
+    where
+        F: FnMut(Event) + 'static,
+    {
+        self.bind_internal(EventType::END_SESSION, callback)
     }
 
     /// Sets the application's top-level window.
@@ -262,6 +287,12 @@ impl App {
             return String::new();
         }
         get_app_string(self.handle, ffi::wxd_App_GetVendorDisplayName).unwrap_or_default()
+    }
+}
+
+impl WxEvtHandler for App {
+    unsafe fn get_event_handler_ptr(&self) -> *mut ffi::wxd_EvtHandler_t {
+        unsafe { ffi::wxd_App_GetEventHandler(self.handle) }
     }
 }
 

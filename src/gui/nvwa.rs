@@ -20,7 +20,6 @@ use super::{
     GuiMessage,
     browser::open_url_in_browser,
     daemon::{app_support_config_path, daemon_config_path},
-    show_error,
     text::{GuiLocale, GuiText},
     theme,
     widgets::{apply_textctrl_theme, text_field_row},
@@ -245,8 +244,114 @@ fn client_title(kind: &str) -> &'static str {
         "codex" => "Codex",
         "workbuddy" => "WorkBuddy",
         "tiangong" => "天工 Claw",
-        _ => "NVWA MCP",
+        _ => "Dumpling-MCP",
     }
+}
+
+fn bounded_tool_text(value: &str, limit: usize) -> String {
+    let mut characters = value
+        .trim()
+        .chars()
+        .filter(|character| !character.is_control() || matches!(*character, '\n' | '\t'));
+    let mut text: String = characters.by_ref().take(limit).collect();
+    if characters.next().is_some() {
+        text.push('…');
+    }
+    text
+}
+
+fn contains_chinese(value: &str) -> bool {
+    value
+        .chars()
+        .any(|character| matches!(character, '\u{3400}'..='\u{9fff}' | '\u{f900}'..='\u{faff}'))
+}
+
+fn tool_catalog_text(text: GuiText, tools: &[Value]) -> String {
+    if tools.is_empty() {
+        return tr(
+            text,
+            "MCP 服务未返回可用工具。",
+            "The MCP service returned no available tools.",
+        )
+        .to_string();
+    }
+    tools
+        .iter()
+        .enumerate()
+        .map(|(index, tool)| {
+            let code = tool
+                .get("name")
+                .and_then(Value::as_str)
+                .or_else(|| tool.as_str())
+                .unwrap_or("");
+            let title = tool
+                .get("title")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .or_else(|| {
+                    tool.pointer("/annotations/title")
+                        .and_then(Value::as_str)
+                        .filter(|value| !value.trim().is_empty())
+                });
+            let description = tool
+                .get("description")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty());
+            let use_title = title.is_some_and(|title| {
+                matches!(text.locale, GuiLocale::EnUs)
+                    || contains_chinese(title)
+                    || !description.is_some_and(contains_chinese)
+            });
+            let heading = if let Some(title) = title.filter(|_| use_title) {
+                bounded_tool_text(title, 80)
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            } else if let Some(description) = description {
+                let summary = description
+                    .split(['。', '！', '？', '\n', '\r'])
+                    .find(|part| !part.trim().is_empty())
+                    .unwrap_or(description);
+                bounded_tool_text(summary, 48)
+            } else {
+                bounded_tool_text(code, 256)
+            };
+            let mut entry = format!(
+                "{}. {heading}\n{}{}",
+                index + 1,
+                tr(text, "工具代码：", "Tool code: "),
+                code,
+            );
+            if let Some(description) = description {
+                entry.push_str(&format!(
+                    "\n{}{}",
+                    tr(text, "服务说明：", "Service description: "),
+                    bounded_tool_text(description, 1600),
+                ));
+            } else {
+                entry.push_str(tr(
+                    text,
+                    "\n服务未提供工具说明。",
+                    "\nThe service did not provide a tool description.",
+                ));
+            }
+            if matches!(text.locale, GuiLocale::ZhCn)
+                && !title.is_some_and(contains_chinese)
+                && !description.is_some_and(contains_chinese)
+            {
+                entry.push_str("\n服务未提供中文名称或说明，请按工具代码核对。");
+            }
+            entry
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn show_error(parent: &dyn WxWidget, message: &str) {
+    MessageDialog::builder(parent, message, "Dumpling-MCP")
+        .with_style(MessageDialogStyle::OK | MessageDialogStyle::IconError)
+        .build()
+        .show_modal();
 }
 
 fn label<W: WxWidget>(parent: &W, root: &BoxSizer, title: &str) {
@@ -307,7 +412,9 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> NvwaTab {
     page.set_background_color(theme::theme().bg_card_alt);
     let root = BoxSizer::builder(Orientation::Vertical).build();
     let heading = BoxSizer::builder(Orientation::Horizontal).build();
-    let title = StaticText::builder(&page).with_label("NVWA MCP").build();
+    let title = StaticText::builder(&page)
+        .with_label("Dumpling-MCP")
+        .build();
     title.set_foreground_color(theme::theme().ink_secondary);
     heading.add(&title, 0, SizerFlag::AlignCenterVertical, 0);
     heading.add_stretch_spacer(1);
@@ -315,7 +422,11 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> NvwaTab {
         .with_label("?")
         .with_size(Size::new(32, 30))
         .build();
-    help.set_tooltip(tr(text, "如何配置 NVWA MCP", "How to configure NVWA MCP"));
+    help.set_tooltip(tr(
+        text,
+        "如何配置 Dumpling-MCP",
+        "How to configure Dumpling-MCP",
+    ));
     heading.add(&help, 0, SizerFlag::AlignCenterVertical, 0);
     root.add_sizer(&heading, 0, SizerFlag::Expand | SizerFlag::All, 16);
     let grid = FlexGridSizer::builder(0, 2)
@@ -330,6 +441,11 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> NvwaTab {
         &[tr(text, "新增环境", "New environment")],
     );
     let name = text_field_row(&page, &grid, tr(text, "环境名称", "Environment name"), "");
+    name.set_tooltip(tr(
+        text,
+        "接入 Codex 时用此名称显示 MCP；请使用 1～64 位英文字母、数字、- 或 _，例如 MCP196。",
+        "Codex uses this name for the MCP connection: 1–64 letters, numbers, - or _, for example MCP196.",
+    ));
     let product = text_field_row(
         &page,
         &grid,
@@ -590,26 +706,59 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> NvwaTab {
         );
         let client_commands = BoxSizer::builder(Orientation::Horizontal).build();
         let inspect = button(&page, &client_commands, tr(text, "检查", "Inspect"));
+        inspect.set_tooltip(tr(
+            text,
+            "读取此客户端的 NVWA 连接设置，核对接入、启用和修改状态。",
+            "Read this client's NVWA connection settings and check whether the entry is configured, enabled or changed.",
+        ));
         let check = button(
             &page,
             &client_commands,
             tr(text, "检测本机桥", "Check local bridge"),
         );
+        check.set_tooltip(if kind == "tiangong" {
+            tr(
+                text,
+                "通过这条已接入连接读取工具清单；成功后同步到天工，不执行工具。",
+                "Read the tool list through this configured connection and update TianGong after success; no tool is invoked.",
+            )
+        } else {
+            tr(
+                text,
+                "通过此客户端的连接凭据检测本机桥并读取工具清单，不执行工具。",
+                "Check the local bridge using this client's connection credential and read the tool list; no tool is invoked.",
+            )
+        });
         let apply = button(
             &page,
             &client_commands,
             tr(text, "预览接入", "Preview connection"),
         );
+        apply.set_tooltip(tr(
+            text,
+            "查看将写入的 MCP 名称与设置，确认后添加或更新此客户端的 NVWA 连接。",
+            "Preview the MCP name and settings, then confirm to add or update this client's NVWA connection.",
+        ));
         let remove = button(
             &page,
             &client_commands,
             tr(text, "预览移除", "Preview removal"),
         );
+        remove.set_tooltip(tr(
+            text,
+            "查看将移除的 NVWA 连接，确认后只删除 Hub 管理的这一项。",
+            "Preview the NVWA connection to remove, then confirm to delete only this Hub-managed entry.",
+        ));
         let restore = button(
             &page,
             &client_commands,
             tr(text, "预览恢复", "Preview restore"),
         );
+        restore.set_tooltip(tr(
+            text,
+            "查看此连接最近一次修改前的备份，确认后还原；后续改动会阻止覆盖。",
+            "Preview the backup from before this connection's latest change, then confirm to restore; later changes prevent overwriting.",
+        ));
         root.add_sizer(
             &client_commands,
             0,
@@ -632,10 +781,19 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> NvwaTab {
             restore,
         });
     }
-    label(&page, &root, tr(text, "当前能力", "Current capabilities"));
+    label(&page, &root, tr(text, "当前可用工具", "Available tools"));
+    label(
+        &page,
+        &root,
+        tr(
+            text,
+            "来自 MCP 服务返回的工具清单（tools/list）；显示返回的名称或短简介、说明与原始工具代码。",
+            "From the MCP service's tool list (tools/list); shows returned names or short summaries, descriptions and original tool codes.",
+        ),
+    );
     let tools = TextCtrl::builder(&page)
         .with_style(TextCtrlStyle::ReadOnly | TextCtrlStyle::MultiLine)
-        .with_size(Size::new(-1, 125))
+        .with_size(Size::new(-1, 220))
         .build();
     apply_textctrl_theme(&tools);
     root.add(
@@ -850,7 +1008,7 @@ pub(super) fn bind_actions(
         MessageDialog::builder(
             &f,
             configuration_help(text),
-            tr(text, "NVWA MCP 配置说明", "NVWA MCP configuration"),
+            tr(text, "Dumpling-MCP 配置说明", "Dumpling-MCP configuration"),
         )
         .with_style(MessageDialogStyle::OK | MessageDialogStyle::IconInformation)
         .build()
@@ -1308,7 +1466,7 @@ fn client_body(tab: &NvwaTab, row: &ClientRow) -> Value {
 }
 
 fn confirm(frame: &Frame, message: &str) -> bool {
-    MessageDialog::builder(frame, message, "NVWA MCP")
+    MessageDialog::builder(frame, message, "Dumpling-MCP")
         .with_style(MessageDialogStyle::YesNo | MessageDialogStyle::IconQuestion)
         .build()
         .show_modal()
@@ -1319,7 +1477,7 @@ fn configuration_help(text: GuiText) -> &'static str {
     tr(
         text,
         concat!(
-            "1. 填写环境\n填写环境名称和 NVWA 服务地址。MCP 默认 /mcp，可在高级设置改路径或完整地址；路径跟随服务地址的部署前缀。认证服务单独部署时，再填写独立认证地址。\n\n",
+            "1. 填写环境\n填写环境名称和 NVWA 服务地址。Codex 中的 MCP 使用环境名称，支持 1～64 位英文字母、数字、- 或 _，例如 MCP196；旧名称可通过预览接入更新。MCP 默认 /mcp，可在高级设置改路径或完整地址；路径跟随服务地址的部署前缀。认证服务单独部署时，再填写独立认证地址。\n\n",
             "2. 选择登录方式\n账号密码：填写账号和密码，收到验证码要求后再填写验证码；改密或图形验证码按服务提示处理。密码在页面直接显示。\n",
             "认证服务连接：在认证服务管理添加应用服务，获取ClientID和ClientSecret。填写这两个值，ClientSecret 在页面直接显示。默认勾选共享应用，填写要代表的账号；应用为该账号申请连接，不验证个人密码。没有应用管理权限时，请向管理员获取应用资料。\n\n",
             "3. 浏览器授权（可选）\n取消共享应用勾选后，用同一组 ClientID/ClientSecret，在打开的产品页面完成个人登录和授权。应用还须允许 Hub 的本机回调地址。高级“限定授权账号”可留空，填写时须与实际授权账号一致。旧浏览器环境保持此方式。\n\n",
@@ -1331,7 +1489,7 @@ fn configuration_help(text: GuiText) -> &'static str {
             "6. 有效期\nClientID + ClientSecret 取票换得的凭证默认固定 24 小时，调用不会延长；认证服务应用的 tokenValidTime 可覆盖。服务返回准确时间时显示到期时间（UTC）和剩余时间，没有返回时只说明默认规则。账号密码登录默认闲置 30 分钟超时，正常认证访问可延长；连续使用不会仅因登录已过 30 分钟被 Hub 判定到期，实际是否有效由服务判断。"
         ),
         concat!(
-            "1. Environment\nEnter a name and the NVWA service URL. MCP defaults to /mcp; edit its path or full URL in advanced settings. Paths preserve the service deployment prefix. Set a separate authentication URL only if deployed separately.\n\n",
+            "1. Environment\nEnter a name and the NVWA service URL. Codex uses the environment name for MCP: 1–64 letters, numbers, - or _, for example MCP196. Preview access to update a previous name. MCP defaults to /mcp; edit its path or full URL in advanced settings. Paths preserve the service deployment prefix. Set a separate authentication URL only if deployed separately.\n\n",
             "2. Sign-in method\nAccount and password: enter both, then complete any requested verification. Follow service instructions for password changes or captcha. Password input is visible.\n",
             "Authentication service connection: add an application service in authentication service management to obtain ClientID and ClientSecret. Enter both; ClientSecret input is visible. Shared application delegation is checked by default; enter the account to represent. This requests access for that account without validating its password. Obtain application settings from your administrator if needed.\n\n",
             "3. Browser authorization (optional)\nUncheck shared delegation and use the same ClientID/ClientSecret to sign in and authorize on the product page. The application must allow Hub's local callback. A restricted username in advanced settings is optional and must match the authorized account if set. Existing browser profiles keep this method.\n\n",
@@ -1469,15 +1627,7 @@ pub(super) fn apply_result(
                 .and_then(Value::as_array)
                 .cloned()
                 .unwrap_or_default();
-            let names: Vec<_> = tools
-                .iter()
-                .filter_map(|tool| {
-                    tool.get("name")
-                        .and_then(Value::as_str)
-                        .or_else(|| tool.as_str())
-                })
-                .collect();
-            tab.tools.set_value(&names.join("\n"));
+            tab.tools.set_value(&tool_catalog_text(text, &tools));
             tab.status.set_label(&match text.locale {
                 GuiLocale::ZhCn => format!(
                     "MCP 连接成功，已读取 {} 个工具。接下来可以在下方选择客户端，点击“预览接入”。",
@@ -1491,13 +1641,7 @@ pub(super) fn apply_result(
         }
         Action::DetectClient(kind) => {
             let tools = value["tools"].as_array().cloned().unwrap_or_default();
-            tab.tools.set_value(
-                &tools
-                    .iter()
-                    .filter_map(|tool| tool["name"].as_str())
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-            );
+            tab.tools.set_value(&tool_catalog_text(text, &tools));
             let next_step = if kind == "tiangong" {
                 if value["tiangongDirectoryUpdated"].as_bool() == Some(true) {
                     tr(
@@ -1599,6 +1743,40 @@ pub(super) fn apply_result(
                     .unwrap_or_default();
                 let client_name = client_title(&client);
                 let environment = tab.name.get_value();
+                let mcp_name = if operation == "apply" {
+                    value
+                        .pointer("/status/desiredServerName")
+                        .or_else(|| value.get("desiredServerName"))
+                        .and_then(Value::as_str)
+                } else {
+                    None
+                }
+                .or_else(|| {
+                    value
+                        .pointer("/status/serverName")
+                        .or_else(|| value.get("serverName"))
+                        .and_then(Value::as_str)
+                })
+                .filter(|name| !name.trim().is_empty())
+                .unwrap_or(tr(text, "服务未返回名称", "Name was not returned"));
+                let name_change = if operation == "apply" {
+                    value
+                        .pointer("/status/previousServerName")
+                        .or_else(|| value.get("previousServerName"))
+                        .and_then(Value::as_str)
+                        .filter(|name| !name.trim().is_empty() && *name != mcp_name)
+                        .map(|previous| match text.locale {
+                            GuiLocale::ZhCn => {
+                                format!("\n当前名称：{previous}；确认后更新为上方 MCP 名称。")
+                            }
+                            GuiLocale::EnUs => format!(
+                                "\nCurrent name: {previous}; confirmation updates it to the MCP name above."
+                            ),
+                        })
+                        .unwrap_or_default()
+                } else {
+                    String::new()
+                };
                 let (introduction, decision) = match operation.as_str() {
                     "apply" => (
                         match text.locale {
@@ -1661,8 +1839,10 @@ pub(super) fn apply_result(
                     )
                 };
                 let detail = display_message(text, detail);
-                let message =
-                    format!("{introduction}\n\n{target}\n\n{detail}\n{warnings}\n\n{decision}");
+                let message = format!(
+                    "{introduction}\n\n{}{mcp_name}{name_change}\n{target}\n\n{detail}\n{warnings}\n\n{decision}",
+                    tr(text, "MCP 名称：", "MCP name: "),
+                );
                 if confirm(frame, &message) {
                     body["expectedFingerprint"] = json!(fingerprint);
                     if let Some(backup) = value
@@ -1745,7 +1925,14 @@ fn apply_client(tab: &NvwaTab, kind: &str, value: Value) {
             ),
         };
         let detail = display_message(tab.text, detail);
-        row.status.set_label(&format!("{detail}\n{load}\n{bridge}"));
+        let mcp_name = value
+            .get("serverName")
+            .and_then(Value::as_str)
+            .filter(|name| !name.trim().is_empty())
+            .map(|name| format!("{}{name}\n", tr(tab.text, "MCP 名称：", "MCP name: ")))
+            .unwrap_or_default();
+        row.status
+            .set_label(&format!("{mcp_name}{detail}\n{load}\n{bridge}"));
         row.status.wrap(920);
     }
     tab.state

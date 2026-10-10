@@ -143,11 +143,16 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           dotnet tool install --global wix --version 7.0.0
+          if ($LASTEXITCODE -ne 0) { throw "WiX tool installation failed" }
           $wix = Join-Path $env:USERPROFILE ".dotnet\tools\wix.exe"
-          if (Test-Path $wix) {
-            & $wix --version
-          } else {
-            wix --version
+          if (-not (Test-Path $wix)) {
+            $wix = "wix"
+          }
+          & $wix --version
+          if ($LASTEXITCODE -ne 0) { throw "WiX version check failed" }
+          foreach ($extension in @("WixToolset.UI.wixext/7.0.0", "WixToolset.Util.wixext/7.0.0")) {
+            & $wix extension add -g $extension
+            if ($LASTEXITCODE -ne 0) { throw "WiX extension installation failed: $extension" }
           }
 
       - name: Build MSI
@@ -163,9 +168,13 @@ jobs:
           & $wix build "packaging\windows\TianCaiSpaceHub.wxs" `
             -acceptEula wix7 `
             -arch x64 `
+            -ext WixToolset.UI.wixext `
+            -ext WixToolset.Util.wixext `
+            -culture zh-CN `
             -d "ProductVersion=$env:PRODUCT_VERSION" `
             -d "SourceDir=$sourceDir" `
             -out $msiPath
+          if ($LASTEXITCODE -ne 0) { throw "WiX MSI build failed" }
 
       - name: Sign MSI
         if: env.HAS_WINDOWS_CODESIGN == 'true'

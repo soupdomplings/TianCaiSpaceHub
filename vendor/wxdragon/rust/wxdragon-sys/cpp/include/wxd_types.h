@@ -346,6 +346,10 @@ typedef enum {
     WXD_EVENT_TYPE_GRID_RANGE_SELECTED = 386,       // wxEVT_GRID_RANGE_SELECTED
     WXD_EVENT_TYPE_GRID_TABBING = 387,              // wxEVT_GRID_TABBING
 
+    // Application session lifecycle events (wxCloseEvent).
+    WXD_EVENT_TYPE_QUERY_END_SESSION = 390,        // wxEVT_QUERY_END_SESSION
+    WXD_EVENT_TYPE_END_SESSION = 391,              // wxEVT_END_SESSION
+
     WXD_EVENT_TYPE_MAX // Keep this last for count if needed, or remove if not used for iteration
 } WXDEventTypeCEnum;
 

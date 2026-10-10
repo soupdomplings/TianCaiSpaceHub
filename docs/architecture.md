@@ -1,6 +1,6 @@
 ﻿# Architecture
 
-维护日期：2026-10-08。当前开发 `0.4.30-5` 新增独立 TC-014 [NVWA MCP](customizations/nvwa-mcp.md)，Windows locked GUI 编译已核对通过，最终整合复核另记；macOS 本版原生构建/实机行为待验证，未发布。以下 remote-control、AI Gateway 与 IM 协议保持各自职责，新 MCP 认证不与模型/IM 授权混用。
+维护日期：2026-10-10。当前开发 `0.4.30-5` 的独立 TC-014 [Dumpling-MCP / NVWA MCP](customizations/nvwa-mcp.md) 提供帮助菜单显示开关、环境名接入及工具目录说明；Windows locked GUI 整合编译和 EXE 静态核对通过，身份见 [v5 交付](releases/v0.4.30-5.md)。macOS 原生构建及本轮实机行为待验证，未发布。以下 remote-control、AI Gateway 与 IM 协议保持各自职责，新 MCP 认证不与模型/IM 授权混用。
 
 `TianCaiSpaceHub` bridges these systems:
 
@@ -24,7 +24,7 @@ The design target is strict:
 
 ## NVWA MCP：独立产品认证与本机桥（0.4.30-5）
 
-“NVWA MCP”页签调用后台专用 `127.0.0.1:3849` 管理入口，采用系统保护的实例凭据；模型网关默认 `3847` 与既有公开 API 不承载 NVWA 登录。客户端通过 `/mcp/<profileId>/<client>` 和每端本地 Bearer 接入，后台发送真实登录 token 或 ticket token，产品 Subject/NpContext 继续负责身份、租户、权限和业务，不从客户端自报头生成身份。
+“Dumpling-MCP”页签（原 NVWA MCP）由帮助菜单勾选显示，默认隐藏，GUI 偏好 `showDumplingMcp` 保存于主配置；隐藏不撤销连接。页签调用后台专用 `127.0.0.1:3849` 管理入口，采用系统保护的实例凭据；模型网关默认 `3847` 与既有公开 API 不承载 NVWA 登录。客户端通过 `/mcp/<profileId>/<client>` 和每端本地 Bearer 接入，后台发送真实登录 token 或 ticket token，产品 Subject/NpContext 继续负责身份、租户、权限和业务，不从客户端自报头生成身份。
 
 password/browser/application 认证独立于模型 Key 和 IM 授权。普通 `<Hub配置stem>.nvwa.json` 只存环境/引用，Windows 用户域 DPAPI 或 macOS Keychain 保存凭据、token、本地凭据和定向备份；恢复核验环境与真实身份。明确过期时仅有保存凭据且保持同身份，才可在后续请求前重新认证，已发送工具不重放。
 

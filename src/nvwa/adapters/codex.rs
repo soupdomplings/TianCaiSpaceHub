@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{collections::BTreeMap, path::PathBuf};
 
 use anyhow::{Result, ensure};
 use toml_edit::{DocumentMut, Item, Table, value};
@@ -52,9 +52,17 @@ pub(super) fn desired(name: &str, endpoint: &str, bearer: &str) -> Snapshot {
 }
 
 pub(super) fn replace(raw: &[u8], name: &str, entry: Option<&Snapshot>) -> Result<Vec<u8>> {
+    replace_many(raw, &BTreeMap::from([(name.to_owned(), entry.cloned())]))
+}
+
+/// Produce a single document for an explicitly verified set of MCP targets.
+pub(super) fn replace_many(
+    raw: &[u8],
+    entries: &BTreeMap<String, Option<Snapshot>>,
+) -> Result<Vec<u8>> {
     let mut doc = document(raw)?;
     if doc.get("mcp_servers").is_none() {
-        if entry.is_none() {
+        if entries.values().all(Option::is_none) {
             return Ok(raw.to_vec());
         }
         doc["mcp_servers"] = Item::Table(Table::new());
@@ -62,19 +70,21 @@ pub(super) fn replace(raw: &[u8], name: &str, entry: Option<&Snapshot>) -> Resul
     let servers = doc["mcp_servers"]
         .as_table_like_mut()
         .ok_or_else(|| anyhow::anyhow!("Codex mcp_servers 格式无效"))?;
-    match entry {
-        Some(Snapshot::Toml(text)) => {
-            let single = document(text.as_bytes())?;
-            let item = single
-                .get("mcp_servers")
-                .and_then(Item::as_table_like)
-                .and_then(|t| t.get(name))
-                .ok_or_else(|| anyhow::anyhow!("Codex 受保护备份缺少目标条目"))?;
-            servers.insert(name, item.clone());
-        }
-        Some(_) => anyhow::bail!("Codex 受保护备份类型无效"),
-        None => {
-            servers.remove(name);
+    for (name, entry) in entries {
+        match entry {
+            Some(Snapshot::Toml(text)) => {
+                let single = document(text.as_bytes())?;
+                let item = single
+                    .get("mcp_servers")
+                    .and_then(Item::as_table_like)
+                    .and_then(|t| t.get(name.as_str()))
+                    .ok_or_else(|| anyhow::anyhow!("Codex 受保护备份缺少目标条目"))?;
+                servers.insert(name, item.clone());
+            }
+            Some(_) => anyhow::bail!("Codex 受保护备份类型无效"),
+            None => {
+                servers.remove(name);
+            }
         }
     }
     Ok(doc.to_string().into_bytes())

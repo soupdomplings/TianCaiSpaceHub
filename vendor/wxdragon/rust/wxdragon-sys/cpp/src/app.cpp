@@ -234,6 +234,15 @@ wxd_GetApp()
     return reinterpret_cast<wxd_App_t*>(wxTheApp);
 }
 
+wxd_EvtHandler_t*
+wxd_App_GetEventHandler(wxd_App_t* app)
+{
+    if (!app)
+        return nullptr;
+    wxApp* wx_app = reinterpret_cast<wxApp*>(app);
+    return reinterpret_cast<wxd_EvtHandler_t*>(static_cast<wxEvtHandler*>(wx_app));
+}
+
 // Sets the top window (main frame) for the application.
 void
 wxd_App_SetTopWindow(wxd_App_t* app, wxd_Window_t* window)

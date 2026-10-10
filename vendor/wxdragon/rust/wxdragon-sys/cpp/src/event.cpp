@@ -982,6 +982,10 @@ get_wx_event_type_for_c_enum(WXDEventTypeCEnum c_enum_val)
         return wxEVT_BUTTON;
     case WXD_EVENT_TYPE_CLOSE_WINDOW:
         return wxEVT_CLOSE_WINDOW;
+    case WXD_EVENT_TYPE_QUERY_END_SESSION:
+        return wxEVT_QUERY_END_SESSION;
+    case WXD_EVENT_TYPE_END_SESSION:
+        return wxEVT_END_SESSION;
     case WXD_EVENT_TYPE_CHECKBOX:
         return wxEVT_CHECKBOX;
     case WXD_EVENT_TYPE_TEXT:

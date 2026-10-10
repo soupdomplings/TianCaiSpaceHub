@@ -19,6 +19,7 @@ use crate::gmclaw_desktop::DesktopClient;
 use super::{config::ConfigStore, secrets::SecretStore, types::ClientKind};
 
 mod codex;
+mod migration;
 mod tiangong;
 mod workbuddy;
 
@@ -56,6 +57,12 @@ pub(crate) enum AdapterOperation {
 pub(crate) struct AdapterStatus {
     pub client: ClientKind,
     pub server_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub desired_server_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_server_name: Option<String>,
+    #[serde(default)]
+    pub name_conflict: bool,
     pub target_path: Option<String>,
     pub available: bool,
     pub present: bool,
@@ -169,11 +176,23 @@ pub(crate) fn managed_server_name(profile_id: &str) -> Result<String> {
     ))
 }
 
-fn location(target: &AdapterTarget) -> Result<Location> {
+pub(crate) fn validate_codex_server_name(name: &str) -> Result<()> {
     ensure!(
-        target.server_name == managed_server_name(&target.profile_id)?,
-        "NVWA MCP 受管条目名无效"
+        !name.is_empty()
+            && name.len() <= 64
+            && name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')),
+        "请将环境名称改为 1～64 位英文字母、数字、下划线或连字符，再接入 Codex"
     );
+    Ok(())
+}
+
+fn location(target: &AdapterTarget) -> Result<Location> {
+    let legacy_name = managed_server_name(&target.profile_id)?;
+    if target.client != ClientKind::Codex {
+        ensure!(target.server_name == legacy_name, "NVWA MCP 受管条目名无效");
+    }
     let path = match target.client {
         ClientKind::Codex => Some(
             target
@@ -200,10 +219,16 @@ fn location(target: &AdapterTarget) -> Result<Location> {
         } else {
             "mcp.json"
         };
-        ensure!(
-            path.file_name().is_some_and(|name| name == expected),
-            "MCP 配置路径文件名不匹配"
-        );
+        let matches_name = path.file_name().is_some_and(|name| {
+            #[cfg(windows)]
+            if target.client == ClientKind::Codex {
+                return name
+                    .to_str()
+                    .is_some_and(|name| name.eq_ignore_ascii_case(expected));
+            }
+            name == expected
+        });
+        ensure!(matches_name, "MCP 配置路径文件名不匹配");
         validate_path(path)?;
     }
     let identity = serde_json::to_vec(&(
@@ -267,6 +292,9 @@ fn save_ledger(root: &Path, ledger: &Ledger) -> Result<()> {
 }
 
 pub(crate) async fn inspect(ctx: &AdapterContext, target: &AdapterTarget) -> Result<AdapterStatus> {
+    if target.client == ClientKind::Codex {
+        return migration::inspect(ctx, target).await;
+    }
     let location = location(target)?;
     let root = metadata_root(ctx)?;
     let _lock = ledger_lock(&root).await?;
@@ -296,11 +324,14 @@ pub(crate) async fn preview(
     target: &AdapterTarget,
     operation: AdapterOperation,
 ) -> Result<AdapterPreview> {
+    if target.client == ClientKind::Codex && matches!(operation, AdapterOperation::Apply) {
+        validate_codex_server_name(&target.server_name)?;
+    }
     let status = inspect(ctx, target).await?;
     let can_apply = status.available
         && !status.modified
         && match operation {
-            AdapterOperation::Apply => !status.present || status.owned,
+            AdapterOperation::Apply => !status.name_conflict && (!status.present || status.owned),
             AdapterOperation::Remove => status.owned,
             AdapterOperation::Restore => status.owned && status.backup_ref.is_some(),
         };
@@ -314,6 +345,17 @@ pub(crate) async fn preview(
         warnings.push(
             "这条连接已被手动或其他程序修改。请先核对客户端中的设置，再回 Hub 重新检查。".into(),
         );
+    }
+    if status.name_conflict && matches!(operation, AdapterOperation::Apply) {
+        warnings.push(status.detail.clone());
+    }
+    if matches!(operation, AdapterOperation::Apply)
+        && let Some(previous) = &status.previous_server_name
+        && let Some(desired) = &status.desired_server_name
+    {
+        warnings.push(format!(
+            "本次将把 Codex 中的受管连接“{previous}”更新为“{desired}”，确认保存后移除旧名称，不保留重复连接。"
+        ));
     }
     Ok(AdapterPreview {
         operation,
@@ -398,6 +440,9 @@ async fn mutate(
     mut desired: Option<Snapshot>,
     restore_ref: Option<&str>,
 ) -> Result<AdapterOutcome> {
+    if target.client == ClientKind::Codex {
+        return migration::mutate(ctx, target, expected, operation, desired, restore_ref).await;
+    }
     ensure!(!expected.is_empty(), "接入操作缺少目标指纹，请先预览");
     let location = location(target)?;
     let root = metadata_root(ctx)?;
@@ -856,6 +901,9 @@ fn status(
     Ok(AdapterStatus {
         client: target.client,
         server_name: target.server_name.clone(),
+        desired_server_name: None,
+        previous_server_name: None,
+        name_conflict: false,
         target_path: location
             .path
             .as_ref()
@@ -888,6 +936,9 @@ fn unavailable(target: &AdapterTarget, managed: Option<&ManagedEntry>) -> Adapte
     AdapterStatus {
         client: target.client,
         server_name: target.server_name.clone(),
+        desired_server_name: None,
+        previous_server_name: None,
+        name_conflict: false,
         target_path: None,
         available: false,
         present: false,

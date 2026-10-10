@@ -24,6 +24,9 @@ pub struct AppConfig {
     pub language: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
+    /// Only controls the optional GUI page; it does not revoke MCP connections.
+    #[serde(default)]
+    pub show_dumpling_mcp: bool,
     #[serde(default)]
     pub state_path: PathBuf,
     pub logging: LoggingConfig,
@@ -142,6 +145,7 @@ impl Default for AppConfig {
             outbound_proxy: OutboundProxyConfig::default(),
             language: None,
             theme: None,
+            show_dumpling_mcp: false,
             state_path: PathBuf::from("codexhub-state.json"),
             logging: LoggingConfig::default(),
             feishu: FeishuConfig::default(),

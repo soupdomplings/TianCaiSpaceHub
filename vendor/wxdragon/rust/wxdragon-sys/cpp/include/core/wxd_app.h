@@ -6,6 +6,9 @@
 // --- App Functions ---
 WXD_EXPORTED wxd_App_t*
 wxd_GetApp();
+// Return the correctly adjusted wxEvtHandler base pointer for app event bindings.
+WXD_EXPORTED wxd_EvtHandler_t*
+wxd_App_GetEventHandler(wxd_App_t* app);
 WXD_EXPORTED int
 wxd_Main(int argc, char** argv, wxd_OnInitCallback on_init, void* userData);
 WXD_EXPORTED void

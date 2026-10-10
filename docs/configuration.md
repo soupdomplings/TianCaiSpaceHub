@@ -8,7 +8,7 @@ There are three separate config surfaces:
 
 Do not mix them. `TianCaiSpaceHub` stores IM channel and bridge settings. Codex App stores model provider, auth, and `chatgpt_base_url`.
 
-维护日期：2026-10-10。当前开发基线为 v0.4.30-5，独立 [NVWA MCP](customizations/nvwa-mcp.md) 页签管理认证环境和三端受管 MCP 配置；普通 JSON 只存地址、身份选择和系统保护引用，秘密/令牌/目标备份不写 Hub TOML、日志或连接诊断。集合 version 1、`_revision` 并发保存，默认本机端口 3849；未知非敏感字段保留，未知字段中的秘密拒绝保存。环境/账号修改先保存才能登录或写客户端，变更会撤销旧授权。本轮应用密钥改为“保存环境”立即保护保存，页面显示保存状态，密码仍登录成功后记住；期限区分密码闲置与换票固定到期，HTTP 401 分步骤说明。最终 Windows locked GUI build 16.59 秒、38 条警告通过，auth-expiry EXE 静态身份核对通过、未运行；此前 25.52 秒 readable 构建及其他产物保持阶段归属，见 [本轮交付](releases/v0.4.30-5.md)。真实保存、会话期限、认证及 401 根因待用户验收。
+维护日期：2026-10-10。当前开发基线 v0.4.30-5，独立 [Dumpling-MCP / NVWA MCP](customizations/nvwa-mcp.md) 页签管理认证环境和三端受管 MCP 配置。帮助菜单控制显示，默认隐藏；Codex 按环境名接入，按钮说明/工具目录增强。普通 JSON 只存地址、身份选择和系统保护引用，秘密/令牌/定向备份不写 Hub TOML、日志或连接诊断。集合 version 1、`_revision` 并发保存，默认端口 3849；非敏感未知字段保留，秘密拒绝保存。密钥立即保护保存、密码成功后记住、期限区分/401诊断等保留。用户有限反馈 Codex 接入，新增行为与真实期限待验收；当前构建及新旧产物归属见 [交付记录](releases/v0.4.30-5.md)。
 
 ## NVWA 服务地址与认证材料
 
@@ -33,7 +33,9 @@ Do not mix them. `TianCaiSpaceHub` stores IM channel and bridge settings. Codex 
 | 认证服务连接，取消共享应用 | `browser` | 使用原产品页面个人授权，限定账号可选 |
 | 加载已保存环境 | 原 `password` / `application` / `browser` | 原值分别映射密码 / 共享勾选 / 共享未勾选，不自动修改旧 profile，下拉保持可切 |
 
-页面 `?` 打开原生帮助对话框，包含服务地址、应用服务注册、两种认证、共享身份、保存/记住、MCP 检测及客户端接入，并区分主认证下拉清理与共享开关保留应用资料。共享应用不验证被代表用户密码，说明集中于帮助。密码与 ClientSecret 在输入区直接可见，传输加密、系统保护与日志规则不变。GUI 常见登录/检测提示、身份/有效期、确认主内容和帮助有中英，适配器提示仍中文，未知后端错误保留固定安全文本，未做全量国际化。预览说明环境、客户端、文件或天工设置及操作后果，隐藏裸 server ID。
+页面 `?` 打开原生帮助对话框，包含服务地址、应用服务注册、两种认证、共享身份、保存/记住、MCP 检测及客户端接入，并区分主认证下拉清理与共享开关保留应用资料。共享应用不验证被代表用户密码，说明集中于帮助。密码与 ClientSecret 在输入区直接可见，传输加密、系统保护与日志规则不变。GUI 常见提示、身份/有效期、确认主内容和帮助有中英，适配器提示仍中文，未知后端错误保留固定安全文本。预览说明环境、客户端、MCP 名称、文件或天工设置及操作后果。
+
+页签名为 `Dumpling-MCP`，主 Hub TOML 的 `showDumplingMcp` 默认 `false`；在“帮助 → 显示 Dumpling-MCP”勾选后立即显示并保存选择，取消勾选隐藏。隐藏保留表单及已接入连接，不表示退出认证或停用桥。Codex MCP 使用已保存环境名称（Hub 支持 1～64 位英文字母、数字、`-`、`_`），如 `MCP196`；更新接入会迁移旧受管名称，同名非受管项或外部修改拒绝覆盖。WorkBuddy/天工保留原受管标识。按钮悬浮解释检查配置、检测桥、接入预览、移除、恢复；“当前可用工具”来自 MCP `tools/list`，使用返回名称/description 中文短简介及说明，保留工具代码，缺中文字段明确提示。
 
 部署地址覆盖、`tenant`、`loginUnit` 仍在高级设置。密码租户留空时请求发送 `__default_tenant__`，不会把它写成用户指定租户；此值也是有效默认租户，返回上下文为此值时正常接受，显示“默认租户（__default_tenant__）”。成功仍要求非空返回用户、身份和租户，租户优先 `tenantName`/回退 `tenantId`，不从表单补值，显式账号/租户匹配继续核对。
 

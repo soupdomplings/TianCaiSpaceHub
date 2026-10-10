@@ -771,15 +771,28 @@ async fn client_operation(
     body: &Value,
 ) -> Result<Value> {
     let client = bridge::client_kind(required(body, "clientKind")?)?;
+    let legacy_name = adapters::managed_server_name(&profile.id)?;
+    let server_name = if client == ClientKind::Codex {
+        profile.name.trim().to_owned()
+    } else {
+        legacy_name.clone()
+    };
+    // Names follow the saved environment. A stale legacy request may still
+    // inspect/manage it, but cannot select an unrelated client entry.
+    if let Some(requested) = body
+        .get("serverName")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+    {
+        ensure!(
+            requested == server_name || requested == legacy_name,
+            "MCP 名称应与已保存环境名称一致，请刷新后重新预览"
+        );
+    }
     let target = AdapterTarget {
         profile_id: profile.id.clone(),
         client,
-        server_name: body
-            .get("serverName")
-            .and_then(Value::as_str)
-            .filter(|v| !v.is_empty())
-            .map(str::to_owned)
-            .unwrap_or(adapters::managed_server_name(&profile.id)?),
+        server_name,
         override_path: body
             .get("overridePath")
             .and_then(Value::as_str)
