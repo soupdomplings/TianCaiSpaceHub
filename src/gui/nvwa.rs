@@ -39,6 +39,7 @@ struct Selection {
     snapshot_loaded: bool,
     active_login: bool,
     login_attempt: Option<String>,
+    saved_profile_snapshot: Option<Value>,
 }
 
 #[derive(Clone)]
@@ -62,6 +63,18 @@ pub(super) struct NvwaTab {
     certification: TextCtrl,
     mcp: TextCtrl,
     mode: Choice,
+    application: CheckBox,
+    advanced: CollapsiblePane,
+    account_row: Panel,
+    browser_account_row: Panel,
+    browser_username: TextCtrl,
+    password_row: Panel,
+    password_settings: Panel,
+    application_settings: Panel,
+    signature_row: Panel,
+    application_hint: StaticText,
+    browser_hint: StaticText,
+    factor_row: Panel,
     username: TextCtrl,
     password: TextCtrl,
     client_id: TextCtrl,
@@ -72,8 +85,6 @@ pub(super) struct NvwaTab {
     signature: Choice,
     remember_password: CheckBox,
     remember_secret: CheckBox,
-    verify_id: TextCtrl,
-    verify_code: TextCtrl,
     factor_code: TextCtrl,
     status: StaticText,
     identity: StaticText,
@@ -102,11 +113,13 @@ pub(super) struct NvwaActionResult {
 #[derive(Clone)]
 enum Action {
     Refresh,
+    RefreshSaved,
     Save,
     Delete,
     Login,
     Logout,
     Cancel,
+    ResetAuthentication,
     Detect,
     DetectClient(String),
     SendFactor,
@@ -126,14 +139,14 @@ fn tr(text: GuiText, zh: &'static str, en: &'static str) -> &'static str {
     }
 }
 
-fn label(parent: &ScrolledWindow, root: &BoxSizer, title: &str) {
+fn label<W: WxWidget>(parent: &W, root: &BoxSizer, title: &str) {
     let item = StaticText::builder(parent).with_label(title).build();
     item.set_foreground_color(theme::theme().ink_secondary);
     root.add(&item, 0, SizerFlag::Expand | SizerFlag::All, 10);
 }
 
-fn choice_row(
-    parent: &ScrolledWindow,
+fn choice_row<W: WxWidget>(
+    parent: &W,
     grid: &FlexGridSizer,
     title: &str,
     values: &[&str],
@@ -149,7 +162,7 @@ fn choice_row(
     field
 }
 
-fn secret_row(parent: &ScrolledWindow, grid: &FlexGridSizer, title: &str) -> TextCtrl {
+fn secret_row<W: WxWidget>(parent: &W, grid: &FlexGridSizer, title: &str) -> TextCtrl {
     let title = StaticText::builder(parent).with_label(title).build();
     grid.add(&title, 0, SizerFlag::AlignCenterVertical, 0);
     let input = TextCtrl::builder(parent)
@@ -161,10 +174,32 @@ fn secret_row(parent: &ScrolledWindow, grid: &FlexGridSizer, title: &str) -> Tex
     input
 }
 
-fn button(parent: &ScrolledWindow, row: &BoxSizer, title: &str) -> Button {
+fn button<W: WxWidget>(parent: &W, row: &BoxSizer, title: &str) -> Button {
     let control = Button::builder(parent).with_label(title).build();
     row.add(&control, 0, SizerFlag::Right, 8);
     control
+}
+
+fn section<W: WxWidget>(parent: &W, root: &BoxSizer) -> (Panel, FlexGridSizer) {
+    let panel = Panel::builder(parent).build();
+    panel.set_background_color(theme::theme().bg_card_alt);
+    let grid = FlexGridSizer::builder(0, 2)
+        .with_vgap(8)
+        .with_hgap(14)
+        .build();
+    grid.add_growable_col(1, 1);
+    root.add(&panel, 0, SizerFlag::Expand | SizerFlag::Top, 8);
+    (panel, grid)
+}
+
+fn auth_mode(tab: &NvwaTab) -> &'static str {
+    if tab.application.is_checked() {
+        "application"
+    } else if tab.mode.get_selection() == Some(1) {
+        "browser"
+    } else {
+        "password"
+    }
 }
 
 pub(super) fn create(parent: &Notebook, text: GuiText) -> NvwaTab {
@@ -186,14 +221,12 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> NvwaTab {
         &[tr(text, "新增环境", "New environment")],
     );
     let name = text_field_row(&page, &grid, tr(text, "环境名称", "Environment name"), "");
-    let product = text_field_row(&page, &grid, tr(text, "产品地址", "Product URL"), "");
-    let certification = text_field_row(
+    let product = text_field_row(
         &page,
         &grid,
-        tr(text, "认证服务地址", "Certification URL"),
+        tr(text, "NVWA 服务地址", "NVWA service URL"),
         "",
     );
-    let mcp = text_field_row(&page, &grid, tr(text, "MCP 地址", "MCP URL"), "");
     let mode = choice_row(
         &page,
         &grid,
@@ -201,34 +234,7 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> NvwaTab {
         &[
             tr(text, "账号密码", "Account and password"),
             tr(text, "浏览器个人授权", "Browser authorization"),
-            tr(text, "应用代表用户", "Application delegation"),
         ],
-    );
-    let username = text_field_row(&page, &grid, tr(text, "账号", "Username"), "");
-    let password = secret_row(&page, &grid, tr(text, "密码", "Password"));
-    let client_id = text_field_row(&page, &grid, tr(text, "应用 ID", "Application ID"), "");
-    let client_secret = secret_row(&page, &grid, tr(text, "应用密钥", "Application secret"));
-    let tenant = text_field_row(&page, &grid, tr(text, "租户", "Tenant"), "");
-    let unit = text_field_row(&page, &grid, tr(text, "登录机构", "Login organization"), "");
-    let auth_header = text_field_row(
-        &page,
-        &grid,
-        tr(text, "MCP 认证头", "MCP authentication header"),
-        "Authorization",
-    );
-    let signature = choice_row(
-        &page,
-        &grid,
-        tr(text, "应用摘要算法", "Application digest"),
-        &["SHA-256", "SM3", "MD5"],
-    );
-    let verify_id = text_field_row(&page, &grid, tr(text, "图形验证码 ID", "Captcha ID"), "");
-    let verify_code = text_field_row(&page, &grid, tr(text, "图形验证码", "Captcha"), "");
-    let factor_code = text_field_row(
-        &page,
-        &grid,
-        tr(text, "双因子验证码", "Verification code"),
-        "",
     );
     root.add_sizer(
         &grid,
@@ -236,21 +242,187 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> NvwaTab {
         SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right,
         16,
     );
-    let options = BoxSizer::builder(Orientation::Horizontal).build();
-    let remember_password = CheckBox::builder(&page)
+    let account_root = BoxSizer::builder(Orientation::Vertical).build();
+    let (account_row, account_grid) = section(&page, &account_root);
+    let username = text_field_row(
+        &account_row,
+        &account_grid,
+        tr(text, "账号", "Username"),
+        "",
+    );
+    account_row.set_sizer(account_grid, true);
+    let (password_row, password_grid) = section(&page, &account_root);
+    let password = secret_row(&password_row, &password_grid, tr(text, "密码", "Password"));
+    let remember_password = CheckBox::builder(&password_row)
         .with_label(tr(text, "记住密码", "Remember password"))
         .build();
-    let remember_secret = CheckBox::builder(&page)
+    password_grid.add_spacer(1);
+    password_grid.add(&remember_password, 0, SizerFlag::Top, 4);
+    password_row.set_sizer(password_grid, true);
+    root.add_sizer(
+        &account_root,
+        0,
+        SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right,
+        16,
+    );
+    let browser_hint = StaticText::builder(&page)
+        .with_label(tr(text, "在产品页面完成个人登录和授权。首次接入需管理员配置授权应用。", "Sign in and authorize on the product page. An administrator must configure the authorization application first."))
+        .build();
+    browser_hint.wrap(920);
+    root.add(&browser_hint, 0, SizerFlag::Expand | SizerFlag::All, 16);
+
+    let advanced = CollapsiblePane::builder(&page)
+        .with_label(tr(
+            text,
+            "高级设置（特殊部署 / 管理员）",
+            "Advanced settings (deployment / administrator)",
+        ))
+        .with_style(CollapsiblePaneStyle::NoTlwResize)
+        .build();
+    let content = advanced.get_pane().expect("NVWA advanced pane");
+    let advanced_root = BoxSizer::builder(Orientation::Vertical).build();
+    label(
+        &content,
+        &advanced_root,
+        tr(
+            text,
+            "通常无需填写：认证地址默认沿用服务地址，MCP 默认为服务地址下的 /mcp。",
+            "Usually leave these blank: authentication uses the service URL, and MCP uses its /mcp endpoint.",
+        ),
+    );
+    let (addresses, addresses_grid) = section(&content, &advanced_root);
+    let certification = text_field_row(
+        &addresses,
+        &addresses_grid,
+        tr(
+            text,
+            "独立认证地址（可选）",
+            "Separate authentication URL (optional)",
+        ),
+        "",
+    );
+    let mcp = text_field_row(
+        &addresses,
+        &addresses_grid,
+        tr(
+            text,
+            "MCP 路径或地址（默认 /mcp，可修改）",
+            "MCP path or URL (default /mcp, editable)",
+        ),
+        "/mcp",
+    );
+    let auth_header = text_field_row(
+        &addresses,
+        &addresses_grid,
+        tr(
+            text,
+            "认证头覆盖（自动选择）",
+            "Authentication header override (automatic)",
+        ),
+        "Authorization",
+    );
+    let tenant = text_field_row(
+        &addresses,
+        &addresses_grid,
+        tr(text, "指定租户（可选）", "Specific tenant (optional)"),
+        "",
+    );
+    addresses.set_sizer(addresses_grid, true);
+    let (password_settings, password_settings_grid) = section(&content, &advanced_root);
+    let unit = text_field_row(
+        &password_settings,
+        &password_settings_grid,
+        tr(text, "登录机构（可选）", "Login organization (optional)"),
+        "",
+    );
+    password_settings.set_sizer(password_settings_grid, true);
+    let (browser_account_row, browser_account_grid) = section(&content, &advanced_root);
+    let browser_username = text_field_row(
+        &browser_account_row,
+        &browser_account_grid,
+        tr(
+            text,
+            "限定授权账号（可选）",
+            "Restrict authorized username (optional)",
+        ),
+        "",
+    );
+    browser_account_row.set_sizer(browser_account_grid, true);
+
+    let application = CheckBox::builder(&content)
+        .with_label(tr(
+            text,
+            "使用共享应用代表指定用户（仅管理员）",
+            "Use a shared application for a specified user (administrator only)",
+        ))
+        .build();
+    advanced_root.add(&application, 0, SizerFlag::Top | SizerFlag::Bottom, 12);
+    let application_hint = StaticText::builder(&page)
+        .with_label(tr(text, "当前使用共享应用代表上方账号取票；这不是个人密码登录。应用参数由管理员提供。", "The shared application requests credentials for the account above. This does not verify the user's password. Obtain application settings from your administrator."))
+        .build();
+    application_hint.wrap(920);
+    root.add(&application_hint, 0, SizerFlag::Expand | SizerFlag::All, 16);
+    let (application_settings, application_grid) = section(&content, &advanced_root);
+    let client_id = text_field_row(
+        &application_settings,
+        &application_grid,
+        tr(text, "授权应用 ID", "Authorization application ID"),
+        "",
+    );
+    let client_secret = secret_row(
+        &application_settings,
+        &application_grid,
+        tr(text, "授权应用密钥", "Authorization application secret"),
+    );
+    let remember_secret = CheckBox::builder(&application_settings)
         .with_label(tr(text, "保存应用密钥", "Save application secret"))
         .build();
-    options.add(&remember_password, 0, SizerFlag::Right, 18);
-    options.add(&remember_secret, 0, SizerFlag::Right, 18);
+    application_grid.add_spacer(1);
+    application_grid.add(&remember_secret, 0, SizerFlag::Top, 4);
+    application_settings.set_sizer(application_grid, true);
+    let (signature_row, signature_grid) = section(&content, &advanced_root);
+    let signature = choice_row(
+        &signature_row,
+        &signature_grid,
+        tr(
+            text,
+            "应用签名算法（默认 SHA-256）",
+            "Application signature (default SHA-256)",
+        ),
+        &["SHA-256", "SM3", "MD5"],
+    );
+    signature_row.set_sizer(signature_grid, true);
+    content.set_sizer(advanced_root, true);
+    advanced.collapse(true);
+    root.add(&advanced, 0, SizerFlag::Expand | SizerFlag::All, 16);
+    advanced.on_changed(move |_| {
+        page.layout();
+        page.fit_inside();
+    });
+
+    let factor_root = BoxSizer::builder(Orientation::Vertical).build();
+    let (factor_row, factor_grid) = section(&page, &factor_root);
+    let factor_code = text_field_row(
+        &factor_row,
+        &factor_grid,
+        tr(text, "双因子验证码", "Verification code"),
+        "",
+    );
+    let options = BoxSizer::builder(Orientation::Horizontal).build();
     let send_factor = button(
-        &page,
+        &factor_row,
         &options,
         tr(text, "发送双因子验证码", "Send verification code"),
     );
-    root.add_sizer(&options, 0, SizerFlag::All, 16);
+    factor_grid.add_spacer(1);
+    factor_grid.add_sizer(&options, 0, SizerFlag::Top, 4);
+    factor_row.set_sizer(factor_grid, true);
+    root.add_sizer(
+        &factor_root,
+        0,
+        SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Bottom,
+        16,
+    );
     let commands = BoxSizer::builder(Orientation::Horizontal).build();
     let reload = button(&page, &commands, tr(text, "刷新", "Refresh"));
     let save = button(&page, &commands, tr(text, "保存环境", "Save environment"));
@@ -374,6 +546,18 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> NvwaTab {
         certification,
         mcp,
         mode,
+        application,
+        advanced,
+        account_row,
+        browser_account_row,
+        browser_username,
+        password_row,
+        password_settings,
+        application_settings,
+        signature_row,
+        application_hint,
+        browser_hint,
+        factor_row,
         username,
         password,
         client_id,
@@ -384,8 +568,6 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> NvwaTab {
         signature,
         remember_password,
         remember_secret,
-        verify_id,
-        verify_code,
         factor_code,
         status,
         identity,
@@ -482,7 +664,7 @@ fn start(
     path: &str,
     mut body: Option<Value>,
 ) {
-    if matches!(action, Action::Cancel) {
+    if matches!(action, Action::Cancel | Action::ResetAuthentication) {
         tab.busy.store(true, Ordering::SeqCst);
     } else if tab.busy.swap(true, Ordering::SeqCst) {
         return;
@@ -496,7 +678,7 @@ fn start(
                 body["loginAttemptId"] = json!(attempt);
             }
             state.login_attempt = Some(attempt);
-        } else if matches!(action, Action::Cancel) {
+        } else if matches!(action, Action::Cancel | Action::ResetAuthentication) {
             if let (Some(body), Some(attempt)) = (body.as_mut(), state.login_attempt.as_ref()) {
                 body["loginAttemptId"] = json!(attempt);
             }
@@ -531,15 +713,14 @@ pub(super) fn bind_actions(
         select_profile(&t);
     });
     let t = tab.clone();
+    let sender = tx.clone();
     tab.mode.on_selection_changed(move |_| {
-        t.auth_header
-            .set_value(if t.mode.get_selection() == Some(0) {
-                "Authorization"
-            } else {
-                "authorization-ticket-token"
-            });
-        update_controls(&t);
+        reset_authentication(&t, &sender);
     });
+    let t = tab.clone();
+    let sender = tx.clone();
+    tab.application
+        .on_toggled(move |_| reset_authentication(&t, &sender));
     let t = tab.clone();
     let sender = tx.clone();
     tab.reload
@@ -556,7 +737,14 @@ pub(super) fn bind_actions(
             .cloned()
             .unwrap_or_else(|| json!({"id":uuid::Uuid::new_v4().to_string()}));
         for (key, value) in form_fields(&t) {
+            // Equivalent defaults must not revoke an existing saved credential.
+            if key == "mcpUrl" && value.is_empty() && profile[key].as_str() == Some("/mcp") {
+                continue;
+            }
             profile[key] = json!(value);
+        }
+        if let Some(profile) = profile.as_object_mut() {
+            profile.remove("credentialSecretRef");
         }
         let revision = config_revision(&state.config).to_string();
         drop(state);
@@ -586,18 +774,45 @@ pub(super) fn bind_actions(
     let sender = tx.clone();
     let f = *frame;
     tab.login.on_click(move |_| {
-        if !require_saved_form(&t, &f, text) { return; }
-        let state = t.state.borrow();
-        let mut ext = serde_json::Map::new();
-        for (key, value) in [("verifyId",t.verify_id.get_value()),("verifyCode",t.verify_code.get_value()),("validCode",t.factor_code.get_value())] {
-            if !value.is_empty() { ext.insert(key.to_string(),json!(value)); }
+        if !require_saved_form(&t, &f, text) {
+            return;
         }
-        if let Some(session) = &state.twofactor_session { ext.insert("twofactorSessionId".to_string(),json!(session)); }
-        let body = json!({"profileId":state.selected_id,"password":t.password.get_value(),
-            "clientSecret":t.client_secret.get_value(),"rememberPassword":t.remember_password.is_checked(),
-            "rememberSecret":t.remember_secret.is_checked(),"extInfo":ext});
+        let state = t.state.borrow();
+        let mode = auth_mode(&t);
+        if mode != "password" && t.client_id.get_value().trim().is_empty() {
+            drop(state);
+            t.advanced.collapse(false);
+            t.page.layout();
+            t.page.fit_inside();
+            show_error(
+                &f,
+                "此方式需要管理员提供授权应用配置。你也可以切换到账号密码登录。",
+            );
+            return;
+        }
+        let mut body = json!({"profileId":state.selected_id});
+        if mode == "password" {
+            let mut ext = serde_json::Map::new();
+            if let Some(session) = &state.twofactor_session {
+                ext.insert("twofactorSessionId".to_string(), json!(session));
+                let code = t.factor_code.get_value();
+                if !code.is_empty() {
+                    ext.insert("validCode".to_string(), json!(code));
+                }
+            }
+            body["password"] = json!(t.password.get_value());
+            body["rememberPassword"] = json!(t.remember_password.is_checked());
+            body["extInfo"] = json!(ext);
+        } else {
+            body["clientSecret"] = json!(t.client_secret.get_value());
+            body["rememberSecret"] = json!(t.remember_secret.is_checked());
+        }
         drop(state);
-        let path = match t.mode.get_selection() { Some(1) => "/manage/login/browser", Some(2) => "/manage/login/application", _ => "/manage/login/password" };
+        let path = match mode {
+            "browser" => "/manage/login/browser",
+            "application" => "/manage/login/application",
+            _ => "/manage/login/password",
+        };
         start(&t, &sender, Action::Login, path, Some(body));
     });
     let t = tab.clone();
@@ -713,13 +928,68 @@ fn config_revision(config: &Value) -> &str {
         .unwrap_or("")
 }
 
+fn clear_login_material(tab: &NvwaTab) {
+    tab.password.set_value("");
+    tab.client_secret.set_value("");
+    tab.factor_code.set_value("");
+    tab.remember_password.set_value(false);
+    tab.remember_secret.set_value(false);
+    tab.state.borrow_mut().twofactor_session = None;
+}
+
+fn reset_authentication(tab: &NvwaTab, tx: &tokio::sync::mpsc::UnboundedSender<GuiMessage>) {
+    clear_login_material(tab);
+    for field in [
+        tab.username,
+        tab.browser_username,
+        tab.client_id,
+        tab.tenant,
+        tab.unit,
+    ] {
+        field.set_value("");
+    }
+    tab.signature.set_selection(0);
+    tab.auth_header.set_value(if auth_mode(tab) == "password" {
+        "Authorization"
+    } else {
+        "authorization-ticket-token"
+    });
+    tab.tools.set_value("");
+    tab.identity
+        .set_label("认证方式已修改，请保存环境后重新登录 / 授权");
+    {
+        let mut state = tab.state.borrow_mut();
+        state.clients.clear();
+        let selected_id = state.selected_id.clone();
+        state
+            .runtime_profiles
+            .retain(|profile| profile["profileId"].as_str() != selected_id.as_deref());
+    }
+    for row in &tab.clients {
+        row.status.set_label("认证方式已修改，请重新检查");
+    }
+    let selected_id = tab.state.borrow().selected_id.clone();
+    if selected_id.is_some() {
+        start(
+            tab,
+            tx,
+            Action::ResetAuthentication,
+            "/manage/login/cancel",
+            Some(json!({"profileId":selected_id})),
+        );
+        tab.state.borrow_mut().login_attempt = None;
+    } else {
+        tab.status
+            .set_label("认证方式已切换，上一种方式的输入已清空");
+    }
+    update_controls(tab);
+}
+
 fn form_fields(tab: &NvwaTab) -> Vec<(&'static str, String)> {
     let mut fields: Vec<_> = [
         ("name", tab.name),
         ("productBaseUrl", tab.product),
         ("certificationBaseUrl", tab.certification),
-        ("mcpUrl", tab.mcp),
-        ("username", tab.username),
         ("clientId", tab.client_id),
         ("tenant", tab.tenant),
         ("loginUnit", tab.unit),
@@ -728,15 +998,23 @@ fn form_fields(tab: &NvwaTab) -> Vec<(&'static str, String)> {
     .into_iter()
     .map(|(key, field)| (key, field.get_value().trim().to_string()))
     .collect();
+    let mcp = tab.mcp.get_value();
+    let mcp = mcp.trim();
     fields.push((
-        "authMode",
-        match tab.mode.get_selection() {
-            Some(1) => "browser",
-            Some(2) => "application",
-            _ => "password",
-        }
-        .to_string(),
+        "mcpUrl",
+        if mcp == "/mcp" {
+            String::new()
+        } else {
+            mcp.to_string()
+        },
     ));
+    let username = if auth_mode(tab) == "browser" {
+        tab.browser_username
+    } else {
+        tab.username
+    };
+    fields.push(("username", username.get_value().trim().to_string()));
+    fields.push(("authMode", auth_mode(tab).to_string()));
     fields.push((
         "signatureAlgorithm",
         match tab.signature.get_selection() {
@@ -755,20 +1033,7 @@ fn require_saved_form(tab: &NvwaTab, frame: &Frame, text: GuiText) -> bool {
         .profiles
         .iter()
         .find(|profile| profile["id"].as_str() == state.selected_id.as_deref());
-    let matches = saved.is_some_and(|profile| {
-        form_fields(tab).iter().all(|(key, value)| {
-            let default = if *key == "mcpAuthHeader" {
-                if profile["authMode"].as_str() == Some("password") {
-                    "Authorization"
-                } else {
-                    "authorization-ticket-token"
-                }
-            } else {
-                ""
-            };
-            profile[*key].as_str().unwrap_or(default) == value
-        })
-    });
+    let matches = saved.is_some_and(|profile| form_matches_profile(&form_fields(tab), profile));
     drop(state);
     if !matches {
         show_error(
@@ -781,6 +1046,25 @@ fn require_saved_form(tab: &NvwaTab, frame: &Frame, text: GuiText) -> bool {
         );
     }
     matches
+}
+
+fn form_matches_profile(fields: &[(&str, String)], profile: &Value) -> bool {
+    fields.iter().all(|(key, value)| {
+        let default = match *key {
+            "mcpAuthHeader" if profile["authMode"].as_str() == Some("password") => "Authorization",
+            "mcpAuthHeader" => "authorization-ticket-token",
+            "signatureAlgorithm" => "sha256",
+            "authMode" => "password",
+            _ => "",
+        };
+        let saved = profile[*key].as_str().unwrap_or(default);
+        let saved = if *key == "mcpUrl" && saved == "/mcp" {
+            ""
+        } else {
+            saved
+        };
+        saved == value
+    })
 }
 
 pub(super) fn refresh_if_needed(
@@ -836,7 +1120,7 @@ pub(super) fn apply_result(
     tab.state.borrow_mut().active_login = false;
     if !matches!(
         result.action,
-        Action::Refresh | Action::Save | Action::Delete
+        Action::Refresh | Action::RefreshSaved | Action::Save | Action::Delete
     ) && result.profile_id != tab.state.borrow().selected_id
     {
         update_controls(tab);
@@ -852,7 +1136,38 @@ pub(super) fn apply_result(
     };
     match result.action {
         Action::Refresh => apply_snapshot(tab, text, value),
+        Action::RefreshSaved => {
+            let fields = form_fields(tab);
+            let selected_id = tab.state.borrow().selected_id.clone();
+            let expected_profile = tab.state.borrow_mut().saved_profile_snapshot.take();
+            let unchanged = value
+                .pointer("/config/profiles")
+                .and_then(Value::as_array)
+                .and_then(|profiles| {
+                    profiles
+                        .iter()
+                        .find(|profile| profile["id"].as_str() == selected_id.as_deref())
+                })
+                .is_some_and(|profile| {
+                    expected_profile.as_ref() == Some(profile)
+                        && form_matches_profile(&fields, profile)
+                });
+            let password = unchanged.then(|| tab.password.get_value());
+            let secret = unchanged.then(|| tab.client_secret.get_value());
+            let remember_password = unchanged && tab.remember_password.is_checked();
+            let remember_secret = unchanged && tab.remember_secret.is_checked();
+            apply_snapshot(tab, text, value);
+            if let Some(password) = password {
+                tab.password.set_value(&password);
+            }
+            if let Some(secret) = secret {
+                tab.client_secret.set_value(&secret);
+            }
+            tab.remember_password.set_value(remember_password);
+            tab.remember_secret.set_value(remember_secret);
+        }
         Action::Save => {
+            tab.state.borrow_mut().saved_profile_snapshot = value.get("profile").cloned();
             if let Some(id) = value
                 .pointer("/profile/id")
                 .or_else(|| value.get("id"))
@@ -862,7 +1177,7 @@ pub(super) fn apply_result(
             }
             tab.status
                 .set_label(tr(text, "环境已保存", "Environment saved"));
-            start(tab, tx, Action::Refresh, "/manage/status", None);
+            start(tab, tx, Action::RefreshSaved, "/manage/status", None);
         }
         Action::Delete => {
             tab.state.borrow_mut().selected_id = None;
@@ -873,6 +1188,7 @@ pub(super) fn apply_result(
                 .get("twofactorSessionId")
                 .and_then(Value::as_str)
                 .map(str::to_string);
+            tab.factor_code.set_value("");
             let detail = value
                 .get("detail")
                 .or_else(|| value.get("message"))
@@ -884,18 +1200,20 @@ pub(super) fn apply_result(
                     show_error(frame, &error);
                 }
             } else if value.get("state").and_then(Value::as_str) == Some("authenticated") {
-                tab.password.set_value("");
-                tab.client_secret.set_value("");
+                clear_login_material(tab);
                 start(tab, tx, Action::Refresh, "/manage/status", None);
             }
         }
         Action::Logout | Action::Cancel => {
-            tab.password.set_value("");
-            tab.client_secret.set_value("");
+            clear_login_material(tab);
             tab.tools.set_value("");
             tab.state.borrow_mut().twofactor_session = None;
             tab.state.borrow_mut().login_attempt = None;
             start(tab, tx, Action::Refresh, "/manage/status", None);
+        }
+        Action::ResetAuthentication => {
+            tab.status
+                .set_label("认证方式已切换，上一种方式的输入已清空；请保存环境后重新登录 / 授权");
         }
         Action::Detect => {
             let tools = value
@@ -1191,8 +1509,8 @@ fn select_profile(tab: &NvwaTab) {
         (tab.name, "name"),
         (tab.product, "productBaseUrl"),
         (tab.certification, "certificationBaseUrl"),
-        (tab.mcp, "mcpUrl"),
         (tab.username, "username"),
+        (tab.browser_username, "username"),
         (tab.client_id, "clientId"),
         (tab.tenant, "tenant"),
         (tab.unit, "loginUnit"),
@@ -1200,12 +1518,17 @@ fn select_profile(tab: &NvwaTab) {
     ] {
         field.set_value(profile[key].as_str().unwrap_or(""));
     }
+    let mcp = profile["mcpUrl"].as_str().unwrap_or("");
+    tab.mcp.set_value(if mcp.is_empty() { "/mcp" } else { mcp });
     let mode = match profile["authMode"].as_str() {
-        Some("browser") => 1,
-        Some("application") => 2,
+        Some("browser" | "application") => 1,
         _ => 0,
     };
     tab.mode.set_selection(mode);
+    tab.application
+        .set_value(profile["authMode"].as_str() == Some("application"));
+    // Old delegated profiles remain explicit and editable in the administrator section.
+    tab.advanced.collapse(!tab.application.is_checked());
     if tab.auth_header.get_value().is_empty() {
         tab.auth_header.set_value(if mode == 0 {
             "Authorization"
@@ -1219,13 +1542,7 @@ fn select_profile(tab: &NvwaTab) {
             Some("md5") => 2,
             _ => 0,
         });
-    tab.password.set_value("");
-    tab.client_secret.set_value("");
-    tab.verify_id.set_value("");
-    tab.verify_code.set_value("");
-    tab.factor_code.set_value("");
-    tab.remember_password.set_value(false);
-    tab.remember_secret.set_value(false);
+    clear_login_material(tab);
     tab.tools.set_value("");
     tab.identity.set_label("未读取当前授权状态");
     for client in &tab.clients {
@@ -1239,12 +1556,26 @@ fn select_profile(tab: &NvwaTab) {
 fn update_controls(tab: &NvwaTab) {
     let busy = tab.busy.load(Ordering::SeqCst);
     let saved = tab.state.borrow().selected_id.is_some();
+    let mode = auth_mode(tab);
+    let password = mode == "password";
+    let application = mode == "application";
+    let twofactor = password && tab.state.borrow().twofactor_session.is_some();
+    tab.account_row.show(mode != "browser");
+    tab.browser_account_row.show(mode == "browser");
+    tab.password_row.show(password);
+    tab.password_settings.show(password);
+    tab.application_settings.show(!password);
+    tab.signature_row.show(application);
+    tab.application_hint.show(application);
+    tab.browser_hint.show(mode == "browser");
+    tab.factor_row.show(twofactor);
     for field in [
         tab.name,
         tab.product,
         tab.certification,
         tab.mcp,
         tab.username,
+        tab.browser_username,
         tab.client_id,
         tab.tenant,
         tab.unit,
@@ -1253,24 +1584,15 @@ fn update_controls(tab: &NvwaTab) {
         field.enable(!busy);
     }
     tab.profile.enable(!busy);
-    tab.mode.enable(!busy);
+    tab.mode.enable(!busy && !application);
+    tab.application.enable(!busy);
     tab.signature.enable(!busy);
-    tab.password
-        .enable(!busy && tab.mode.get_selection() == Some(0));
-    tab.client_secret
-        .enable(!busy && tab.mode.get_selection() != Some(0));
-    tab.remember_password
-        .enable(!busy && tab.mode.get_selection() == Some(0));
-    tab.remember_secret
-        .enable(!busy && tab.mode.get_selection() != Some(0));
-    tab.send_factor.enable(
-        !busy
-            && tab.mode.get_selection() == Some(0)
-            && tab.state.borrow().twofactor_session.is_some(),
-    );
-    for field in [tab.verify_id, tab.verify_code, tab.factor_code] {
-        field.enable(!busy && tab.mode.get_selection() == Some(0));
-    }
+    tab.password.enable(!busy && password);
+    tab.client_secret.enable(!busy && !password);
+    tab.remember_password.enable(!busy && password);
+    tab.remember_secret.enable(!busy && !password);
+    tab.send_factor.enable(!busy && twofactor);
+    tab.factor_code.enable(!busy && twofactor);
     tab.reload.enable(!busy);
     tab.save.enable(!busy);
     tab.delete.enable(!busy && saved);
@@ -1297,4 +1619,6 @@ fn update_controls(tab: &NvwaTab) {
         );
         row.path.enable(!busy && row.kind != "tiangong");
     }
+    tab.page.layout();
+    tab.page.fit_inside();
 }

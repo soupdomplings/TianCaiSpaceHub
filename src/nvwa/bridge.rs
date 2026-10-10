@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 
 use super::{
     NvwaService,
+    config::resolve_mcp_url,
     runtime::now_ms,
     types::{AuthResult, ClientKind, NvwaProfile},
 };
@@ -520,7 +521,7 @@ pub(crate) async fn remote(
     let mut builder = service
         .inner
         .http
-        .post(&profile.mcp_url)
+        .post(resolve_mcp_url(profile)?)
         .header("accept", "application/json, text/event-stream")
         .header("content-type", "application/json")
         .header(&auth.mcp_token.header_name, token)

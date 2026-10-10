@@ -162,9 +162,7 @@ pub fn validate_profile(profile: &NvwaProfile) -> Result<()> {
     if !profile.certification_base_url.is_empty() {
         validate_url(&profile.certification_base_url)?;
     }
-    if !profile.mcp_url.is_empty() {
-        validate_url(&profile.mcp_url)?;
-    }
+    resolve_mcp_url(profile)?;
     if let Some(header) = &profile.mcp_auth_header {
         ensure!(
             matches!(
@@ -272,6 +270,49 @@ fn validate_extension_value(
         _ => {}
     }
     Ok(())
+}
+
+pub(crate) fn resolve_mcp_url(profile: &NvwaProfile) -> Result<Url> {
+    let value = profile.mcp_url.as_str();
+    if value.is_empty() {
+        return endpoint(&profile.product_base_url, "mcp");
+    }
+    ensure!(
+        value.len() <= 4096
+            && !value.contains('\\')
+            && !value.chars().any(|c| c.is_control() || c.is_whitespace()),
+        "NVWA MCP 地址包含无效字符或超出长度限制"
+    );
+    if value.starts_with('/') {
+        ensure!(
+            !value.contains("//") && !value.contains('?') && !value.contains('#'),
+            "NVWA MCP 路径不能包含双斜杠、查询或片段"
+        );
+        ensure!(
+            !value.split('/').any(|segment| {
+                matches!(
+                    segment.to_ascii_lowercase().replace("%2e", ".").as_str(),
+                    "." | ".."
+                )
+            }),
+            "NVWA MCP 路径不能包含当前目录或父目录路段"
+        );
+        let url = endpoint(&profile.product_base_url, value)?;
+        validate_url(url.as_str())
+    } else {
+        validate_url(value)
+    }
+}
+
+pub(crate) fn endpoint(base: &str, route: &str) -> Result<Url> {
+    let mut url = validate_url(base)?;
+    let path = format!(
+        "{}/{}",
+        url.path().trim_end_matches('/'),
+        route.trim_start_matches('/')
+    );
+    url.set_path(&path);
+    Ok(url)
 }
 
 pub fn validate_url(value: &str) -> Result<Url> {

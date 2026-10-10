@@ -1,6 +1,6 @@
 # Configuration
 
-There are two separate config surfaces:
+There are three separate config surfaces:
 
 - `TianCaiSpaceHub` config, usually this repository's `config.toml`
 - Codex App config, usually `~/.codex/config.toml`
@@ -8,7 +8,27 @@ There are two separate config surfaces:
 
 Do not mix them. `TianCaiSpaceHub` stores IM channel and bridge settings. Codex App stores model provider, auth, and `chatgpt_base_url`.
 
-维护日期：2026-10-08。当前开发基线为 v0.4.30-5，独立 [NVWA MCP](customizations/nvwa-mcp.md) 页签管理认证环境和三端受管 MCP 配置；普通 JSON 只存地址、身份选择和系统保护引用，秘密/令牌/目标备份不写 Hub TOML、日志或连接诊断。集合 version 1、`_revision` 并发保存，默认本机端口 3849；未知非敏感字段保留，未知字段中的秘密拒绝保存。环境/账号修改先保存才能登录或写客户端，变更会撤销旧授权。运行状态、编译和用户验收见 [本轮交付](releases/v0.4.30-5.md)。下文 v4 构建/产物描述保持历史归属。
+维护日期：2026-10-10。当前开发基线为 v0.4.30-5，独立 [NVWA MCP](customizations/nvwa-mcp.md) 页签管理认证环境和三端受管 MCP 配置；普通 JSON 只存地址、身份选择和系统保护引用，秘密/令牌/目标备份不写 Hub TOML、日志或连接诊断。集合 version 1、`_revision` 并发保存，默认本机端口 3849；未知非敏感字段保留，未知字段中的秘密拒绝保存。环境/账号修改先保存才能登录或写客户端，变更会撤销旧授权。界面简化与可编辑 MCP 路径已实现，Windows 本轮编译和 debug EXE 构建通过；运行状态、编译和用户验收见 [本轮交付](releases/v0.4.30-5.md)，历史构建/产物保持原阶段归属。
+
+## NVWA 服务地址与认证材料
+
+普通界面选择账号密码或浏览器个人授权，只提供一个 NVWA 服务地址，对应 `productBaseUrl`。`certificationBaseUrl` 留空时使用该服务地址。默认折叠的高级设置直接显示 MCP 默认 `/mcp`，可自行改为以单 `/` 开头的路径或完整 HTTP(S) URL。空值与 `/mcp` 使用同一默认行为；路径跟随 `productBaseUrl` 的部署前缀，修改服务地址后随之变化；完整 URL 保留为独立覆盖，不随服务地址改变。已保存的独立认证地址和完整 MCP URL 继续兼容。
+
+以 `productBaseUrl="https://nvwa.example.com/product"` 为例：
+
+| 高级 MCP 输入 | 实际 `resolvedMcpUrl` | 保存行为 |
+| --- | --- | --- |
+| 空值或 `/mcp` | `https://nvwa.example.com/product/mcp` | 新配置的默认 `/mcp` 规范为 `mcpUrl=""`；旧空值加载显示 `/mcp`，已有 `/mcp` 无改动保存保留原值 |
+| `/agent/mcp` | `https://nvwa.example.com/product/agent/mcp` | `mcpUrl` 原样保存路径，保留部署前缀 |
+| `https://mcp.example.com/custom` | `https://mcp.example.com/custom` | 完整 URL 原样保存为独立覆盖 |
+
+状态中的 `resolvedMcpUrl` 表示实际请求地址，原 profile 值不被解析结果回填。路径拒绝 `//`、查询、片段、控制/空白字符、反斜杠和当前/父目录路段（含 `%2e` 形式），不接受跨主机的协议相对地址；完整 URL 仍要求 HTTP(S)，禁止用户信息、查询和片段。
+
+高级设置包含部署地址覆盖、`tenant`、`loginUnit` 及应用注册材料。密码模式不要求 `clientId`；租户留空时仅登录请求发送规范默认 `__default_tenant__`，不会把它写成用户指定租户。认证成功仍要求登录上下文返回真实用户、身份和租户，显式填写的租户继续核对。浏览器授权需管理员预先配置产品接受的应用 ID、密钥与回调；高级“限定授权账号”为可选，留空以产品页面实际授权身份为准，填写后继续比对返回上下文；旧 `authMode="application"` 继续兼容，只能通过高级设置的管理员勾选进入，主界面的应用代表用户提示仅在该模式显示，折叠高级设置后仍可见。
+
+切换认证方式会清理账号、密码、应用密钥/ID、记住选项、挑战和旧模式展示，并撤销旧授权，防止沿用另一种方式的材料。双因子输入和发送按钮仅在收到 `204` 挑战后显示；图形验证码没有手填 ID 入口，`402` 指引用户到产品页面完成验证或选择已配置的浏览器授权，当前 Hub 尚不获取或显示图片。
+
+保存后的刷新仅当完整 profile 与当前表单一致时保留本次 GUI 内存中的秘密，便于继续认证；比较时空 MCP 地址与 `/mcp` 规范为同一默认值，环境切换或其他字段不一致时清空，保留内存不代表持久保存。仅显式选择记住凭据才使用 DPAPI/Keychain；普通 JSON、Hub TOML 和日志不保存秘密。回退前逐端移除或恢复 NVWA 受管项，再退出授权；旧版仍需显式完整 MCP 地址，不能假定支持留空或路径派生。
 
 ## TianCaiSpace customization fields and concurrent saves
 

@@ -1,21 +1,27 @@
 # Hub 接入 NVWA MCP：当前开发交接
 
-维护日期：2026-10-08。目标项目：TianCaiSpaceHub。关联 TC-014，适用 `0.4.30-5`。
+维护日期：2026-10-10。目标项目：TianCaiSpaceHub。关联 TC-014，适用 `0.4.30-5`；本文件路径保留首次交接日期。
 
-本文由初始建议修订为用户最新决定与本轮实际源码交接。操作、默认值、系统保护与回滚以 [NVWA MCP 专题](customizations/nvwa-mcp.md) 为准；同仓依据见 [NVWA 资料索引](nvwa/README.md)。源码与文档已完成同次整合，最终 Windows locked GUI 编译已通过，见 [v5 交付](releases/v0.4.30-5.md)；没有真实登录、MCP 调用、客户端测试或用户验收，未发布。
+本文按用户最新决定记录当前源码交接。操作、默认值、系统保护与回滚以 [NVWA MCP 专题](customizations/nvwa-mcp.md) 为准；同仓依据见 [NVWA 资料索引](nvwa/README.md)。2026-10-10 简化 NVWA 界面、修复认证切换与保存输入，并开放可编辑 MCP 路径。最终 Windows locked GUI build 通过（17.55 秒、38 条警告），新测试 EXE 已构建、复制并通过静态产物核对，未运行；2026-10-08 的编译/EXE 保留原归属，见 [v5 交付](releases/v0.4.30-5.md)。没有真实登录、MCP 调用、客户端测试或用户验收，未发布。
 
 ## 1. 已确认需求
 
 管理登录的三种入口现在都要求随机 UUID `loginAttemptId`。取消可提交同一标识；服务按同一短临界区排序并保留 10 分钟、最多 4096 条取消记录，避免取消先到、旧登录后到。GUI 挑战重试生成新事务，取消期间晚到响应不能提交授权；不把取消解释为远端业务回滚。
 
 - Hub 新增独立 NVWA MCP 页签，管理多个环境，分别接入本机 Codex、WorkBuddy、天工 Claw。
-- 首版必须支持在 Hub 输入本人账号密码，默认 `password`；浏览器个人授权及现有“应用代表用户”方式作为显式选项保留。
-- 当前共享一套应用 ID/密钥，不要求每位实施人员或每端客户端重新申请。用户已确认共享应用密钥没有服务端用户名范围限制；应用签名能代表填写的用户，不证明人员已完成本人密码认证。
+- 普通认证选择只有本人账号密码 `password` 和浏览器个人授权 `browser`，默认 `password`。共享应用方式放入高级区明确的“使用共享应用代表指定用户（仅管理员）”复选框；启用后普通选择禁用，旧 `application` 环境仍能展示、编辑和认证，不自动改模式。
+- 当前可共享一套真实注册应用 ID/密钥，不要求每位实施人员或每端客户端重新申请。Hub 不内置共享密钥；浏览器首次也需管理员配置真实应用 ID/密钥及回调。用户已确认共享应用密钥没有服务端用户名范围限制；应用签名能代表填写的用户，不证明人员已完成本人密码认证，管理员提示不等于服务端新增授权控制。
 - 用户已确认 `Authorization` 登录 token 与 `authorization-ticket-token` ticket token 都可用、有效期不同。两类 token、使用头与 expiry 分别管理，不猜测互换或统一 TTL。
 - 普通 profile 只存 secret 引用。Windows 使用当前用户 DPAPI，macOS 使用 Keychain；本轮不扩展 Linux。
 - 用户负责真实测试。开发方只进行必要编译、产物及文档静态核对，不启动实际客户端、Hub/NVWA，不调用真实认证、MCP 或模型，不读取 `.local-data`、用户配置、凭据、私有日志或数据库。
 
 先前浏览器作为唯一默认入口、密码登录仅预留、共享密钥用户名范围待核实、每客户端单独应用 ID 等建议，不作为当前开发指令。产品将来新增服务端范围限制时再更新真实契约，不用 UI 校验冒充服务端控制。
+
+基础区只要求环境名称和一个 NVWA 服务地址，再按普通方式显示账号密码或浏览器授权提示；独立认证/MCP 地址、认证头、指定租户与密码登录机构放在默认折叠的高级区。认证地址留空回退产品地址。MCP 高级字段默认直接显示可编辑的 `/mcp`，可改成其它以 `/` 开头的路径或完整 HTTP(S) URL；空值和 `/mcp` 都保留产品部署前缀后追加 `/mcp`，其它路径同样保留前缀，完整 URL 独立覆盖。路径随保存的服务地址变化，完整 URL 不自动改变。GUI 将空值和 `/mcp` 同样视为默认，保存和未保存检查使用同一规则；新环境默认保存空值，旧环境已存 `/mcp` 则保持原值，避免等价保存误撤凭据。旧完整 URL 原样加载，不因默认显示造成未保存差异。显式 URL/header/digest 继续兼容。管理状态增加 `resolvedMcpUrl`，用于核对实际目标，当前 GUI 身份文字不显示该字段。密码方式不显示应用注册/签名；应用代表用户才显示 SHA-256（默认）、SM3、MD5 签名选项。浏览器应用密钥可在一次授权时明确勾选保存到系统保护存储，普通 profile 仅持引用。
+
+浏览器在高级区另有“限定授权账号（可选）”专属行，新环境可留空，无需日常填写；旧环境非空 `username` 限制保留并允许编辑，不因切换界面静默删除。填写限制后仍须与真实授权身份一致。
+
+切换普通方式或管理员复选框，清空账号、密码、ID/密钥、指定租户、机构、记住选项、挑战、身份、工具及客户端检测，重置认证头/摘要默认值，保留环境名称和通用地址。已保存环境取消请求携带旧 `loginAttemptId`，旧结果失效，取消完成后保留新表单、不重载旧认证输入。保存后的状态刷新仅在完整 profile 与保存快照及表单一致时保留当前内存密码/密钥和记住选项，避免保存吞输入；不写普通配置。
 
 ## 2. 两项目职责
 
@@ -41,6 +47,8 @@ NVWA MCP 必须已在产品宿主安装并启用。工具目录由该账号真�
 
 [AuthClient](../src/nvwa/auth.rs) 先 GET `/anon/framework/api/encrypt/key`。alias `3`：UTF-8 标准 Base64 后每 50 个字符分块，RSA PKCS#1 v1.5 加密，各块 Base64 拼接；alias `2`：原文 UTF-8、SM2 `C1C3C2`。与当前产品前端一致，POST `/nvwa/login` 发送 `username/pwd/tenant`、可选 `loginUnit`、受限 `extInfo`、`encryptType="3L"`。不硬编码公钥、不采用旧 AES 默认值，不因公钥失败降级明文，不裁剪密码。
 
+密码方式指定租户留空时，请求的 `tenant` 使用产品默认选择值 `__default_tenant__`；最终仍须真实 `/nvwa/getLoginContext` user/identity/tenant，不将该占位值视为已核验租户。显式租户仍须与返回身份相符。
+
 成功需明确业务状态和 token，再 GET `/nvwa/getLoginContext` 核对真实用户、身份、租户与登录名。支持 `context` 包装、`contextUser`/历史 `conetxtUser`；显示占位租户不算已验证上下文。默认 MCP 采用 `Authorization: <raw login token>`，无 Bearer。
 
 | 产品状态 | Hub 当前处理 |
@@ -52,13 +60,13 @@ NVWA MCP 必须已在产品宿主安装并启用。工具目录由该账号真�
 | `402` | 需要有效图形验证码，不跳过、不伪成功 |
 | 错误账号、锁定、停用、过期、登录限制、维护等 | 固定安全提示，不回显原响应或认证 header |
 
-挑战字段仅 `verifyId`、`verifyCode`、`validCode`、`twofactorSessionId`。GUI 提供发送双因子按钮，发送使用 POST `/anon/nvwa-nros/v1/msg/send`；第二次登录带 `extInfo.validCode/twofactorSessionId`，由产品继续校验。不能借附加字段覆盖 username、`checkPwd` 或加密模式。
+provider 挑战字段仅 `verifyId`、`verifyCode`、`validCode`、`twofactorSessionId`。GUI 仅在 `204` 后显示双因子验证码输入和发送按钮，session 内部维护。发送使用 POST `/anon/nvwa-nros/v1/msg/send`；第二次登录带 `extInfo.validCode/twofactorSessionId`，由产品继续校验。不能借附加字段覆盖 username、`checkPwd` 或加密模式。
 
-图形验证码 ID/码可手动提交，但获取方法、图片 schema 尚未核实，当前**没有验证码图片获取或展示**。完整集成还需 NVWA 提供准确方法、参数、图片/ID、有效期和一次性契约并由用户验证；本版不猜返回值。
+GUI 已移除图形验证码 ID/码输入。获取方法、图片 schema 尚未核实，当前**没有验证码图片获取或展示**；`402` 提示到产品页面处理或选择已配置的浏览器授权，不保证产品页面操作后 Hub 密码登录必然成功，也不自动复用浏览器会话。完整集成仍需 NVWA 提供准确方法、参数、图片/ID、有效期和一次性契约并由用户验证；provider 保留受限字段兼容，本版不猜返回值。
 
 ### 3.2 浏览器个人授权
 
-当前构造产品 `#/authorize?response_type=code&client_id=...&redirect_uri=...&state=...`。本机 `127.0.0.1` 回调含随机 64 hex state 路径，事务 10 分钟、单次消费，失败也消费。只接一个 `code`/`ticket`/`ticketId`，若带 state 参数必须匹配路径；还核对 profile 指纹与登录代次。新登录、配置改变、取消和退出均撤销旧事务，晚到或重复回调不能重新开放授权。
+首次浏览器授权需要管理员提供真实注册的 ID/密钥及本机回调，Hub 无内置共享密钥；密钥可由用户明确记住后交给 SecretStore。当前构造产品 `#/authorize?response_type=code&client_id=...&redirect_uri=...&state=...`。本机 `127.0.0.1` 回调含随机 64 hex state 路径，事务 10 分钟、单次消费，失败也消费。只接一个 `code`/`ticket`/`ticketId`，若带 state 参数必须匹配路径；还核对 profile 指纹与登录代次。新登录、配置改变、取消和退出均撤销旧事务，晚到或重复回调不能重新开放授权。
 
 通过校验后用应用 ID/密钥交换 ticket，并读取真实上下文。打开网页或收到回调不是认证完成。当前共享应用是否接受本机回调地址/端口、部署是否采用 Hash 路由、个人票据交换后能否调用 MCP，均待用户实测。不假设 OAuth discovery、PKCE、refresh token 或任意 redirect URI 已支持；回调 query/票据不进日志和错误。
 
@@ -102,11 +110,13 @@ initialize 后本地 `Mcp-Session-Id` 绑定环境、client、凭据、登录代
 
 移除/恢复撤销该端授权。有未移除受管条目时拒绝删除 profile；退出撤销环境认证/session/事务但不自动改客户端配置。改端口、迁移作用范围和回旧版需先定向移除或恢复，细节见 [专题](customizations/nvwa-mcp.md)。配置、加载/信任、Hub 检测、客户端连接和业务成功分别记录。
 
+新增 MCP 路径不被此前只接受完整 URL 的 NVWA 版本理解。回退路径功能前，先将已存 `/mcp` 或其它路径解析成明确完整 HTTP(S) 地址并保存，再处理授权与客户端条目；默认空值保持兼容，旧完整覆盖地址不自动改变。
+
 ## 5. 代码与系统存储
 
 | 路径 | 职责 |
 | --- | --- |
-| [GUI](../src/gui/nvwa.rs) | 多环境、遮罩凭据、挑战、每端预览；后台结果代次隔离 |
+| [GUI](../src/gui/nvwa.rs) | 基础/高级分区与按方式显隐、切换清空/取消、保存后一致输入保留、204 挑战与每端预览；后台结果代次隔离 |
 | [types](../src/nvwa/types.rs)、[config](../src/nvwa/config.rs) | 非秘密 DTO、默认值、URL 校验、集合 revision 和原子保存 |
 | [auth](../src/nvwa/auth.rs)、[secrets](../src/nvwa/secrets.rs) | 实际认证、动态 RSA/SM2、身份/TTL、Windows/macOS 系统保护 |
 | [mod](../src/nvwa/mod.rs)、[server](../src/nvwa/server.rs) | 生命周期、管理 API、一次性 browser、系统保护恢复与代次 |
@@ -136,4 +146,6 @@ NVWA 邻仓 `D:\traeworkspace\dumpling-nvwa` 的公开静态来源仅作来源�
 
 交回 NVWA 的待验收契约：浏览器注册地址/Hash 路由、两类 token 实际寿命与字段、getLoginContext 稳定 identity/tenant、动态 RSA/SM2、captcha 获取 schema、MFA 发送与二次校验、普通/管理员工具权限。不能把这些待验收项写成已确定产品缺陷或本轮已经通过。
 
-最终 Windows locked GUI 编译已通过（6.27 秒、38 条警告），见 [v5 交付](releases/v0.4.30-5.md)；真实登录、MCP/模型、三端加载信任、写断连未知、并发保存和系统恢复均待用户。安装包只由 GitHub Actions 生成，Windows/macOS 构建、产物核验、实机验收、源码推送和发布分开记录。
+2026-10-08 Windows locked GUI 编译通过（6.27 秒、38 条警告）及原 `outputs/nvwa-v0.4.30-5-windows/` EXE，只证明当时源码。2026-10-10 界面调整仍为 `0.4.30-5`、唯一 `main`；前阶段 Windows locked GUI check 通过（27.23 秒、38 条警告），最终 build 通过（17.55 秒、38 条警告），包括浏览器限定账号与最新可编辑 MCP 路径。新 EXE 已复制到 `outputs/nvwa-v0.4.30-5-windows-ui-20261010/TianCaiSpaceHub.exe`，版本/x64 PE/导入及源/复制哈希核对通过，未运行，不覆盖上次文件；源码指纹及实际产物身份见 [v5 交付](releases/v0.4.30-5.md)。
+
+本轮基础/高级显隐、认证切换清空/晚到结果、保存环境保留输入、默认 MCP 地址/默认与指定真实租户、402 提示、204 挑战、浏览器首次配置及旧 application 兼容均待用户验收；真实登录、MCP/模型、三端加载信任、写断连未知、并发保存和系统恢复仍待用户。开发方未运行测试、实际 Hub/客户端或业务，不读取私有资料；安装包只由 GitHub Actions 生成，Windows/macOS 构建、产物核验、实机验收、源码推送和发布分开记录。

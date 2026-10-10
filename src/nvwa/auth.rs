@@ -20,7 +20,7 @@ use sha2::{Digest, Sha256};
 use url::Url;
 
 use super::{
-    config::{validate_profile, validate_url},
+    config::{endpoint, validate_profile, validate_url},
     types::{
         AuthMode, AuthOutcome, AuthResult, AuthToken, NvwaProfile, PasswordLoginInput,
         SignatureAlgorithm, VerifiedIdentity,
@@ -103,7 +103,12 @@ impl AuthClient {
                 extra.insert(name.to_owned(), Value::String(value.clone()));
             }
         }
-        let mut body = json!({"username": username, "pwd": password, "tenant": profile.tenant, "encryptType": "3L", "extInfo": extra});
+        let tenant = if profile.tenant.is_empty() {
+            "__default_tenant__"
+        } else {
+            profile.tenant.as_str()
+        };
+        let mut body = json!({"username": username, "pwd": password, "tenant": tenant, "encryptType": "3L", "extInfo": extra});
         if let Some(unit) = &profile.login_unit {
             body["loginUnit"] = Value::String(unit.clone());
         }
@@ -161,8 +166,7 @@ impl AuthClient {
             }
             402 => {
                 return Ok(AuthOutcome::CaptchaRequired {
-                    message: "需要有效图形验证码；请取得当前 NVWA 登录验证码的 ID 和内容后重试"
-                        .into(),
+                    message: "产品要求图形验证码；当前 Hub 尚不显示验证码图片，请在 NVWA 产品页面完成登录验证，或选择已配置的浏览器授权".into(),
                 });
             }
             0 | 200 | 203 => {}
@@ -495,17 +499,6 @@ impl AuthClient {
         ensure!(value.is_object(), "NVWA 认证响应结构无效");
         Ok(value)
     }
-}
-
-fn endpoint(base: &str, route: &str) -> Result<Url> {
-    let mut url = validate_url(base)?;
-    let path = format!(
-        "{}/{}",
-        url.path().trim_end_matches('/'),
-        route.trim_start_matches('/')
-    );
-    url.set_path(&path);
-    Ok(url)
 }
 
 fn certification_base(profile: &NvwaProfile) -> &str {

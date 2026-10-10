@@ -5,7 +5,10 @@ use serde_json::{Value, json};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use super::types::{AuthResult, AuthToken, ClientKind, NvwaProfile, VerifiedIdentity};
+use super::{
+    config::resolve_mcp_url,
+    types::{AuthResult, AuthToken, ClientKind, NvwaProfile, VerifiedIdentity},
+};
 
 const SESSION_IDLE_MS: u64 = 24 * 60 * 60 * 1000;
 const MAX_SESSIONS: usize = 512;
@@ -613,6 +616,7 @@ impl Runtime {
                 Some(_) => "authenticated",
             };
             json!({"profileId":profile.id,"state":state,"identity":auth.map(|a| &a.identity),
+                "resolvedMcpUrl":resolve_mcp_url(profile).ok().map(|url| url.to_string()),
                 "personalTokenPresent":auth.is_some_and(|a| a.personal_token.is_some()),
                 "mcpTokenPresent":auth.is_some(),
                 "personalExpiresAtMs":auth.and_then(|a| a.personal_token.as_ref()).and_then(|t| t.expires_at_ms),
