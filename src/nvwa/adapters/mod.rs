@@ -306,10 +306,14 @@ pub(crate) async fn preview(
         };
     let mut warnings = client_warnings(target.client);
     if status.present && !status.owned {
-        warnings.push("同名 MCP 条目不是 Hub 管理，本次不能接管或覆盖".into());
+        warnings.push(
+            "客户端已有同名连接，但不是由 Hub 添加的。请先确认它的用途，Hub 不会覆盖它。".into(),
+        );
     }
     if status.modified {
-        warnings.push("目标条目已被其他操作修改；请保留用户修改并重新核对".into());
+        warnings.push(
+            "这条连接已被手动或其他程序修改。请先核对客户端中的设置，再回 Hub 重新检查。".into(),
+        );
     }
     Ok(AdapterPreview {
         operation,
@@ -521,7 +525,7 @@ async fn mutate(
             }
             let mut warnings = client_warnings(target.client);
             if mutation.is_err() {
-                warnings.push("写入响应未确认，但只读核对已确认目标内容；没有重放写入".into());
+                warnings.push("操作时未收到明确回复，随后已检查并确认本次修改已完成。".into());
             }
             let updated_status =
                 status(target, &location, &after, ledger.entries.get(&location.key))?;
@@ -839,15 +843,15 @@ fn status(
     };
     let configured = present && owned && !modified && !managed.is_some_and(|entry| entry.pending);
     let detail = if managed.is_some_and(|entry| entry.pending) {
-        "上次操作结果未确认，已保留受保护恢复记录；请核对目标，不能自动覆盖"
+        "上次修改的结果还未确认。请查看客户端中的这条连接，再回 Hub 重新检查；修改前的备份已保留。"
     } else if modified {
-        "目标与 Hub 保存记录不同，请保留用户修改并核对"
+        "这条连接与 Hub 上次保存的设置不同。请先核对客户端中的设置，Hub 会保留这些改动。"
     } else if present && !owned {
-        "同名条目不属于 Hub，不能接管"
+        "客户端已有同名连接，但不是由 Hub 添加的。请先确认它的用途，Hub 不会覆盖它。"
     } else if configured {
-        "配置已保存；客户端加载、信任和真实 MCP 连接需分别确认"
+        "连接设置已保存。请刷新客户端，并按客户端提示确认使用这条连接。"
     } else {
-        "尚未配置此客户端 MCP 接入"
+        "尚未给此客户端添加 NVWA 连接。"
     };
     Ok(AdapterStatus {
         client: target.client,
@@ -896,23 +900,24 @@ fn unavailable(target: &AdapterTarget, managed: Option<&ManagedEntry>) -> Adapte
         load_state: "unavailable".into(),
         connection_state: "unknown".into(),
         native_connected: None,
-        detail: "天工未取得已验证的当前运行授权，请先连接桌面后读取".into(),
+        detail: "请先打开天工 Claw，并在 Hub 中完成天工连接，再检查 NVWA 接入。".into(),
     }
 }
 
 fn client_warnings(client: ClientKind) -> Vec<String> {
     match client {
         ClientKind::Codex => {
-            vec!["配置保存不代表已有 Codex 会话已加载；保留客户端原生信任流程".into()]
+            vec!["保存后请重新打开或刷新 Codex 会话，并按 Codex 的提示确认使用这条连接。".into()]
         }
         ClientKind::Workbuddy => vec![
-            "保留 WorkBuddy 原生信任；请原生刷新或重启后连接，外部写入不保证即时生效".into(),
-            "默认路径仅适用于标准用户实例；品牌或专享版请显式核对配置路径".into(),
+            "保存后请刷新或重新打开 WorkBuddy，并按 WorkBuddy 的提示确认使用这条连接。".into(),
+            "使用品牌版或专享版 WorkBuddy 时，请确认这里的配置文件路径属于你正在使用的版本。"
+                .into(),
         ],
         ClientKind::Tiangong => vec![
-            "原生 test/discover 的 ok 不是严格连接证据；保存保持未连接，严格握手后才启用目录"
+            "保存后请在 Hub 检测这条天工连接。检测成功并更新能力列表后，再到天工开始下一轮对话。"
                 .into(),
-            "原生接口没有 CAS，并发修改只能前后核对，不能承诺跨进程原子保护".into(),
+            "操作期间请勿同时在天工中修改同一条连接。设置发生变化时，请重新检查后再操作。".into(),
         ],
     }
 }

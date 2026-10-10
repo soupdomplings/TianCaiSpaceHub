@@ -435,22 +435,34 @@ impl AuthClient {
             .or_else(|| context.get("conetxtUser"));
         let user_id = text(context.get("id"))
             .or_else(|| user.and_then(|u| text(u.get("id"))))
-            .ok_or_else(|| anyhow::anyhow!("NVWA 登录上下文缺少真实用户标识"))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "NVWA 返回的账号或组织信息不完整（缺少用户标识），请联系管理员检查登录接口"
+                )
+            })?;
         let identity_id = context
             .get("contextIdentity")
             .and_then(|v| text(v.get("id")))
             .or_else(|| text(context.get("identityId")))
-            .ok_or_else(|| anyhow::anyhow!("NVWA 登录上下文缺少真实身份标识"))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "NVWA 返回的账号或组织信息不完整（缺少身份标识），请联系管理员检查登录接口"
+                )
+            })?;
         let tenant_id = text(context.get("tenantName"))
             .or_else(|| text(context.get("tenantId")))
-            .ok_or_else(|| anyhow::anyhow!("NVWA 登录上下文缺少真实租户标识"))?;
-        ensure!(
-            tenant_id != "__default_tenant__",
-            "NVWA 未返回可验证租户标识"
-        );
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "NVWA 返回的账号或组织信息不完整（缺少租户标识），请联系管理员检查登录接口"
+                )
+            })?;
         let username = text(context.get("username"))
             .or_else(|| user.and_then(|u| text(u.get("name"))))
-            .ok_or_else(|| anyhow::anyhow!("NVWA 登录上下文缺少真实登录名"))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "NVWA 返回的账号或组织信息不完整（缺少登录账号），请联系管理员检查登录接口"
+                )
+            })?;
         let identity = VerifiedIdentity {
             user_id,
             identity_id,

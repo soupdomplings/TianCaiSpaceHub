@@ -727,6 +727,9 @@ async fn client_operation(
                 "restore" => AdapterOperation::Restore,
                 _ => bail!("Unknown client operation"),
             };
+            if matches!(operation, AdapterOperation::Apply) {
+                service.ensure_authenticated(profile).await?;
+            }
             Ok(serde_json::to_value(
                 adapters::preview(&context, &target, operation).await?,
             )?)

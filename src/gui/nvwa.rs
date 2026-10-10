@@ -57,6 +57,7 @@ struct ClientRow {
 #[derive(Clone)]
 pub(super) struct NvwaTab {
     pub(super) page: ScrolledWindow,
+    text: GuiText,
     profile: Choice,
     name: TextCtrl,
     product: TextCtrl,
@@ -139,6 +140,114 @@ fn tr(text: GuiText, zh: &'static str, en: &'static str) -> &'static str {
     }
 }
 
+fn display_message(text: GuiText, message: &str) -> String {
+    let (zh, en) = match message {
+        "NVWA login required" | "Login required" => (
+            "还没有登录成功。请先点击“登录 / 授权”，成功后再检测 MCP 或接入客户端。",
+            "You are not signed in. Sign in successfully before checking MCP or connecting a client.",
+        ),
+        "NVWA MCP token expired; login required"
+        | "NVWA token expired; explicit login required"
+        | "NVWA browser authorization expired; authorize again" => (
+            "登录已过期。请重新点击“登录 / 授权”，成功后再继续。",
+            "Your sign-in has expired. Sign in again before continuing.",
+        ),
+        "NVWA profile changed; explicit login required" => (
+            "环境设置已变化。请保存环境并重新登录，再接入客户端。",
+            "Environment settings changed. Save the environment and sign in again.",
+        ),
+        "Saved NVWA credential unavailable; login required" => (
+            "无法读取之前保存的登录资料。请重新填写并登录。",
+            "Saved credentials could not be read. Enter them and sign in again.",
+        ),
+        "Restored NVWA identity could not be verified; login again" => (
+            "无法确认之前保存的登录仍然有效。请重新登录。",
+            "The saved sign-in could not be verified. Please sign in again.",
+        ),
+        "NVWA identity changed; explicit login required"
+        | "NVWA identity changed; explicit login and client access required" => (
+            "服务返回的账号或租户已变化。请重新登录，确认身份后再接入客户端。",
+            "The returned account or tenant changed. Sign in, verify your identity, and reconnect the client.",
+        ),
+        "NVWA requires interactive login verification" => (
+            "登录还需要验证码或其他确认。请点击“登录 / 授权”完成验证。",
+            "Sign-in needs a verification code or another confirmation. Select Sign in to continue.",
+        ),
+        "Login failed; previous client access remains revoked" => (
+            "登录没有成功。请处理登录错误后重试，再重新接入客户端。",
+            "Sign-in failed. Resolve the sign-in error and try again, then reconnect the client.",
+        ),
+        "Waiting for login" => (
+            "尚未完成登录。请查看登录结果或完成浏览器中的授权。",
+            "Sign-in is not complete. Check the result or finish authorization in your browser.",
+        ),
+        "Authenticated; client access must be explicitly applied"
+        | "Verified login; explicitly apply each client to grant access to this identity" => (
+            "登录成功。可以检测 MCP，然后在下方选择客户端接入。",
+            "Signed in. Check MCP, then choose a client below to connect.",
+        ),
+        "Logged out; previous client access revoked" => (
+            "已退出登录。客户端中的旧连接暂时不能使用；需要时重新登录并接入。",
+            "Signed out. Previous client connections are inactive; sign in and reconnect when needed.",
+        ),
+        "NVWA rejected authorization; request was not replayed" => (
+            "NVWA 已拒绝这次连接的登录授权。请重新登录；刚才的操作没有自动重试。",
+            "NVWA rejected this sign-in. Sign in again; the previous operation was not retried.",
+        ),
+        "MCP initialize and paginated tools/list verified; no tool was invoked" => (
+            "已连接到 MCP 并读取工具清单。可以继续接入客户端；工具是否能执行，需要在客户端中确认。",
+            "MCP connected and its tool list was read. Connect a client next; verify tool execution there.",
+        ),
+        "Waiting for one-time browser authorization"
+        | "Complete authorization in NVWA; callback must match this one-time transaction" => (
+            "请在打开的 NVWA 页面完成登录和授权，然后回到 Hub 查看结果。",
+            "Finish sign-in and authorization on the opened NVWA page, then return to Hub.",
+        ),
+        "Browser authorization failed or superseded; start again" => (
+            "浏览器授权未完成或已经失效。请重新点击“登录 / 授权”。",
+            "Browser authorization failed or expired. Start sign-in again.",
+        ),
+        "Two factor verification required" | "Enter the verification code to continue" => (
+            "还需要验证码才能登录。请发送验证码，收到后填写并再次点击“登录 / 授权”。",
+            "A verification code is needed. Request it, enter it, and select Sign in again.",
+        ),
+        "Verification code requested" => (
+            "已请求发送验证码。收到后填写并再次点击“登录 / 授权”。",
+            "Verification code requested. Enter it and select Sign in again.",
+        ),
+        "Password change required in NVWA" => (
+            "请先到 NVWA 页面修改密码，再回到 Hub 登录。",
+            "Change your password on the NVWA page, then sign in from Hub.",
+        ),
+        "Client authorization required" | "Client authorization invalid" => (
+            "这个客户端的连接尚未添加，或登录已变化。请重新“预览接入”并确认添加。",
+            "This client connection is missing or no longer valid. Preview and add it again.",
+        ),
+        "Login was cancelled or superseded"
+        | "Login was superseded"
+        | "Login changed during detection"
+        | "Login changed during renewal" => (
+            "登录已取消或变化。请确认当前环境并重新登录，再继续操作。",
+            "Sign-in was cancelled or changed. Check the environment and sign in again.",
+        ),
+        "NVWA operation failed; check configuration or login again" => (
+            "操作未完成。请检查环境地址和登录资料，保存后重新登录。配置方法可查看右上角“?”。",
+            "The operation failed. Check the environment URL and credentials, save, and sign in again. See '?' for setup help.",
+        ),
+        _ => return message.to_string(),
+    };
+    tr(text, zh, en).to_string()
+}
+
+fn client_title(kind: &str) -> &'static str {
+    match kind {
+        "codex" => "Codex",
+        "workbuddy" => "WorkBuddy",
+        "tiangong" => "天工 Claw",
+        _ => "NVWA MCP",
+    }
+}
+
 fn label<W: WxWidget>(parent: &W, root: &BoxSizer, title: &str) {
     let item = StaticText::builder(parent).with_label(title).build();
     item.set_foreground_color(theme::theme().ink_secondary);
@@ -160,18 +269,6 @@ fn choice_row<W: WxWidget>(
     field.set_selection(0);
     grid.add(&field, 1, SizerFlag::Expand, 0);
     field
-}
-
-fn secret_row<W: WxWidget>(parent: &W, grid: &FlexGridSizer, title: &str) -> TextCtrl {
-    let title = StaticText::builder(parent).with_label(title).build();
-    grid.add(&title, 0, SizerFlag::AlignCenterVertical, 0);
-    let input = TextCtrl::builder(parent)
-        .with_style(TextCtrlStyle::Password)
-        .build();
-    apply_textctrl_theme(&input);
-    input.set_min_size(Size::new(420, 30));
-    grid.add(&input, 1, SizerFlag::Expand, 0);
-    input
 }
 
 fn button<W: WxWidget>(parent: &W, row: &BoxSizer, title: &str) -> Button {
@@ -263,7 +360,12 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> NvwaTab {
     );
     account_row.set_sizer(account_grid, true);
     let (password_row, password_grid) = section(&page, &account_root);
-    let password = secret_row(&password_row, &password_grid, tr(text, "密码", "Password"));
+    let password = text_field_row(
+        &password_row,
+        &password_grid,
+        tr(text, "密码", "Password"),
+        "",
+    );
     let remember_password = CheckBox::builder(&password_row)
         .with_label(tr(text, "记住密码", "Remember password"))
         .build();
@@ -298,7 +400,8 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> NvwaTab {
     let application_root = BoxSizer::builder(Orientation::Vertical).build();
     let (application_settings, application_grid) = section(&page, &application_root);
     let client_id = text_field_row(&application_settings, &application_grid, "ClientID", "");
-    let client_secret = secret_row(&application_settings, &application_grid, "ClientSecret");
+    let client_secret =
+        text_field_row(&application_settings, &application_grid, "ClientSecret", "");
     let remember_secret = CheckBox::builder(&application_settings)
         .with_label(tr(text, "保存应用密钥", "Save application secret"))
         .build();
@@ -541,6 +644,7 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> NvwaTab {
     page.fit_inside();
     let tab = NvwaTab {
         page,
+        text,
         profile,
         name,
         product,
@@ -679,10 +783,33 @@ fn start(
                 body["loginAttemptId"] = json!(attempt);
             }
             state.login_attempt = Some(attempt);
+            let selected_id = state.selected_id.clone();
+            state
+                .runtime_profiles
+                .retain(|profile| profile["profileId"].as_str() != selected_id.as_deref());
+            for client in state.clients.values_mut() {
+                client["bridgeState"] = json!("unknown");
+                client["bridgeCheckedAtMs"] = Value::Null;
+            }
         } else if matches!(action, Action::Cancel | Action::ResetAuthentication) {
             if let (Some(body), Some(attempt)) = (body.as_mut(), state.login_attempt.as_ref()) {
                 body["loginAttemptId"] = json!(attempt);
             }
+        }
+    }
+    if matches!(action, Action::Login) {
+        tab.identity.set_label(tr(
+            tab.text,
+            "登录尚未完成。成功后这里会显示服务返回的账号和租户。",
+            "Sign-in is pending. The returned account and tenant will appear here after success.",
+        ));
+        tab.tools.set_value("");
+        for row in &tab.clients {
+            row.status.set_label(tr(
+                tab.text,
+                "正在重新登录，完成后请重新检测这条连接。",
+                "Signing in again. Check this connection after sign-in completes.",
+            ));
         }
     }
     let operation = tab.operation.fetch_add(1, Ordering::SeqCst) + 1;
@@ -730,12 +857,12 @@ pub(super) fn bind_actions(
     let sender = tx.clone();
     tab.mode.on_selection_changed(move |_| {
         t.application.set_value(true);
-        reset_authentication(&t, &sender);
+        reset_authentication(&t, &sender, false);
     });
     let t = tab.clone();
     let sender = tx.clone();
     tab.application
-        .on_toggled(move |_| reset_authentication(&t, &sender));
+        .on_toggled(move |_| reset_authentication(&t, &sender, true));
     let t = tab.clone();
     let sender = tx.clone();
     tab.reload
@@ -956,7 +1083,18 @@ fn clear_login_material(tab: &NvwaTab) {
     tab.state.borrow_mut().twofactor_session = None;
 }
 
-fn reset_authentication(tab: &NvwaTab, tx: &tokio::sync::mpsc::UnboundedSender<GuiMessage>) {
+fn reset_authentication(
+    tab: &NvwaTab,
+    tx: &tokio::sync::mpsc::UnboundedSender<GuiMessage>,
+    keep_application_credentials: bool,
+) {
+    let application_credentials = keep_application_credentials.then(|| {
+        (
+            tab.client_id.get_value(),
+            tab.client_secret.get_value(),
+            tab.remember_secret.is_checked(),
+        )
+    });
     clear_login_material(tab);
     for field in [
         tab.username,
@@ -966,6 +1104,11 @@ fn reset_authentication(tab: &NvwaTab, tx: &tokio::sync::mpsc::UnboundedSender<G
         tab.unit,
     ] {
         field.set_value("");
+    }
+    if let Some((client_id, client_secret, remember_secret)) = application_credentials {
+        tab.client_id.set_value(&client_id);
+        tab.client_secret.set_value(&client_secret);
+        tab.remember_secret.set_value(remember_secret);
     }
     tab.signature.set_selection(0);
     tab.auth_header.set_value(if auth_mode(tab) == "password" {
@@ -1126,8 +1269,26 @@ fn confirm(frame: &Frame, message: &str) -> bool {
 fn configuration_help(text: GuiText) -> &'static str {
     tr(
         text,
-        "1. 环境与地址\n填写环境名称和 NVWA 服务地址。认证服务单独部署时，在高级设置填写独立认证地址。MCP 默认 /mcp，可改其他路径或完整地址；路径跟随服务地址的部署前缀。\n\n2. 账号密码\n选择“账号密码”，填写账号和密码；特殊租户、登录机构在高级设置。服务要求双因子时再填写验证码；要求改密或图形验证码时按返回提示处理。\n\n3. 认证服务连接\n在认证服务管理添加应用服务，获取ClientID和ClientSecret。选择“认证服务连接”，填写这两个值。默认勾选“使用共享应用代表指定用户”，还需填写要代表的账号；应用按服务端权限代表该账号取票，不执行个人密码验证。没有应用管理权限时，请向管理员获取应用资料。\n\n4. 浏览器授权（可选）\n取消“使用共享应用代表指定用户”后，点击“登录 / 授权”打开产品页面完成个人登录与授权。此方式仍需要 ClientID、ClientSecret，以及认证服务允许的本机回调地址。原有浏览器授权环境保持此设置。高级“限定授权账号”可留空，填写后必须与实际授权账号一致。\n\n5. 保存与接入\n先“保存环境”，再“登录 / 授权”。登录成功后“检测 MCP”，随后检查目标客户端并“预览接入”，确认后完成客户端刷新和信任。\n\n“记住密码”或“保存应用密钥”仅在认证成功后交给系统保护存储；默认不勾选。更改认证方式会清空该方式的输入并取消旧授权，重新填写后保存再连接。",
-        "1. Environment and URLs\nEnter an environment name and the NVWA service URL. Set a separate authentication URL in advanced settings if deployed separately. MCP defaults to /mcp; use another path or a complete URL. Paths preserve the service deployment prefix.\n\n2. Account and password\nEnter your username and password. Specific tenant and organization settings are optional under advanced settings. Enter a two-factor code only when requested; follow the returned instructions for password changes or captcha requirements.\n\n3. Authentication service connection\nAdd an application service in authentication service management to obtain ClientID and ClientSecret, then enter both. Shared application delegation is checked by default: also enter the username to represent. The application requests credentials for that user under server permissions and does not verify their personal password. Obtain application settings from your administrator if needed.\n\n4. Browser authorization (optional)\nUncheck shared application delegation and select Sign in to complete personal login and authorization on the product page. ClientID, ClientSecret and an allowed local callback are still required. Existing browser profiles keep this setting. An optional restricted username in advanced settings must match the authorized account.\n\n5. Save and connect\nSave the environment, sign in, then check MCP. Inspect your target client and preview the connection before confirming; complete the client's refresh and trust steps.\n\nRemember password and Save application secret store credentials with system protection only after successful authentication. Both default to off. Switching authentication clears the previous inputs and cancels the previous authorization; enter your settings again and save before connecting.",
+        concat!(
+            "1. 填写环境\n填写环境名称和 NVWA 服务地址。MCP 默认 /mcp，可在高级设置改路径或完整地址；路径跟随服务地址的部署前缀。认证服务单独部署时，再填写独立认证地址。\n\n",
+            "2. 选择登录方式\n账号密码：填写账号和密码，收到验证码要求后再填写验证码；改密或图形验证码按服务提示处理。密码在页面直接显示。\n",
+            "认证服务连接：在认证服务管理添加应用服务，获取ClientID和ClientSecret。填写这两个值，ClientSecret 在页面直接显示。默认勾选共享应用，填写要代表的账号；应用为该账号申请连接，不验证个人密码。没有应用管理权限时，请向管理员获取应用资料。\n\n",
+            "3. 浏览器授权（可选）\n取消共享应用勾选后，用同一组 ClientID/ClientSecret，在打开的产品页面完成个人登录和授权。应用还须允许 Hub 的本机回调地址。高级“限定授权账号”可留空，填写时须与实际授权账号一致。旧浏览器环境保持此方式。\n\n",
+            "4. 登录后确认账号与租户\n先保存环境，再点击“登录 / 授权”。成功后显示服务实际返回的账号和租户；__default_tenant__ 表示默认租户。高级指定租户通常可留空。登录未成功时，先处理登录提示，再检测 MCP。\n\n",
+            "5. 检测并接入\n“检测 MCP”读取可用工具清单。选择客户端，点击“预览接入”，确认环境与保存位置后点“是”添加。保存后刷新客户端或重开会话，并按客户端提示确认使用；天工先检测这条连接，再开始下一轮对话。工具是否能执行，在客户端中确认。\n\n",
+            "共享应用勾选切换会保留 ClientID、ClientSecret 和保存密钥选项，取消旧授权；保存后重新登录。主认证下拉切换会清空旧方式的输入。\n",
+            "“记住密码”和“保存应用密钥”默认关闭；勾选后仅在认证成功时交给系统保护存储。"
+        ),
+        concat!(
+            "1. Environment\nEnter a name and the NVWA service URL. MCP defaults to /mcp; edit its path or full URL in advanced settings. Paths preserve the service deployment prefix. Set a separate authentication URL only if deployed separately.\n\n",
+            "2. Sign-in method\nAccount and password: enter both, then complete any requested verification. Follow service instructions for password changes or captcha. Password input is visible.\n",
+            "Authentication service connection: add an application service in authentication service management to obtain ClientID and ClientSecret. Enter both; ClientSecret input is visible. Shared application delegation is checked by default; enter the account to represent. This requests access for that account without validating its password. Obtain application settings from your administrator if needed.\n\n",
+            "3. Browser authorization (optional)\nUncheck shared delegation and use the same ClientID/ClientSecret to sign in and authorize on the product page. The application must allow Hub's local callback. A restricted username in advanced settings is optional and must match the authorized account if set. Existing browser profiles keep this method.\n\n",
+            "4. Check account and tenant\nSave, then select Sign in. After success, Hub shows the returned account and tenant. __default_tenant__ is the default tenant. Specific tenant can usually be left blank. Resolve sign-in errors before checking MCP.\n\n",
+            "5. Check and connect\nCheck MCP reads the available tools. Choose a client and preview the connection. Review the environment and save location, then select Yes to add it. Refresh or reopen the client session and follow its confirmation prompts. For TianGong, check the connection first and start a new conversation turn. Verify actual tool use in the client.\n\n",
+            "Toggling shared delegation keeps ClientID, ClientSecret and Save application secret, and cancels the previous authorization. Save and sign in again. Switching the main sign-in dropdown clears the previous inputs.\n",
+            "Remember password and Save application secret default to off. When enabled, credentials go to protected system storage only after successful authentication."
+        ),
     )
 }
 
@@ -1154,7 +1315,15 @@ pub(super) fn apply_result(
     let value = match result.outcome {
         Ok(value) => value,
         Err(error) => {
-            tab.status.set_label(&error);
+            tab.status.set_label(&display_message(text, &error));
+            tab.status.wrap(920);
+            if matches!(result.action, Action::Login) {
+                tab.identity.set_label(tr(
+                    text,
+                    "登录未完成。成功后这里会显示服务返回的账号和租户。",
+                    "Sign-in is incomplete. The returned account and tenant will appear here after success.",
+                ));
+            }
             update_controls(tab);
             return;
         }
@@ -1219,7 +1388,7 @@ pub(super) fn apply_result(
                 .or_else(|| value.get("message"))
                 .and_then(Value::as_str)
                 .unwrap_or("认证步骤已返回");
-            tab.status.set_label(detail);
+            tab.status.set_label(&display_message(text, detail));
             if let Some(url) = value.get("authorizeUrl").and_then(Value::as_str) {
                 if let Err(error) = open_url_in_browser(text, url) {
                     show_error(frame, &error);
@@ -1254,10 +1423,16 @@ pub(super) fn apply_result(
                 })
                 .collect();
             tab.tools.set_value(&names.join("\n"));
-            tab.status.set_label(&format!(
-                "MCP 协议检测通过；当前 {} 项能力，客户端实际调用待验证",
-                tools.len()
-            ));
+            tab.status.set_label(&match text.locale {
+                GuiLocale::ZhCn => format!(
+                    "MCP 连接成功，已读取 {} 个工具。接下来可以在下方选择客户端，点击“预览接入”。",
+                    tools.len()
+                ),
+                GuiLocale::EnUs => format!(
+                    "MCP connected; {} tools found. Choose a client below and select Preview connection.",
+                    tools.len()
+                ),
+            });
         }
         Action::DetectClient(kind) => {
             let tools = value["tools"].as_array().cloned().unwrap_or_default();
@@ -1268,20 +1443,38 @@ pub(super) fn apply_result(
                     .collect::<Vec<_>>()
                     .join("\n"),
             );
-            let native = if kind == "tiangong" {
+            let next_step = if kind == "tiangong" {
                 if value["tiangongDirectoryUpdated"].as_bool() == Some(true) {
-                    "；天工能力目录已更新，真实调用待验收"
+                    tr(
+                        text,
+                        "工具清单已更新到天工，可在下一轮对话中使用。",
+                        "The tool list was updated in TianGong; use it in your next conversation turn.",
+                    )
                 } else {
-                    "；天工目录未更新，请检查受管项与原生状态"
+                    tr(
+                        text,
+                        "工具清单尚未更新到天工，请检查天工是否已连接并重新检测。",
+                        "The tool list was not updated in TianGong. Check its connection and try again.",
+                    )
                 }
             } else {
-                "；客户端加载、信任与真实调用待验收"
+                tr(
+                    text,
+                    "请到客户端刷新或重开会话，并按提示确认使用这些工具。",
+                    "Refresh or reopen a client session and follow its prompts to enable these tools.",
+                )
             };
             if let Some(row) = tab.clients.iter().find(|row| row.kind == kind) {
-                row.status.set_label(&format!(
-                    "本机桥协议检测通过；{} 项能力{native}",
-                    tools.len()
-                ));
+                row.status.set_label(&match text.locale {
+                    GuiLocale::ZhCn => format!(
+                        "Hub 已通过这条连接读取到 {} 个工具。{next_step}",
+                        tools.len()
+                    ),
+                    GuiLocale::EnUs => format!(
+                        "Hub read {} tools through this connection. {next_step}",
+                        tools.len()
+                    ),
+                });
                 row.status.wrap(920);
             }
             let mut status = tab
@@ -1293,12 +1486,19 @@ pub(super) fn apply_result(
                 .unwrap_or(Value::Null);
             status["bridgeState"] = json!("checked");
             tab.state.borrow_mut().clients.insert(kind, status);
-            tab.status
-                .set_label("本机桥检测通过；客户端实际调用仍需验证");
+            tab.status.set_label(tr(
+                text,
+                "工具连接检测通过。请到客户端确认工具是否可用。",
+                "Tool connection checked. Confirm the tools are usable in your client.",
+            ));
         }
         Action::SendFactor => {
-            tab.status
-                .set_label(value["detail"].as_str().unwrap_or("已请求发送双因子验证码"));
+            tab.status.set_label(&display_message(
+                text,
+                value["detail"]
+                    .as_str()
+                    .unwrap_or("Verification code requested"),
+            ));
         }
         Action::Inspect(kind) | Action::Mutate(kind) => {
             let value = value.get("status").cloned().unwrap_or(value);
@@ -1325,14 +1525,10 @@ pub(super) fn apply_result(
                 .and_then(Value::as_str)
                 .unwrap_or("无法取得客户端预览详情");
             if !allowed || fingerprint.is_empty() {
-                tab.status.set_label(detail);
+                tab.status.set_label(&display_message(text, detail));
             } else {
                 let target_path = value
                     .pointer("/status/targetPath")
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
-                let server_name = value
-                    .pointer("/status/serverName")
                     .and_then(Value::as_str)
                     .unwrap_or("");
                 let warnings = value["warnings"]
@@ -1341,19 +1537,77 @@ pub(super) fn apply_result(
                         items
                             .iter()
                             .filter_map(Value::as_str)
+                            .map(|message| display_message(text, message))
                             .collect::<Vec<_>>()
                             .join("\n")
                     })
                     .unwrap_or_default();
-                let operation_label = match operation.as_str() {
-                    "apply" => "写入接入配置",
-                    "remove" => "移除受管配置",
-                    "restore" => "恢复目标备份",
-                    _ => "修改配置",
+                let client_name = client_title(&client);
+                let environment = tab.name.get_value();
+                let (introduction, decision) = match operation.as_str() {
+                    "apply" => (
+                        match text.locale {
+                            GuiLocale::ZhCn => {
+                                format!("将把“{environment}”的 NVWA 工具连接添加到 {client_name}。")
+                            }
+                            GuiLocale::EnUs => {
+                                format!("Add the NVWA tools for '{environment}' to {client_name}.")
+                            }
+                        },
+                        tr(
+                            text,
+                            "点击“是”保存连接；点击“否”取消。",
+                            "Select Yes to save the connection, or No to cancel.",
+                        ),
+                    ),
+                    "remove" => (
+                        match text.locale {
+                            GuiLocale::ZhCn => format!(
+                                "将从 {client_name} 移除“{environment}”的 NVWA 工具连接，移除后该连接将不能使用。"
+                            ),
+                            GuiLocale::EnUs => format!(
+                                "Remove the NVWA connection for '{environment}' from {client_name}. This connection will no longer be usable."
+                            ),
+                        },
+                        tr(
+                            text,
+                            "点击“是”移除连接；点击“否”取消。",
+                            "Select Yes to remove the connection, or No to cancel.",
+                        ),
+                    ),
+                    "restore" => (
+                        match text.locale {
+                            GuiLocale::ZhCn => format!(
+                                "将把 {client_name} 中“{environment}”的 NVWA 连接设置恢复到 Hub 修改前的备份，恢复后需要重新接入。"
+                            ),
+                            GuiLocale::EnUs => format!(
+                                "Restore the backed-up settings from before Hub changed the NVWA connection for '{environment}' in {client_name}. Reconnect afterwards."
+                            ),
+                        },
+                        tr(
+                            text,
+                            "点击“是”恢复备份；点击“否”取消。",
+                            "Select Yes to restore the backup, or No to cancel.",
+                        ),
+                    ),
+                    _ => return,
                 };
-                let message = format!(
-                    "{client} · {operation_label}\n{target_path}\n{server_name}\n\n{detail}\n{warnings}"
-                );
+                let target = if target_path.is_empty() {
+                    tr(
+                        text,
+                        "保存位置：天工中的 MCP 连接设置",
+                        "Save location: TianGong MCP connection settings",
+                    )
+                    .to_string()
+                } else {
+                    format!(
+                        "{}\n{target_path}",
+                        tr(text, "配置文件：", "Configuration file:")
+                    )
+                };
+                let detail = display_message(text, detail);
+                let message =
+                    format!("{introduction}\n\n{target}\n\n{detail}\n{warnings}\n\n{decision}");
                 if confirm(frame, &message) {
                     body["expectedFingerprint"] = json!(fingerprint);
                     if let Some(backup) = value
@@ -1396,16 +1650,47 @@ fn apply_client(tab: &NvwaTab, kind: &str, value: Value) {
             row.path.set_value(path);
         }
         let load = value.get("loadState").and_then(Value::as_str).unwrap_or("");
-        let connection = value
-            .get("connectionState")
-            .and_then(Value::as_str)
-            .unwrap_or("");
         let bridge = value
             .get("bridgeState")
             .and_then(Value::as_str)
             .unwrap_or("");
-        row.status
-            .set_label(&format!("{detail}\n{load}  {connection}  {bridge}"));
+        let load = match load {
+            "pending_client_refresh" => tr(
+                tab.text,
+                "下一步：刷新客户端或重开会话，并按提示确认使用。",
+                "Next: refresh the client or reopen a session and follow its confirmation prompts.",
+            ),
+            "next_turn" => tr(
+                tab.text,
+                "下一步：在天工下一轮对话中查看工具。",
+                "Next: check the tools in the next TianGong conversation turn.",
+            ),
+            "not_configured" => tr(
+                tab.text,
+                "下一步：登录成功后点击“预览接入”。",
+                "Next: sign in, then select Preview connection.",
+            ),
+            "unavailable" => tr(
+                tab.text,
+                "下一步：先打开并连接客户端，再点击“检查”。",
+                "Next: open and connect the client, then select Inspect.",
+            ),
+            _ => "",
+        };
+        let bridge = match bridge {
+            "checked" | "tools_discovered" => tr(
+                tab.text,
+                "Hub 已检测这条工具连接；客户端是否能使用，请在客户端确认。",
+                "Hub checked this tool connection; confirm it is usable in the client.",
+            ),
+            _ => tr(
+                tab.text,
+                "Hub 尚未检测这条工具连接。",
+                "Hub has not checked this tool connection yet.",
+            ),
+        };
+        let detail = display_message(tab.text, detail);
+        row.status.set_label(&format!("{detail}\n{load}\n{bridge}"));
         row.status.wrap(920);
     }
     tab.state
@@ -1448,24 +1733,35 @@ fn apply_snapshot(tab: &NvwaTab, text: GuiText, value: Value) {
     }
 }
 
-fn expiry_label(expiry: Option<u64>) -> String {
+fn expiry_label(text: GuiText, expiry: Option<u64>) -> String {
     let Some(expiry) = expiry else {
-        return "未知（服务未返回期限）".to_string();
+        return tr(text, "服务未说明有效期", "Service did not specify validity").to_string();
     };
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64;
     if expiry <= now {
-        return "已过期".to_string();
+        return tr(text, "已过期", "Expired").to_string();
     }
     let minutes = (expiry - now).div_ceil(60_000);
-    if minutes >= 1440 {
-        format!("约 {} 天 {} 小时", minutes / 1440, minutes % 1440 / 60)
-    } else if minutes >= 60 {
-        format!("约 {} 小时 {} 分钟", minutes / 60, minutes % 60)
-    } else {
-        format!("约 {minutes} 分钟")
+    match text.locale {
+        GuiLocale::ZhCn if minutes >= 1440 => {
+            format!("约 {} 天 {} 小时", minutes / 1440, minutes % 1440 / 60)
+        }
+        GuiLocale::ZhCn if minutes >= 60 => {
+            format!("约 {} 小时 {} 分钟", minutes / 60, minutes % 60)
+        }
+        GuiLocale::ZhCn => format!("约 {minutes} 分钟"),
+        GuiLocale::EnUs if minutes >= 1440 => format!(
+            "About {} days {} hours",
+            minutes / 1440,
+            minutes % 1440 / 60
+        ),
+        GuiLocale::EnUs if minutes >= 60 => {
+            format!("About {} hours {} minutes", minutes / 60, minutes % 60)
+        }
+        GuiLocale::EnUs => format!("About {minutes} minutes"),
     }
 }
 
@@ -1487,28 +1783,73 @@ fn show_runtime_status(tab: &NvwaTab) {
         .and_then(Value::as_str)
         .unwrap_or("");
     let state_label = match state["state"].as_str() {
-        Some("authenticated") => "已登录",
-        Some("expired") => "MCP 凭据已过期",
-        Some("personal_expired") => "个人会话已过期",
-        Some("identity_verification_pending") => "待重新核验身份",
-        _ => "未登录",
+        Some("authenticated") => tr(tab.text, "已登录", "Signed in"),
+        Some("expired") => tr(
+            tab.text,
+            "工具连接授权已过期，请重新登录",
+            "Tool authorization expired; sign in again",
+        ),
+        Some("personal_expired") => tr(
+            tab.text,
+            "登录已过期，请重新登录",
+            "Sign-in expired; sign in again",
+        ),
+        Some("identity_verification_pending") => tr(
+            tab.text,
+            "正在确认之前的登录是否有效",
+            "Verifying the saved sign-in",
+        ),
+        _ => tr(tab.text, "未登录", "Not signed in"),
+    };
+    let tenant = if tenant == "__default_tenant__" {
+        tr(
+            tab.text,
+            "默认租户（__default_tenant__）",
+            "Default tenant (__default_tenant__)",
+        )
+    } else {
+        tenant
     };
     let personal =
         if state["personalTokenPresent"].as_bool() == Some(false) || state["identity"].is_null() {
             "无个人会话".to_string()
         } else {
-            expiry_label(state["personalExpiresAtMs"].as_u64())
+            expiry_label(tab.text, state["personalExpiresAtMs"].as_u64())
         };
     let mcp = if state["identity"].is_null() {
         "未取得".to_string()
     } else {
-        expiry_label(state["mcpExpiresAtMs"].as_u64())
+        expiry_label(tab.text, state["mcpExpiresAtMs"].as_u64())
     };
-    tab.identity.set_label(&format!(
-        "{state_label}  {person}  租户 {tenant}\n个人会话：{personal}；MCP 凭据：{mcp}"
+    if state["identity"].is_null() {
+        tab.identity.set_label(tr(
+            tab.text,
+            "未登录。成功后这里会显示服务返回的账号和租户。",
+            "Not signed in. The returned account and tenant will appear here after success.",
+        ));
+    } else {
+        let account_label = tr(tab.text, "当前账号", "Account");
+        let tenant_label = tr(tab.text, "服务返回的租户", "Returned tenant");
+        let personal_label = tr(tab.text, "密码登录有效期", "Password sign-in validity");
+        let mcp_label = tr(tab.text, "工具连接有效期", "Tool connection validity");
+        let personal = if state["personalTokenPresent"].as_bool() == Some(false) {
+            tr(
+                tab.text,
+                "此方式不使用密码登录",
+                "This method does not use password sign-in",
+            )
+            .to_string()
+        } else {
+            personal
+        };
+        tab.identity.set_label(&format!(
+            "{state_label}\n{account_label}：{person}    {tenant_label}：{tenant}\n{personal_label}：{personal}；{mcp_label}：{mcp}"
+        ));
+    }
+    tab.status.set_label(&display_message(
+        tab.text,
+        state["detail"].as_str().unwrap_or("Login required"),
     ));
-    tab.status
-        .set_label(state["detail"].as_str().unwrap_or("后台已连接"));
 }
 
 fn select_profile(tab: &NvwaTab) {
