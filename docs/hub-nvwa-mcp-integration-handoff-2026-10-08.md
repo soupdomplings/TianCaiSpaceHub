@@ -2,7 +2,7 @@
 
 维护日期：2026-10-10。目标项目：TianCaiSpaceHub。关联 TC-014，适用 `0.4.30-5`；本文件路径保留首次交接日期。
 
-本文按用户最新决定记录当前源码交接。操作、默认值、系统保护与回滚以 [Dumpling-MCP / NVWA MCP 专题](customizations/nvwa-mcp.md) 为准；同仓依据见 [NVWA 资料索引](nvwa/README.md)。本轮修正 Codex 环境名/旧名迁移，增加按钮悬浮说明和 MCP 工具中文简介，页签更名 Dumpling-MCP、使用透明线条品牌图标并由帮助菜单勾选显示（默认隐藏/保存偏好）。此前 ClientSecret 立即保护保存、期限区分与诊断继续保留；历史 build/产物保持原归属，最新构建与 EXE 见 [v5 交付](releases/v0.4.30-5.md)。用户已反馈通过 Hub 接入 Codex MCP，仅限该次接入，不涵盖本轮迁移/显示、真实工具调用或期限；开发方未运行实际应用/测试/认证，未发布。
+本文按用户最新决定记录当前源码交接。操作、默认值、系统保护与回滚以 [Dumpling-MCP / NVWA MCP 专题](customizations/nvwa-mcp.md) 为准；同仓依据见 [NVWA 资料索引](nvwa/README.md)。本轮修正 Codex 环境名/旧名迁移，增加按钮悬浮说明和 MCP 工具中文简介，页签更名 Dumpling-MCP、使用透明线条品牌图标并由帮助菜单勾选显示（默认隐藏/保存偏好）。此前 ClientSecret 立即保护保存、期限区分与诊断继续保留；历史 build/产物保持原归属，最新构建与 EXE 见 [v5 交付](releases/v0.4.30-5.md)。用户已反馈通过 Hub 接入 Codex MCP，仅限该次接入，不涵盖本轮迁移/显示、真实工具调用或期限；开发方未运行实际应用/测试/认证。用户后续反馈本机测试版“可以了”并授权发布，当前完整标签、Actions 和 Release 正在准备，安装包/跨平台/完整 MCP 仍待验收。
 
 ## 1. 已确认需求
 

@@ -2,6 +2,8 @@
 
 维护日期：2026-10-10。当前基线 `0.4.30-5`，唯一 `main`。本文替代旧版 wxDragon 同步与资源优化执行计划；旧文档中的 `0.9.16`、临时脏文件和 stash 操作不再代表当前状态。
 
+发布状态：用户对本轮本机测试版反馈“可以了”并授权发布 `v0.4.30-5`，当前准备标签、Actions 构建与 Release。该反馈只属于此次本机试用和可交付判断，不扩大为 Windows MSI、macOS 或系统退出全部场景验收；Windows/macOS 安装包由 GitHub Actions 生成，实际成功结果及产物身份由 [v5 交付](releases/v0.4.30-5.md) 后续登记。
+
 ## 依赖来源
 
 [Cargo.toml](../Cargo.toml) 声明 wxDragon `0.9.17`，通过 `[patch.crates-io]` 指向 [vendor/wxdragon](../vendor/wxdragon)。升级时需要一并考虑 vendored 的 `wxdragon`、`wxdragon-sys`、`wxdragon-macros` 和底层构建，而不是只改版本字符串。

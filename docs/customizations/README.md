@@ -2,9 +2,9 @@
 
 维护日期：2026-10-10。当前开发基线为 `v0.4.30-5`，源码只维护 `main`。范围：TianCaiSpaceHub 相对于 CodexHub 上游的定制，以及上游升级时必须保留的兼容衔接。
 
-本轮保留唯一 `main` 的全部 TC-001～TC-013，并调整 [TC-014 Dumpling-MCP / NVWA MCP](nvwa-mcp.md)：页签更名、透明线条品牌图标、帮助菜单显示勾选（默认隐藏并保存 `showDumplingMcp`）；Codex 按已保存环境名接入并兼容旧哈希/旧名迁移；五按钮悬浮说明和 MCP `tools/list` 中文简介/说明/原始代码。密钥保护保存、密码闲置/换票固定期限与分步骤 HTTP 401 诊断继续保留。用户已有限反馈 Hub 接入 Codex MCP，新增名称迁移/显示与工具展示待用户验收；构建与新旧产物身份见 [v5 交付](../releases/v0.4.30-5.md)，不创建标签、Release 或发布安装包。
+本轮保留唯一 `main` 的全部 TC-001～TC-013，并调整 [TC-014 Dumpling-MCP / NVWA MCP](nvwa-mcp.md)：页签更名、透明线条品牌图标、帮助菜单显示勾选（默认隐藏并保存 `showDumplingMcp`）；Codex 按已保存环境名接入并兼容旧哈希/旧名迁移；五按钮悬浮说明和 MCP `tools/list` 中文简介/说明/原始代码。密钥保护保存、密码闲置/换票固定期限与分步骤 HTTP 401 诊断继续保留。用户已有限反馈 Hub 接入 Codex MCP，新增名称迁移/显示与工具展示待用户验收；构建与新旧产物身份见 [v5 交付](../releases/v0.4.30-5.md)，用户已反馈本机测试版“可以了”并授权发布，正在准备完整标签与两平台 Actions/Release；不扩大为安装包或全部 MCP 验收。
 
-TC-007 同轮修正系统关机：query 不再走关闭到托盘的 veto，确认 end-session 快速清理自有后台、普通 × 仍隐藏；MSI 新装/major upgrade 完整交互成功页提供“打开 TianCaiSpaceHub”和“完成”，不自动启动。详情及 Actions/MSI/实机待验收边界见 [品牌与交付](desktop-and-packaging.md)、[GUI 维护](../gui-runtime-maintenance.zh-CN.md)。
+TC-007 同轮修正系统关机：query 不再走关闭到托盘的 veto，确认 end-session 快速清理自有后台、普通 × 仍隐藏；MSI 新装/major upgrade 完整交互成功页提供“打开 TianCaiSpaceHub”和“完成”，不自动启动。用户明确前述所有产品改动兼容 Windows/macOS，实际仅 Windows 测试；macOS 原生构建与实机验收分别记录，不用 Windows 反馈替代。详情及 Actions/MSI/实机待验收边界见 [品牌与交付](desktop-and-packaging.md)、[GUI 维护](../gui-runtime-maintenance.zh-CN.md)。
 
 NVWA 认证下拉为“账号密码”和“认证服务连接”，新环境仍默认账号密码。用户新切到认证服务连接时默认勾选“使用共享应用代表指定用户”，主区显示代表账号、`ClientID`、`ClientSecret` 和共享选项，说明为“在认证服务管理添加应用服务，获取ClientID和ClientSecret”；取消勾选才使用原浏览器个人页面授权。加载旧 `password`、`application`、`browser` 环境分别保持密码、勾选共享、未勾选浏览器，不自动迁移；下拉始终可切换。密码模式隐藏并忽略共享选项，不要求应用 ID。签名算法仅共享模式显示于高级设置，浏览器限定授权账号仍为高级可选项。
 

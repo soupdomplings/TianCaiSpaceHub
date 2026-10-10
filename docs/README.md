@@ -1,6 +1,6 @@
 # TianCaiSpaceHub 文档总入口
 
-维护日期：2026-10-10。当前开发基线统一为 `v0.4.30-5`、唯一 `main`，上游仍 CodexHub `v0.4.30`。[Dumpling-MCP / NVWA MCP（TC-014）](customizations/nvwa-mcp.md) 页签改名并使用透明线条品牌图标，帮助菜单勾选“显示 Dumpling-MCP”后显示，默认隐藏并保存偏好。Codex 连接使用环境名称（如 `MCP196`），更新接入兼容旧哈希名称；按钮有悬浮说明，工具清单展示服务返回的中文简介、说明和原代码。应用密钥立即保护保存、两类期限、认证/默认租户与每端隔离继续保留。用户已反馈通过 Hub 接入 Codex MCP，仅覆盖该次接入；本轮名称迁移、页签与工具展示待验收。构建、独立 EXE 身份及此前产物归属见 [v0.4.30-5 交付](releases/v0.4.30-5.md)，不创建标签、Release 或发布安装包。
+维护日期：2026-10-10。当前开发基线统一为 `v0.4.30-5`、唯一 `main`，上游仍 CodexHub `v0.4.30`。[Dumpling-MCP / NVWA MCP（TC-014）](customizations/nvwa-mcp.md) 页签改名并使用透明线条品牌图标，帮助菜单勾选“显示 Dumpling-MCP”后显示，默认隐藏并保存偏好。Codex 连接使用环境名称（如 `MCP196`），更新接入兼容旧哈希名称；按钮有悬浮说明，工具清单展示服务返回的中文简介、说明和原代码。应用密钥立即保护保存、两类期限、认证/默认租户与每端隔离继续保留。用户已反馈通过 Hub 接入 Codex MCP，仅覆盖该次接入；本轮名称迁移、页签与工具展示待验收。构建、独立 EXE 身份及此前产物归属见 [v0.4.30-5 交付](releases/v0.4.30-5.md)，用户已反馈本机测试版可交付并授权创建完整标签及 Release；两平台安装包统一由 Actions 生成，成功身份另记。
 
 同轮修正 [Windows 关机放行与安装成功入口](customizations/desktop-and-packaging.md)：普通 × 仍隐藏，系统结束会话不再 veto；MSI 完整交互安装成功页提供“打开 TianCaiSpaceHub”和“完成”。安装包生成/安装与关机实机行为待用户验收，发布包只由 GitHub Actions 生成。
 
@@ -16,7 +16,7 @@
 | 查看每次二开开发变更 | [二开变更记录](customizations/CHANGELOG.md) |
 | 开发时知道必须更新哪些文档 | [文档规划与维护规范](development/documentation.md) |
 | 登录 NVWA、检测 MCP、分别接入三客户端 | [NVWA MCP](customizations/nvwa-mcp.md)、[资料索引](nvwa/README.md) |
-| 查看当前 v5 基线、编译与用户待验收内容 | [v0.4.30-5 开发交付](releases/v0.4.30-5.md) |
+| 查看当前 v5 基线、编译与用户待验收内容 | [v0.4.30-5 发布交付](releases/v0.4.30-5.md) |
 | 配置 WorkBuddy 模型、启动桌面及了解 `/wb` 边界 | [WorkBuddy 使用说明](workbuddy.md) |
 | 区分普通渠道与 WorkBuddy/天工专用渠道 | [接入点用途与隔离](customizations/client-channel-scope.md) |
 | 获取当前 GitHub 交付、两平台安装包与验收边界 | [v0.4.30-4 发布交付](releases/v0.4.30-4.md) |
