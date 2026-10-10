@@ -30,6 +30,14 @@ use super::{
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 const DEFAULT_FIXED_TOKEN_SECONDS: u64 = 24 * 3600;
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum AuthError {
+    #[error("NVWA 在“验证已保存登录”步骤返回 HTTP 401，当前连接凭证已失效")]
+    SessionUnauthorized,
+    #[error("{0}")]
+    IdentityMismatch(&'static str),
+}
+
 #[derive(Clone, Copy)]
 enum RequestStage {
     LoginKey,
@@ -386,10 +394,11 @@ impl AuthClient {
                 RequestStage::VerifySavedLogin,
             )
             .await?;
-        ensure!(
-            identity == session.identity,
-            "NVWA 当前身份或租户已变化，请重新认证"
-        );
+        if identity != session.identity {
+            return Err(
+                AuthError::IdentityMismatch("NVWA 当前身份或租户已变化，请重新认证").into(),
+            );
+        }
         Ok(identity)
     }
 
@@ -554,6 +563,9 @@ impl AuthClient {
             }
         })?;
         if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            if matches!(stage, RequestStage::VerifySavedLogin) {
+                return Err(AuthError::SessionUnauthorized.into());
+            }
             bail!(
                 "NVWA 在“{}”步骤返回 HTTP 401。{}",
                 stage.label(),
@@ -705,17 +717,11 @@ fn ensure_business_success(payload: &Value) -> Result<()> {
 }
 
 fn ensure_requested_identity(profile: &NvwaProfile, identity: &VerifiedIdentity) -> Result<()> {
-    if !profile.username.is_empty() {
-        ensure!(
-            profile.username.eq_ignore_ascii_case(&identity.username),
-            "NVWA 返回的用户与环境账号不一致"
-        );
+    if !profile.username.is_empty() && !profile.username.eq_ignore_ascii_case(&identity.username) {
+        return Err(AuthError::IdentityMismatch("NVWA 返回的用户与环境账号不一致").into());
     }
-    if !profile.tenant.is_empty() {
-        ensure!(
-            profile.tenant == identity.tenant_id,
-            "NVWA 返回的租户与环境配置不一致"
-        );
+    if !profile.tenant.is_empty() && profile.tenant != identity.tenant_id {
+        return Err(AuthError::IdentityMismatch("NVWA 返回的租户与环境配置不一致").into());
     }
     Ok(())
 }

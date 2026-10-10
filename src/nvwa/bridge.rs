@@ -19,6 +19,30 @@ use super::{
 pub(crate) const PROTOCOLS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26"];
 const MAX_REMOTE_BYTES: usize = 8 * 1024 * 1024;
 
+#[derive(Debug, thiserror::Error)]
+#[error("NVWA authorization expired")]
+struct RemoteAuthorizationExpired;
+
+async fn record_remote_auth_rejection(
+    service: &NvwaService,
+    profile_id: &str,
+    generation: &str,
+    auth: &AuthResult,
+    error: &anyhow::Error,
+) {
+    if !error.is::<RemoteAuthorizationExpired>() {
+        return;
+    }
+    // A late rejection must only expire the token used by this request, never
+    // a replacement login or a newer token renewed for the same identity.
+    service
+        .inner
+        .runtime
+        .mark_expired(profile_id, generation, &auth.mcp_token.value)
+        .await;
+    let _ = service.persist_session(profile_id).await;
+}
+
 pub(crate) fn client_kind(value: &str) -> Result<ClientKind> {
     match value {
         "codex" => Ok(ClientKind::Codex),
@@ -422,14 +446,14 @@ pub(crate) async fn post(
             method == "tools/call",
         ),
         Err(error) => {
-            if error.to_string() == "NVWA authorization expired" {
-                service
-                    .inner
-                    .runtime
-                    .mark_expired(&profile_id, &lease.generation, &lease.auth.mcp_token.value)
-                    .await;
-                let _ = service.persist_session(&profile_id).await;
-            }
+            record_remote_auth_rejection(
+                &service,
+                &profile_id,
+                &lease.generation,
+                &lease.auth,
+                &error,
+            )
+            .await;
             rpc_error(
                 StatusCode::BAD_GATEWAY,
                 original_id,
@@ -533,7 +557,7 @@ pub(crate) async fn remote(
         anyhow::anyhow!("NVWA request interrupted; result unconfirmed; no retry was made")
     })?;
     if response.status() == StatusCode::UNAUTHORIZED {
-        bail!("NVWA authorization expired");
+        return Err(RemoteAuthorizationExpired.into());
     }
     ensure!(
         !response.headers().contains_key("mcp-session-id"),
@@ -625,6 +649,9 @@ pub(crate) async fn detect(
     let mut transport = DetectionTransport::new(service, profile, client).await?;
     let result = detect_catalog(service, profile, &generation, &auth, &mut transport).await;
     transport.close().await;
+    if let Err(error) = &result {
+        record_remote_auth_rejection(service, &profile.id, &generation, &auth, error).await;
+    }
     if result.is_ok()
         && let Some(client) = client
     {

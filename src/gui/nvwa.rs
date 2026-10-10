@@ -147,10 +147,22 @@ fn display_message(text: GuiText, message: &str) -> String {
             "You are not signed in. Sign in successfully before checking MCP or connecting a client.",
         ),
         "NVWA MCP token expired; login required"
-        | "NVWA token expired; explicit login required"
         | "NVWA browser authorization expired; authorize again" => (
             "登录已过期。请重新点击“登录 / 授权”，成功后再继续。",
             "Your sign-in has expired. Sign in again before continuing.",
+        ),
+        "NVWA token expired; explicit login required" => (
+            "登录已过期，尚未保存自动登录所需的资料。请重新登录；需要自动重新认证时，勾选“记住密码”或“保存应用密钥”。",
+            "Sign-in expired and credentials for automatic renewal were not saved. Sign in again; enable Remember password or Save application secret for automatic renewal.",
+        ),
+        "NVWA automatic renewal failed recently; retry after one minute or sign in manually"
+        | "Automatic renewal failed; retry after one minute or sign in manually" => (
+            "自动重新认证没有成功。请核对密码或应用资料；一分钟后再次使用会重试，也可现在点击“登录 / 授权”。",
+            "Automatic renewal failed. Check the password or application settings. Using the connection after one minute retries; you can also sign in manually now.",
+        ),
+        "Authentication verified; existing client access retained" => (
+            "登录有效。可以继续检测 MCP 或使用已接入的客户端。",
+            "Sign-in verified. Continue checking MCP or using connected clients.",
         ),
         "NVWA profile changed; explicit login required" => (
             "环境设置已变化。请保存环境并重新登录，再接入客户端。",
@@ -190,9 +202,9 @@ fn display_message(text: GuiText, message: &str) -> String {
             "已退出登录。客户端中的旧连接暂时不能使用；需要时重新登录并接入。",
             "Signed out. Previous client connections are inactive; sign in and reconnect when needed.",
         ),
-        "NVWA rejected authorization; request was not replayed" => (
-            "NVWA 已拒绝这次连接的登录授权。请重新登录；刚才的操作没有自动重试。",
-            "NVWA rejected this sign-in. Sign in again; the previous operation was not retried.",
+        "NVWA authorization expired" | "NVWA rejected authorization; request was not replayed" => (
+            "服务已拒绝当前认证。已保存密码或共享应用密钥时，下次使用会尝试自动重新认证；其他情况请重新登录。刚才的操作没有自动重试。",
+            "The service rejected the current authentication. Saved password or shared application credentials allow renewal on next use; otherwise sign in again. The previous operation was not retried.",
         ),
         "MCP initialize and paginated tools/list verified; no tool was invoked" => (
             "已连接到 MCP 并读取工具清单。可以继续接入客户端；工具是否能执行，需要在客户端中确认。",
@@ -1486,7 +1498,9 @@ fn configuration_help(text: GuiText) -> &'static str {
             "共享应用勾选切换会保留 ClientID、ClientSecret 和保存密钥选项，取消旧授权；保存后重新登录。主认证下拉切换会清空旧方式的输入。\n",
             "“保存应用密钥”在新环境默认关闭；勾选后点击“保存环境”就保存 ClientSecret，无需先登录成功。已保存环境会显示保存状态并恢复勾选；输入框留空可复用，填写新值并保存可替换。环境设置改变时需要重新填写。取消勾选并保存环境会删除保存的应用密钥。密钥不写入普通配置，也不从后台回填到输入框。\n",
             "“记住密码”仍在登录成功后交给系统保护存储。HTTP 401 表示服务拒绝了该步请求；请按提示中的失败步骤核对，保存密钥不代表登录成功。\n\n",
-            "6. 有效期\nClientID + ClientSecret 取票换得的凭证默认固定 24 小时，调用不会延长；认证服务应用的 tokenValidTime 可覆盖。服务返回准确时间时显示到期时间（UTC）和剩余时间，没有返回时只说明默认规则。账号密码登录默认闲置 30 分钟超时，正常认证访问可延长；连续使用不会仅因登录已过 30 分钟被 Hub 判定到期，实际是否有效由服务判断。"
+            "6. 有效期与自动重新认证\nClientID + ClientSecret 取票换得的凭证默认固定 24 小时，调用不会延长；认证服务应用的 tokenValidTime 可覆盖。服务返回准确时间时显示到期时间（UTC）和剩余时间，没有返回时只说明默认规则。账号密码登录默认闲置 30 分钟超时，正常认证访问可延长；连续使用不会仅因登录已过 30 分钟被 Hub 判定到期，实际是否有效由服务判断。\n",
+            "账号密码需勾选“记住密码”并成功登录；共享应用需勾选“保存应用密钥”并保存环境，再成功登录。认证过期后，Hub 会在下次检测、接入或客户端请求前使用已保存资料获取新认证，保持原账号与租户及已有客户端连接。无需一直打开此页，也不按固定周期提前登录。\n",
+            "已经发送的操作如果收到认证拒绝，不会自动重新执行；下次请求才使用新认证。重新认证失败后至少间隔一分钟才自动重试，手动登录可立即进行。验证码、双因子、改密或个人浏览器授权仍需手动完成。"
         ),
         concat!(
             "1. Environment\nEnter a name and the NVWA service URL. Codex uses the environment name for MCP: 1–64 letters, numbers, - or _, for example MCP196. Preview access to update a previous name. MCP defaults to /mcp; edit its path or full URL in advanced settings. Paths preserve the service deployment prefix. Set a separate authentication URL only if deployed separately.\n\n",
@@ -1498,7 +1512,9 @@ fn configuration_help(text: GuiText) -> &'static str {
             "Toggling shared delegation keeps ClientID, ClientSecret and Save application secret, and cancels the previous authorization. Save and sign in again. Switching the main sign-in dropdown clears the previous inputs.\n",
             "Save application secret defaults to off for new environments. Check it and select Save environment to store ClientSecret immediately, even before successful sign-in. Saved environments show its status and restore the checkbox. Leave the input blank to reuse it, or enter a new value and save to replace it. Changed environment settings require entering it again. Uncheck and save to remove the stored application secret. It is not written to ordinary configuration or returned to the input.\n",
             "Remember password still stores the password only after successful sign-in. HTTP 401 means the service rejected that request step; check the named step. Saving a secret does not sign you in.\n\n",
-            "6. Validity\nClientID + ClientSecret ticket tokens default to a fixed 24 hours; calls do not extend them. The application's tokenValidTime can override this. Hub shows the expiry time (UTC) and remaining time when supplied by the service; otherwise it explains the default rule. Password sign-in defaults to a 30-minute idle timeout, extended by normal authenticated access. Hub does not expire an actively used session merely because 30 minutes have passed since sign-in; the service decides whether it is valid."
+            "6. Validity and automatic renewal\nClientID + ClientSecret ticket tokens default to a fixed 24 hours; calls do not extend them. The application's tokenValidTime can override this. Hub shows the expiry time (UTC) and remaining time when supplied by the service; otherwise it explains the default rule. Password sign-in defaults to a 30-minute idle timeout, extended by normal authenticated access. Hub does not expire an actively used session merely because 30 minutes have passed since sign-in; the service decides whether it is valid.\n",
+            "For password sign-in, enable Remember password and sign in successfully. For a shared application, enable Save application secret, save the environment and sign in successfully. After expiry, Hub uses the saved credentials before the next check, connection or client request, preserving the account, tenant and existing client connections. This page need not stay open; Hub does not sign in early on a timer.\n",
+            "An operation already sent when authentication is rejected is not replayed; the next request can use renewed credentials. Failed automatic renewal waits at least one minute before another attempt; manual sign-in is available immediately. Captcha, two-factor verification, password changes and personal browser authorization require manual completion."
         ),
     )
 }
@@ -2063,8 +2079,23 @@ fn show_runtime_status(tab: &NvwaTab) {
         .pointer("/identity/tenantId")
         .and_then(Value::as_str)
         .unwrap_or("");
+    let can_renew = selection.profiles.iter().any(|profile| {
+        profile["id"].as_str() == selection.selected_id.as_deref()
+            && matches!(
+                profile["authMode"].as_str(),
+                Some("password" | "application")
+            )
+            && profile["credentialSecretRef"]
+                .as_str()
+                .is_some_and(|reference| !reference.is_empty())
+    });
     let state_label = match state["state"].as_str() {
         Some("authenticated") => tr(tab.text, "已登录", "Signed in"),
+        Some("expired" | "personal_expired") if can_renew => tr(
+            tab.text,
+            "认证已过期，下次使用时尝试自动重新认证",
+            "Authentication expired; automatic renewal on next use",
+        ),
         Some("expired") => tr(
             tab.text,
             "工具连接授权已过期，请重新登录",

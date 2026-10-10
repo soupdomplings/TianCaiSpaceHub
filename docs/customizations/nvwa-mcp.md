@@ -2,7 +2,9 @@
 
 维护日期：2026-10-10。适用版本：`0.4.30-5`。关联：TC-014。
 
-实现状态：接入页、认证 provider、后台本机桥、管理接口与三客户端适配已实现；本轮页签改名 Dumpling-MCP、默认隐藏并提供帮助菜单显示开关，增加按钮悬浮说明、工具名称/说明及 Codex 按环境名称接入。旧受管名的保护迁移、路径别名兼容、双槽备份/journal/恢复已实现并静态复核；最终 Windows locked GUI build 22.88 秒、38 条警告通过，新独立 EXE 的版本、x64 PE、导入和复制哈希核对通过、开发方未运行，详见 [v5 交付](../releases/v0.4.30-5.md)。此前 auth-expiry 等构建和产物保留原源码身份。用户此前反馈通过 Hub 连入 Codex MCP，另对本轮 Windows 本机测试版反馈“可以了”并授权发布；这些只记录对应接入/试用及可交付判断，不扩大为 Windows MSI、macOS、全部 MCP 工具调用或期限验收。发布状态：[v0.4.30-5 Release](https://github.com/soupdomplings/TianCaiSpaceHub/releases/tag/v0.4.30-5) 已创建（非草稿 Pre-release、Latest=false）；Windows/macOS Actions 已启动、尚未完成，本轮停止核对时为 0 个附件，未执行发布产物或签名核验。安装包由 Actions 成功后自动上传，实际构建与包结果另行登记。
+实现状态：接入页、认证 provider、后台本机桥、管理接口与三客户端适配已实现；此前 Dumpling-MCP 页签、帮助菜单显示开关、按钮说明、工具展示及 Codex 环境名迁移已进入 v5 发布基线。该阶段 Windows locked GUI build 22.88 秒、38 条警告通过，独立 EXE 的版本、x64 PE、导入和复制哈希核对通过、开发方未运行，详见 [v5 交付](../releases/v0.4.30-5.md)。此前 auth-expiry 等构建和产物保留原源码身份。用户曾反馈通过 Hub 连入 Codex MCP，另对该 Windows 本机测试版反馈“可以了”并授权发布；这些只记录对应接入/试用及可交付判断，不扩大为 Windows MSI、macOS、全部 MCP 工具调用或期限验收。[v0.4.30-5 Release](https://github.com/soupdomplings/TianCaiSpaceHub/releases/tag/v0.4.30-5) 已创建（非草稿 Pre-release、Latest=false）；此前停止核对时 Windows/macOS Actions 已启动、未确认完成、0 个附件，未执行发布产物或签名核验。安装包由 Actions 成功后自动上传，实际构建与包结果另行登记。
+
+当前追加修复：在 `main` 上已完善 password/application 的按需自动续认证，使用此前显式保存的凭据；身份核验及主桥/直连检测的真实 HTTP 401 都进入失效处理，已发送 MCP 请求不重放，自动认证失败后同代次重试最小间隔 60 秒。版本仍 `0.4.30-5`，此次改动未发布，不改变既有标签、Release 或历史包，也未触发新发布构建。最终 Windows locked GUI build 32.62 秒、38 条既有警告通过，独立新 debug EXE 的版本、MZ/PE/x64 及复制哈希核对通过、未运行；macOS 此轮平台中立逻辑静态审阅通过，未原生编译或实机测试。真实续认证和失败边界待用户验收，此前“可以了”不覆盖此次修复。
 
 本文描述 Hub 的当前实现；同仓 [NVWA 资料索引](../nvwa/README.md) 和 [开发交接](../hub-nvwa-mcp-integration-handoff-2026-10-08.md) 保存依据与跨项目边界。参考规范、旧脚本及静态源码核对不等于本次真实登录或客户端验收。
 
@@ -101,7 +103,7 @@ Hub 先获取 `/anon/framework/api/encrypt/key`，按服务端真实公钥与 al
 
 应用取票使用 `authorization-cer-client`；SHA-256 为默认摘要，SM3 可选，MD5 仅显式兼容。SHA-256/SM3 按规范在签名串中分别加入 `1`/`2`，digest 为小写 hex；MD5 沿用参考连接器的大写 hex。新摘要支持取决于部署版本，服务端时间校验也要求双方时钟正确。成功取得的 ticket 通过 `/nvwa-ticket/v1/ticket/{ticketId}` 与 `authorization-client-basic: Base64(clientId:clientSecret)` 交换，Basic 材料不是 MCP token。
 
-显式登录的认证 HTTP 401 按失败步骤提供固定安全说明，区分申请票据、票据换成连接凭证及读取当前账号租户；可据此核对应用资料、认证地址、签名算法或重新授权。认证层也标记“验证已保存登录”，但恢复/运行期核验失败仍由服务层转换为固定“无法验证已保存身份，需要重新登录”，不保证该路径在 GUI 透传 401 分步提示。该改动只改善诊断，不改变服务端认证结果，不宣称已解决真实 401，也不回显请求/响应 body、密码、密钥、ticket 或 header。
+显式登录的认证 HTTP 401 按失败步骤提供固定安全说明，区分申请票据、票据换成连接凭证及读取当前账号租户；可据此核对应用资料、认证地址、签名算法或重新授权。验证保存登录的真实 HTTP 401 另由结构化错误进入下文按需续认证，其他核验失败不一律清除身份。诊断和续认证实现都不改变服务端认证结果，也不证明当前部署的真实 401 已解决；请求/响应 body、密码、密钥、ticket 或 header 不进入诊断。
 
 浏览器 URL 使用产品地址的 `#/authorize`、`response_type=code`、`client_id`、已编码 `redirect_uri` 和随机 `state`。本机回调为 `/callback/<64位hex随机state>`，仅绑定 `127.0.0.1`，事务 10 分钟、最多 64 个，必须匹配当前环境指纹与登录代次。有效回调在换票前单次消费，换票失败也不能重用；若回传 state 参数必须匹配路径，取消后晚到回调不能重新开放授权。支持单一 `code`/`ticket`/`ticketId` 票据，重复票据字段拒绝，兼容性 `tokenId` 不作为第二个票据使用。回调 code、ticket 与应用密钥不进入日志或可见错误。当前共享应用能否接受该本机回调 URL/端口、部署是否使用 Hash 路由，以及换票后 MCP 行为，均待用户真实验收；不假设标准 OAuth discovery、PKCE 或 refresh token 已存在。
 
@@ -115,9 +117,13 @@ Hub 先获取 `/anon/framework/api/encrypt/key`，按服务端真实公钥与 al
 
 恢复旧系统保护快照时，先核对 profile 指纹和认证方式，再按 `auth_mode` 确定两份 token 策略：password 清除旧非零绝对期限，保留真实 401 的 `Some(0)` 失效标记；browser/application 保留原准确期限，不按恢复时间补造新期限。个人与 MCP token 仍分别记录，不能把某个 token 的过期推定为另一 token 也过期；恢复前的真实身份核验、认证代次和同身份保护不放宽。
 
-后台把认证状态和每端本地连接凭据通过系统保护存储保留；重启后恢复记录还要核对 profile 指纹及真实上下文身份，不能直接放行旧 token。运行期同身份核验缓存最长 60 秒。明确已过期或真实 `401` 后，只有此前显式保存了该方式凭据，password/application 才可在下一次请求发送前重新认证，并严格保持原 `user_id`、`identity_id`、`tenant_id`；遇验证码、双因子或改密状态需人工继续。browser 无已确认 refresh 契约，过期要求重新浏览器授权，不切换到共享应用代表用户认证。
+后台把认证状态和每端本地连接凭据通过系统保护存储保留；重启后恢复记录还要核对 profile 指纹及真实上下文身份，不能直接放行旧 token。运行期同身份核验缓存最长 60 秒。已知期限过期或已有真实 HTTP 401 失效标记时，在下次使用、尚未发送 MCP 请求前，password 仅用此前成功登录时显式记住的密码重新登录，application 仅用此前显式保存的 ClientSecret 重新申请 ticket 并换 token；未保存或保护记录不可读时要求人工认证。没有新增后台定时续期，普通配置也不新增秘密字段。
 
-既有主桥调用收到真实 MCP `401` 时标记授权失效；原请求不会在取新 token 后自动重放。直接工具检测尚未统一该失效标记路径，不能将主桥行为扩称所有检测请求。`403` 或网络超时不被当成同义的“重新登录即可”，业务状态和请求结果分别处理。
+`/nvwa/getLoginContext` 身份核验的真实 HTTP 401 由结构化错误识别，先标记并保存当前认证失效，再在同一次发送前预检中按上述条件续认证；不再把该 401 一律当成必须清除身份的核验失败。HTTP 403、网络超时、异常 JSON 等其他核验失败只拒绝当前请求，不据此清除已登录身份或提交密码/密钥。确认用户或租户已变化时仍撤销对应旧认证代次并要求显式登录；迟到结果不能撤销替代登录。
+
+主桥请求和上方“检测 MCP”的直连检测收到真实上游 HTTP 401 时，使用同一失效标记与系统保护保存路径。标记同时核对该请求的认证代次及实际 token，不能把旧请求的迟到 401 标到新登录或已经续成的新 token。已经发出的原 MCP 请求仍失败，尤其 `tools/call` 绝不换 token 后自动重放；失效状态供下一次使用时续认证。HTTP 403、网络错误及协议/JSON 异常不会触发这条 HTTP 401 续认证路径。
+
+自动续认证成功后必须严格保持原 `user_id`、`identity_id`、`tenant_id` 和认证代次，保留同身份的各端本机 capability/session；身份变化不被当成成功续期。自动认证请求失败或返回验证码、双因子、改密等挑战后，同一代次的下一次自动尝试至少等待 60 秒，再有使用请求时才重试；该失败冷却保留在本次运行内存中，手动登录不受等待限制。这与最长 60 秒的身份核验缓存是两项不同规则。挑战仍需人工继续；browser 没有已确认 refresh 契约，过期必须重新浏览器授权，不能切换成共享应用代表用户认证。
 
 ## 本机 HTTP 桥与 MCP 行为
 
@@ -191,6 +197,8 @@ NVWA 不复用模型 API Key、IM 授权或普通网关渠道。普通 profile �
 
 回退此前期限修正后，旧程序可能仍按密码初次登录绝对期限判断失效，且不提供新的固定/闲置状态说明；新增 `expiryPolicy` 只在系统保护快照中，普通环境格式不变。回退前退出授权并在所用版本重新认证，不把新策略字段或旧恢复记录当作已完成跨版本会话验收。
 
+此次按需续认证修复沿用普通配置 version `1` 和 DPAPI/Keychain 秘密存储格式，不新增明文秘密或迁移记录。回退该修复可能恢复身份核验 401 直接清除登录、直连工具检测未统一失效标记及自动失败无 60 秒冷却的旧行为；届时仍须人工重新登录。回退前正常退出 Hub 并在所用版本重新核对身份和授权，不重放此前失败的工具请求，也不把存储格式兼容当作跨版本运行会话已验收。
+
 回退本轮界面后，旧包仍按原页签名称和显示规则工作，不提供新的按钮/工具说明。原 v1 ledger 与单目标备份可由新包读取；新 Codex 操作使用 version 2 定向多目标保护备份，仅新包理解。回退前用新包检查并按预览移除或恢复环境名连接，避免旧程序只识别旧 hash 名而遗留新项；最新引用与完整目标指纹仍需一致，不能把改环境名称当作直接修改任意客户端项。WorkBuddy、天工仍沿用原名。
 
 ## 维护定位与验证
@@ -198,17 +206,21 @@ NVWA 不复用模型 API Key、IM 授权或普通网关渠道。普通 profile �
 | 入口 | 职责 |
 | --- | --- |
 | [GUI](../../src/gui/nvwa.rs)、[主界面](../../src/gui.rs)、[主配置](../../src/config.rs)、[图标](../../src/gui/widgets.rs) | Dumpling-MCP 帮助显示开关/默认隐藏、透明品牌图标、按钮悬浮说明、工具标题/说明、预览实际/目标名称；原保存/期限、认证与代次保护 |
-| [服务生命周期](../../src/nvwa/mod.rs)、[管理 API](../../src/nvwa/server.rs) | 后台桥、受保护管理引导、环境保存密钥事务边界、浏览器事务、认证恢复与期限策略状态 |
+| [服务生命周期](../../src/nvwa/mod.rs)、[管理 API](../../src/nvwa/server.rs) | 后台桥、受保护管理引导、环境保存密钥事务边界、浏览器事务、认证恢复、发送前按需续认证、同代次自动失败 60 秒冷却 |
 | [类型](../../src/nvwa/types.rs)、[配置](../../src/nvwa/config.rs) | `TokenExpiryPolicy`、非秘密 DTO、默认值、URL 校验、集合 revision 和普通配置原子保存 |
-| [认证](../../src/nvwa/auth.rs)、[系统存储](../../src/nvwa/secrets.rs) | 动态 RSA/SM2、取票/换票、身份、固定期限字段解析、密码闲置策略、Windows/macOS 系统保护 |
-| [桥](../../src/nvwa/bridge.rs)、[运行态](../../src/nvwa/runtime.rs) | 旧保护快照期限迁移、RPC/session/ID 隔离、工具检测、真实失效标记、未知结果及禁止重放 |
+| [认证](../../src/nvwa/auth.rs)、[系统存储](../../src/nvwa/secrets.rs) | 动态 RSA/SM2、取票/换票、身份、结构化核验 HTTP 401/身份变化、固定期限字段解析、密码闲置策略、Windows/macOS 系统保护 |
+| [桥](../../src/nvwa/bridge.rs)、[运行态](../../src/nvwa/runtime.rs) | 旧保护快照期限迁移、RPC/session/ID 隔离、工具检测与主桥统一真实 401 标记、token/代次防迟到结果、同身份续期保留本机授权、未知结果及禁止重放 |
 | [适配器](../../src/nvwa/adapters/mod.rs)、[名称迁移](../../src/nvwa/adapters/migration.rs)、[Codex 配置](../../src/nvwa/adapters/codex.rs)、[桌面窄 API](../../src/gmclaw_desktop.rs) | Codex 环境名、路径别名/旧键兼容、双槽迁移/保护备份/journal/补偿；原定向配置及天工原生接口 |
 
-2026-10-10 当前新增 Dumpling-MCP 默认隐藏/显示偏好、透明品牌图标、五按钮悬浮说明与工具人话详情，并按 Codex 已保存环境名实施旧受管名迁移。本轮代码静态复核、最终 Windows locked GUI build（22.88 秒、38 条警告）及新产物静态核对通过，独立目录为 `outputs/dumpling-v0.4.30-5-windows-20261010/`；同轮关机放行见 [品牌与交付](desktop-and-packaging.md)。此前 auth-expiry（16.59 秒）、readable（25.52 秒）、认证服务/帮助（13.85 秒）与表单/路径（17.55 秒）构建保持原阶段归属。版本仍 `0.4.30-5`、唯一 `main`，源码及 EXE 身份见 [v5 交付](../releases/v0.4.30-5.md)。开发方未执行测试、程序或真实认证/MCP/模型调用，不读取用户配置、凭据、私有日志或数据库；本轮产品功能改动以 Windows/macOS 兼容为目标，macOS 条件编译及平台分支的静态复核通过；本次 macOS 原生编译和包构建已由 Actions 启动但尚未完成，Mac 实机验收仍待进行。Windows/macOS 发布安装包统一由 GitHub Actions 生成，源码推送、构建、用户验收和发布分别记录。
+2026-10-10 此前 Dumpling-MCP 界面/名称迁移阶段代码静态复核、最终 Windows locked GUI build（22.88 秒、38 条警告）及新产物静态核对通过，独立目录为 `outputs/dumpling-v0.4.30-5-windows-20261010/`；同阶段关机放行见 [品牌与交付](desktop-and-packaging.md)。auth-expiry（16.59 秒）、readable（25.52 秒）、认证服务/帮助（13.85 秒）与表单/路径（17.55 秒）构建保持原阶段归属，均不作为此次追加续认证修复的编译或验收证据。既有源码及 EXE 身份见 [v5 交付](../releases/v0.4.30-5.md)，此前发布构建停在用户要求的“已启动、未继续核对”状态。Windows/macOS 发布安装包统一由 GitHub Actions 生成，源码推送、构建、用户验收和发布分别记录。
 
-此前已交付测试目录及 EXE 保留原源码、文件和静态核对归属。auth-expiry 目录为 `outputs/nvwa-v0.4.30-5-windows-auth-expiry-20261010/TianCaiSpaceHub.exe`，61,003,264 字节，SHA-256 `a9abeb4fe11a7408eea8d1a525cfabcc32472a738f6c7d15452a869fc2c8e2be`，当时构建与静态身份核对通过、开发方未运行；不包含本轮界面和名称迁移。readable 阶段 60,967,936 字节及其他旧文件同样保留身份。各阶段见 [v5 交付](../releases/v0.4.30-5.md#本机-windows-测试程序)；使用指定测试包前先从托盘退出旧 Hub，× 只隐藏。测试 EXE 与 Actions 安装包分别记录。
+此次追加续认证修复仍为 `0.4.30-5`、唯一 `main`、未发布，最终 Windows locked GUI build 32.62 秒、38 条既有警告通过，编译后 287 项产品构建输入摘要未变；5 份文档的严格 UTF-8、本地链接目标和空白静态核对通过。新增逻辑使用 Tokio/通用 Rust 和现有 SecretStore，没有新增 Windows 专属依赖；macOS 平台中立逻辑静态审阅通过，未原生构建或实机测试。开发方未运行测试、Hub/客户端或真实认证/MCP/模型调用，不读取用户配置、凭据、私有日志或数据库。用户需验收密码闲置 401、固定期限/真实 401 后应用取新票、未保存秘密/不可读记录、自动失败冷却及手动登录例外、验证码/双因子/改密、非 401 错误保持身份、同身份本机会话延续及身份变化拒绝、迟到 401 不影响新 token、工具请求不重放和重启失效标记恢复。
 
-用户此前反馈“已通过 Hub 连入 Codex MCP”，仅记录此前交付包上的该次 Codex 接入，不扩大为工具调用、闲置/固定期限、WorkBuddy 或天工通过。本轮用户对 Windows 本机测试版反馈“可以了”并授权发布 `v0.4.30-5`，属于该次本机试用与可交付的有限反馈。显示开关、图标、工具人话详情、Codex 新名/旧 hash 或旧名称迁移、冲突拒绝、移除/恢复和回滚没有逐项及跨平台验收证据；隐藏页签的后台连接持续性、Windows MSI、macOS 及全部 MCP 工具实际调用仍按各自范围验收。注释标签已指向发布源码，Release 已创建；[Windows Actions](https://github.com/soupdomplings/TianCaiSpaceHub/actions/runs/38052269127) 与 [macOS Actions](https://github.com/soupdomplings/TianCaiSpaceHub/actions/runs/38052269076) 均已启动、尚未完成。按用户要求在开始构建后停止等待，本轮没有执行安装包下载或静态核验；构建成功后由 Actions 自动上传，不使用本机测试 EXE 代替发布包。源码/标签及 Release 身份见 [v5 交付](../releases/v0.4.30-5.md)。
+此次独立本机 debug 测试 EXE 为 `outputs/dumpling-v0.4.30-5-windows-auto-renew-20261010/TianCaiSpaceHub.exe`，61,503,488 字节，SHA-256 `2b4c53232162ccbf43919787b856ce52dc68c628423f917e28097230acda0228`；287 项产品构建输入摘要为 `d890328f78b70907632ffe48faa172c13f9ebabcce14be5dd0cba806523706b6`。版本 `0.4.30-5`、MZ/PE/x64 机器号及与 target 的复制哈希核对通过；`dumpbin /dependents` 核对仅有 Windows 系统与 VC++ x64 运行库依赖，无须另附 wxWidgets/SQLite/OpenSSL DLL。目录另有 `README.txt` 与 `TEST_BUILD.json`，程序未运行。它包含此次修复，未覆盖此前交付文件，也不是既有 v5 标签或 Actions 发布包；现有标签、Release 与历史包不会因本机编译获得此次修复。
+
+此前已交付测试目录及 EXE 保留原源码、文件和静态核对归属。auth-expiry 目录为 `outputs/nvwa-v0.4.30-5-windows-auth-expiry-20261010/TianCaiSpaceHub.exe`，61,003,264 字节，SHA-256 `a9abeb4fe11a7408eea8d1a525cfabcc32472a738f6c7d15452a869fc2c8e2be`，当时构建与静态身份核对通过、开发方未运行；不包含后续 Dumpling-MCP 界面/名称迁移或此次自动续认证修复。readable 阶段 60,967,936 字节及其他旧文件同样保留身份。各阶段见 [v5 交付](../releases/v0.4.30-5.md#本机-windows-测试程序)；使用指定测试包前先从托盘退出旧 Hub，× 只隐藏。测试 EXE 与 Actions 安装包分别记录。
+
+用户此前反馈“已通过 Hub 连入 Codex MCP”，仅记录此前交付包上的该次 Codex 接入，不扩大为工具调用、闲置/固定期限、WorkBuddy 或天工通过。此前用户对 Windows 本机测试版反馈“可以了”并授权发布 `v0.4.30-5`，属于该次本机试用与可交付的有限反馈，不覆盖此次追加续认证修复。显示开关、图标、工具人话详情、Codex 新名/旧 hash 或旧名称迁移、冲突拒绝、移除/恢复和回滚没有逐项及跨平台验收证据；隐藏页签的后台连接持续性、Windows MSI、macOS 及全部 MCP 工具实际调用仍按各自范围验收。注释标签已指向发布源码，Release 已创建；此前停止核对时 [Windows Actions](https://github.com/soupdomplings/TianCaiSpaceHub/actions/runs/38052269127) 与 [macOS Actions](https://github.com/soupdomplings/TianCaiSpaceHub/actions/runs/38052269076) 均已启动、未确认完成。按用户要求在开始构建后停止等待，该阶段没有执行安装包下载或静态核验；构建成功后由 Actions 自动上传，不使用本机测试 EXE 代替发布包。源码/标签及 Release 身份见 [v5 交付](../releases/v0.4.30-5.md)。
 
 用户验收重点为默认租户成功接受及当前账号/返回租户展示、登录/未登录检测提示、中文/英文状态与接入/移除/恢复后果、未登录清理旧连接、共享开关保留应用资料与主下拉清理、密码与 ClientSecret 直接可见、认证服务主区域与旧模式加载、默认 MCP 路径及表单一致性、保存保留内存输入、真实密码/浏览器/共享应用认证、双因子与受限验证码提示、两 token 生命周期、迟到结果与身份隔离、三端原生加载/信任/调用、并发目标保护、移除/恢复及未知工具结果。以上是待验收范围，不是开发方已执行的测试清单；图形验证码图片接口仍未集成。
 

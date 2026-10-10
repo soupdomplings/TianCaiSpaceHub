@@ -1,5 +1,7 @@
 # TianCaiSpaceHub 文档总入口
 
+当前追加修复（2026-10-10）：唯一 `main` 已完善 [NVWA 按需自动续认证](customizations/nvwa-mcp.md#有效期恢复与重新认证)，password/application 仅复用此前显式保存的凭据，统一真实 HTTP 401 失效处理、已发送请求不重放，并对同代次自动认证失败设置 60 秒重试间隔。此次已实现、未发布，完整版本保持 `0.4.30-5`，既有 v5 标签、Release 和历史包不变，不触发新发布构建；最终 Windows locked GUI build 32.62 秒、38 条既有警告通过，独立新 debug EXE 静态身份/复制哈希核对通过、未运行，见 [专题验证](customizations/nvwa-mcp.md#维护定位与验证)。macOS 平台中立逻辑仅静态审阅通过，未原生编译或实机测试，真实续认证及失败边界待用户验收。下方 v5 发布状态与有限用户反馈属于此前发布阶段，不覆盖此次追加修复。
+
 维护日期：2026-10-10。当前开发基线统一为 `v0.4.30-5`、唯一 `main`，上游仍 CodexHub `v0.4.30`。[Dumpling-MCP / NVWA MCP（TC-014）](customizations/nvwa-mcp.md) 页签改名并使用透明线条品牌图标，帮助菜单勾选“显示 Dumpling-MCP”后显示，默认隐藏并保存偏好。Codex 连接使用环境名称（如 `MCP196`），更新接入兼容旧哈希名称；按钮有悬浮说明，工具清单展示服务返回的中文简介、说明和原代码。应用密钥立即保护保存、两类期限、认证/默认租户与每端隔离继续保留。用户已反馈通过 Hub 接入 Codex MCP，仅覆盖该次接入；本轮名称迁移、页签与工具展示待验收。构建、独立 EXE 身份及此前产物归属见 [v0.4.30-5 交付](releases/v0.4.30-5.md)，用户已反馈 Windows 本机测试版可交付；完整标签/非草稿 Pre-release 已创建，两平台 Actions 已启动、尚未确认完成，按用户要求停止等待，后续包自动上传。
 
 同轮修正 [Windows 关机放行与安装成功入口](customizations/desktop-and-packaging.md)：普通 × 仍隐藏，系统结束会话不再 veto；MSI 完整交互安装成功页提供“打开 TianCaiSpaceHub”和“完成”。安装包生成/安装与关机实机行为待用户验收，发布包只由 GitHub Actions 生成。
@@ -42,7 +44,7 @@
 
 | 文档 | 用途与状态 |
 | --- | --- |
-| [Dumpling-MCP / NVWA MCP](customizations/nvwa-mcp.md) | TC-014 / v0.4.30-5：帮助菜单控制页签显示、透明品牌线条图标；Codex 按环境名接入及旧名迁移；按钮说明、工具中文简介与 tools/list 来源。认证/密钥/期限行为保留，用户有限反馈 Codex 接入，用户有限试用反馈，Release 已创建、两平台构建中，安装包/macOS/完整链路待验收 |
+| [Dumpling-MCP / NVWA MCP](customizations/nvwa-mcp.md) | TC-014 / v0.4.30-5：显示开关/品牌图标、Codex 环境名迁移、按钮与 tools/list 说明；main 未发布追加按需续 password/application、真实 401 标记、失败 60 秒冷却和不重放。Windows build 32.62 秒及新 EXE 静态核对通过、未运行；Mac 仅静态审阅通过，续认证待验收；既有发布与有限反馈保留原身份 |
 | [WorkBuddy](workbuddy.md) | 模型多条目接入已预发布；v0.4.30-3：接入页提供显式启动桌面按钮，用户本次反馈该按钮可启动，仅覆盖该次本机操作；其他机器及 macOS 待验收。`/wb` 仍提示不可用，外部任务执行尚未接通 |
 | [接入点用途与隔离](customizations/client-channel-scope.md) | 普通/专用渠道标识、各接入点及同模型条目的精确路由、保留名称与回滚注意项 |
 | [天工 Claw 模型](customizations/gmclaw.md) | 多条目与独立路由、保存/删除/默认切换恢复、厂商参数及上游流式聚合已预发布；v0.4.30-3：概览按当前专用模型请求、配置 URL 和桌面进程区分等待/已连接，与上游成功和 IM 授权独立。旧单模型保存无需重启已有有限反馈；新增行为待用户验收 |

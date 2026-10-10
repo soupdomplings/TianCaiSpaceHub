@@ -102,6 +102,30 @@ fn live_auth(profile: &ProfileRuntime) -> Result<AuthResult> {
     Ok(auth.clone())
 }
 
+fn begin_auth(inner: &mut Inner, profile_id: &str) -> String {
+    inner
+        .sessions
+        .retain(|_, session| session.profile != profile_id);
+    let retained: std::collections::HashSet<_> = inner.sessions.keys().cloned().collect();
+    inner
+        .calls
+        .retain(|(session, _), _| retained.contains(session));
+    let generation = Uuid::new_v4().to_string();
+    inner.profiles.insert(
+        profile_id.to_owned(),
+        ProfileRuntime {
+            generation: generation.clone(),
+            auth: None,
+            capabilities: HashMap::new(),
+            tools: None,
+            detail: "Waiting for login".into(),
+            verified: false,
+            client_checks: HashMap::new(),
+        },
+    );
+    generation
+}
+
 impl Runtime {
     pub(crate) fn restore(records: Vec<(String, AuthMode, Value)>) -> Self {
         let mut inner = Inner::default();
@@ -265,6 +289,7 @@ impl Runtime {
         );
         profile.auth = Some(auth);
         profile.verified = true;
+        profile.detail = "Authentication verified; existing client access retained".into();
         Ok(())
     }
 
@@ -286,27 +311,22 @@ impl Runtime {
 
     pub async fn begin_auth(&self, profile_id: &str) -> String {
         let mut inner = self.inner.lock().await;
-        inner
-            .sessions
-            .retain(|_, session| session.profile != profile_id);
-        let retained: std::collections::HashSet<_> = inner.sessions.keys().cloned().collect();
-        inner
-            .calls
-            .retain(|(session, _), _| retained.contains(session));
-        let generation = Uuid::new_v4().to_string();
-        inner.profiles.insert(
-            profile_id.to_owned(),
-            ProfileRuntime {
-                generation: generation.clone(),
-                auth: None,
-                capabilities: HashMap::new(),
-                tools: None,
-                detail: "Waiting for login".into(),
-                verified: false,
-                client_checks: HashMap::new(),
-            },
-        );
-        generation
+        begin_auth(&mut inner, profile_id)
+    }
+
+    pub async fn invalidate_generation(&self, profile_id: &str, generation: &str) -> bool {
+        let mut inner = self.inner.lock().await;
+        if !inner
+            .profiles
+            .get(profile_id)
+            .is_some_and(|profile| profile.generation == generation)
+        {
+            return false;
+        }
+        begin_auth(&mut inner, profile_id);
+        inner.profiles.get_mut(profile_id).unwrap().detail =
+            "NVWA identity changed; explicit login and client access required".into();
+        true
     }
 
     pub async fn commit_auth(

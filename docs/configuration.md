@@ -49,7 +49,9 @@ Do not mix them. `TianCaiSpaceHub` stores IM channel and bridge settings. Codex 
 
 用户补充的服务期限规则：密码登录默认闲置 30 分钟超时，正常认证访问更新会话；个人/MCP 两份 token 均使用 `slidingIdle`，新登录不保留初次绝对到期时间、不本机推算 touch，实际失效由服务判断。ClientID + ClientSecret 换票 token 使用 `fixed`，默认固定 24 小时，调用不延长，应用 `tokenValidTime` 可覆盖；仅按交换 token 自身返回字段确认准确期限，优先 `expiresAtMs`，否则服务 `createTime`（毫秒）加正 `validTime`/`tokenValidTime`（秒），缺有效正时长或 0 用 86400 秒。无服务创建时间保留未知准确期限，不用本机时间补造；apply ticket 600 秒不继承。准确固定期限显示 UTC 到期+剩余时间，否则说明默认规则与准确时间未返回，帮助中英同步。
 
-管理状态新增 `personalExpiryPolicy/mcpExpiryPolicy`（`unknown/fixed/slidingIdle`），系统保护认证快照保存每 token 的 `expiryPolicy`；普通配置 schema 仍 v1。恢复旧快照在指纹/模式核对后，password 清旧非零期限、保留真实 401 的零失效标记，browser/application 保留期限且不按恢复时间补新 24 小时；身份核验、代次和真实失效不重放保护保持。详细事务错误边界、恢复路径固定安全提示和回滚见 [专题](customizations/nvwa-mcp.md#有效期恢复与重新认证)。这些规则尚未在本版真实服务实测。
+管理状态新增 `personalExpiryPolicy/mcpExpiryPolicy`（`unknown/fixed/slidingIdle`），系统保护认证快照保存每 token 的 `expiryPolicy`；普通配置 schema 仍 v1。恢复旧快照在指纹/模式核对后，password 清旧非零期限、保留真实 401 的零失效标记，browser/application 保留期限且不按恢复时间补新 24 小时；身份核验、代次和真实失效不重放保护保持。
+
+当前 `main` 追加按需自动重新认证修复：已有成功登录且保存该方式凭据时，password 使用“记住密码”的保护引用重新登录，application 使用“保存应用密钥”的保护引用重新取票、换 token；已知到期或身份核验 HTTP 401 在下一次使用的请求预检中处理。主桥和直接工具检测收到上游 MCP HTTP 401 均精确标记被拒 token 并持久化，原请求不重放，下次使用再续认证。成功须保持原用户、稳定身份和租户，不撤销已有本机客户端连接；失败至少间隔 60 秒再按需重试，手动登录不受此等待限制。没有保存资料、资料不可读、验证码/双因子/改密或 browser 个人网页授权需要人工完成。状态刷新只读取本地状态，没有后台提前续认证定时器；403、网络或响应格式错误不会自动提交保存凭据。无需新增普通配置字段或明文秘密；详细错误边界及回滚见 [专题](customizations/nvwa-mcp.md#有效期恢复与重新认证)。这项追加修复尚未发布，不回写既有 `v0.4.30-5` 标签和包；真实期限与续认证链路待用户验收。
 
 ## TianCaiSpace customization fields and concurrent saves
 
