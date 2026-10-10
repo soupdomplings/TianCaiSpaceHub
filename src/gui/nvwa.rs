@@ -72,8 +72,7 @@ pub(super) struct NvwaTab {
     password_settings: Panel,
     application_settings: Panel,
     signature_row: Panel,
-    application_hint: StaticText,
-    browser_hint: StaticText,
+    connection_hint: StaticText,
     factor_row: Panel,
     username: TextCtrl,
     password: TextCtrl,
@@ -97,6 +96,7 @@ pub(super) struct NvwaTab {
     logout: Button,
     detect: Button,
     send_factor: Button,
+    help: Button,
     clients: Vec<ClientRow>,
     state: Rc<RefCell<Selection>>,
     busy: Arc<AtomicBool>,
@@ -193,12 +193,12 @@ fn section<W: WxWidget>(parent: &W, root: &BoxSizer) -> (Panel, FlexGridSizer) {
 }
 
 fn auth_mode(tab: &NvwaTab) -> &'static str {
-    if tab.application.is_checked() {
-        "application"
-    } else if tab.mode.get_selection() == Some(1) {
-        "browser"
-    } else {
+    if tab.mode.get_selection() != Some(1) {
         "password"
+    } else if tab.application.is_checked() {
+        "application"
+    } else {
+        "browser"
     }
 }
 
@@ -208,7 +208,18 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> NvwaTab {
         .build();
     page.set_background_color(theme::theme().bg_card_alt);
     let root = BoxSizer::builder(Orientation::Vertical).build();
-    label(&page, &root, tr(text, "NVWA MCP", "NVWA MCP"));
+    let heading = BoxSizer::builder(Orientation::Horizontal).build();
+    let title = StaticText::builder(&page).with_label("NVWA MCP").build();
+    title.set_foreground_color(theme::theme().ink_secondary);
+    heading.add(&title, 0, SizerFlag::AlignCenterVertical, 0);
+    heading.add_stretch_spacer(1);
+    let help = Button::builder(&page)
+        .with_label("?")
+        .with_size(Size::new(32, 30))
+        .build();
+    help.set_tooltip(tr(text, "如何配置 NVWA MCP", "How to configure NVWA MCP"));
+    heading.add(&help, 0, SizerFlag::AlignCenterVertical, 0);
+    root.add_sizer(&heading, 0, SizerFlag::Expand | SizerFlag::All, 16);
     let grid = FlexGridSizer::builder(0, 2)
         .with_vgap(8)
         .with_hgap(14)
@@ -233,7 +244,7 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> NvwaTab {
         tr(text, "认证方式", "Authentication"),
         &[
             tr(text, "账号密码", "Account and password"),
-            tr(text, "浏览器个人授权", "Browser authorization"),
+            tr(text, "认证服务连接", "Authentication service connection"),
         ],
     );
     root.add_sizer(
@@ -265,11 +276,41 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> NvwaTab {
         SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right,
         16,
     );
-    let browser_hint = StaticText::builder(&page)
-        .with_label(tr(text, "在产品页面完成个人登录和授权。首次接入需管理员配置授权应用。", "Sign in and authorize on the product page. An administrator must configure the authorization application first."))
+    let connection_hint = StaticText::builder(&page)
+        .with_label(tr(text, "在认证服务管理添加应用服务，获取ClientID和ClientSecret", "Add an application service in authentication service management to obtain ClientID and ClientSecret."))
         .build();
-    browser_hint.wrap(920);
-    root.add(&browser_hint, 0, SizerFlag::Expand | SizerFlag::All, 16);
+    connection_hint.wrap(920);
+    root.add(&connection_hint, 0, SizerFlag::Expand | SizerFlag::All, 16);
+    let application = CheckBox::builder(&page)
+        .with_label(tr(
+            text,
+            "使用共享应用代表指定用户",
+            "Use a shared application for a specified user",
+        ))
+        .with_value(true)
+        .build();
+    root.add(
+        &application,
+        0,
+        SizerFlag::Left | SizerFlag::Right | SizerFlag::Bottom,
+        16,
+    );
+    let application_root = BoxSizer::builder(Orientation::Vertical).build();
+    let (application_settings, application_grid) = section(&page, &application_root);
+    let client_id = text_field_row(&application_settings, &application_grid, "ClientID", "");
+    let client_secret = secret_row(&application_settings, &application_grid, "ClientSecret");
+    let remember_secret = CheckBox::builder(&application_settings)
+        .with_label(tr(text, "保存应用密钥", "Save application secret"))
+        .build();
+    application_grid.add_spacer(1);
+    application_grid.add(&remember_secret, 0, SizerFlag::Top, 4);
+    application_settings.set_sizer(application_grid, true);
+    root.add_sizer(
+        &application_root,
+        0,
+        SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Bottom,
+        16,
+    );
 
     let advanced = CollapsiblePane::builder(&page)
         .with_label(tr(
@@ -281,15 +322,6 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> NvwaTab {
         .build();
     let content = advanced.get_pane().expect("NVWA advanced pane");
     let advanced_root = BoxSizer::builder(Orientation::Vertical).build();
-    label(
-        &content,
-        &advanced_root,
-        tr(
-            text,
-            "通常无需填写：认证地址默认沿用服务地址，MCP 默认为服务地址下的 /mcp。",
-            "Usually leave these blank: authentication uses the service URL, and MCP uses its /mcp endpoint.",
-        ),
-    );
     let (addresses, addresses_grid) = section(&content, &advanced_root);
     let certification = text_field_row(
         &addresses,
@@ -349,37 +381,6 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> NvwaTab {
     );
     browser_account_row.set_sizer(browser_account_grid, true);
 
-    let application = CheckBox::builder(&content)
-        .with_label(tr(
-            text,
-            "使用共享应用代表指定用户（仅管理员）",
-            "Use a shared application for a specified user (administrator only)",
-        ))
-        .build();
-    advanced_root.add(&application, 0, SizerFlag::Top | SizerFlag::Bottom, 12);
-    let application_hint = StaticText::builder(&page)
-        .with_label(tr(text, "当前使用共享应用代表上方账号取票；这不是个人密码登录。应用参数由管理员提供。", "The shared application requests credentials for the account above. This does not verify the user's password. Obtain application settings from your administrator."))
-        .build();
-    application_hint.wrap(920);
-    root.add(&application_hint, 0, SizerFlag::Expand | SizerFlag::All, 16);
-    let (application_settings, application_grid) = section(&content, &advanced_root);
-    let client_id = text_field_row(
-        &application_settings,
-        &application_grid,
-        tr(text, "授权应用 ID", "Authorization application ID"),
-        "",
-    );
-    let client_secret = secret_row(
-        &application_settings,
-        &application_grid,
-        tr(text, "授权应用密钥", "Authorization application secret"),
-    );
-    let remember_secret = CheckBox::builder(&application_settings)
-        .with_label(tr(text, "保存应用密钥", "Save application secret"))
-        .build();
-    application_grid.add_spacer(1);
-    application_grid.add(&remember_secret, 0, SizerFlag::Top, 4);
-    application_settings.set_sizer(application_grid, true);
     let (signature_row, signature_grid) = section(&content, &advanced_root);
     let signature = choice_row(
         &signature_row,
@@ -555,8 +556,7 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> NvwaTab {
         password_settings,
         application_settings,
         signature_row,
-        application_hint,
-        browser_hint,
+        connection_hint,
         factor_row,
         username,
         password,
@@ -580,6 +580,7 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> NvwaTab {
         logout,
         detect,
         send_factor,
+        help,
         clients,
         state: Rc::new(RefCell::new(Selection::default())),
         busy: Arc::new(AtomicBool::new(false)),
@@ -686,7 +687,9 @@ fn start(
     }
     let operation = tab.operation.fetch_add(1, Ordering::SeqCst) + 1;
     let profile_id = tab.state.borrow().selected_id.clone();
-    tab.status.set_label("处理中");
+    if !matches!(action, Action::ResetAuthentication) {
+        tab.status.set_label("处理中");
+    }
     update_controls(tab);
     let path = path.to_string();
     let tx = tx.clone();
@@ -708,6 +711,17 @@ pub(super) fn bind_actions(
     text: GuiText,
     tx: &tokio::sync::mpsc::UnboundedSender<GuiMessage>,
 ) {
+    let f = *frame;
+    tab.help.on_click(move |_| {
+        MessageDialog::builder(
+            &f,
+            configuration_help(text),
+            tr(text, "NVWA MCP 配置说明", "NVWA MCP configuration"),
+        )
+        .with_style(MessageDialogStyle::OK | MessageDialogStyle::IconInformation)
+        .build()
+        .show_modal();
+    });
     let t = tab.clone();
     tab.profile.on_selection_changed(move |_| {
         select_profile(&t);
@@ -715,6 +729,7 @@ pub(super) fn bind_actions(
     let t = tab.clone();
     let sender = tx.clone();
     tab.mode.on_selection_changed(move |_| {
+        t.application.set_value(true);
         reset_authentication(&t, &sender);
     });
     let t = tab.clone();
@@ -786,7 +801,11 @@ pub(super) fn bind_actions(
             t.page.fit_inside();
             show_error(
                 &f,
-                "此方式需要管理员提供授权应用配置。你也可以切换到账号密码登录。",
+                tr(
+                    text,
+                    "请填写 ClientID 和 ClientSecret。获取方法见页面右上角“?”。",
+                    "Enter ClientID and ClientSecret. See the '?' button for setup instructions.",
+                ),
             );
             return;
         }
@@ -955,8 +974,8 @@ fn reset_authentication(tab: &NvwaTab, tx: &tokio::sync::mpsc::UnboundedSender<G
         "authorization-ticket-token"
     });
     tab.tools.set_value("");
-    tab.identity
-        .set_label("认证方式已修改，请保存环境后重新登录 / 授权");
+    tab.identity.set_label("");
+    tab.status.set_label("");
     {
         let mut state = tab.state.borrow_mut();
         state.clients.clear();
@@ -966,7 +985,7 @@ fn reset_authentication(tab: &NvwaTab, tx: &tokio::sync::mpsc::UnboundedSender<G
             .retain(|profile| profile["profileId"].as_str() != selected_id.as_deref());
     }
     for row in &tab.clients {
-        row.status.set_label("认证方式已修改，请重新检查");
+        row.status.set_label("");
     }
     let selected_id = tab.state.borrow().selected_id.clone();
     if selected_id.is_some() {
@@ -978,10 +997,8 @@ fn reset_authentication(tab: &NvwaTab, tx: &tokio::sync::mpsc::UnboundedSender<G
             Some(json!({"profileId":selected_id})),
         );
         tab.state.borrow_mut().login_attempt = None;
-    } else {
-        tab.status
-            .set_label("认证方式已切换，上一种方式的输入已清空");
     }
+    tab.status.set_label("");
     update_controls(tab);
 }
 
@@ -1106,6 +1123,14 @@ fn confirm(frame: &Frame, message: &str) -> bool {
         == ID_YES
 }
 
+fn configuration_help(text: GuiText) -> &'static str {
+    tr(
+        text,
+        "1. 环境与地址\n填写环境名称和 NVWA 服务地址。认证服务单独部署时，在高级设置填写独立认证地址。MCP 默认 /mcp，可改其他路径或完整地址；路径跟随服务地址的部署前缀。\n\n2. 账号密码\n选择“账号密码”，填写账号和密码；特殊租户、登录机构在高级设置。服务要求双因子时再填写验证码；要求改密或图形验证码时按返回提示处理。\n\n3. 认证服务连接\n在认证服务管理添加应用服务，获取ClientID和ClientSecret。选择“认证服务连接”，填写这两个值。默认勾选“使用共享应用代表指定用户”，还需填写要代表的账号；应用按服务端权限代表该账号取票，不执行个人密码验证。没有应用管理权限时，请向管理员获取应用资料。\n\n4. 浏览器授权（可选）\n取消“使用共享应用代表指定用户”后，点击“登录 / 授权”打开产品页面完成个人登录与授权。此方式仍需要 ClientID、ClientSecret，以及认证服务允许的本机回调地址。原有浏览器授权环境保持此设置。高级“限定授权账号”可留空，填写后必须与实际授权账号一致。\n\n5. 保存与接入\n先“保存环境”，再“登录 / 授权”。登录成功后“检测 MCP”，随后检查目标客户端并“预览接入”，确认后完成客户端刷新和信任。\n\n“记住密码”或“保存应用密钥”仅在认证成功后交给系统保护存储；默认不勾选。更改认证方式会清空该方式的输入并取消旧授权，重新填写后保存再连接。",
+        "1. Environment and URLs\nEnter an environment name and the NVWA service URL. Set a separate authentication URL in advanced settings if deployed separately. MCP defaults to /mcp; use another path or a complete URL. Paths preserve the service deployment prefix.\n\n2. Account and password\nEnter your username and password. Specific tenant and organization settings are optional under advanced settings. Enter a two-factor code only when requested; follow the returned instructions for password changes or captcha requirements.\n\n3. Authentication service connection\nAdd an application service in authentication service management to obtain ClientID and ClientSecret, then enter both. Shared application delegation is checked by default: also enter the username to represent. The application requests credentials for that user under server permissions and does not verify their personal password. Obtain application settings from your administrator if needed.\n\n4. Browser authorization (optional)\nUncheck shared application delegation and select Sign in to complete personal login and authorization on the product page. ClientID, ClientSecret and an allowed local callback are still required. Existing browser profiles keep this setting. An optional restricted username in advanced settings must match the authorized account.\n\n5. Save and connect\nSave the environment, sign in, then check MCP. Inspect your target client and preview the connection before confirming; complete the client's refresh and trust steps.\n\nRemember password and Save application secret store credentials with system protection only after successful authentication. Both default to off. Switching authentication clears the previous inputs and cancels the previous authorization; enter your settings again and save before connecting.",
+    )
+}
+
 pub(super) fn apply_result(
     tab: &NvwaTab,
     frame: &Frame,
@@ -1212,8 +1237,7 @@ pub(super) fn apply_result(
             start(tab, tx, Action::Refresh, "/manage/status", None);
         }
         Action::ResetAuthentication => {
-            tab.status
-                .set_label("认证方式已切换，上一种方式的输入已清空；请保存环境后重新登录 / 授权");
+            tab.status.set_label("");
         }
         Action::Detect => {
             let tools = value
@@ -1526,9 +1550,9 @@ fn select_profile(tab: &NvwaTab) {
     };
     tab.mode.set_selection(mode);
     tab.application
-        .set_value(profile["authMode"].as_str() == Some("application"));
-    // Old delegated profiles remain explicit and editable in the administrator section.
-    tab.advanced.collapse(!tab.application.is_checked());
+        .set_value(profile["authMode"].as_str() != Some("browser"));
+    // Loading a saved browser profile must not change its authentication mode.
+    tab.advanced.collapse(true);
     if tab.auth_header.get_value().is_empty() {
         tab.auth_header.set_value(if mode == 0 {
             "Authorization"
@@ -1565,9 +1589,9 @@ fn update_controls(tab: &NvwaTab) {
     tab.password_row.show(password);
     tab.password_settings.show(password);
     tab.application_settings.show(!password);
+    tab.application.show(!password);
     tab.signature_row.show(application);
-    tab.application_hint.show(application);
-    tab.browser_hint.show(mode == "browser");
+    tab.connection_hint.show(!password);
     tab.factor_row.show(twofactor);
     for field in [
         tab.name,
@@ -1584,8 +1608,8 @@ fn update_controls(tab: &NvwaTab) {
         field.enable(!busy);
     }
     tab.profile.enable(!busy);
-    tab.mode.enable(!busy && !application);
-    tab.application.enable(!busy);
+    tab.mode.enable(!busy);
+    tab.application.enable(!busy && !password);
     tab.signature.enable(!busy);
     tab.password.enable(!busy && password);
     tab.client_secret.enable(!busy && !password);
