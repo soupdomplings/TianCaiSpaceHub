@@ -1,6 +1,6 @@
 ﻿# Architecture
 
-维护日期：2026-10-10。当前开发 `0.4.30-5` 的独立 TC-014 [Dumpling-MCP / NVWA MCP](customizations/nvwa-mcp.md) 提供帮助菜单显示开关、环境名接入及工具目录说明；Windows locked GUI 整合编译和 EXE 静态核对通过，身份见 [v5 交付](releases/v0.4.30-5.md)。用户已授权 v0.4.30-5 发布；macOS 原生构建待 Actions，具体安装包及完整链路仍待验收。以下 remote-control、AI Gateway 与 IM 协议保持各自职责，新 MCP 认证不与模型/IM 授权混用。
+维护日期：2026-10-10。当前开发 `0.4.30-5` 的独立 TC-014 [Dumpling-MCP / NVWA MCP](customizations/nvwa-mcp.md) 提供帮助菜单显示开关、环境名接入及工具目录说明；Windows locked GUI 整合编译和 EXE 静态核对通过，身份见 [v5 交付](releases/v0.4.30-5.md)。v0.4.30-5 完整标签及非草稿 Pre-release 已创建，Windows/macOS 原生 Actions 已启动，尚未确认完成；用户仅 Windows 试用，具体安装包、macOS 实机及完整链路仍待验收。以下 remote-control、AI Gateway 与 IM 协议保持各自职责，新 MCP 认证不与模型/IM 授权混用。
 
 `TianCaiSpaceHub` bridges these systems:
 

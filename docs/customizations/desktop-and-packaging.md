@@ -1,6 +1,6 @@
 # 天才空间品牌、桌面行为与交付
 
-维护日期：2026-10-10。当前 `0.4.30-5` 的 [Dumpling-MCP 页签与 NVWA 后台桥](nvwa-mcp.md) 按帮助菜单勾选显示，默认隐藏并保存偏好，采用 Hub 品牌透明线条图标；Codex 使用环境名接入/兼容旧名，按钮说明和工具中文简介同步调整，关联 TC-014/TC-007。本轮同时实现系统会话结束不再触发普通关闭的托盘阻止，以及 Windows MSI 成功页的显式打开/完成按钮。密钥保存、期限与认证隔离保留；本轮必要 Windows 编译、独立产物及用户有限 Codex 接入反馈见 [v5](../releases/v0.4.30-5.md)，历史 build/EXE 保持原身份。上述源码已实现、静态复核通过；用户对本机测试版反馈“可以了”并授权发布。现按新指示准备 `v0.4.30-5` 的标签、Actions 和 Release，Windows/macOS 安装包由 Actions 生成；该反馈不覆盖新 MSI、macOS 或全部 MCP 调用验收。保留 TC-001、TC-007、TC-011、TC-012 的既有桌面能力；已完成发布的最近版本仍为 [v0.4.30-4](../releases/v0.4.30-4.md)，本轮成功证据取得后更新 [v5 交付](../releases/v0.4.30-5.md)。
+维护日期：2026-10-10。当前 `0.4.30-5` 的 [Dumpling-MCP 页签与 NVWA 后台桥](nvwa-mcp.md) 按帮助菜单勾选显示，默认隐藏并保存偏好，采用 Hub 品牌透明线条图标；Codex 使用环境名接入/兼容旧名，按钮说明和工具中文简介同步调整，关联 TC-014/TC-007。本轮同时实现系统会话结束不再触发普通关闭的托盘阻止，以及 Windows MSI 成功页的显式打开/完成按钮。密钥保存、期限与认证隔离保留；本轮必要 Windows 编译、独立产物及用户有限 Codex 接入反馈见 [v5](../releases/v0.4.30-5.md)，历史 build/EXE 保持原身份。上述源码已实现、静态复核通过；用户对 Windows 本机测试版反馈“可以了”并授权发布。[v0.4.30-5 Release](https://github.com/soupdomplings/TianCaiSpaceHub/releases/tag/v0.4.30-5) 已创建，Windows/macOS Actions 已启动、尚未完成，本轮停止核对时 0 个附件，发布产物核验未执行。安装包由 Actions 成功后自动上传；该反馈不覆盖新 MSI、macOS 或全部 MCP 调用验收。保留 TC-001、TC-007、TC-011、TC-012 的既有桌面能力；源码/标签、运行和 Release 身份见 [v5 交付](../releases/v0.4.30-5.md)，此前 [v4](../releases/v0.4.30-4.md) 保持原发布事实。
 
 `v0.4.30-4` 产品源码 `7b5dd6e…`、注释标签与非草稿 Pre-release 已公开。Windows Actions 与 Mac 修复后同标签重建均成功，八项附件下载静态核验通过；Windows 未签名，Mac universal ad-hoc 且未公证。首次 DMG 失败、工作流修复 `1bd8ffd6…` 与产品源码分开记录，运行程序和升级/同步效果仍待用户验收。旧版与调试 EXE 保持原身份，发布后核验文档使用单独提交进入 `main`，不移动产品标签或改变安装包。
 
@@ -101,11 +101,11 @@ macOS 保持 `com.codexhub.app` 的安装身份，完整 App 声明导入协议�
 
 ## 当前交付状态
 
-### 本轮：0.4.30-5 源码实现，已授权准备发布
+### 本轮：0.4.30-5 Release 已创建，两平台 Actions 构建中
 
 基线为唯一 `main` 的 `8d1ccea7…`，包含上一版产品、CI 修复与交付核验文档。原混合工作区先完整快照，逐项比对并确认主线包含后安全对齐，见 [整理记录](../development/repository-cleanup.md)。本版新增 TC-014、普通引用配置、系统保护恢复、各端定向备份及 GUI 操作，不本地生成发布安装包，不覆盖已交付程序或包。
 
-2026-10-10 当前阶段新增 Dumpling-MCP 显示偏好、透明图标、工具详情与 Codex 环境名迁移，系统会话查询/结束的独立处理和 Windows MSI 成功页。代码及静态复核已完成；会话结束包含启动线程发布后释放锁再复查关闭标志的并发收尾。**最终 Windows locked GUI build 通过（22.88 秒、38 条警告），包含该启动握手；独立 EXE 的版本、x64 PE、DLL 导入及复制前后哈希静态核对通过，未运行**。本轮文件为 `outputs/dumpling-v0.4.30-5-windows-20261010/TianCaiSpaceHub.exe`，61,454,848 字节，SHA-256 `471e14cca4f756e30534661f2768a80a162cc2659e10174242691f6bf3ceb291`；287 个源码文件摘要及完整身份按 [v5 交付](../releases/v0.4.30-5.md) 登记，不复用下一段 auth-expiry 结果。MSI 仅完成 XML、条件与官方 WiX 源码静态核对，当前没有生成或运行新安装包；普通 ×、系统关机/取消、安装成功页及非提升打开、静默/修复/卸载等实际行为待用户验收，macOS 原生与两平台安装包构建仍由 Actions 完成。
+2026-10-10 当前阶段新增 Dumpling-MCP 显示偏好、透明图标、工具详情与 Codex 环境名迁移，系统会话查询/结束的独立处理和 Windows MSI 成功页。代码及静态复核已完成；会话结束包含启动线程发布后释放锁再复查关闭标志的并发收尾。**最终 Windows locked GUI build 通过（22.88 秒、38 条警告），包含该启动握手；独立 EXE 的版本、x64 PE、DLL 导入及复制前后哈希静态核对通过，未运行**。本轮文件为 `outputs/dumpling-v0.4.30-5-windows-20261010/TianCaiSpaceHub.exe`，61,454,848 字节，SHA-256 `471e14cca4f756e30534661f2768a80a162cc2659e10174242691f6bf3ceb291`；287 个源码文件摘要及完整身份按 [v5 交付](../releases/v0.4.30-5.md) 登记，不复用下一段 auth-expiry 结果。MSI 已完成 XML、条件与官方 WiX 源码静态核对，本地未生成或运行新安装包；Windows Actions 正在构建，本轮未取得成功包或执行核验。普通 ×、系统关机/取消、安装成功页及非提升打开、静默/修复/卸载等实际行为待各自范围验收。全部产品功能以 Windows/macOS 兼容为目标，Mac 平台分支静态复核通过；本次 Mac 原生编译/包构建已启动、尚未完成，实机验收另行进行。
 
 2026-10-10 此前应用密钥/期限阶段实现保存环境立即保护保存应用密钥、保存状态/引用恢复、替换/空输入复用/取消移除及分步骤 HTTP 401 说明；密码仍登录成功后记住。新增密码闲置/换票固定期限策略、准确 UTC 到期显示与旧保护快照兼容。**该阶段最终 Windows locked GUI build 通过（16.59 秒、38 条警告），auth-expiry EXE 版本/x64 PE/DLL 导入/复制前后哈希静态核对通过、未运行**，独立目录 `outputs/nvwa-v0.4.30-5-windows-auth-expiry-20261010/`，61,003,264 字节，SHA-256 `a9abeb4fe11a7408eea8d1a525cfabcc32472a738f6c7d15452a869fc2c8e2be`。真实验收待用户；未运行测试、Hub/Codex/WorkBuddy/天工/NVWA 或真实认证/MCP/模型/业务，实际期限和 401 根因尚未联调验证，源码/产物身份见 [v5 交付](../releases/v0.4.30-5.md)。
 
@@ -117,7 +117,7 @@ macOS 保持 `com.codexhub.app` 的安装身份，完整 App 声明导入协议�
 
 此前 NVWA 首版第二轮 `cargo check --locked --target x86_64-pc-windows-msvc --features gui --bin TianCaiSpaceHub` 已通过，27.61 秒、38 条警告；它和后续历史复核/测试 EXE 只属于各自当时源码，不是 2026-10-10 最终修正的编译或验收证据。macOS Keychain 源码/API 已静态核对，本版原生 Mac 编译、Windows/macOS Actions 安装包、签名及实机行为尚未核验。
 
-用户对本轮 Windows 本机测试版反馈“可以了”，并明确授权发布 `v0.4.30-5`；这是该次本机试用与可交付的有限反馈，不扩称关机全部场景、Windows MSI/macOS 安装升级或全部 MCP 工具调用均已通过。当前正在准备标签、Windows/macOS Actions 构建和 Release，安装包统一由 Actions 生成，不本地打包，也不创建版本/release 分支。新的 Actions、附件、签名及 Release 成功证据取得后按 [v5 交付](../releases/v0.4.30-5.md) 分别收尾。macOS 原生构建与实机验收、普通/高级界面全部异常、模式清理、保存后继续认证、图形验证码限制/双因子、回调注册、两 token 真实 TTL、原生刷新/信任、目录加载、并发写入、移除/恢复及未知工具结果仍需各自范围的验收。下节保留历史 `v0.4.30-4` 已发布身份和结果。
+用户对本轮 Windows 本机测试版反馈“可以了”，并明确授权发布 `v0.4.30-5`；这是该次本机试用与可交付的有限反馈，不扩称关机全部场景、Windows MSI/macOS 安装升级或全部 MCP 工具调用均已通过。Release 已创建，ID `408945546`、`draft=false/prerelease=true/Latest=false`，发布时间 `2026-10-10T12:41:18Z`；注释标签 `ee8f03bffa85d25b4fec3c25b54d41e345560c51` 指向源码 `3ea7e003c94b6e3a74606fd2ef9fe3159db15418`。[Windows Actions 38052269127](https://github.com/soupdomplings/TianCaiSpaceHub/actions/runs/38052269127)（run 14）和 [macOS Actions 38052269076](https://github.com/soupdomplings/TianCaiSpaceHub/actions/runs/38052269076)（run 18）均已启动、`in_progress`，使用同一标签源码。本轮按用户要求在开始构建后停止等待，尚未取得两平台构建成功或包证据；Release 当时为 0 个附件，下载、产物/签名核验未执行。安装包统一由 Actions 成功后自动上传，不本地打包，也不创建版本/release 分支；上述身份及状态见 [v5 交付](../releases/v0.4.30-5.md)。macOS 原生构建与实机验收、普通/高级界面全部异常、模式清理、保存后继续认证、图形验证码限制/双因子、回调注册、两 token 真实 TTL、原生刷新/信任、目录加载、并发写入、移除/恢复及未知工具结果仍需各自范围的验收。下节保留历史 `v0.4.30-4` 已发布身份和结果。
 
 ### 已发布：v0.4.30-4 预发布，两平台包已核验
 

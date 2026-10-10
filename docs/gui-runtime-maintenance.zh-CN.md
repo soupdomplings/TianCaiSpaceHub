@@ -2,7 +2,7 @@
 
 维护日期：2026-10-10。当前基线 `0.4.30-5`，唯一 `main`。本文替代旧版 wxDragon 同步与资源优化执行计划；旧文档中的 `0.9.16`、临时脏文件和 stash 操作不再代表当前状态。
 
-发布状态：用户对本轮本机测试版反馈“可以了”并授权发布 `v0.4.30-5`，当前准备标签、Actions 构建与 Release。该反馈只属于此次本机试用和可交付判断，不扩大为 Windows MSI、macOS 或系统退出全部场景验收；Windows/macOS 安装包由 GitHub Actions 生成，实际成功结果及产物身份由 [v5 交付](releases/v0.4.30-5.md) 后续登记。
+发布状态：用户对本轮 Windows 本机测试版反馈“可以了”并授权发布；[v0.4.30-5 Release](https://github.com/soupdomplings/TianCaiSpaceHub/releases/tag/v0.4.30-5) 已创建（非草稿 Pre-release、Latest=false），[Windows Actions](https://github.com/soupdomplings/TianCaiSpaceHub/actions/runs/38052269127) 与 [macOS Actions](https://github.com/soupdomplings/TianCaiSpaceHub/actions/runs/38052269076) 已启动、尚未完成，本轮停止核对时为 0 个附件，未执行发布产物核验。按用户要求在开始构建后停止等待，构建成功后由 Actions 自动上传。该反馈只属于此次 Windows 本机试用和可交付判断，不扩大为 MSI、macOS 或系统退出全部场景验收；源码/标签、运行和 Release 身份见 [v5 交付](releases/v0.4.30-5.md)。
 
 ## 依赖来源
 
@@ -24,7 +24,7 @@ Windows 查询处理通过 `set_can_veto(false)` 明确允许，并用 `skip(fal
 
 维护入口：[GUI 会话结束](../src/gui.rs)、[自有后台](../src/gui/daemon.rs)、[Rust App](../vendor/wxdragon/rust/wxdragon/src/app.rs)、[事件映射](../vendor/wxdragon/rust/wxdragon/src/event/mod.rs)、[C ABI](../vendor/wxdragon/rust/wxdragon-sys/cpp/include/core/wxd_app.h)、[C 枚举](../vendor/wxdragon/rust/wxdragon-sys/cpp/include/wxd_types.h)、[C++ App](../vendor/wxdragon/rust/wxdragon-sys/cpp/src/app.cpp)、[C++ 事件](../vendor/wxdragon/rust/wxdragon-sys/cpp/src/event.cpp)。合并依赖时保留或以等价上游 API 替代，不能只删枚举或单边改 ABI。
 
-本轮实现及事件 ABI、取消语义、启动并发收尾的静态复核已完成，最终 Windows locked GUI build 通过（22.88 秒、38 条警告），包含发布后关机握手；独立 EXE 版本、x64 PE、DLL 导入及复制哈希静态核对通过，最终身份见 [v5 交付](releases/v0.4.30-5.md)。开发方未实际关机/注销、启动 GUI 或执行测试；系统取消关机、普通 ×、强制关闭和自有/外部后台边界待用户验收。session hooks 在 Windows/macOS 注册，macOS 此轮仅条件编译下的源码核对，原生编译待 Actions，不宣称系统退出已验证；本轮不增加 Linux 支持。此修复不新增配置字段或数据迁移，回退 GUI 与整套窄事件扩展可能恢复关机阻止，回退后可在关机前从托盘“退出”。Windows MSI 安装成功页及其 Actions 构建边界另见 [桌面与交付](customizations/desktop-and-packaging.md#平台与产物)，本地 EXE 编译不验证安装向导。
+本轮实现及事件 ABI、取消语义、启动并发收尾的静态复核已完成，最终 Windows locked GUI build 通过（22.88 秒、38 条警告），包含发布后关机握手；独立 EXE 版本、x64 PE、DLL 导入及复制哈希静态核对通过，最终身份见 [v5 交付](releases/v0.4.30-5.md)。开发方未实际关机/注销、启动 GUI 或执行测试；系统取消关机、普通 ×、强制关闭和自有/外部后台边界待用户验收。session hooks 在 Windows/macOS 注册，本轮产品功能以 Windows/macOS 兼容为目标，macOS 条件编译及平台分支静态复核通过；本次 Mac 原生编译和包构建已由 Actions 启动、尚未完成，Mac 实机及系统退出验收另行进行；本轮不增加 Linux 支持。此修复不新增配置字段或数据迁移，回退 GUI 与整套窄事件扩展可能恢复关机阻止，回退后可在关机前从托盘“退出”。Windows MSI 安装成功页及其 Actions 构建边界另见 [桌面与交付](customizations/desktop-and-packaging.md#平台与产物)，本地 EXE 编译不验证安装向导。
 
 ## 当前刷新机制
 

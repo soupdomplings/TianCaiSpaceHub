@@ -12,7 +12,7 @@ Hub MCP 页签改名 Dumpling-MCP，帮助菜单勾选后显示、默认隐藏�
 - 新增期限策略与旧系统保护快照兼容：password 清旧非零硬期限、保留真实 401 失效标记，browser/application 保留原期限、不按恢复时间补新到期点。普通配置 schema 仍 v1，指纹、身份恢复核验、认证代次与不重放保护保持，中英帮助同步。
 - 显式登录 HTTP 401 区分取票、换票及读取账号租户；恢复/运行核验仍固定安全错误，仅改善诊断，不能宣称真实 401 已解决。原认证服务/密码入口、可见密码与 ClientSecret、共享开关资料保留、有效默认租户、单服务地址和可编辑 `/mcp`、操作预览、本机桥/三端隔离及全部既有二开继续保留。
 
-本轮 Windows locked GUI 编译与独立测试 EXE 身份见 [最新交付](docs/releases/v0.4.30-5.md)，开发方未运行产品或真实调用。用户已反馈本机测试版“可以了”，并于 2026-10-10 授权发布；这不扩大为 Windows MSI、macOS 或全部 MCP 调用验收。Windows/macOS 安装包统一由 GitHub Actions 生成，构建、附件核验和正式发布状态分别登记。此前 auth-expiry 16.59 秒、readable 25.52 秒等构建与旧 EXE 保持原归属。回退前用新包按指纹移除/恢复 Codex 环境名连接，新 Codex version 2 保护备份需新包管理；旧包不认识新名称与备份。原路径/认证/期限回滚边界见专题。
+本轮 Windows locked GUI 编译与独立测试 EXE 身份见 [最新交付](docs/releases/v0.4.30-5.md)，开发方未运行产品或真实调用。用户已反馈 Windows 本机测试版“可以了”，并于 2026-10-10 授权发布；完整标签及非草稿 Pre-release 已创建，两平台 Actions 已启动。按用户要求构建开始后停止等待，安装包在云端完成后自动上传；当前不确认构建成功或包核验通过，不扩大为 Windows MSI、macOS 或全部 MCP 调用验收。此前 auth-expiry 16.59 秒、readable 25.52 秒等构建与旧 EXE 保持原归属。回退前用新包按指纹移除/恢复 Codex 环境名连接，新 Codex version 2 保护备份需新包管理；旧包不认识新名称与备份。原路径/认证/期限回滚边界见专题。
 
 使用、配置、回滚与限制见 [NVWA MCP](docs/customizations/nvwa-mcp.md)。此前版本摘要保留历史事实。
 
