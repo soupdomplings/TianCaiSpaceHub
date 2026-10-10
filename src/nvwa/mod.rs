@@ -78,7 +78,7 @@ impl NvwaService {
                         .and_then(serde_json::Value::as_str)
                         == Some(profile_fingerprint(profile).as_str())
                 {
-                    records.push((profile.id.clone(), record));
+                    records.push((profile.id.clone(), profile.auth_mode, record));
                 } else {
                     secrets.delete(&session_key(&profile.id))?;
                 }

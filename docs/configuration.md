@@ -8,7 +8,7 @@ There are three separate config surfaces:
 
 Do not mix them. `TianCaiSpaceHub` stores IM channel and bridge settings. Codex App stores model provider, auth, and `chatgpt_base_url`.
 
-维护日期：2026-10-10。当前开发基线为 v0.4.30-5，独立 [NVWA MCP](customizations/nvwa-mcp.md) 页签管理认证环境和三端受管 MCP 配置；普通 JSON 只存地址、身份选择和系统保护引用，秘密/令牌/目标备份不写 Hub TOML、日志或连接诊断。集合 version 1、`_revision` 并发保存，默认本机端口 3849；未知非敏感字段保留，未知字段中的秘密拒绝保存。环境/账号修改先保存才能登录或写客户端，变更会撤销旧授权。本轮修正默认租户误拒、提示/预览和输入保留，密码/ClientSecret 直接可见；最终 Windows locked GUI build 25.52 秒、38 条警告通过，新 readable EXE 静态核对通过、未运行，原产物保持阶段归属，见 [本轮交付](releases/v0.4.30-5.md)。
+维护日期：2026-10-10。当前开发基线为 v0.4.30-5，独立 [NVWA MCP](customizations/nvwa-mcp.md) 页签管理认证环境和三端受管 MCP 配置；普通 JSON 只存地址、身份选择和系统保护引用，秘密/令牌/目标备份不写 Hub TOML、日志或连接诊断。集合 version 1、`_revision` 并发保存，默认本机端口 3849；未知非敏感字段保留，未知字段中的秘密拒绝保存。环境/账号修改先保存才能登录或写客户端，变更会撤销旧授权。本轮应用密钥改为“保存环境”立即保护保存，页面显示保存状态，密码仍登录成功后记住；期限区分密码闲置与换票固定到期，HTTP 401 分步骤说明。最终 Windows locked GUI build 16.59 秒、38 条警告通过，auth-expiry EXE 静态身份核对通过、未运行；此前 25.52 秒 readable 构建及其他产物保持阶段归属，见 [本轮交付](releases/v0.4.30-5.md)。真实保存、会话期限、认证及 401 根因待用户验收。
 
 ## NVWA 服务地址与认证材料
 
@@ -40,6 +40,14 @@ Do not mix them. `TianCaiSpaceHub` stores IM channel and bridge settings. Codex 
 主认证下拉切换清理账号、密码、应用密钥/ID、记住选项、挑战和旧状态；共享复选框切换保留 ClientID、ClientSecret 和保存密钥选项，其余旧输入/状态清理，两者都撤销旧授权并拒绝迟到结果。重新登录先清旧快照、工具清单及客户端检测，等待浏览器/双因子/改密时不显示旧“已登录”。双因子仅在 `204` 后显示；`402` 提示产品页面或已配置浏览器授权，Hub 尚不显示验证码图片。未登录接入预览先提示登录，移除/恢复可未登录；工具清单及配置保存不等于真实调用通过。
 
 保存后的刷新仅当完整 profile 与当前表单一致时保留本次 GUI 内存中的秘密，便于继续认证；比较时空 MCP 地址与 `/mcp` 规范为同一默认值，环境切换或其他字段不一致时清空，保留内存不代表持久保存。仅显式选择记住凭据才使用 DPAPI/Keychain；普通 JSON、Hub TOML 和日志不保存秘密。回退前逐端移除或恢复 NVWA 受管项，再退出授权；旧版仍需显式完整 MCP 地址，不能假定支持留空或路径派生。
+
+认证服务连接勾选“保存应用密钥”后点击“保存环境”，立即将非空 ClientSecret 交给 DPAPI/Keychain，不依赖登录成功；密码记住仍在登录成功后保存。页面显示密钥是否已保存，加载有引用的服务环境恢复勾选但不从 API 回填秘密。勾选且非空保存/替换，勾选且空仅复用完全未变环境中实际可读取的现有引用；改环境字段、没有引用或原保护记录不可用时要求重新填写。显式填写新密钥可以替换不可读取的旧记录，不要求先恢复旧秘密。取消勾选并保存移除旧密钥。GUI 保留旧环境中未改的 `loginUnit:null`、`mcpAuthHeader:null` 及原默认 MCP 表示，避免默认显示制造字段变化。
+
+管理保存请求新增顶层 `rememberSecret/clientSecret`，二者不写 profile，普通配置只持 `credentialSecretRef`。不带 `rememberSecret` 的旧 API 请求保持原语义。需要新建/替换秘密时先用随机独立 key 写入；配置按 `_revision` 保存失败删除新 blob，成功后删除旧引用。未改环境输入相同可读取密钥时保留原引用；环境字段或引用变化撤销旧登录及客户端授权。HTTP 401 按取票/换票/读取账号租户等步骤说明，只改善诊断，不证明真实服务认证已修复。
+
+用户补充的服务期限规则：密码登录默认闲置 30 分钟超时，正常认证访问更新会话；个人/MCP 两份 token 均使用 `slidingIdle`，新登录不保留初次绝对到期时间、不本机推算 touch，实际失效由服务判断。ClientID + ClientSecret 换票 token 使用 `fixed`，默认固定 24 小时，调用不延长，应用 `tokenValidTime` 可覆盖；仅按交换 token 自身返回字段确认准确期限，优先 `expiresAtMs`，否则服务 `createTime`（毫秒）加正 `validTime`/`tokenValidTime`（秒），缺有效正时长或 0 用 86400 秒。无服务创建时间保留未知准确期限，不用本机时间补造；apply ticket 600 秒不继承。准确固定期限显示 UTC 到期+剩余时间，否则说明默认规则与准确时间未返回，帮助中英同步。
+
+管理状态新增 `personalExpiryPolicy/mcpExpiryPolicy`（`unknown/fixed/slidingIdle`），系统保护认证快照保存每 token 的 `expiryPolicy`；普通配置 schema 仍 v1。恢复旧快照在指纹/模式核对后，password 清旧非零期限、保留真实 401 的零失效标记，browser/application 保留期限且不按恢复时间补新 24 小时；身份核验、代次和真实失效不重放保护保持。详细事务错误边界、恢复路径固定安全提示和回滚见 [专题](customizations/nvwa-mcp.md#有效期恢复与重新认证)。这些规则尚未在本版真实服务实测。
 
 ## TianCaiSpace customization fields and concurrent saves
 

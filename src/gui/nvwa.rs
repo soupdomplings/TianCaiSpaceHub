@@ -85,6 +85,7 @@ pub(super) struct NvwaTab {
     signature: Choice,
     remember_password: CheckBox,
     remember_secret: CheckBox,
+    secret_status: StaticText,
     factor_code: TextCtrl,
     status: StaticText,
     identity: StaticText,
@@ -407,6 +408,11 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> NvwaTab {
         .build();
     application_grid.add_spacer(1);
     application_grid.add(&remember_secret, 0, SizerFlag::Top, 4);
+    let secret_status = StaticText::builder(&application_settings)
+        .with_label("")
+        .build();
+    application_grid.add_spacer(1);
+    application_grid.add(&secret_status, 0, SizerFlag::Expand | SizerFlag::Top, 4);
     application_settings.set_sizer(application_grid, true);
     root.add_sizer(
         &application_root,
@@ -672,6 +678,7 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> NvwaTab {
         signature,
         remember_password,
         remember_secret,
+        secret_status,
         factor_code,
         status,
         identity,
@@ -864,6 +871,28 @@ pub(super) fn bind_actions(
     tab.application
         .on_toggled(move |_| reset_authentication(&t, &sender, true));
     let t = tab.clone();
+    tab.remember_secret
+        .on_toggled(move |_| update_secret_status(&t));
+    for field in [
+        tab.name,
+        tab.product,
+        tab.certification,
+        tab.mcp,
+        tab.username,
+        tab.browser_username,
+        tab.client_id,
+        tab.client_secret,
+        tab.tenant,
+        tab.unit,
+        tab.auth_header,
+    ] {
+        let t = tab.clone();
+        field.on_text_updated(move |_| update_secret_status(&t));
+    }
+    let t = tab.clone();
+    tab.signature
+        .on_selection_changed(move |_| update_secret_status(&t));
+    let t = tab.clone();
     let sender = tx.clone();
     tab.reload
         .on_click(move |_| start(&t, &sender, Action::Refresh, "/manage/status", None));
@@ -883,6 +912,19 @@ pub(super) fn bind_actions(
             if key == "mcpUrl" && value.is_empty() && profile[key].as_str() == Some("/mcp") {
                 continue;
             }
+            if key == "loginUnit" && value.is_empty() && profile[key].is_null() {
+                continue;
+            }
+            if key == "mcpAuthHeader" && profile[key].is_null() {
+                let default = if auth_mode(&t) == "password" {
+                    "Authorization"
+                } else {
+                    "authorization-ticket-token"
+                };
+                if value == default {
+                    continue;
+                }
+            }
             profile[key] = json!(value);
         }
         if let Some(profile) = profile.as_object_mut() {
@@ -894,12 +936,19 @@ pub(super) fn bind_actions(
             show_error(&f, "请输入环境名称");
             return;
         }
+        let mut body = json!({"profile":profile,"expectedRevision":revision});
+        if auth_mode(&t) != "password" {
+            body["rememberSecret"] = json!(t.remember_secret.is_checked());
+            if t.remember_secret.is_checked() {
+                body["clientSecret"] = json!(t.client_secret.get_value());
+            }
+        }
         start(
             &t,
             &sender,
             Action::Save,
             "/manage/profile/save",
-            Some(json!({"profile":profile,"expectedRevision":revision})),
+            Some(body),
         );
     });
     let t = tab.clone();
@@ -1277,7 +1326,9 @@ fn configuration_help(text: GuiText) -> &'static str {
             "4. 登录后确认账号与租户\n先保存环境，再点击“登录 / 授权”。成功后显示服务实际返回的账号和租户；__default_tenant__ 表示默认租户。高级指定租户通常可留空。登录未成功时，先处理登录提示，再检测 MCP。\n\n",
             "5. 检测并接入\n“检测 MCP”读取可用工具清单。选择客户端，点击“预览接入”，确认环境与保存位置后点“是”添加。保存后刷新客户端或重开会话，并按客户端提示确认使用；天工先检测这条连接，再开始下一轮对话。工具是否能执行，在客户端中确认。\n\n",
             "共享应用勾选切换会保留 ClientID、ClientSecret 和保存密钥选项，取消旧授权；保存后重新登录。主认证下拉切换会清空旧方式的输入。\n",
-            "“记住密码”和“保存应用密钥”默认关闭；勾选后仅在认证成功时交给系统保护存储。"
+            "“保存应用密钥”在新环境默认关闭；勾选后点击“保存环境”就保存 ClientSecret，无需先登录成功。已保存环境会显示保存状态并恢复勾选；输入框留空可复用，填写新值并保存可替换。环境设置改变时需要重新填写。取消勾选并保存环境会删除保存的应用密钥。密钥不写入普通配置，也不从后台回填到输入框。\n",
+            "“记住密码”仍在登录成功后交给系统保护存储。HTTP 401 表示服务拒绝了该步请求；请按提示中的失败步骤核对，保存密钥不代表登录成功。\n\n",
+            "6. 有效期\nClientID + ClientSecret 取票换得的凭证默认固定 24 小时，调用不会延长；认证服务应用的 tokenValidTime 可覆盖。服务返回准确时间时显示到期时间（UTC）和剩余时间，没有返回时只说明默认规则。账号密码登录默认闲置 30 分钟超时，正常认证访问可延长；连续使用不会仅因登录已过 30 分钟被 Hub 判定到期，实际是否有效由服务判断。"
         ),
         concat!(
             "1. Environment\nEnter a name and the NVWA service URL. MCP defaults to /mcp; edit its path or full URL in advanced settings. Paths preserve the service deployment prefix. Set a separate authentication URL only if deployed separately.\n\n",
@@ -1287,7 +1338,9 @@ fn configuration_help(text: GuiText) -> &'static str {
             "4. Check account and tenant\nSave, then select Sign in. After success, Hub shows the returned account and tenant. __default_tenant__ is the default tenant. Specific tenant can usually be left blank. Resolve sign-in errors before checking MCP.\n\n",
             "5. Check and connect\nCheck MCP reads the available tools. Choose a client and preview the connection. Review the environment and save location, then select Yes to add it. Refresh or reopen the client session and follow its confirmation prompts. For TianGong, check the connection first and start a new conversation turn. Verify actual tool use in the client.\n\n",
             "Toggling shared delegation keeps ClientID, ClientSecret and Save application secret, and cancels the previous authorization. Save and sign in again. Switching the main sign-in dropdown clears the previous inputs.\n",
-            "Remember password and Save application secret default to off. When enabled, credentials go to protected system storage only after successful authentication."
+            "Save application secret defaults to off for new environments. Check it and select Save environment to store ClientSecret immediately, even before successful sign-in. Saved environments show its status and restore the checkbox. Leave the input blank to reuse it, or enter a new value and save to replace it. Changed environment settings require entering it again. Uncheck and save to remove the stored application secret. It is not written to ordinary configuration or returned to the input.\n",
+            "Remember password still stores the password only after successful sign-in. HTTP 401 means the service rejected that request step; check the named step. Saving a secret does not sign you in.\n\n",
+            "6. Validity\nClientID + ClientSecret ticket tokens default to a fixed 24 hours; calls do not extend them. The application's tokenValidTime can override this. Hub shows the expiry time (UTC) and remaining time when supplied by the service; otherwise it explains the default rule. Password sign-in defaults to a 30-minute idle timeout, extended by normal authenticated access. Hub does not expire an actively used session merely because 30 minutes have passed since sign-in; the service decides whether it is valid."
         ),
     )
 }
@@ -1349,7 +1402,7 @@ pub(super) fn apply_result(
             let password = unchanged.then(|| tab.password.get_value());
             let secret = unchanged.then(|| tab.client_secret.get_value());
             let remember_password = unchanged && tab.remember_password.is_checked();
-            let remember_secret = unchanged && tab.remember_secret.is_checked();
+            let remember_secret = unchanged.then(|| tab.remember_secret.is_checked());
             apply_snapshot(tab, text, value);
             if let Some(password) = password {
                 tab.password.set_value(&password);
@@ -1358,7 +1411,9 @@ pub(super) fn apply_result(
                 tab.client_secret.set_value(&secret);
             }
             tab.remember_password.set_value(remember_password);
-            tab.remember_secret.set_value(remember_secret);
+            if let Some(remember_secret) = remember_secret {
+                tab.remember_secret.set_value(remember_secret);
+            }
         }
         Action::Save => {
             tab.state.borrow_mut().saved_profile_snapshot = value.get("profile").cloned();
@@ -1765,6 +1820,45 @@ fn expiry_label(text: GuiText, expiry: Option<u64>) -> String {
     }
 }
 
+fn token_validity_label(text: GuiText, state: &Value, personal: bool) -> String {
+    let (policy, expiry) = if personal {
+        (
+            state["personalExpiryPolicy"].as_str(),
+            state["personalExpiresAtMs"].as_u64(),
+        )
+    } else {
+        (
+            state["mcpExpiryPolicy"].as_str(),
+            state["mcpExpiresAtMs"].as_u64(),
+        )
+    };
+    if expiry == Some(0) {
+        return tr(
+            text,
+            "服务已拒绝此凭证，请重新登录",
+            "The service rejected this credential; sign in again",
+        )
+        .to_string();
+    }
+    match policy {
+        Some("slidingIdle") => tr(text, "默认闲置 30 分钟超时；正常认证访问可延长，由服务判断", "Default idle timeout: 30 minutes; authenticated access extends the session, as decided by the service").to_string(),
+        Some("fixed") if expiry.is_some() => {
+            let expiry = expiry.unwrap();
+            let seconds = expiry / 1000;
+            let deadline = if seconds <= 253_402_300_799 {
+                crate::codex_app_config::format_rfc3339_utc(seconds)
+                    .replace('T', " ")
+                    .replace('Z', " UTC")
+            } else {
+                tr(text, "时间超出可显示范围", "Time is outside the display range").to_string()
+            };
+            format!("{} {deadline}（{}）；{}", tr(text, "到期：", "Expires:"), expiry_label(text, Some(expiry)), tr(text, "固定到期，调用不延长", "Fixed expiry; calls do not extend it"))
+        },
+        Some("fixed") => tr(text, "固定有效期默认 24 小时，应用可覆盖；服务未返回准确到期时间", "Fixed validity defaults to 24 hours, configurable by the application; exact expiry was not returned").to_string(),
+        _ => expiry_label(text, expiry),
+    }
+}
+
 fn show_runtime_status(tab: &NvwaTab) {
     let selection = tab.state.borrow();
     let Some(state) = selection
@@ -1814,12 +1908,12 @@ fn show_runtime_status(tab: &NvwaTab) {
         if state["personalTokenPresent"].as_bool() == Some(false) || state["identity"].is_null() {
             "无个人会话".to_string()
         } else {
-            expiry_label(tab.text, state["personalExpiresAtMs"].as_u64())
+            token_validity_label(tab.text, state, true)
         };
     let mcp = if state["identity"].is_null() {
         "未取得".to_string()
     } else {
-        expiry_label(tab.text, state["mcpExpiresAtMs"].as_u64())
+        token_validity_label(tab.text, state, false)
     };
     if state["identity"].is_null() {
         tab.identity.set_label(tr(
@@ -1842,9 +1936,19 @@ fn show_runtime_status(tab: &NvwaTab) {
         } else {
             personal
         };
+        let validity = if state["personalTokenPresent"].as_bool() == Some(true)
+            && state["mcpExpiryPolicy"].as_str() == Some("slidingIdle")
+            && state["personalExpiryPolicy"].as_str() == Some("slidingIdle")
+            && personal == mcp
+        {
+            format!("{personal_label} / {mcp_label}：{personal}")
+        } else {
+            format!("{personal_label}：{personal}\n{mcp_label}：{mcp}")
+        };
         tab.identity.set_label(&format!(
-            "{state_label}\n{account_label}：{person}    {tenant_label}：{tenant}\n{personal_label}：{personal}；{mcp_label}：{mcp}"
+            "{state_label}\n{account_label}：{person}    {tenant_label}：{tenant}\n{validity}"
         ));
+        tab.identity.wrap(920);
     }
     tab.status.set_label(&display_message(
         tab.text,
@@ -1908,6 +2012,12 @@ fn select_profile(tab: &NvwaTab) {
             _ => 0,
         });
     clear_login_material(tab);
+    tab.remember_secret.set_value(
+        mode == 1
+            && profile["credentialSecretRef"]
+                .as_str()
+                .is_some_and(|s| !s.is_empty()),
+    );
     tab.tools.set_value("");
     tab.identity.set_label("未读取当前授权状态");
     for client in &tab.clients {
@@ -1916,6 +2026,54 @@ fn select_profile(tab: &NvwaTab) {
     }
     show_runtime_status(tab);
     update_controls(tab);
+}
+
+fn update_secret_status(tab: &NvwaTab) {
+    let state = tab.state.borrow();
+    let saved = state
+        .profiles
+        .iter()
+        .find(|p| p["id"].as_str() == state.selected_id.as_deref());
+    let stored = saved.is_some_and(|p| {
+        matches!(p["authMode"].as_str(), Some("browser" | "application"))
+            && p["credentialSecretRef"]
+                .as_str()
+                .is_some_and(|s| !s.is_empty())
+    });
+    let same_environment = saved.is_some_and(|p| form_matches_profile(&form_fields(tab), p));
+    let message = if stored && !tab.remember_secret.is_checked() {
+        tr(
+            tab.text,
+            "应用密钥已保存。取消勾选后点击“保存环境”会删除保存的密钥。",
+            "Application secret is saved. Uncheck and save the environment to remove it.",
+        )
+    } else if stored && !same_environment {
+        tr(
+            tab.text,
+            "原环境已保存密钥；设置已改变，请重新填写 ClientSecret 并保存。",
+            "The original environment has a saved secret. Settings changed; enter ClientSecret again and save.",
+        )
+    } else if stored {
+        tr(
+            tab.text,
+            "应用密钥已保存。输入框留空可继续使用；填写新值并保存可替换。",
+            "Application secret is saved. Leave the input blank to reuse it, or enter a new value and save to replace it.",
+        )
+    } else if tab.remember_secret.is_checked() {
+        tr(
+            tab.text,
+            "尚未保存应用密钥。填写 ClientSecret 后点击“保存环境”，无需先登录成功。",
+            "Application secret is not saved. Enter ClientSecret and save the environment; sign-in is not required.",
+        )
+    } else {
+        tr(
+            tab.text,
+            "应用密钥尚未保存。勾选“保存应用密钥”并保存环境，可供下次使用。",
+            "Application secret is not saved. Check Save application secret and save the environment to reuse it later.",
+        )
+    };
+    tab.secret_status.set_label(message);
+    tab.secret_status.wrap(740);
 }
 
 fn update_controls(tab: &NvwaTab) {
@@ -1984,6 +2142,7 @@ fn update_controls(tab: &NvwaTab) {
         );
         row.path.enable(!busy && row.kind != "tiangong");
     }
+    update_secret_status(tab);
     tab.page.layout();
     tab.page.fit_inside();
 }

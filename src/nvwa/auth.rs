@@ -23,11 +23,63 @@ use super::{
     config::{endpoint, validate_profile, validate_url},
     types::{
         AuthMode, AuthOutcome, AuthResult, AuthToken, NvwaProfile, PasswordLoginInput,
-        SignatureAlgorithm, VerifiedIdentity,
+        SignatureAlgorithm, TokenExpiryPolicy, VerifiedIdentity,
     },
 };
 
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
+const DEFAULT_FIXED_TOKEN_SECONDS: u64 = 24 * 3600;
+
+#[derive(Clone, Copy)]
+enum RequestStage {
+    LoginKey,
+    PasswordLogin,
+    ApplicationCredential,
+    VerificationCode,
+    Logout,
+    TicketExchange,
+    ReadIdentity,
+    VerifySavedLogin,
+}
+
+impl RequestStage {
+    fn label(self) -> &'static str {
+        match self {
+            Self::LoginKey => "获取加密公钥",
+            Self::PasswordLogin => "账号密码登录",
+            Self::ApplicationCredential => "共享应用申请凭证",
+            Self::VerificationCode => "发送验证码",
+            Self::Logout => "退出登录",
+            Self::TicketExchange => "票据换成连接凭证",
+            Self::ReadIdentity => "读取当前账号租户",
+            Self::VerifySavedLogin => "验证已保存登录",
+        }
+    }
+
+    fn unauthorized_hint(self) -> &'static str {
+        match self {
+            Self::LoginKey => {
+                "登录加密公钥请求被拒绝。请核对 NVWA 服务地址，并请管理员检查登录接口的访问配置。"
+            }
+            Self::PasswordLogin => {
+                "账号密码登录请求被拒绝。请核对账号、密码和 NVWA 服务地址；若信息正确，请管理员检查登录接口的访问配置。"
+            }
+            Self::ApplicationCredential => {
+                "认证服务未接受本次应用认证。请核对 ClientID、ClientSecret、认证服务地址和部署使用的签名算法。"
+            }
+            Self::TicketExchange => {
+                "认证服务未接受本次应用认证或票据交换。请核对 ClientID、ClientSecret、认证服务地址和部署使用的签名算法，并重新授权获取票据。"
+            }
+            Self::ReadIdentity | Self::VerifySavedLogin => {
+                "产品未接受当前连接凭证。请核对 NVWA 服务地址、认证头和认证服务与产品之间的信任配置。"
+            }
+            Self::VerificationCode => {
+                "验证码请求被拒绝。请重新开始登录，并请管理员检查验证码接口。"
+            }
+            Self::Logout => "退出登录请求被拒绝，原登录凭证可能已失效。",
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct AuthClient {
@@ -61,10 +113,13 @@ impl AuthClient {
             "NVWA 密码为空或超出长度限制"
         );
         let key_payload = self
-            .request_json(self.client.get(endpoint(
-                &profile.product_base_url,
-                "anon/framework/api/encrypt/key",
-            )?))
+            .request_json(
+                self.client.get(endpoint(
+                    &profile.product_base_url,
+                    "anon/framework/api/encrypt/key",
+                )?),
+                RequestStage::LoginKey,
+            )
             .await?;
         ensure_business_success(&key_payload)?;
         let key = data_object(&key_payload);
@@ -117,6 +172,7 @@ impl AuthClient {
                 self.client
                     .post(endpoint(&profile.product_base_url, "nvwa/login")?)
                     .json(&body),
+                RequestStage::PasswordLogin,
             )
             .await?;
         let response = data_object(&payload);
@@ -180,9 +236,14 @@ impl AuthClient {
         let personal_token = AuthToken {
             value: token.clone(),
             header_name: login_header,
-            expires_at_ms: token_expiry(response)?,
+            // The product extends this idle session on authenticated access.
+            // Initial response times must not become a permanent local deadline.
+            expires_at_ms: None,
+            expiry_policy: TokenExpiryPolicy::SlidingIdle,
         };
-        let identity = self.fetch_identity(profile, &personal_token).await?;
+        let identity = self
+            .fetch_identity(profile, &personal_token, RequestStage::ReadIdentity)
+            .await?;
         let mcp_token = AuthToken {
             value: token,
             header_name: profile
@@ -191,7 +252,8 @@ impl AuthClient {
                 .map(allowed_header)
                 .transpose()?
                 .unwrap_or_else(|| "Authorization".to_owned()),
-            expires_at_ms: personal_token.expires_at_ms,
+            expires_at_ms: None,
+            expiry_policy: TokenExpiryPolicy::SlidingIdle,
         };
         Ok(AuthOutcome::Authenticated(AuthResult {
             identity,
@@ -241,6 +303,7 @@ impl AuthClient {
                         "nvwa-certification/v1/ticket/apply",
                     )?)
                     .header("authorization-cer-client", auth),
+                RequestStage::ApplicationCredential,
             )
             .await?;
         ensure_business_success(&payload)?;
@@ -320,6 +383,7 @@ impl AuthClient {
                     .personal_token
                     .as_ref()
                     .unwrap_or(&session.mcp_token),
+                RequestStage::VerifySavedLogin,
             )
             .await?;
         ensure!(
@@ -345,6 +409,7 @@ impl AuthClient {
                         "anon/nvwa-nros/v1/msg/send",
                     )?)
                     .json(&json!({"twofactorSessionId": session_id})),
+                RequestStage::VerificationCode,
             )
             .await?;
         ensure_business_success(&payload)
@@ -359,7 +424,7 @@ impl AuthClient {
                 .get(endpoint(&profile.product_base_url, "nvwa/logout")?),
             token,
         )?;
-        let payload = self.request_json(request).await?;
+        let payload = self.request_json(request, RequestStage::Logout).await?;
         ensure_business_success(&payload)
     }
 
@@ -388,6 +453,7 @@ impl AuthClient {
                 self.client
                     .post(url)
                     .header("authorization-client-basic", basic),
+                RequestStage::TicketExchange,
             )
             .await?;
         ensure_business_success(&payload)?;
@@ -400,9 +466,12 @@ impl AuthClient {
                 .map(allowed_header)
                 .transpose()?
                 .unwrap_or_else(|| "authorization-ticket-token".into()),
-            expires_at_ms: token_expiry(token_object)?,
+            expires_at_ms: fixed_token_expiry(token_object)?,
+            expiry_policy: TokenExpiryPolicy::Fixed,
         };
-        let identity = self.fetch_identity(profile, &mcp_token).await?;
+        let identity = self
+            .fetch_identity(profile, &mcp_token, RequestStage::ReadIdentity)
+            .await?;
         if !profile.username.is_empty() || !profile.tenant.is_empty() {
             ensure_requested_identity(profile, &identity)?;
         }
@@ -417,13 +486,14 @@ impl AuthClient {
         &self,
         profile: &NvwaProfile,
         token: &AuthToken,
+        stage: RequestStage,
     ) -> Result<VerifiedIdentity> {
         let request = with_token(
             self.client
                 .get(endpoint(&profile.product_base_url, "nvwa/getLoginContext")?),
             token,
         )?;
-        let payload = self.request_json(request).await?;
+        let payload = self.request_json(request, stage).await?;
         ensure_business_success(&payload)?;
         let outer = data_object(&payload);
         let context = outer
@@ -473,7 +543,7 @@ impl AuthClient {
         Ok(identity)
     }
 
-    async fn request_json(&self, request: RequestBuilder) -> Result<Value> {
+    async fn request_json(&self, request: RequestBuilder, stage: RequestStage) -> Result<Value> {
         let mut response = request.send().await.map_err(|error| {
             if error.is_timeout() {
                 anyhow::anyhow!("NVWA 认证请求超时")
@@ -483,9 +553,17 @@ impl AuthClient {
                 anyhow::anyhow!("NVWA 认证网络请求失败")
             }
         })?;
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            bail!(
+                "NVWA 在“{}”步骤返回 HTTP 401。{}",
+                stage.label(),
+                stage.unauthorized_hint()
+            );
+        }
         ensure!(
             response.status().is_success(),
-            "NVWA 认证服务返回 HTTP {}",
+            "NVWA 在“{}”步骤返回 HTTP {}",
+            stage.label(),
             response.status().as_u16()
         );
         ensure!(
@@ -649,30 +727,38 @@ fn epoch_ms() -> Result<u64> {
         .as_millis() as u64)
 }
 
-fn token_expiry(token: &Value) -> Result<Option<u64>> {
+fn fixed_token_expiry(token: &Value) -> Result<Option<u64>> {
     if let Some(expiry) = token.get("expiresAtMs").and_then(Value::as_u64) {
         return Ok(Some(expiry));
     }
-    // validTime belongs only to this token response, never to an earlier one-use ticket.
-    if let (Some(created), Some(seconds)) = (
-        token.get("createTime").and_then(Value::as_u64),
-        token.get("validTime").and_then(Value::as_u64),
-    ) {
-        ensure!(
-            created >= 946_684_800_000 && seconds <= 366 * 24 * 3600,
-            "NVWA 令牌有效期格式无效"
-        );
-        return Ok(Some(
-            created
-                .checked_add(
-                    seconds
-                        .checked_mul(1000)
-                        .ok_or_else(|| anyhow::anyhow!("NVWA 令牌有效期溢出"))?,
-                )
-                .ok_or_else(|| anyhow::anyhow!("NVWA 令牌有效期溢出"))?,
-        ));
-    }
-    Ok(None)
+    // Both durations are seconds and belong only to this exchanged token's
+    // response. Never inherit an earlier one-use ticket's validTime.
+    let seconds = token
+        .get("validTime")
+        .and_then(Value::as_u64)
+        .filter(|seconds| *seconds > 0)
+        .or_else(|| {
+            token
+                .get("tokenValidTime")
+                .and_then(Value::as_u64)
+                .filter(|seconds| *seconds > 0)
+        })
+        .unwrap_or(DEFAULT_FIXED_TOKEN_SECONDS);
+    ensure!(seconds <= 366 * 24 * 3600, "NVWA 令牌有效期格式无效");
+    let Some(created) = token.get("createTime").and_then(Value::as_u64) else {
+        // A duration without a product timestamp cannot identify an exact expiry.
+        return Ok(None);
+    };
+    ensure!(created >= 946_684_800_000, "NVWA 令牌有效期格式无效");
+    Ok(Some(
+        created
+            .checked_add(
+                seconds
+                    .checked_mul(1000)
+                    .ok_or_else(|| anyhow::anyhow!("NVWA 令牌有效期溢出"))?,
+            )
+            .ok_or_else(|| anyhow::anyhow!("NVWA 令牌有效期溢出"))?,
+    ))
 }
 
 fn encrypt_login_field(key: &str, alias: &str, value: &str) -> Result<String> {

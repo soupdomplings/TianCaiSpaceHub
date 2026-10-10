@@ -2,7 +2,7 @@
 
 维护日期：2026-10-10。目标项目：TianCaiSpaceHub。关联 TC-014，适用 `0.4.30-5`；本文件路径保留首次交接日期。
 
-本文按用户最新决定记录当前源码交接。操作、默认值、系统保护与回滚以 [NVWA MCP 专题](customizations/nvwa-mcp.md) 为准；同仓依据见 [NVWA 资料索引](nvwa/README.md)。2026-10-10 本轮修正默认租户误拒和登录/检测/预览提示，密码与 ClientSecret 直接可见，共享开关保留应用资料；**最终 Windows locked GUI build 通过（25.52 秒、38 条警告），新 readable EXE 构建及静态核对通过，未运行**。此前 13.85 秒认证服务/帮助、17.55 秒表单/路径及 2026-10-08 产物保留原归属，见 [v5 交付](releases/v0.4.30-5.md)。没有真实登录、MCP 调用、客户端测试或用户验收，未发布。
+本文按用户最新决定记录当前源码交接。操作、默认值、系统保护与回滚以 [NVWA MCP 专题](customizations/nvwa-mcp.md) 为准；同仓依据见 [NVWA 资料索引](nvwa/README.md)。本轮将 ClientSecret 保护保存提前到“保存环境”，显示已保存状态、增加分步骤 HTTP 401 说明，并区分密码闲置超时与换票 token 固定到期；**最终 Windows locked GUI build 16.59 秒、38 条警告通过，独立 auth-expiry EXE 静态身份核对通过、未运行**。此前 readable 的 25.52 秒构建及其他产物保持原归属，见 [v5 交付](releases/v0.4.30-5.md)。没有真实登录、MCP 调用、客户端测试或用户验收，不宣称真实 401 已解决或会话期限已实测，未发布。
 
 ## 1. 已确认需求
 
@@ -20,7 +20,9 @@
 
 基础区显示环境名称、一个 NVWA 服务地址和认证选择。账号密码显示账号/明文可见密码/记住密码；认证服务连接主区域直接显示共享应用复选框、ClientID、明文可见 ClientSecret 和保存应用密钥，勾选时显示代表账号。密码与 ClientSecret 均直接可见是用户指定的输入显示方式，加密登录、秘密存储与日志规则不变。应用注册字段不再藏在高级区，密码模式不显示它们。独立认证/MCP 地址、认证头、指定租户、密码登录机构和仅 application 的签名算法仍在默认折叠高级区；摘要默认 SHA-256，保留 SM3/MD5 兼容。
 
-认证地址留空回退产品地址。MCP 高级字段默认直接显示可编辑的 `/mcp`，可改成其它以 `/` 开头的路径或完整 HTTP(S) URL；空值和 `/mcp` 都保留产品部署前缀后追加 `/mcp`，其它路径同样保留前缀，完整 URL 独立覆盖。路径随保存的服务地址变化，完整 URL 不自动改变。GUI 将空值和 `/mcp` 同样视为默认，保存和未保存检查使用同一规则；新环境默认保存空值，旧环境已存 `/mcp` 则保持原值，避免等价保存误撤凭据。旧完整 URL 原样加载，不因默认显示造成未保存差异。管理状态增加 `resolvedMcpUrl`，用于核对实际目标，当前 GUI 身份文字不显示该字段。服务主区域的“保存应用密钥”在认证时明确交给系统保护存储，普通 profile 仅持引用。
+认证地址留空回退产品地址。MCP 高级字段默认直接显示可编辑 `/mcp`，可改其他路径或完整 HTTP(S) URL；空值/`/mcp` 和其他路径保留产品部署前缀，完整 URL 独立覆盖。默认显示与保存比较一致，新环境默认空值，旧已存 `/mcp` 保留原值，旧完整 URL 原样加载。管理状态返回 `resolvedMcpUrl`，GUI 身份文字不显示此字段。服务方式勾选“保存应用密钥”后点击“保存环境”即系统保护保存 ClientSecret，不依赖认证成功；密码记住仍成功后保存，普通 profile 只持引用。
+
+应用密钥保存请求使用顶层 `rememberSecret/clientSecret`，不写 profile。勾选+非空保存/替换；勾选+空仅复用完全未变环境中实际可读的现有引用，环境字段改变、没有引用或记录不可用时要求重新填写；显式新密钥可替换不可读旧记录，未改且密钥相同可保留原引用。取消勾选+保存移除旧密钥。页面显示已保存状态，加载有引用的服务环境恢复勾选，但 API 不返回密钥、不回填输入框。需要新记录时随机独立 key 先写 SecretStore，再按 revision 保存配置，失败删除新 blob，成功删除旧引用；字段或引用变化撤销旧登录/客户端授权。配置提交后的撤销/旧记录删除失败仍返回操作错误，不是跨存储原子事务，须刷新核对实际状态。旧 API 不带 `rememberSecret` 继续原语义。GUI 保留未改旧环境的 `loginUnit:null`、`mcpAuthHeader:null` 和原默认 MCP 表示，避免等价显示制造环境变化。顶部帮助同步区分两类凭据保存时机。
 
 浏览器在高级区另有“限定授权账号（可选）”专属行，新环境可留空，无需日常填写；旧环境非空 `username` 限制保留并允许编辑，不因切换界面静默删除。填写限制后仍须与真实授权身份一致。
 
@@ -75,6 +77,8 @@ GUI 已移除图形验证码 ID/码输入。获取方法、图片 schema 尚未�
 
 认证服务连接取消共享应用勾选后，走真实浏览器页面授权；首次需要真实注册的 ClientID/ClientSecret 及本机回调，Hub 无内置共享密钥。密钥可由用户明确记住后交给 SecretStore。当前构造产品 `#/authorize?response_type=code&client_id=...&redirect_uri=...&state=...`。本机 `127.0.0.1` 回调含随机 64 hex state 路径，事务 10 分钟、单次消费，失败也消费。只接一个 `code`/`ticket`/`ticketId`，若带 state 参数必须匹配路径；还核对 profile 指纹与登录代次。新登录、配置改变、取消和退出均撤销旧事务，晚到或重复回调不能重新开放授权。
 
+认证 HTTP 401 现在说明失败步骤，包括申请票据、票据交换、读取当前账号租户及验证保存登录等，给出固定安全核对建议，不回显响应或秘密。该变化仅改善诊断，真实 401 的部署原因和成功认证仍需用户联调，不能写成已经解决。
+
 通过校验后用应用 ID/密钥交换 ticket，并读取真实上下文。打开网页或收到回调不是认证完成。当前共享应用是否接受本机回调地址/端口、部署是否采用 Hash 路由、个人票据交换后能否调用 MCP，均待用户实测。不假设 OAuth discovery、PKCE、refresh token 或任意 redirect URI 已支持；回调 query/票据不进日志和错误。
 
 ### 3.3 应用代表用户
@@ -87,11 +91,17 @@ GUI 已移除图形验证码 ID/码输入。获取方法、图片 schema 尚未�
 
 ### 3.4 两类有效期与恢复
 
-`AuthResult` 内含真实 `VerifiedIdentity`、可选 `personal_token` 与 `mcp_token`。token 不作为普通 DTO Debug/Serialize；仅专用系统保护记录含值。可见状态分别报告个人/MCP expiry，未知为未知。password 默认个人 token 直接用于 MCP，browser/application 默认交换 token。
+`AuthResult` 内含真实 `VerifiedIdentity`、可选 `personal_token` 与 `mcp_token`。token 不作为普通 DTO Debug/Serialize；仅专用系统保护记录含值。`TokenExpiryPolicy` 为 `Unknown/Fixed/SlidingIdle`，可见管理状态分别返回 `personalExpiryPolicy/mcpExpiryPolicy`（`unknown/fixed/slidingIdle`）及可空准确期限。password 默认个人 token 直接用于 MCP，browser/application 默认交换 token。
 
-expiry 只从该 token 响应的 `expiresAtMs` 或明确 `createTime+validTime`（秒）取得，apply ticket 的 600 秒不继承给交换 token。profile 可显式选择两个已允许头名，但不能推定所有部署令牌可互换。
+用户明确的服务规则：密码 token 默认闲置 30 分钟超时，正常认证访问更新会话；连续使用通常不会在登录 30 分钟后失效。新 password 两份 token 均为 `SlidingIdle`、`expiresAtMs=None`，不采用初次响应的绝对期限或创建时间+时长，不在 Hub 推算 touch；界面和帮助说明由服务判断。
+
+换票 token 为 `Fixed`，默认 24 小时、调用不延长，认证服务应用 `tokenValidTime` 可覆盖。解析优先取 token 自己的 `expiresAtMs`，否则自己 `createTime`（毫秒）加正 `validTime`（秒），再回退正 `tokenValidTime`（秒）；缺有效正时长或为 `0` 时默认 `86400` 秒。没有服务创建时间仍为未知准确期限，不用本机换票/恢复时间补造。apply ticket 的 600 秒不继承。GUI 有准确值显示 UTC 到期时间+剩余时间，否则说明固定默认规则与未返回准确时间。应用覆盖通过 token 自身响应时长体现，Hub 不改服务配置；时长上限/溢出校验保留。profile 可显式选择两个已允许头名，但不能推定所有部署令牌可互换。
+
+protected snapshot 新保存 token `expiryPolicy`。恢复旧记录仍先核对 profile 指纹与 `auth_mode`：password 两份 token 设闲置策略，清旧非零期限、保留真实 401 的 `Some(0)`；browser/application 保留已有期限并设固定策略，不按恢复时间补 24 小时。普通配置 schema 仍 version `1`，身份核验、认证代次与授权隔离不放宽。
 
 后台保留系统保护的认证记录和每端本地凭据，绑定 profile 指纹。恢复后首次使用必须重新核验真实身份，运行期核验缓存最长 60 秒；状态明确 `identity_verification_pending`，分别显示两 token 是否存在及 expiry。明确过期或真实 401 后，只有此前显式保存该方式凭据时，下一次请求前 password/application 可重新认证并核对相同 user/identity/tenant；captcha/MFA/改密需人工。browser 无已确认 refresh，过期重授权。原请求特别是 `tools/call` 绝不因换 token 自动重放。
+
+显式登录的取票、换票和身份读取直接显示 401 失败阶段。`auth.rs` 也有“验证已保存登录”标签，但恢复/运行核验错误仍由 `mod.rs` 转为固定“无法验证已保存身份，需要重新登录”，不承诺 GUI 对该路径透传分步骤 401。期限规则来自用户补充，尚无本版真实服务实测，诊断改动不代表 401 已解决。
 
 ## 4. 本机桥与每端配置
 
@@ -151,10 +161,10 @@ NVWA 邻仓 `D:\traeworkspace\dumpling-nvwa` 的公开静态来源仅作来源�
 
 客户端官方入口：[Codex MCP](https://developers.openai.com/codex/mcp/)、[Codex 配置](https://developers.openai.com/codex/config-reference/)、[WorkBuddy MCP](https://www.codebuddy.cn/docs/workbuddy/From-Beginner-to-Expert-Guide/Function-Description/MCP-Guide)。客户端配置参考不替代本版验收；天工静态依据为官方 DataServer/harness adapter 公开资源，没有读取用户 token 或私有任务库。
 
-交回 NVWA 的待验收契约：浏览器注册地址/Hash 路由、两类 token 实际寿命与字段、getLoginContext 稳定 identity/tenant、动态 RSA/SM2、captcha 获取 schema、MFA 发送与二次校验、普通/管理员工具权限。不能把这些待验收项写成已确定产品缺陷或本轮已经通过。
+交回 NVWA 的待验收契约：浏览器注册地址/Hash 路由、用户已明确的密码闲置/换票固定规则在当前部署中的行为与返回时间字段、应用时长覆盖、getLoginContext 稳定 identity/tenant、动态 RSA/SM2、captcha 获取 schema、MFA 发送与二次校验、普通/管理员工具权限。不能把这些待验收项写成已确定产品缺陷或本轮已经通过。
 
 2026-10-08 Windows locked GUI check（6.27 秒、38 条警告）及原 `outputs/nvwa-v0.4.30-5-windows/` EXE 保留当时源码归属。此前 2026-10-10 基础/高级与 MCP 路径阶段 check（27.23 秒、38 条警告）及 build（17.55 秒、38 条警告），对应 `outputs/nvwa-v0.4.30-5-windows-ui-20261010/`，版本/x64 PE/导入/哈希已核对、未运行；均不能验收本轮认证服务主区域和帮助说明。
 
-此前认证服务/帮助修正 Windows locked GUI `cargo build` 通过（13.85 秒、38 条警告），auth-service EXE 为 60,942,336 字节，静态身份通过、未运行，保持原归属。本轮仍为 `0.4.30-5`、唯一 `main`，**最终 Windows locked GUI build 通过（25.52 秒、38 条警告）**；已独立输出 `outputs/nvwa-v0.4.30-5-windows-readable-20261010/` EXE，60,967,936 字节，版本/x64 PE/DLL 导入和复制哈希静态核对通过、未运行。源码及产物身份由 [v5 交付](releases/v0.4.30-5.md) 分阶段记录。
+此前 readable 构建 25.52 秒、38 条警告及 60,967,936 字节 EXE 静态身份核对通过、未运行，其他阶段也保持原归属。本轮仍为 `0.4.30-5`、唯一 `main`，**最终 Windows locked GUI build 16.59 秒、38 条警告通过，新 auth-expiry EXE 静态身份核对通过、未运行**，独立目录 `outputs/nvwa-v0.4.30-5-windows-auth-expiry-20261010/`。最终 EXE 61,003,264 字节、SHA-256 `a9abeb4fe11a7408eea8d1a525cfabcc32472a738f6c7d15452a869fc2c8e2be`；248 文件源码摘要 `e789465ecac668c9120aa5474e4c75754ed64cb523ee34c571dda6ecdaadb92b`。源码/产物身份由 [v5 交付](releases/v0.4.30-5.md) 分阶段记录；保存、旧快照兼容、真实会话期限和 401 原因待用户验收。
 
 本轮默认租户接受和当前账号/返回租户展示、双语登录/检测/客户端提示及预览后果、未登录移除/恢复、共享开关保留应用资料、主下拉清理、密码与 ClientSecret 直接可见待用户验收；原真实认证、挑战、MCP 地址、两 token、三端加载/信任/调用、未知结果不重放、并发目标和系统恢复仍待用户。开发方未运行测试、实际 Hub/客户端或业务，不读取私有资料；安装包只由 GitHub Actions 生成，Windows/macOS 构建、产物核验、实机验收、源码推送和发布分开记录。

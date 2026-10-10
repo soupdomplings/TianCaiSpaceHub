@@ -549,16 +549,32 @@ fn remember(
         .iter_mut()
         .find(|p| p.id == profile.id)
         .ok_or_else(|| anyhow::anyhow!("NVWA environment changed"))?;
-    let key = format!("credential-{}", profile.id);
+    let old_reference = saved.credential_secret_ref.clone();
+    let mut new_reference = None;
     if enabled {
+        let unchanged = old_reference
+            .as_ref()
+            .and_then(|reference| service.inner.secrets.get(reference).ok().flatten())
+            .is_some_and(|stored| stored == secret);
+        if unchanged {
+            return Ok(());
+        }
+        let key = format!("credential-{}-{}", profile.id, uuid::Uuid::new_v4());
         service.inner.secrets.set(&key, secret)?;
-        saved.credential_secret_ref = Some(key);
+        saved.credential_secret_ref = Some(key.clone());
+        new_reference = Some(key);
     } else {
-        if let Some(reference) = saved.credential_secret_ref.take() {
+        saved.credential_secret_ref = None;
+    }
+    if let Err(error) = service.inner.store.save(&config, &revision) {
+        if let Some(reference) = new_reference {
             service.inner.secrets.delete(&reference)?;
         }
+        return Err(error);
     }
-    service.inner.store.save(&config, &revision)?;
+    if let Some(reference) = old_reference {
+        service.inner.secrets.delete(&reference)?;
+    }
     Ok(())
 }
 
@@ -610,6 +626,16 @@ async fn save_profile(service: &NvwaService, body: &Value) -> Result<Value> {
     let gate = service.gate(&id).await;
     let _guard = gate.lock().await;
     let mut config = service.inner.store.load()?;
+    let expected_revision = revision(body)?;
+    ensure!(
+        config.revision == expected_revision,
+        "NVWA 配置已被其他操作修改，请刷新后重试"
+    );
+    let existing_reference = config
+        .profiles
+        .iter()
+        .find(|p| p.id == id)
+        .and_then(|p| p.credential_secret_ref.clone());
     if let Some(existing) = config.profiles.iter().find(|p| p.id == id) {
         let mut merged = serde_json::to_value(existing)?;
         for (key, value) in value.as_object().unwrap() {
@@ -631,19 +657,81 @@ async fn save_profile(service: &NvwaService, body: &Value) -> Result<Value> {
         .is_none_or(|p| profile_fingerprint(p) != profile_fingerprint(&profile));
     // A saved password/application secret belongs to its old authentication
     // target, user and mode. Never carry it into a changed environment.
-    let old_reference = if changed {
-        profile.credential_secret_ref.take()
-    } else {
-        None
-    };
+    if changed {
+        profile.credential_secret_ref = None;
+    }
+    let remember_secret = body
+        .get("rememberSecret")
+        .map(|value| {
+            value
+                .as_bool()
+                .ok_or_else(|| anyhow::anyhow!("NVWA 保存应用密钥选项无效"))
+        })
+        .transpose()?;
+    ensure!(
+        body.get("clientSecret").is_none() || remember_secret.is_some(),
+        "NVWA 保存应用密钥选项缺失"
+    );
+    let mut new_reference = None;
+    if let Some(enabled) = remember_secret {
+        ensure!(
+            profile.auth_mode != super::types::AuthMode::Password,
+            "账号密码环境不能保存应用密钥"
+        );
+        let secret = body
+            .get("clientSecret")
+            .map(|value| {
+                value
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("NVWA 应用密钥格式无效"))
+            })
+            .transpose()?
+            .unwrap_or("");
+        ensure!(secret.len() <= 16_384, "NVWA application secret too large");
+        if enabled {
+            if secret.is_empty() {
+                let reference = profile.credential_secret_ref.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!("请填写 ClientSecret 后再保存；环境设置改变时需要重新填写密钥")
+                })?;
+                ensure!(
+                    service.inner.secrets.get(reference)?.is_some(),
+                    "已保存的应用密钥不可用，请重新填写 ClientSecret 后保存"
+                );
+            } else {
+                let unchanged = profile
+                    .credential_secret_ref
+                    .as_ref()
+                    .and_then(|reference| service.inner.secrets.get(reference).ok().flatten())
+                    .is_some_and(|stored| stored == secret.as_bytes());
+                if !unchanged {
+                    let key = format!("credential-{}-{}", id, uuid::Uuid::new_v4());
+                    service.inner.secrets.set(&key, secret.as_bytes())?;
+                    profile.credential_secret_ref = Some(key.clone());
+                    new_reference = Some(key);
+                }
+            }
+        } else {
+            profile.credential_secret_ref = None;
+        }
+    }
+    let credential_changed = existing_reference != profile.credential_secret_ref;
     config.profiles.retain(|p| p.id != id);
     config.profiles.push(profile.clone());
-    let saved = service.inner.store.save(&config, revision(body)?)?;
-    if changed {
-        service.invalidate(&id).await?;
-        if let Some(reference) = old_reference {
+    let saved = match service.inner.store.save(&config, expected_revision) {
+        Ok(saved) => saved,
+        Err(error) => {
+            if let Some(reference) = new_reference {
+                service.inner.secrets.delete(&reference)?;
+            }
+            return Err(error);
+        }
+    };
+    if changed || credential_changed {
+        let invalidated = service.invalidate(&id).await;
+        if credential_changed && let Some(reference) = existing_reference {
             service.inner.secrets.delete(&reference)?;
         }
+        invalidated?;
     }
     Ok(json!({"profile":profile,"config":saved}))
 }

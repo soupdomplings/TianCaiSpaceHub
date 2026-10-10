@@ -7,7 +7,10 @@ use uuid::Uuid;
 
 use super::{
     config::resolve_mcp_url,
-    types::{AuthResult, AuthToken, ClientKind, NvwaProfile, VerifiedIdentity},
+    types::{
+        AuthMode, AuthResult, AuthToken, ClientKind, NvwaProfile, TokenExpiryPolicy,
+        VerifiedIdentity,
+    },
 };
 
 const SESSION_IDLE_MS: u64 = 24 * 60 * 60 * 1000;
@@ -100,9 +103,9 @@ fn live_auth(profile: &ProfileRuntime) -> Result<AuthResult> {
 }
 
 impl Runtime {
-    pub(crate) fn restore(records: Vec<(String, Value)>) -> Self {
+    pub(crate) fn restore(records: Vec<(String, AuthMode, Value)>) -> Self {
         let mut inner = Inner::default();
-        for (id, record) in records {
+        for (id, mode, record) in records {
             let decoded = (|| -> Result<ProfileRuntime> {
                 let generation = record
                     .get("generation")
@@ -136,10 +139,23 @@ impl Runtime {
                             ),
                         "Invalid protected token"
                     );
+                    let expiry_policy = if mode == AuthMode::Password {
+                        TokenExpiryPolicy::SlidingIdle
+                    } else {
+                        TokenExpiryPolicy::Fixed
+                    };
+                    let saved_expiry = value.get("expiresAtMs").and_then(Value::as_u64);
                     Ok(AuthToken {
                         value: content,
                         header_name: header,
-                        expires_at_ms: value.get("expiresAtMs").and_then(Value::as_u64),
+                        // Older snapshots treated the password idle timeout as a
+                        // fixed deadline. Keep only the real rejection sentinel.
+                        expires_at_ms: if mode == AuthMode::Password {
+                            saved_expiry.filter(|expiry| *expiry == 0)
+                        } else {
+                            saved_expiry
+                        },
+                        expiry_policy,
                     })
                 };
                 let auth = AuthResult {
@@ -189,7 +205,7 @@ impl Runtime {
         let inner = self.inner.lock().await;
         let profile = inner.profiles.get(id)?;
         let auth = profile.auth.as_ref()?;
-        let token = |token: &AuthToken| json!({"value":token.value,"headerName":token.header_name,"expiresAtMs":token.expires_at_ms});
+        let token = |token: &AuthToken| json!({"value":token.value,"headerName":token.header_name,"expiresAtMs":token.expires_at_ms,"expiryPolicy":token.expiry_policy});
         let mut capabilities = serde_json::Map::new();
         for (kind, capability) in &profile.capabilities {
             capabilities.insert(kind.as_str().to_owned(), Value::String(capability.clone()));
@@ -621,6 +637,8 @@ impl Runtime {
                 "mcpTokenPresent":auth.is_some(),
                 "personalExpiresAtMs":auth.and_then(|a| a.personal_token.as_ref()).and_then(|t| t.expires_at_ms),
                 "mcpExpiresAtMs":auth.and_then(|a| a.mcp_token.expires_at_ms),
+                "personalExpiryPolicy":auth.and_then(|a| a.personal_token.as_ref()).map(|t| t.expiry_policy),
+                "mcpExpiryPolicy":auth.map(|a| a.mcp_token.expiry_policy),
                 "personalExpired":auth.and_then(|a| a.personal_token.as_ref()).and_then(|t| t.expires_at_ms).is_some_and(|e| e <= now_ms()),
                 "toolCount":runtime.and_then(|p| p.tools.as_ref()).and_then(Value::as_array).map(Vec::len),
                 "detail":runtime.map(|p| p.detail.as_str()).unwrap_or("Login required"),

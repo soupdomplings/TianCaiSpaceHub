@@ -111,12 +111,23 @@ pub struct VerifiedIdentity {
     pub username: String,
 }
 
+/// Public metadata describing the service's expiration rule.
+#[derive(Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TokenExpiryPolicy {
+    #[default]
+    Unknown,
+    Fixed,
+    SlidingIdle,
+}
+
 /// Authentication material is deliberately neither Debug nor Serialize.
 #[derive(Clone)]
 pub struct AuthToken {
     pub value: String,
     pub header_name: String,
     pub expires_at_ms: Option<u64>,
+    pub expiry_policy: TokenExpiryPolicy,
 }
 
 #[derive(Clone)]
