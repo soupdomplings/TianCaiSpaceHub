@@ -1,6 +1,6 @@
 # 二开功能总表
 
-2026-10-11 TC-007/TC-014 打包追加：用户授权包含按需续认证修复的最新 `main` 手动触发 Windows/macOS Actions，仅上传 Actions 安装包附件。Windows 扩展安装补齐原 build 已有的 WiX 7 参数，并提前到 Rust 编译前；macOS 旧包已生成，旧流程失败是等不到 Windows 发布清单，本次非标签构建跳过该等待。两工作流 YAML、Windows PowerShell 语法及 WXS 静态核对通过，云端构建待启动、包与安装/实机待验收；版本保持 `0.4.30-5`，既有标签/Release 不变，详情见 [交付](../releases/v0.4.30-5.md)。以下 10 月 10 日状态保留原阶段归属。
+2026-10-11 TC-007/TC-014 打包追加：包含按需续认证修复的最新 `main`、源码 `b05b489` 已手动启动 Windows/macOS Actions，两者核对时均为 `in_progress`，仅上传 Actions 安装包附件。Windows 扩展安装补齐原 build 已有的 WiX 7 参数，并提前到 Rust 编译前；macOS 旧包已生成，旧流程失败是等不到 Windows 发布清单，本次非标签构建跳过该等待。两工作流 YAML、Windows PowerShell 语法及 WXS 静态核对通过，按用户要求确认开始后停止等待；包生成、核验和安装/实机仍待确认。版本保持 `0.4.30-5`，既有标签/Release 不变，运行链接与完整身份见 [交付](../releases/v0.4.30-5.md)。以下 10 月 10 日状态保留原阶段归属。
 
 维护日期：2026-10-10。当前开发基线为 `v0.4.30-5`，源码只维护 `main`。范围：TianCaiSpaceHub 相对于 CodexHub 上游的定制，以及上游升级时必须保留的兼容衔接。
 
