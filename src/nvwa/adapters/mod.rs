@@ -71,6 +71,9 @@ pub(crate) struct AdapterStatus {
     pub modified: bool,
     pub enabled: Option<bool>,
     pub target_fingerprint: String,
+    /// Static target settings only, used privately for native catalog updates.
+    #[serde(skip)]
+    pub(crate) entry_fingerprint: String,
     pub backup_ref: Option<String>,
     pub load_state: String,
     pub connection_state: String,
@@ -176,23 +179,37 @@ pub(crate) fn managed_server_name(profile_id: &str) -> Result<String> {
     ))
 }
 
-pub(crate) fn validate_codex_server_name(name: &str) -> Result<()> {
+pub(crate) fn validate_server_name(name: &str) -> Result<()> {
     ensure!(
         !name.is_empty()
             && name.len() <= 64
             && name
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')),
-        "请将环境名称改为 1～64 位英文字母、数字、下划线或连字符，再接入 Codex"
+        "请将环境名称改为 1～64 位英文字母、数字、下划线或连字符，再接入客户端"
     );
     Ok(())
 }
 
-fn location(target: &AdapterTarget) -> Result<Location> {
-    let legacy_name = managed_server_name(&target.profile_id)?;
-    if target.client != ClientKind::Codex {
-        ensure!(target.server_name == legacy_name, "NVWA MCP 受管条目名无效");
+fn validate_client_server_name(client: ClientKind, name: &str) -> Result<()> {
+    validate_server_name(name).map_err(|_| {
+        anyhow::anyhow!(
+            "请将环境名称改为 1～64 位英文字母、数字、下划线或连字符，再接入 {}",
+            client_label(client)
+        )
+    })
+}
+
+fn client_label(client: ClientKind) -> &'static str {
+    match client {
+        ClientKind::Codex => "Codex",
+        ClientKind::Workbuddy => "WorkBuddy",
+        ClientKind::Tiangong => "天工",
     }
+}
+
+fn location(target: &AdapterTarget) -> Result<Location> {
+    managed_server_name(&target.profile_id)?;
     let path = match target.client {
         ClientKind::Codex => Some(
             target
@@ -221,12 +238,14 @@ fn location(target: &AdapterTarget) -> Result<Location> {
         };
         let matches_name = path.file_name().is_some_and(|name| {
             #[cfg(windows)]
-            if target.client == ClientKind::Codex {
-                return name
-                    .to_str()
-                    .is_some_and(|name| name.eq_ignore_ascii_case(expected));
+            {
+                name.to_str()
+                    .is_some_and(|name| name.eq_ignore_ascii_case(expected))
             }
-            name == expected
+            #[cfg(not(windows))]
+            {
+                name == expected
+            }
         });
         ensure!(matches_name, "MCP 配置路径文件名不匹配");
         validate_path(path)?;
@@ -292,25 +311,7 @@ fn save_ledger(root: &Path, ledger: &Ledger) -> Result<()> {
 }
 
 pub(crate) async fn inspect(ctx: &AdapterContext, target: &AdapterTarget) -> Result<AdapterStatus> {
-    if target.client == ClientKind::Codex {
-        return migration::inspect(ctx, target).await;
-    }
-    let location = location(target)?;
-    let root = metadata_root(ctx)?;
-    let _lock = ledger_lock(&root).await?;
-    let mut ledger = load_ledger(&root)?;
-    if target.client == ClientKind::Tiangong && ctx.desktop.is_none() {
-        return Ok(unavailable(target, ledger.entries.get(&location.key)));
-    }
-    let read = read_target(ctx, target, &location).await?;
-    reconcile_journal(ctx, target, &location, &root, &read, &mut ledger)?;
-    status_with_backup(
-        ctx,
-        target,
-        &location,
-        &read,
-        ledger.entries.get(&location.key),
-    )
+    migration::inspect(ctx, target).await
 }
 
 /// Check all recorded explicit paths, not only the three default targets.
@@ -330,8 +331,8 @@ pub(crate) async fn preview(
     target: &AdapterTarget,
     operation: AdapterOperation,
 ) -> Result<AdapterPreview> {
-    if target.client == ClientKind::Codex && matches!(operation, AdapterOperation::Apply) {
-        validate_codex_server_name(&target.server_name)?;
+    if matches!(operation, AdapterOperation::Apply) {
+        validate_client_server_name(target.client, &target.server_name)?;
     }
     let status = inspect(ctx, target).await?;
     let can_apply = status.available
@@ -361,11 +362,13 @@ pub(crate) async fn preview(
     {
         warnings.push(if status.present {
             format!(
-                "本次将把 Codex 中的受管连接“{previous}”更新为“{desired}”，确认保存后移除旧名称，不保留重复连接。"
+                "本次将把 {} 中的受管连接“{previous}”更新为“{desired}”，确认保存后移除旧名称，不保留重复连接。",
+                client_label(target.client)
             )
         } else {
             format!(
-                "历史连接“{previous}”已不在 Codex 配置中；确认后将按环境名称“{desired}”重新添加。"
+                "历史连接“{previous}”已不在 {} 配置中；确认后将按环境名称“{desired}”重新添加。",
+                client_label(target.client)
             )
         });
     }
@@ -449,172 +452,10 @@ async fn mutate(
     target: &AdapterTarget,
     expected: &str,
     operation: AdapterOperation,
-    mut desired: Option<Snapshot>,
+    desired: Option<Snapshot>,
     restore_ref: Option<&str>,
 ) -> Result<AdapterOutcome> {
-    if target.client == ClientKind::Codex {
-        return migration::mutate(ctx, target, expected, operation, desired, restore_ref).await;
-    }
-    ensure!(!expected.is_empty(), "接入操作缺少目标指纹，请先预览");
-    let location = location(target)?;
-    let root = metadata_root(ctx)?;
-    let _lock = ledger_lock(&root).await?;
-    let mut ledger = load_ledger(&root)?;
-    let before = read_target(ctx, target, &location).await?;
-    reconcile_journal(ctx, target, &location, &root, &before, &mut ledger)?;
-    let current = status_with_backup(
-        ctx,
-        target,
-        &location,
-        &before,
-        ledger.entries.get(&location.key),
-    )?;
-    ensure!(
-        current.target_fingerprint == expected,
-        "MCP 目标在预览后已变化，本次未覆盖"
-    );
-    ensure!(!current.modified, "Hub 受管 MCP 条目已被修改，本次未覆盖");
-    ensure!(
-        !current.present || current.owned,
-        "同名 MCP 条目不是 Hub 管理，本次未接管"
-    );
-    let previous_managed = ledger.entries.get(&location.key).cloned().map(|mut entry| {
-        // A confirmed re-add backs up the actual absent entry. Restoring it
-        // must not claim that the externally removed old entry still exists.
-        if before.snapshot.is_none() && !entry.pending {
-            entry.fingerprint = "missing".into();
-        }
-        entry
-    });
-    let next_managed;
-    match operation {
-        AdapterOperation::Restore => {
-            let reference = restore_ref.ok_or_else(|| anyhow::anyhow!("还原缺少受保护备份引用"))?;
-            ensure!(
-                previous_managed
-                    .as_ref()
-                    .is_some_and(|entry| entry.backup_ref == reference),
-                "备份不属于当前受管目标"
-            );
-            let bytes = load_backup(&ctx.secrets, reference)?;
-            let backup: ProtectedBackup = serde_json::from_slice(&bytes)
-                .map_err(|_| anyhow::anyhow!("受保护 MCP 备份格式无效"))?;
-            ensure!(
-                backup.version == 1
-                    && backup.target_key == location.key
-                    && backup.after_fingerprint
-                        == fingerprint(before.snapshot.as_ref(), true, target.client)?,
-                "MCP 目标已变化，不能将备份还原到当前条目"
-            );
-            desired = backup.before;
-            next_managed = backup.previous_managed;
-        }
-        AdapterOperation::Apply | AdapterOperation::Remove => {
-            if matches!(operation, AdapterOperation::Remove) {
-                ensure!(current.owned, "没有可移除的 Hub 受管 MCP 条目");
-            }
-            let after = planned_snapshot(target, &before, desired.as_ref())?;
-            desired = after;
-            let after_fingerprint = fingerprint(desired.as_ref(), true, target.client)?;
-            let reference = format!("adapter-backup:{}", Uuid::new_v4());
-            let backup = ProtectedBackup {
-                version: 1,
-                target_key: location.key.clone(),
-                before: before.snapshot.clone(),
-                after_fingerprint,
-                previous_managed: previous_managed.clone(),
-            };
-            let bytes = serde_json::to_vec(&backup)
-                .map_err(|_| anyhow::anyhow!("无法编码 MCP 受保护备份"))?;
-            save_backup(&ctx.secrets, &reference, &bytes)?;
-            next_managed = Some(ManagedEntry {
-                profile_id: target.profile_id.clone(),
-                client: target.client,
-                server_name: target.server_name.clone(),
-                target_path: location.path.clone(),
-                fingerprint: fingerprint(desired.as_ref(), true, target.client)?,
-                backup_ref: reference.clone(),
-                pending: false,
-            });
-        }
-    }
-    // Journal ownership before external mutation. A crash leaves a detectable
-    // mismatch and protected target-only recovery evidence, never silent takeover.
-    let desired_ownership = fingerprint(desired.as_ref(), true, target.client)?;
-    let mut journal = next_managed.clone().or_else(|| {
-        previous_managed.clone().map(|mut entry| {
-            entry.fingerprint = desired_ownership.clone();
-            entry
-        })
-    });
-    if let Some(entry) = &mut journal {
-        entry.pending = true;
-    }
-    set_record(&mut ledger, &location.key, journal);
-    save_ledger(&root, &ledger)?;
-    let mutation = replace_target(ctx, target, &location, &before, desired.as_ref()).await;
-    let observed = read_target(ctx, target, &location).await;
-    let after_fingerprint = fingerprint(desired.as_ref(), false, target.client)?;
-    match observed {
-        Ok(after)
-            if fingerprint(after.snapshot.as_ref(), false, target.client)? == after_fingerprint =>
-        {
-            set_record(&mut ledger, &location.key, next_managed);
-            if save_ledger(&root, &ledger).is_err() {
-                // Compensate only while the exact written target is still ours.
-                // Re-read the whole file so unrelated edits remain intact.
-                if let Ok(latest) = read_target(ctx, target, &location).await {
-                    if fingerprint(latest.snapshot.as_ref(), false, target.client)?
-                        == after_fingerprint
-                    {
-                        let _ = replace_target(
-                            ctx,
-                            target,
-                            &location,
-                            &latest,
-                            before.snapshot.as_ref(),
-                        )
-                        .await;
-                        if let Ok(restored) = read_target(ctx, target, &location).await {
-                            if fingerprint(restored.snapshot.as_ref(), false, target.client)?
-                                == expected
-                            {
-                                set_record(&mut ledger, &location.key, previous_managed);
-                                let _ = save_ledger(&root, &ledger);
-                                bail!("接入元数据保存失败；已核对目标未变并补偿还原，请刷新后重试")
-                            }
-                        }
-                    }
-                }
-                bail!("接入元数据提交失败，目标结果待核对；没有覆盖并发修改，受保护恢复记录仍保留")
-            }
-            let mut warnings = client_warnings(target.client);
-            if mutation.is_err() {
-                warnings.push("操作时未收到明确回复，随后已检查并确认本次修改已完成。".into());
-            }
-            let updated_status = status_with_backup(
-                ctx,
-                target,
-                &location,
-                &after,
-                ledger.entries.get(&location.key),
-            )?;
-            Ok(AdapterOutcome {
-                backup_ref: updated_status.backup_ref.clone(),
-                status: updated_status,
-                mutation_done: true,
-                warnings,
-            })
-        }
-        Ok(after) => {
-            if fingerprint(after.snapshot.as_ref(), false, target.client)? == expected {
-                set_record(&mut ledger, &location.key, previous_managed);
-                save_ledger(&root, &ledger)?;
-            }
-            bail!("MCP 保存结果未确认或目标被并发修改；没有重放或覆盖，请重新读取目标状态")
-        }
-        Err(_) => bail!("MCP 写入后无法核对目标；已保留受保护恢复记录，请重新读取状态后处理"),
-    }
+    migration::mutate(ctx, target, expected, operation, desired, restore_ref).await
 }
 
 fn set_record(ledger: &mut Ledger, key: &str, record: Option<ManagedEntry>) {
@@ -733,24 +574,6 @@ fn load_backup(secrets: &SecretStore, reference: &str) -> Result<Vec<u8>> {
     Ok(assembled)
 }
 
-fn planned_snapshot(
-    target: &AdapterTarget,
-    before: &TargetRead,
-    desired: Option<&Snapshot>,
-) -> Result<Option<Snapshot>> {
-    match target.client {
-        ClientKind::Codex | ClientKind::Workbuddy => {
-            let bytes = replace_file(
-                target,
-                before.file_bytes.as_deref().unwrap_or_default(),
-                desired,
-            )?;
-            read_file(target, &bytes)
-        }
-        ClientKind::Tiangong => Ok(desired.cloned()),
-    }
-}
-
 async fn read_target(
     ctx: &AdapterContext,
     target: &AdapterTarget,
@@ -781,70 +604,6 @@ async fn read_target(
     })
 }
 
-async fn replace_target(
-    ctx: &AdapterContext,
-    target: &AdapterTarget,
-    location: &Location,
-    before: &TargetRead,
-    desired: Option<&Snapshot>,
-) -> Result<()> {
-    if let Some(path) = &location.path {
-        let path = path.clone();
-        let target = target.clone();
-        let raw = before.file_bytes.clone();
-        let desired = desired.cloned();
-        return tokio::task::spawn_blocking(move || {
-            validate_path(&path)?;
-            let parent = path
-                .parent()
-                .ok_or_else(|| anyhow::anyhow!("MCP 配置路径无效"))?;
-            fs::create_dir_all(parent).map_err(|_| anyhow::anyhow!("无法创建 MCP 配置目录"))?;
-            validate_path(&path)?;
-            let lock_path = path.with_extension(format!(
-                "{}.nvwa.lock",
-                path.extension()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("config")
-            ));
-            validate_path(&lock_path)?;
-            let lock = OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create(true)
-                .truncate(false)
-                .open(lock_path)
-                .map_err(|_| anyhow::anyhow!("无法打开 MCP 配置操作锁"))?;
-            lock.lock_exclusive()
-                .map_err(|_| anyhow::anyhow!("无法锁定 MCP 配置"))?;
-            let current = read_bounded(&path, MAX_FILE_BYTES)?;
-            ensure!(current == raw, "MCP 配置在保存前已变化，本次未覆盖");
-            let bytes = replace_file(
-                &target,
-                current.as_deref().unwrap_or_default(),
-                desired.as_ref(),
-            )?;
-            ensure!(
-                read_bounded(&path, MAX_FILE_BYTES)? == current,
-                "MCP 配置被其他操作修改，本次未覆盖"
-            );
-            atomic_write(&path, &bytes)
-        })
-        .await
-        .map_err(|_| anyhow::anyhow!("MCP 配置写入中断"))?;
-    }
-    let desktop = ctx
-        .desktop
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("天工运行授权不可用"))?;
-    let current = tiangong::read(desktop, &target.server_name).await?;
-    ensure!(
-        fingerprint(current.as_ref(), false, target.client)?
-            == fingerprint(before.snapshot.as_ref(), false, target.client)?,
-        "天工 MCP 目标在保存前已变化，本次未覆盖"
-    );
-    tiangong::replace(desktop, &target.server_name, desired, current.is_some()).await
-}
-
 fn read_file(target: &AdapterTarget, raw: &[u8]) -> Result<Option<Snapshot>> {
     match target.client {
         ClientKind::Codex => codex::read(raw, &target.server_name),
@@ -853,19 +612,11 @@ fn read_file(target: &AdapterTarget, raw: &[u8]) -> Result<Option<Snapshot>> {
     }
 }
 
-fn replace_file(target: &AdapterTarget, raw: &[u8], desired: Option<&Snapshot>) -> Result<Vec<u8>> {
-    match target.client {
-        ClientKind::Codex => codex::replace(raw, &target.server_name, desired),
-        ClientKind::Workbuddy => workbuddy::replace(raw, &target.server_name, desired),
-        ClientKind::Tiangong => bail!("天工 MCP 不使用配置文件"),
-    }
-}
-
 /// Reuse the exact inspection normalization when checking a fresh native entry
 /// before writing TianGong connection discovery fields.
 pub(crate) fn tiangong_target_fingerprint(entry: &Value) -> Result<String> {
     let snapshot = tiangong::snapshot(entry)?;
-    fingerprint(Some(&snapshot), false, ClientKind::Tiangong)
+    fingerprint(Some(&snapshot), true, ClientKind::Tiangong)
 }
 
 fn fingerprint(snapshot: Option<&Snapshot>, ownership: bool, client: ClientKind) -> Result<String> {
@@ -947,6 +698,7 @@ fn status(
         modified,
         enabled,
         target_fingerprint: fingerprint(read.snapshot.as_ref(), false, target.client)?,
+        entry_fingerprint: fingerprint(read.snapshot.as_ref(), true, target.client)?,
         // The old backup describes a different after-image and cannot restore
         // an externally removed entry. Retain it privately for history only.
         backup_ref: (!deleted)
@@ -968,33 +720,6 @@ fn status(
     })
 }
 
-fn status_with_backup(
-    ctx: &AdapterContext,
-    target: &AdapterTarget,
-    location: &Location,
-    read: &TargetRead,
-    managed: Option<&ManagedEntry>,
-) -> Result<AdapterStatus> {
-    let mut status = status(target, location, read, managed)?;
-    if let Some(reference) = &status.backup_ref {
-        // Recovery metadata may refer to an older, now missing entry after a
-        // re-add is restored. Offer Restore only for this exact after-image.
-        let matches = load_backup(&ctx.secrets, reference)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice::<ProtectedBackup>(&bytes).ok())
-            .is_some_and(|backup| {
-                backup.version == 1
-                    && backup.target_key == location.key
-                    && fingerprint(read.snapshot.as_ref(), true, target.client)
-                        .is_ok_and(|actual| actual == backup.after_fingerprint)
-            });
-        if !matches {
-            status.backup_ref = None;
-        }
-    }
-    Ok(status)
-}
-
 fn unavailable(target: &AdapterTarget, managed: Option<&ManagedEntry>) -> AdapterStatus {
     AdapterStatus {
         client: target.client,
@@ -1010,6 +735,7 @@ fn unavailable(target: &AdapterTarget, managed: Option<&ManagedEntry>) -> Adapte
         modified: false,
         enabled: None,
         target_fingerprint: String::new(),
+        entry_fingerprint: String::new(),
         backup_ref: managed.map(|entry| entry.backup_ref.clone()),
         load_state: "unavailable".into(),
         connection_state: "unknown".into(),

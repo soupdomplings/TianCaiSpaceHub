@@ -772,11 +772,7 @@ async fn client_operation(
 ) -> Result<Value> {
     let client = bridge::client_kind(required(body, "clientKind")?)?;
     let legacy_name = adapters::managed_server_name(&profile.id)?;
-    let server_name = if client == ClientKind::Codex {
-        profile.name.trim().to_owned()
-    } else {
-        legacy_name.clone()
-    };
+    let server_name = profile.name.trim().to_owned();
     // Names follow the saved environment. A stale legacy request may still
     // inspect/manage it, but cannot select an unrelated client entry.
     if let Some(requested) = body
@@ -932,29 +928,30 @@ async fn update_tiangong_catalog(
         .await
         .ok_or_else(|| anyhow::anyhow!("Apply TianGong client access before detection"))?;
     let context = adapter_context(service, ClientKind::Tiangong).await?;
-    let name = adapters::managed_server_name(&profile.id)?;
     let target = AdapterTarget {
         profile_id: profile.id.clone(),
         client: ClientKind::Tiangong,
-        server_name: name.clone(),
+        server_name: profile.name.trim().to_owned(),
         override_path: None,
     };
     let status = adapters::inspect(&context, &target).await?;
     ensure!(
-        status.owned && !status.modified && status.enabled == Some(true),
+        status.configured && status.owned && !status.modified && status.enabled == Some(true),
         "TianGong entry is disabled or has changed"
     );
     let desktop = context
         .desktop
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("TianGong connection unavailable"))?;
+    // Inspection discovers the actual managed name until a rename is confirmed.
+    let name = status.server_name.clone();
     let entry = desktop
         .mcp_connection(&name)
         .await?
         .ok_or_else(|| anyhow::anyhow!("TianGong entry unavailable"))?;
     ensure!(
         entry.get("status").and_then(Value::as_str) == Some("active")
-            && adapters::tiangong_target_fingerprint(&entry)? == status.target_fingerprint,
+            && adapters::tiangong_target_fingerprint(&entry)? == status.entry_fingerprint,
         "TianGong entry changed after inspection; inspect and detect again"
     );
     let headers = entry.get("header_config").cloned().unwrap_or(Value::Null);

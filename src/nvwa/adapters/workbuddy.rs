@@ -1,4 +1,4 @@
-use std::{env, path::PathBuf};
+use std::{collections::BTreeMap, env, path::PathBuf};
 
 use anyhow::{Result, ensure};
 use serde_json::{Value, json};
@@ -63,9 +63,17 @@ pub(super) fn desired(endpoint: &str, bearer: &str) -> Snapshot {
 }
 
 pub(super) fn replace(raw: &[u8], name: &str, entry: Option<&Snapshot>) -> Result<Vec<u8>> {
+    replace_many(raw, &BTreeMap::from([(name.to_owned(), entry.cloned())]))
+}
+
+/// Replace only the independently verified names in one complete JSON write.
+pub(super) fn replace_many(
+    raw: &[u8],
+    entries: &BTreeMap<String, Option<Snapshot>>,
+) -> Result<Vec<u8>> {
     let mut doc = document(raw)?;
     if doc.get("mcpServers").is_none() {
-        if entry.is_none() {
+        if entries.values().all(Option::is_none) {
             return Ok(raw.to_vec());
         }
         doc["mcpServers"] = json!({});
@@ -73,14 +81,16 @@ pub(super) fn replace(raw: &[u8], name: &str, entry: Option<&Snapshot>) -> Resul
     let servers = doc["mcpServers"]
         .as_object_mut()
         .expect("validated MCP object");
-    match entry {
-        Some(Snapshot::Json(value)) => {
-            ensure!(value.is_object(), "WorkBuddy 受保护备份类型无效");
-            servers.insert(name.into(), value.clone());
-        }
-        Some(_) => anyhow::bail!("WorkBuddy 受保护备份类型无效"),
-        None => {
-            servers.remove(name);
+    for (name, entry) in entries {
+        match entry {
+            Some(Snapshot::Json(value)) => {
+                ensure!(value.is_object(), "WorkBuddy 受保护备份类型无效");
+                servers.insert(name.clone(), value.clone());
+            }
+            Some(_) => anyhow::bail!("WorkBuddy 受保护备份类型无效"),
+            None => {
+                servers.remove(name);
+            }
         }
     }
     serde_json::to_vec_pretty(&doc).map_err(|_| anyhow::anyhow!("无法编码 WorkBuddy MCP 配置"))
@@ -96,4 +106,41 @@ pub(super) fn enabled(snapshot: &Snapshot) -> Option<bool> {
             .and_then(Value::as_bool)
             .unwrap_or(false),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn migrate_names_preserves_other_servers_and_root_settings() {
+        let raw = br#"{
+            "theme":"fixture-theme",
+            "mcpServers":{
+                "nvwa-old":{"url":"http://127.0.0.1/old","headers":{"Authorization":"fixture-old"}},
+                "other-server":{"command":"fixture-command","disabled":true}
+            }
+        }"#;
+        let original: Value = serde_json::from_slice(raw).unwrap();
+        let new = desired("http://127.0.0.1/updated", "fixture-new");
+        let updated = replace_many(
+            raw,
+            &BTreeMap::from([
+                ("nvwa-old".into(), None),
+                ("MCP196".into(), Some(new.clone())),
+            ]),
+        )
+        .unwrap();
+        let updated: Value = serde_json::from_slice(&updated).unwrap();
+        assert_eq!(updated["theme"], original["theme"]);
+        assert_eq!(
+            updated["mcpServers"]["other-server"],
+            original["mcpServers"]["other-server"]
+        );
+        assert!(updated["mcpServers"].get("nvwa-old").is_none());
+        let Snapshot::Json(new) = new else {
+            panic!("JSON fixture");
+        };
+        assert_eq!(updated["mcpServers"]["MCP196"], new);
+    }
 }

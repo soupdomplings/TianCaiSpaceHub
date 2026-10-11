@@ -61,6 +61,82 @@ pub(crate) fn bearer(headers: &HeaderMap) -> Option<&str> {
         .filter(|v| !v.is_empty() && v.len() <= 256)
 }
 
+/// TianGong discovery sends the same session under two case variants. HTTP
+/// clients can combine them into one comma-separated value. Collapse only
+/// identical copies; runtime admission still checks the exact session owner.
+fn session_header(headers: &HeaderMap, client: ClientKind) -> Result<Option<&str>> {
+    let mut selected = None;
+    let mut count = 0;
+    for header in headers.get_all("mcp-session-id") {
+        let header = header
+            .to_str()
+            .map_err(|_| anyhow::anyhow!("Invalid MCP session header"))?;
+        for value in header.split(',') {
+            count += 1;
+            let value = value.trim();
+            ensure!(
+                count <= 4
+                    && !value.is_empty()
+                    && value.len() <= 128
+                    && value.bytes().all(|byte| byte.is_ascii_graphic()),
+                "Invalid MCP session header"
+            );
+            if let Some(previous) = selected {
+                ensure!(
+                    client == ClientKind::Tiangong && previous == value,
+                    "Conflicting MCP session headers"
+                );
+            } else {
+                selected = Some(value);
+            }
+        }
+    }
+    Ok(selected)
+}
+
+#[cfg(test)]
+mod session_header_tests {
+    use super::*;
+
+    #[test]
+    fn tiangong_case_variants_and_fetch_combined_values_select_the_same_session() {
+        let session = "12345678-1234-1234-1234-123456789abc";
+        let mut headers = HeaderMap::new();
+        headers.append("mcp-session-id", HeaderValue::from_static(session));
+        headers.append(
+            axum::http::HeaderName::from_bytes(b"Mcp-Session-Id").unwrap(),
+            HeaderValue::from_static(session),
+        );
+        assert_eq!(
+            session_header(&headers, ClientKind::Tiangong).unwrap(),
+            Some(session)
+        );
+        headers.insert(
+            "mcp-session-id",
+            HeaderValue::from_str(&format!("{session}, {session}")).unwrap(),
+        );
+        assert_eq!(
+            session_header(&headers, ClientKind::Tiangong).unwrap(),
+            Some(session)
+        );
+        assert!(session_header(&headers, ClientKind::Codex).is_err());
+        assert!(session_header(&headers, ClientKind::Workbuddy).is_err());
+    }
+
+    #[test]
+    fn absent_session_is_distinct_from_conflicting_empty_or_excessive_values() {
+        let mut headers = HeaderMap::new();
+        assert_eq!(
+            session_header(&headers, ClientKind::Tiangong).unwrap(),
+            None
+        );
+        for value in ["", "session-a, session-b", "session-a,", "a, a, a, a, a"] {
+            headers.insert("mcp-session-id", HeaderValue::from_str(value).unwrap());
+            assert!(session_header(&headers, ClientKind::Tiangong).is_err());
+        }
+    }
+}
+
 fn rpc_error(
     status: StatusCode,
     id: Option<Value>,
@@ -230,7 +306,18 @@ pub(crate) async fn post(
             false,
         );
     }
-    let session = headers.get("mcp-session-id").and_then(|v| v.to_str().ok());
+    let session = match session_header(&headers, client) {
+        Ok(session) => session,
+        Err(_) => {
+            return rpc_error(
+                StatusCode::BAD_REQUEST,
+                original_id,
+                -32600,
+                "Invalid or conflicting MCP session headers",
+                false,
+            );
+        }
+    };
     if method == "initialize"
         && request
             .pointer("/params/protocolVersion")
@@ -476,17 +563,23 @@ pub(crate) async fn delete(
             json!({"error":"Local request rejected"}),
         );
     }
-    let (Some(credential), Some(session)) = (
-        bearer(&headers),
-        headers.get("mcp-session-id").and_then(|v| v.to_str().ok()),
-    ) else {
+    let Ok(client) = client_kind(&client) else {
+        return response(StatusCode::NOT_FOUND, json!({"error":"Client unavailable"}));
+    };
+    let session = match session_header(&headers, client) {
+        Ok(session) => session,
+        Err(_) => {
+            return response(
+                StatusCode::BAD_REQUEST,
+                json!({"error":"Invalid or conflicting MCP session headers"}),
+            );
+        }
+    };
+    let (Some(credential), Some(session)) = (bearer(&headers), session) else {
         return response(
             StatusCode::UNAUTHORIZED,
             json!({"error":"Client and session authorization required"}),
         );
-    };
-    let Ok(client) = client_kind(&client) else {
-        return response(StatusCode::NOT_FOUND, json!({"error":"Client unavailable"}));
     };
     match service
         .inner

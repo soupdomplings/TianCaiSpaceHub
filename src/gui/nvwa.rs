@@ -464,8 +464,8 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> NvwaTab {
     let name = text_field_row(&page, &grid, tr(text, "环境名称", "Environment name"), "");
     name.set_tooltip(tr(
         text,
-        "接入 Codex 时用此名称显示 MCP；请使用 1～64 位英文字母、数字、- 或 _，例如 MCP196。",
-        "Codex uses this name for the MCP connection: 1–64 letters, numbers, - or _, for example MCP196.",
+        "Codex、WorkBuddy、天工接入的 MCP 都使用此名称；请使用 1～64 位英文字母、数字、- 或 _，例如 MCP196。",
+        "Codex, WorkBuddy and TianGong use this name for MCP: 1–64 letters, numbers, - or _, for example MCP196.",
     ));
     let product = text_field_row(
         &page,
@@ -1498,7 +1498,7 @@ fn configuration_help(text: GuiText) -> &'static str {
     tr(
         text,
         concat!(
-            "1. 填写环境\n填写环境名称和 NVWA 服务地址。Codex 中的 MCP 使用环境名称，支持 1～64 位英文字母、数字、- 或 _，例如 MCP196；旧名称可通过预览接入更新。MCP 默认 /mcp，可在高级设置改路径或完整地址；路径跟随服务地址的部署前缀。认证服务单独部署时，再填写独立认证地址。\n\n",
+            "1. 填写环境\n填写环境名称和 NVWA 服务地址。Codex、WorkBuddy、天工中的 MCP 都使用已保存的环境名称，支持 1～64 位英文字母、数字、- 或 _，例如 MCP196；各客户端的旧名称可通过“预览接入”并确认更新。MCP 默认 /mcp，可在高级设置改路径或完整地址；路径跟随服务地址的部署前缀。认证服务单独部署时，再填写独立认证地址。\n\n",
             "2. 选择登录方式\n账号密码：填写账号和密码，收到验证码要求后再填写验证码；改密或图形验证码按服务提示处理。密码在页面直接显示。\n",
             "认证服务连接：在认证服务管理添加应用服务，获取ClientID和ClientSecret。填写这两个值，ClientSecret 在页面直接显示。默认勾选共享应用，填写要代表的账号；应用为该账号申请连接，不验证个人密码。没有应用管理权限时，请向管理员获取应用资料。\n\n",
             "3. 浏览器授权（可选）\n取消共享应用勾选后，用同一组 ClientID/ClientSecret，在打开的产品页面完成个人登录和授权。应用还须允许 Hub 的本机回调地址。高级“限定授权账号”可留空，填写时须与实际授权账号一致。旧浏览器环境保持此方式。\n\n",
@@ -1512,7 +1512,7 @@ fn configuration_help(text: GuiText) -> &'static str {
             "已经发送的操作如果收到认证拒绝，不会自动重新执行；下次请求才使用新认证。重新认证失败后至少间隔一分钟才自动重试，手动登录可立即进行。验证码、双因子、改密或个人浏览器授权仍需手动完成。"
         ),
         concat!(
-            "1. Environment\nEnter a name and the NVWA service URL. Codex uses the environment name for MCP: 1–64 letters, numbers, - or _, for example MCP196. Preview access to update a previous name. MCP defaults to /mcp; edit its path or full URL in advanced settings. Paths preserve the service deployment prefix. Set a separate authentication URL only if deployed separately.\n\n",
+            "1. Environment\nEnter a name and the NVWA service URL. Codex, WorkBuddy and TianGong use the saved environment name for MCP: 1–64 letters, numbers, - or _, for example MCP196. Select Preview connection and confirm in each client to update a previous name. MCP defaults to /mcp; edit its path or full URL in advanced settings. Paths preserve the service deployment prefix. Set a separate authentication URL only if deployed separately.\n\n",
             "2. Sign-in method\nAccount and password: enter both, then complete any requested verification. Follow service instructions for password changes or captcha. Password input is visible.\n",
             "Authentication service connection: add an application service in authentication service management to obtain ClientID and ClientSecret. Enter both; ClientSecret input is visible. Shared application delegation is checked by default; enter the account to represent. This requests access for that account without validating its password. Obtain application settings from your administrator if needed.\n\n",
             "3. Browser authorization (optional)\nUncheck shared delegation and use the same ClientID/ClientSecret to sign in and authorize on the product page. The application must allow Hub's local callback. A restricted username in advanced settings is optional and must match the authorized account if set. Existing browser profiles keep this method.\n\n",

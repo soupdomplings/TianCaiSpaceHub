@@ -1,4 +1,4 @@
-//! Codex name changes are one file transaction with target-only recovery data.
+//! Managed name migration with target-only recovery and client-specific writes.
 use std::{collections::BTreeSet, path::Component};
 
 use super::*;
@@ -7,7 +7,7 @@ const MAX_SLOTS: usize = 4;
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct CodexSlot {
+struct NameSlot {
     server_name: String,
     before: Option<Snapshot>,
     after_fingerprint: String,
@@ -15,15 +15,16 @@ struct CodexSlot {
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct CodexBackup {
+struct NameBackup {
     version: u32,
     scope: String,
-    slots: Vec<CodexSlot>,
+    slots: Vec<NameSlot>,
     previous_records: BTreeMap<String, ManagedEntry>,
     next_records: BTreeMap<String, ManagedEntry>,
 }
 
 struct FileState {
+    client: ClientKind,
     raw: Option<Vec<u8>>,
     slots: BTreeMap<String, Option<Snapshot>>,
 }
@@ -37,6 +38,10 @@ struct Plan {
 }
 
 fn scope(target: &AdapterTarget, location: &Location) -> Result<String> {
+    if target.client == ClientKind::Tiangong {
+        ensure!(location.path.is_none(), "天工 MCP 只能使用官方本机接口");
+        return legacy_scope(target, location);
+    }
     Ok(hex::encode(Sha256::digest(serde_json::to_vec(&(
         &target.profile_id,
         target.client,
@@ -55,8 +60,8 @@ fn legacy_scope(target: &AdapterTarget, location: &Location) -> Result<String> {
 // Normalize only file identity. Managed keys and v1 backups keep the exact
 // original path spelling, so an alias never reinterprets an existing key.
 fn path_identity(path: Option<&Path>) -> Result<String> {
-    let path = path.ok_or_else(|| anyhow::anyhow!("Codex 配置路径缺失"))?;
-    ensure!(path.is_absolute(), "Codex 配置路径必须是绝对路径");
+    let path = path.ok_or_else(|| anyhow::anyhow!("MCP 配置路径缺失"))?;
+    ensure!(path.is_absolute(), "MCP 配置路径必须是绝对路径");
     validate_path(path)?;
     let mut normalized = PathBuf::new();
     for component in path.components() {
@@ -83,14 +88,14 @@ fn path_identity(path: Option<&Path>) -> Result<String> {
                 suffix.push(
                     ancestor
                         .file_name()
-                        .ok_or_else(|| anyhow::anyhow!("无法核对 Codex 配置路径身份"))?
+                        .ok_or_else(|| anyhow::anyhow!("无法核对 MCP 配置路径身份"))?
                         .to_os_string(),
                 );
                 ancestor = ancestor
                     .parent()
-                    .ok_or_else(|| anyhow::anyhow!("无法核对 Codex 配置路径身份"))?;
+                    .ok_or_else(|| anyhow::anyhow!("无法核对 MCP 配置路径身份"))?;
             }
-            Err(_) => bail!("无法核对 Codex 配置路径身份"),
+            Err(_) => bail!("无法核对 MCP 配置路径身份"),
         }
     };
     for component in suffix.into_iter().rev() {
@@ -98,7 +103,7 @@ fn path_identity(path: Option<&Path>) -> Result<String> {
     }
     let identity = resolved
         .to_str()
-        .ok_or_else(|| anyhow::anyhow!("Codex 配置路径编码无效"))?;
+        .ok_or_else(|| anyhow::anyhow!("MCP 配置路径编码无效"))?;
     #[cfg(windows)]
     {
         let identity = identity.replace('/', "\\").to_lowercase();
@@ -120,6 +125,9 @@ fn path_identity(path: Option<&Path>) -> Result<String> {
 }
 
 fn same_path(left: Option<&Path>, right: Option<&Path>) -> Result<bool> {
+    if left.is_none() || right.is_none() {
+        return Ok(left.is_none() && right.is_none());
+    }
     Ok(path_identity(left)? == path_identity(right)?)
 }
 
@@ -143,13 +151,13 @@ fn scoped_records(
     let mut result = BTreeMap::new();
     for (key, record) in &ledger.entries {
         if record.profile_id == target.profile_id
-            && record.client == ClientKind::Codex
+            && record.client == target.client
             && same_path(record.target_path.as_deref(), location.path.as_deref())?
         {
-            validate_codex_server_name(&record.server_name)?;
+            validate_server_name(&record.server_name)?;
             ensure!(
                 super::location(&record_target(target, record))?.key == *key,
-                "Codex 受管名称元数据不一致，请先核对接入记录"
+                "MCP 受管名称元数据不一致，请先核对接入记录"
             );
             result.insert(key.clone(), record.clone());
         }
@@ -163,16 +171,35 @@ async fn read_state(
     location: &Location,
     names: &BTreeSet<String>,
 ) -> Result<FileState> {
-    let read = read_target(ctx, target, location).await?;
     let mut slots = BTreeMap::new();
-    for name in names {
-        slots.insert(
-            name.clone(),
-            codex::read(read.file_bytes.as_deref().unwrap_or_default(), name)?,
+    let raw = if let Some(path) = &location.path {
+        let path = path.clone();
+        tokio::task::spawn_blocking(move || read_bounded(&path, MAX_FILE_BYTES))
+            .await
+            .map_err(|_| anyhow::anyhow!("MCP 配置读取中断"))??
+    } else {
+        ensure!(
+            target.client == ClientKind::Tiangong,
+            "MCP 文件配置路径缺失"
         );
+        None
+    };
+    for name in names {
+        let snapshot = match target.client {
+            ClientKind::Codex => codex::read(raw.as_deref().unwrap_or_default(), name)?,
+            ClientKind::Workbuddy => workbuddy::read(raw.as_deref().unwrap_or_default(), name)?,
+            ClientKind::Tiangong => {
+                let desktop = ctx.desktop.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!("天工未取得已验证的运行授权，请先显式连接桌面")
+                })?;
+                tiangong::read(desktop, name).await?
+            }
+        };
+        slots.insert(name.clone(), snapshot);
     }
     Ok(FileState {
-        raw: read.file_bytes,
+        client: target.client,
+        raw,
         slots,
     })
 }
@@ -180,26 +207,22 @@ async fn read_state(
 fn slot_fingerprint(state: &FileState, name: &str) -> Result<String> {
     fingerprint(
         state.slots.get(name).and_then(Option::as_ref),
-        false,
-        ClientKind::Codex,
+        true,
+        state.client,
     )
 }
 
-fn validate_backup(
-    backup: &CodexBackup,
-    target: &AdapterTarget,
-    location: &Location,
-) -> Result<()> {
+fn validate_backup(backup: &NameBackup, target: &AdapterTarget, location: &Location) -> Result<()> {
     ensure!(
         backup.version == 2 && !backup.slots.is_empty() && backup.slots.len() <= MAX_SLOTS,
-        "Codex 名称迁移备份不属于当前环境或保存位置"
+        "MCP 名称迁移备份不属于当前环境或保存位置"
     );
     let mut names = BTreeSet::new();
     for slot in &backup.slots {
-        validate_codex_server_name(&slot.server_name)?;
+        validate_server_name(&slot.server_name)?;
         ensure!(
             names.insert(slot.server_name.clone()),
-            "Codex 名称迁移备份包含重复目标"
+            "MCP 名称迁移备份包含重复目标"
         );
     }
     for (records, after) in [
@@ -210,28 +233,28 @@ fn validate_backup(
             ensure!(
                 !record.pending
                     && record.profile_id == target.profile_id
-                    && record.client == ClientKind::Codex
+                    && record.client == target.client
                     && same_path(record.target_path.as_deref(), location.path.as_deref())?
                     && names.contains(&record.server_name)
                     && super::location(&record_target(target, record))?.key == *key,
-                "Codex 名称迁移备份归属无效"
+                "MCP 名称迁移备份归属无效"
             );
             let slot = backup
                 .slots
                 .iter()
                 .find(|slot| slot.server_name == record.server_name)
-                .ok_or_else(|| anyhow::anyhow!("Codex 名称迁移备份目标缺失"))?;
+                .ok_or_else(|| anyhow::anyhow!("MCP 名称迁移备份目标缺失"))?;
             let expected = if after {
                 slot.after_fingerprint.clone()
             } else {
-                fingerprint(slot.before.as_ref(), false, ClientKind::Codex)?
+                fingerprint(slot.before.as_ref(), true, target.client)?
             };
             // Missing entries are historical recovery markers. Normalizing old
             // aliases can place one beside the active owner of the same slot;
             // Restore preserves that metadata without claiming the live entry.
             ensure!(
                 record.fingerprint == expected || record.fingerprint == "missing",
-                "Codex 名称迁移备份指纹与归属记录不一致"
+                "MCP 名称迁移备份指纹与归属记录不一致"
             );
         }
     }
@@ -247,11 +270,11 @@ fn validate_backup(
         valid_scope |= backup.scope
             == legacy_scope(target, &super::location(&record_target(target, record))?)?;
     }
-    ensure!(valid_scope, "Codex 名称迁移备份不属于当前环境或保存位置");
+    ensure!(valid_scope, "MCP 名称迁移备份不属于当前环境或保存位置");
     Ok(())
 }
 
-fn backup_names(backup: &CodexBackup) -> BTreeSet<String> {
+fn backup_names(backup: &NameBackup) -> BTreeSet<String> {
     backup
         .slots
         .iter()
@@ -259,7 +282,7 @@ fn backup_names(backup: &CodexBackup) -> BTreeSet<String> {
         .collect()
 }
 
-fn matches_after(backup: &CodexBackup, state: &FileState) -> Result<bool> {
+fn matches_after(backup: &NameBackup, state: &FileState) -> Result<bool> {
     for slot in &backup.slots {
         if slot_fingerprint(state, &slot.server_name)? != slot.after_fingerprint {
             return Ok(false);
@@ -268,10 +291,10 @@ fn matches_after(backup: &CodexBackup, state: &FileState) -> Result<bool> {
     Ok(true)
 }
 
-fn matches_before(backup: &CodexBackup, state: &FileState) -> Result<bool> {
+fn matches_before(backup: &NameBackup, state: &FileState) -> Result<bool> {
     for slot in &backup.slots {
         if slot_fingerprint(state, &slot.server_name)?
-            != fingerprint(slot.before.as_ref(), false, ClientKind::Codex)?
+            != fingerprint(slot.before.as_ref(), true, state.client)?
         {
             return Ok(false);
         }
@@ -287,7 +310,7 @@ fn restorable_backup(
     record: &ManagedEntry,
     state: &FileState,
 ) -> Result<bool> {
-    if let Ok(backup) = serde_json::from_slice::<CodexBackup>(bytes) {
+    if let Ok(backup) = serde_json::from_slice::<NameBackup>(bytes) {
         return Ok(backup.version == 2
             && backup.next_records.get(actual_key).is_some_and(|next| {
                 !next.pending
@@ -325,7 +348,7 @@ fn install_records(
     ledger: &mut Ledger,
     target: &AdapterTarget,
     location: &Location,
-    backup: &CodexBackup,
+    backup: &NameBackup,
     records: &BTreeMap<String, ManagedEntry>,
 ) -> Result<()> {
     let names = backup_names(backup);
@@ -355,7 +378,7 @@ async fn reconcile(
             Ok(bytes) => bytes,
             Err(_) => continue,
         };
-        if let Ok(backup) = serde_json::from_slice::<CodexBackup>(&bytes) {
+        if let Ok(backup) = serde_json::from_slice::<NameBackup>(&bytes) {
             validate_backup(&backup, target, location)?;
             let scoped = scoped_records(target, location, ledger)?;
             ensure!(
@@ -363,7 +386,7 @@ async fn reconcile(
                     .slots
                     .iter()
                     .any(|slot| slot.server_name == record.server_name),
-                "Codex 名称迁移日志与保护备份不一致"
+                "MCP 名称迁移日志与保护备份不一致"
             );
             for slot in &backup.slots {
                 let entries: Vec<_> = scoped
@@ -377,10 +400,10 @@ async fn reconcile(
                                 && entry.backup_ref == record.backup_ref
                                 && entry.fingerprint == slot.after_fingerprint
                                 && entry.profile_id == target.profile_id
-                                && entry.client == ClientKind::Codex
+                                && entry.client == target.client
                                 && entry.server_name == slot.server_name
                         }),
-                    "Codex 名称迁移日志尚不完整，请核对接入记录"
+                    "MCP 名称迁移日志尚不完整，请核对接入记录"
                 );
             }
             let state = read_state(ctx, target, location, &backup_names(&backup)).await?;
@@ -400,7 +423,7 @@ async fn reconcile(
             // their original name, key and fingerprint normalization.
             let actual = record_target(target, &record);
             let actual_location = super::location(&actual)?;
-            ensure!(actual_location.key == key, "Codex 受管归属键无效");
+            ensure!(actual_location.key == key, "MCP 受管归属键无效");
             let read = read_target(ctx, &actual, &actual_location).await?;
             reconcile_journal(ctx, &actual, &actual_location, root, &read, ledger)?;
         }
@@ -422,7 +445,7 @@ async fn plan(
         .collect();
     ensure!(
         active.len() <= 1,
-        "同一环境在此 Codex 配置中有多个受管连接，请先核对旧连接，Hub 未自动删除"
+        "同一环境在此 MCP 配置中有多个受管连接，请先核对旧连接，Hub 未自动删除"
     );
     let preferred: Vec<_> = records
         .values()
@@ -430,7 +453,7 @@ async fn plan(
         .collect();
     ensure!(
         !active.is_empty() || preferred.len() <= 1,
-        "此 Codex 名称有多个路径别名恢复记录，请先核对接入记录"
+        "此 MCP 名称有多个路径别名恢复记录，请先核对接入记录"
     );
     let record = active
         .first()
@@ -444,9 +467,9 @@ async fn plan(
         .cloned();
     ensure!(
         record.is_some() || records.is_empty() || pending,
-        "此环境有多个可恢复的旧 Codex 名称，请先将环境名改为要管理的名称"
+        "此环境有多个可恢复的旧 MCP 名称，请先将环境名改为要管理的名称"
     );
-    let valid_desired = validate_codex_server_name(&target.server_name).is_ok();
+    let valid_desired = validate_server_name(&target.server_name).is_ok();
     let actual_name = record
         .as_ref()
         .map(|record| record.server_name.clone())
@@ -470,12 +493,12 @@ async fn plan(
         .as_ref()
         .and_then(|record| load_backup(&ctx.secrets, &record.backup_ref).ok());
     if let Some(bytes) = &recovery_bytes
-        && let Ok(backup) = serde_json::from_slice::<CodexBackup>(bytes)
+        && let Ok(backup) = serde_json::from_slice::<NameBackup>(bytes)
     {
         validate_backup(&backup, target, location)?;
         names.extend(backup_names(&backup));
     }
-    ensure!(names.len() <= MAX_SLOTS, "Codex 名称迁移目标超出限制");
+    ensure!(names.len() <= MAX_SLOTS, "MCP 名称迁移目标超出限制");
     let state = read_state(ctx, &actual, &actual_location, &names).await?;
     let read = TargetRead {
         snapshot: state.slots.get(&actual_name).cloned().flatten(),
@@ -505,12 +528,16 @@ async fn plan(
     {
         public.name_conflict = true;
         public.detail =
-            "Codex 已有与环境名称相同的其他连接，Hub 不会覆盖它；请更换环境名称。".into();
+            "客户端已有与环境名称相同的其他连接，Hub 不会覆盖它；请更换环境名称。".into();
     }
     if pending {
         public.modified = true;
-        public.detail =
-            "上次 Codex 名称迁移的结果还未确认，请核对新旧连接后重新检查；保护备份已保留。".into();
+        public.detail = if target.client == ClientKind::Tiangong {
+            "上次天工名称修改尚未完全确认，可能仅完成部分步骤。请在天工核对新旧连接后重新检查；本次未自动重试或覆盖，保护备份已保留。"
+        } else {
+            "上次 MCP 名称迁移的结果还未确认，请核对新旧连接后重新检查；保护备份已保留。"
+        }
+        .into();
     }
     let fingerprints: BTreeMap<_, _> = names
         .iter()
@@ -537,29 +564,50 @@ pub(super) async fn inspect(ctx: &AdapterContext, target: &AdapterTarget) -> Res
     let root = metadata_root(ctx)?;
     let _lock = ledger_lock(&root).await?;
     let mut ledger = load_ledger(&root)?;
+    if target.client == ClientKind::Tiangong && ctx.desktop.is_none() {
+        let records = scoped_records(target, &location, &ledger)?;
+        let mut public = unavailable(target, None);
+        public.owned = !records.is_empty();
+        public.desired_server_name = Some(target.server_name.clone());
+        // Without a current native instance, do not select a historical owner
+        // or promise that any protected backup can be restored.
+        public.backup_ref = None;
+        return Ok(public);
+    }
     reconcile(ctx, target, &location, &root, &mut ledger).await?;
     Ok(plan(ctx, target, &location, &ledger).await?.public)
 }
 
 async fn write_slots(
+    ctx: &AdapterContext,
+    target: &AdapterTarget,
     location: &Location,
     before: &FileState,
     desired: &BTreeMap<String, Option<Snapshot>>,
 ) -> Result<()> {
+    if target.client == ClientKind::Tiangong {
+        return write_native_slots(ctx, target, location, before, desired).await;
+    }
     let path = location
         .path
         .clone()
-        .ok_or_else(|| anyhow::anyhow!("Codex 配置路径缺失"))?;
+        .ok_or_else(|| anyhow::anyhow!("MCP 配置路径缺失"))?;
     let raw = before.raw.clone();
+    let client = target.client;
     let desired = desired.clone();
     tokio::task::spawn_blocking(move || {
         validate_path(&path)?;
         let parent = path
             .parent()
-            .ok_or_else(|| anyhow::anyhow!("Codex 配置路径无效"))?;
-        fs::create_dir_all(parent).map_err(|_| anyhow::anyhow!("无法创建 Codex 配置目录"))?;
+            .ok_or_else(|| anyhow::anyhow!("MCP 配置路径无效"))?;
+        fs::create_dir_all(parent).map_err(|_| anyhow::anyhow!("无法创建 MCP 配置目录"))?;
         validate_path(&path)?;
-        let lock_path = path.with_extension("toml.nvwa.lock");
+        let lock_path = path.with_extension(format!(
+            "{}.nvwa.lock",
+            path.extension()
+                .and_then(|s| s.to_str())
+                .unwrap_or("config")
+        ));
         validate_path(&lock_path)?;
         let lock = OpenOptions::new()
             .read(true)
@@ -567,24 +615,97 @@ async fn write_slots(
             .create(true)
             .truncate(false)
             .open(lock_path)
-            .map_err(|_| anyhow::anyhow!("无法打开 Codex 配置操作锁"))?;
+            .map_err(|_| anyhow::anyhow!("无法打开 MCP 配置操作锁"))?;
         lock.lock_exclusive()
-            .map_err(|_| anyhow::anyhow!("无法锁定 Codex 配置"))?;
+            .map_err(|_| anyhow::anyhow!("无法锁定 MCP 配置"))?;
         let current = read_bounded(&path, MAX_FILE_BYTES)?;
-        ensure!(current == raw, "Codex 配置在保存前已变化，本次未覆盖");
-        let bytes = codex::replace_many(current.as_deref().unwrap_or_default(), &desired)?;
+        ensure!(current == raw, "MCP 配置在保存前已变化，本次未覆盖");
+        let bytes = replace_file_slots(client, current.as_deref().unwrap_or_default(), &desired)?;
         ensure!(
             bytes.len() <= MAX_FILE_BYTES as usize,
-            "Codex MCP 配置超出大小限制"
+            "客户端 MCP 配置超出大小限制"
         );
         ensure!(
             read_bounded(&path, MAX_FILE_BYTES)? == current,
-            "Codex 配置被其他操作修改，本次未覆盖"
+            "MCP 配置被其他操作修改，本次未覆盖"
         );
         atomic_write(&path, &bytes)
     })
     .await
-    .map_err(|_| anyhow::anyhow!("Codex 配置写入中断"))?
+    .map_err(|_| anyhow::anyhow!("MCP 配置写入中断"))?
+}
+
+fn replace_file_slots(
+    client: ClientKind,
+    raw: &[u8],
+    desired: &BTreeMap<String, Option<Snapshot>>,
+) -> Result<Vec<u8>> {
+    match client {
+        ClientKind::Codex => codex::replace_many(raw, desired),
+        ClientKind::Workbuddy => workbuddy::replace_many(raw, desired),
+        ClientKind::Tiangong => bail!("天工 MCP 不使用配置文件"),
+    }
+}
+
+fn states_match_slots(left: &FileState, right: &FileState) -> Result<bool> {
+    if left.client != right.client || left.slots.keys().ne(right.slots.keys()) {
+        return Ok(false);
+    }
+    for name in left.slots.keys() {
+        if slot_fingerprint(left, name)? != slot_fingerprint(right, name)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// The native API has no rename or group transaction. Delete first to avoid
+/// retaining duplicate names, then create/update. Verify every involved static
+/// configuration before and after each individual request; never resend it.
+async fn write_native_slots(
+    ctx: &AdapterContext,
+    target: &AdapterTarget,
+    location: &Location,
+    before: &FileState,
+    desired: &BTreeMap<String, Option<Snapshot>>,
+) -> Result<()> {
+    let desktop = ctx
+        .desktop
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("天工未取得已验证的运行授权，请先显式连接桌面"))?;
+    let names: BTreeSet<_> = desired.keys().cloned().collect();
+    let mut expected = FileState {
+        client: target.client,
+        raw: None,
+        slots: before.slots.clone(),
+    };
+    let order = desired
+        .iter()
+        .filter(|(_, value)| value.is_none())
+        .chain(desired.iter().filter(|(_, value)| value.is_some()));
+    for (name, after) in order {
+        let latest = read_state(ctx, target, location, &names).await?;
+        ensure!(
+            states_match_slots(&expected, &latest)?,
+            "天工新旧连接在保存前已变化；本次停止，未覆盖其他修改，请检查连接"
+        );
+        let after_fingerprint = fingerprint(after.as_ref(), true, target.client)?;
+        if slot_fingerprint(&expected, name)? == after_fingerprint {
+            continue;
+        }
+        let exists = expected.slots.get(name).is_some_and(Option::is_some);
+        let mutation = tiangong::replace(desktop, name, after.as_ref(), exists).await;
+        expected.slots.insert(name.clone(), after.clone());
+        let observed = read_state(ctx, target, location, &names).await?;
+        ensure!(
+            states_match_slots(&expected, &observed)?,
+            "天工名称修改可能仅完成部分步骤；没有重试，保护记录已保留，请在天工中核对新旧连接后重新检查"
+        );
+        // A missing reply can be accepted only after both names match the
+        // complete expected state for this step; there is no request replay.
+        let _ = mutation;
+    }
+    Ok(())
 }
 
 pub(super) async fn mutate(
@@ -597,7 +718,7 @@ pub(super) async fn mutate(
 ) -> Result<AdapterOutcome> {
     ensure!(!expected.is_empty(), "接入操作缺少目标指纹，请先预览");
     if matches!(operation, AdapterOperation::Apply) {
-        validate_codex_server_name(&target.server_name)?;
+        validate_server_name(&target.server_name)?;
     }
     let location = super::location(target)?;
     let root = metadata_root(ctx)?;
@@ -611,7 +732,7 @@ pub(super) async fn mutate(
     );
     ensure!(
         !current.public.modified,
-        "Codex 新旧连接存在冲突或外部修改，本次未覆盖"
+        "MCP 新旧连接存在冲突或外部修改，本次未覆盖"
     );
     ensure!(
         !current.public.present || current.public.owned,
@@ -630,7 +751,7 @@ pub(super) async fn mutate(
         AdapterOperation::Apply => {
             ensure!(
                 !current.public.name_conflict,
-                "Codex 环境名称已被其他连接占用，本次未覆盖"
+                "MCP 环境名称已被其他连接占用，本次未覆盖"
             );
             if current.actual.server_name != target.server_name {
                 ensure!(
@@ -639,7 +760,7 @@ pub(super) async fn mutate(
                         .slots
                         .get(&target.server_name)
                         .is_none_or(Option::is_none),
-                    "Codex 环境名称已被其他连接占用，本次未覆盖"
+                    "MCP 环境名称已被其他连接占用，本次未覆盖"
                 );
                 if current.record.is_some() {
                     desired_slots.insert(current.actual.server_name.clone(), None);
@@ -662,7 +783,7 @@ pub(super) async fn mutate(
                 "备份不属于当前受管目标"
             );
             let bytes = load_backup(&ctx.secrets, restore_ref)?;
-            if let Ok(backup) = serde_json::from_slice::<CodexBackup>(&bytes) {
+            if let Ok(backup) = serde_json::from_slice::<NameBackup>(&bytes) {
                 validate_backup(&backup, target, &location)?;
                 ensure!(
                     backup
@@ -675,13 +796,13 @@ pub(super) async fn mutate(
                                         && record.fingerprint == actual.fingerprint
                                 })
                         }),
-                    "Codex 名称迁移备份不属于当前受管连接"
+                    "MCP 名称迁移备份不属于当前受管连接"
                 );
                 let state =
                     read_state(ctx, &current.actual, &location, &backup_names(&backup)).await?;
                 ensure!(
                     matches_after(&backup, &state)?,
-                    "Codex 新旧名称在迁移后已变化，本次未还原"
+                    "MCP 新旧名称在迁移后已变化，本次未还原"
                 );
                 for slot in backup.slots {
                     desired_slots.insert(slot.server_name, slot.before);
@@ -702,26 +823,33 @@ pub(super) async fn mutate(
                     ensure!(
                         !record.pending
                             && record.profile_id == target.profile_id
-                            && record.client == ClientKind::Codex
+                            && record.client == target.client
                             && record.server_name == current.actual.server_name
                             && same_path(record.target_path.as_deref(), location.path.as_deref())?
                             && super::location(&record_target(target, &record))?.key
                                 == current.actual_location.key,
-                        "旧 Codex 备份归属无效"
+                        "旧 MCP 备份归属无效"
                     );
                     next_records.insert(current.actual_location.key.clone(), record);
                 }
             }
         }
     }
-    // Normalize exactly as Codex will serialize the complete file, including
-    // both the removed old name and the newly inserted environment name.
-    let planned = codex::replace_many(
-        current.state.raw.as_deref().unwrap_or_default(),
-        &desired_slots,
-    )?;
-    for (name, snapshot) in &mut desired_slots {
-        *snapshot = codex::read(&planned, name)?;
+    // File clients serialize both names in one complete replacement. Native
+    // snapshots keep their exact protected values and are applied via the API.
+    if target.client != ClientKind::Tiangong {
+        let planned = replace_file_slots(
+            target.client,
+            current.state.raw.as_deref().unwrap_or_default(),
+            &desired_slots,
+        )?;
+        for (name, snapshot) in &mut desired_slots {
+            *snapshot = match target.client {
+                ClientKind::Codex => codex::read(&planned, name)?,
+                ClientKind::Workbuddy => workbuddy::read(&planned, name)?,
+                ClientKind::Tiangong => unreachable!(),
+            };
+        }
     }
     if !matches!(operation, AdapterOperation::Restore) {
         let actual_name = if matches!(operation, AdapterOperation::Apply) {
@@ -734,13 +862,13 @@ pub(super) async fn mutate(
             super::location(&actual_target)?.key,
             ManagedEntry {
                 profile_id: target.profile_id.clone(),
-                client: ClientKind::Codex,
+                client: target.client,
                 server_name: actual_name.clone(),
                 target_path: location.path.clone(),
                 fingerprint: fingerprint(
                     desired_slots.get(actual_name).and_then(Option::as_ref),
                     true,
-                    ClientKind::Codex,
+                    target.client,
                 )?,
                 backup_ref: reference.clone(),
                 pending: false,
@@ -751,8 +879,14 @@ pub(super) async fn mutate(
     let before = read_state(ctx, &current.actual, &location, &names).await?;
     ensure!(
         before.raw == current.state.raw,
-        "Codex 配置在预览核对后已变化，本次未覆盖"
+        "MCP 配置在预览核对后已变化，本次未覆盖"
     );
+    for name in before.slots.keys() {
+        ensure!(
+            slot_fingerprint(&before, name)? == slot_fingerprint(&current.state, name)?,
+            "MCP 新旧连接在预览核对后已变化，本次未覆盖"
+        );
+    }
     let previous_records = scoped_records(target, &location, &ledger)?
         .into_iter()
         .filter(|(_, record)| names.contains(&record.server_name))
@@ -760,13 +894,13 @@ pub(super) async fn mutate(
         .collect();
     let mut slots = Vec::new();
     for (name, after) in &desired_slots {
-        slots.push(CodexSlot {
+        slots.push(NameSlot {
             server_name: name.clone(),
             before: before.slots.get(name).cloned().flatten(),
-            after_fingerprint: fingerprint(after.as_ref(), false, ClientKind::Codex)?,
+            after_fingerprint: fingerprint(after.as_ref(), true, target.client)?,
         });
     }
-    let backup = CodexBackup {
+    let backup = NameBackup {
         version: 2,
         scope: scope(target, &location)?,
         slots,
@@ -777,7 +911,7 @@ pub(super) async fn mutate(
     save_backup(
         &ctx.secrets,
         &reference,
-        &serde_json::to_vec(&backup).map_err(|_| anyhow::anyhow!("无法编码 Codex 名称迁移备份"))?,
+        &serde_json::to_vec(&backup).map_err(|_| anyhow::anyhow!("无法编码 MCP 名称迁移备份"))?,
     )?;
     install_records(&mut ledger, target, &location, &backup, &BTreeMap::new())?;
     for slot in &backup.slots {
@@ -786,7 +920,7 @@ pub(super) async fn mutate(
             key,
             ManagedEntry {
                 profile_id: target.profile_id.clone(),
-                client: ClientKind::Codex,
+                client: target.client,
                 server_name: slot.server_name.clone(),
                 target_path: location.path.clone(),
                 fingerprint: slot.after_fingerprint.clone(),
@@ -796,7 +930,7 @@ pub(super) async fn mutate(
         );
     }
     save_ledger(&root, &ledger)?;
-    let mutation = write_slots(&location, &before, &desired_slots).await;
+    let mutation = write_slots(ctx, target, &location, &before, &desired_slots).await;
     let observed = read_state(ctx, &current.actual, &location, &names).await;
     match observed {
         Ok(after) if matches_after(&backup, &after)? => {
@@ -808,6 +942,11 @@ pub(super) async fn mutate(
                 &backup.next_records,
             )?;
             if save_ledger(&root, &ledger).is_err() {
+                if target.client == ClientKind::Tiangong {
+                    bail!(
+                        "天工连接已写入但接入记录保存失败；没有自动重试或补偿，保护记录已保留，请重新检查"
+                    );
+                }
                 // Re-read and compensate only while both exact written slots
                 // remain ours. Unrelated file edits are retained in this raw.
                 if let Ok(latest) = read_state(ctx, &current.actual, &location, &names).await
@@ -818,7 +957,7 @@ pub(super) async fn mutate(
                         .iter()
                         .map(|slot| (slot.server_name.clone(), slot.before.clone()))
                         .collect();
-                    let _ = write_slots(&location, &latest, &original).await;
+                    let _ = write_slots(ctx, target, &location, &latest, &original).await;
                     if let Ok(restored) = read_state(ctx, &current.actual, &location, &names).await
                         && matches_before(&backup, &restored)?
                     {
@@ -833,9 +972,9 @@ pub(super) async fn mutate(
                         bail!("接入元数据保存失败；已核对新旧名称未变并补偿还原，请刷新后重试");
                     }
                 }
-                bail!("Codex 名称迁移元数据提交失败，结果待核对；未覆盖并发修改，保护记录已保留");
+                bail!("MCP 名称迁移元数据提交失败，结果待核对；未覆盖并发修改，保护记录已保留");
             }
-            let mut warnings = client_warnings(ClientKind::Codex);
+            let mut warnings = client_warnings(target.client);
             if mutation.is_err() {
                 warnings
                     .push("操作时未收到明确回复，随后已核对新旧名称并确认本次修改已完成。".into());
@@ -859,9 +998,17 @@ pub(super) async fn mutate(
                 )?;
                 save_ledger(&root, &ledger)?;
             }
-            bail!("Codex 保存结果未确认或新旧名称被并发修改；没有重放或覆盖，请重新检查");
+            if target.client == ClientKind::Tiangong {
+                bail!(
+                    "天工名称修改未完全确认或仅完成部分步骤；没有重放或覆盖，保护记录已保留，请核对新旧连接后重新检查"
+                );
+            }
+            bail!("MCP 保存结果未确认或新旧名称被并发修改；没有重放或覆盖，请重新检查");
         }
-        Err(_) => bail!("Codex 写入后无法核对新旧名称；保护恢复记录已保留，请重新检查"),
+        Err(_) if target.client == ClientKind::Tiangong => bail!(
+            "天工名称修改后无法核对新旧连接，可能仅完成部分步骤；没有重试，保护记录已保留，请在天工核对后重新检查"
+        ),
+        Err(_) => bail!("MCP 写入后无法核对新旧名称；保护恢复记录已保留，请重新检查"),
     }
 }
 
@@ -882,7 +1029,11 @@ mod tests {
     }
 
     fn state(slots: BTreeMap<String, Option<Snapshot>>) -> FileState {
-        FileState { raw: None, slots }
+        FileState {
+            client: ClientKind::Codex,
+            raw: None,
+            slots,
+        }
     }
 
     #[test]
@@ -954,16 +1105,16 @@ mod tests {
         let current_entry = Snapshot::Toml("fixture rebuilt current entry".into());
         let after = fingerprint(Some(&current_entry), false, ClientKind::Codex).unwrap();
         let current = record("MCP196", &after);
-        let backup = CodexBackup {
+        let backup = NameBackup {
             version: 2,
             scope: "fixture-scope".into(),
             slots: vec![
-                CodexSlot {
+                NameSlot {
                     server_name: "nvwa-old".into(),
                     before: None,
                     after_fingerprint: "missing".into(),
                 },
-                CodexSlot {
+                NameSlot {
                     server_name: "MCP196".into(),
                     before: None,
                     after_fingerprint: after,
@@ -987,5 +1138,70 @@ mod tests {
             Some(Snapshot::Toml("externally added connection".into())),
         );
         assert!(!restorable_backup(&bytes, "new-key", &current, &actual).unwrap());
+    }
+
+    #[test]
+    fn old_json_client_removal_backups_keep_their_static_after_image() {
+        for client in [ClientKind::Workbuddy, ClientKind::Tiangong] {
+            let mut marker = record("nvwa-old", "missing");
+            marker.client = client;
+            let mut missing = state(BTreeMap::from([("nvwa-old".into(), None)]));
+            missing.client = client;
+            let backup = ProtectedBackup {
+                version: 1,
+                target_key: "original-key".into(),
+                before: Some(Snapshot::Json(serde_json::json!({"fixture":true}))),
+                after_fingerprint: "missing".into(),
+                previous_managed: None,
+            };
+            let bytes = serde_json::to_vec(&backup).unwrap();
+            assert!(restorable_backup(&bytes, "original-key", &marker, &missing).unwrap());
+            assert!(!restorable_backup(&bytes, "another-key", &marker, &missing).unwrap());
+        }
+    }
+
+    #[test]
+    fn native_group_checks_ignore_tool_activity_but_keep_configuration_changes() {
+        let entry = serde_json::json!({
+            "server_id":"MCP196", "server_url":"http://127.0.0.1:3849/fixture",
+            "header_config":{"Authorization":"synthetic-credential"},
+            "status":"active", "tools_json":[], "is_connected":0,
+            "retry_count":0, "conn_last_error":null,
+        });
+        let original = FileState {
+            client: ClientKind::Tiangong,
+            raw: None,
+            slots: BTreeMap::from([
+                ("nvwa-old".into(), None),
+                ("MCP196".into(), Some(Snapshot::Json(entry.clone()))),
+            ]),
+        };
+        let mut activity = entry.clone();
+        activity["tools_json"] = serde_json::json!([{"name":"fixture-tool"}]);
+        activity["is_connected"] = 1.into();
+        activity["retry_count"] = 2.into();
+        let mut observed = FileState {
+            client: ClientKind::Tiangong,
+            raw: None,
+            slots: BTreeMap::from([
+                ("nvwa-old".into(), None),
+                ("MCP196".into(), Some(Snapshot::Json(activity))),
+            ]),
+        };
+        assert!(states_match_slots(&original, &observed).unwrap());
+        observed.slots.insert(
+            "nvwa-old".into(),
+            Some(Snapshot::Json(
+                serde_json::json!({"server_id":"other-owner"}),
+            )),
+        );
+        assert!(!states_match_slots(&original, &observed).unwrap());
+        observed.slots.insert("nvwa-old".into(), None);
+        let mut different_config = entry;
+        different_config["header_config"]["Authorization"] = "other-credential".into();
+        observed
+            .slots
+            .insert("MCP196".into(), Some(Snapshot::Json(different_config)));
+        assert!(!states_match_slots(&original, &observed).unwrap());
     }
 }
