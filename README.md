@@ -1,5 +1,7 @@
 # TianCaiSpaceHub
 
+2026-10-11 历史 MCP 接入修复：Hub 留有接入记录、但客户端连接已删除时，现在可“预览接入 → 确认”重新添加；Codex 使用已保存环境名称（如 `MCP196`）。检查只读取配置，检测本机桥才读取工具清单；重新登录后应先预览确认更新客户端。操作错误与拒绝原因直接显示在对应客户端区域。完整版本仍 `0.4.30-5`，本轮源码/构建/验收见 [v5 交付](docs/releases/v0.4.30-5.md)，历史安装包不自动获得此修复。
+
 2026-10-11 安装升级修复：用户反馈 v5 MSI 安装后仍运行 v4。已确认旧包语言标识 `0`、新包升级限定 `1033`，漏掉旧产品；两版数字文件版本也都为 `0.4.30.0`。当前修复忽略升级语言限制、写入数字二开修订号并支持同修订重打包覆盖；新装与升级均显示“确认 → 进度 → 成功”，成功后可选“打开 TianCaiSpaceHub”或“完成”。完整版本仍 `0.4.30-5`。修复 `4966b1f` 已推送，[新 Windows Actions](https://github.com/soupdomplings/TianCaiSpaceHub/actions/runs/38121034272) 已开始编译，WiX 安装已通过，按用户要求停止等待；修复包生成/核验和安装升级仍待完成，详见 [v5 交付](docs/releases/v0.4.30-5.md)。下方首次 main 包不含这次升级修复。
 
 2026-10-11 前一轮打包启动记录：`main` 的 `b05b489`（含 NVWA 自动重新认证）已启动 [Windows](https://github.com/soupdomplings/TianCaiSpaceHub/actions/runs/38116693075) 和 [macOS](https://github.com/soupdomplings/TianCaiSpaceHub/actions/runs/38116694993) 手动 Actions 打包，两者核对时均为 `in_progress`。此前 Windows 失败的 WiX 扩展安装参数已修正，并前移到编译前；macOS 原编译/打包已成功，失败于等待 Windows 发布清单，本次手动 `main` 构建跳过该等待。按用户要求停止等待完成；成功后安装包放在对应 Actions 的 Artifacts，既有 v5 标签及 Release 不变，完整身份与验证边界见 [v5 交付](docs/releases/v0.4.30-5.md)。下方旧构建与反馈保留原日期归属。

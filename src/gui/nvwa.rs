@@ -114,6 +114,7 @@ pub(super) struct NvwaActionResult {
 #[derive(Clone)]
 enum Action {
     Refresh,
+    RefreshAfterLogin,
     RefreshSaved,
     Save,
     Delete,
@@ -231,10 +232,18 @@ fn display_message(text: GuiText, message: &str) -> String {
             "请先到 NVWA 页面修改密码，再回到 Hub 登录。",
             "Change your password on the NVWA page, then sign in from Hub.",
         ),
-        "Client authorization required" | "Client authorization invalid" => (
+        "Client authorization required"
+        | "Client authorization invalid"
+        | "Apply this client before checking its local bridge" => (
             "这个客户端的连接尚未添加，或登录已变化。请重新“预览接入”并确认添加。",
             "This client connection is missing or no longer valid. Preview and add it again.",
         ),
+        "此前的接入记录仍在，但客户端中的连接已不存在。点击“预览接入”并确认，可重新添加连接。" => {
+            (
+                "此前的接入记录仍在，但客户端中的连接已不存在。点击“预览接入”并确认，可重新添加连接。",
+                "Hub retains the previous connection record, but the entry is missing from the client. Preview and confirm the connection to add it again.",
+            )
+        }
         "Login was cancelled or superseded"
         | "Login was superseded"
         | "Login changed during detection"
@@ -720,8 +729,8 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> NvwaTab {
         let inspect = button(&page, &client_commands, tr(text, "检查", "Inspect"));
         inspect.set_tooltip(tr(
             text,
-            "读取此客户端的 NVWA 连接设置，核对接入、启用和修改状态。",
-            "Read this client's NVWA connection settings and check whether the entry is configured, enabled or changed.",
+            "读取客户端的连接设置及 MCP 名称；要确认工具连通，请使用“检测本机桥”。",
+            "Read the client's connection settings and MCP name. Use Check local bridge to verify the tool connection.",
         ));
         let check = button(
             &page,
@@ -984,8 +993,8 @@ fn start(
         for row in &tab.clients {
             row.status.set_label(tr(
                 tab.text,
-                "正在重新登录，完成后请重新检测这条连接。",
-                "Signing in again. Check this connection after sign-in completes.",
+                "正在重新登录。成功后请“预览接入”并确认，更新客户端连接，再检测本机桥。",
+                "Signing in again. After success, preview and confirm the connection to update the client, then check the local bridge.",
             ));
         }
     }
@@ -1533,7 +1542,11 @@ pub(super) fn apply_result(
     tab.state.borrow_mut().active_login = false;
     if !matches!(
         result.action,
-        Action::Refresh | Action::RefreshSaved | Action::Save | Action::Delete
+        Action::Refresh
+            | Action::RefreshAfterLogin
+            | Action::RefreshSaved
+            | Action::Save
+            | Action::Delete
     ) && result.profile_id != tab.state.borrow().selected_id
     {
         update_controls(tab);
@@ -1542,8 +1555,52 @@ pub(super) fn apply_result(
     let value = match result.outcome {
         Ok(value) => value,
         Err(error) => {
-            tab.status.set_label(&display_message(text, &error));
+            let message = display_message(text, &error);
+            tab.status.set_label(&message);
             tab.status.wrap(920);
+            match &result.action {
+                Action::Inspect(kind) => show_client_failure(
+                    tab,
+                    kind,
+                    tr(
+                        text,
+                        "客户端配置检查未完成",
+                        "Client settings check did not complete",
+                    ),
+                    &message,
+                ),
+                Action::DetectClient(kind) => show_client_failure(
+                    tab,
+                    kind,
+                    tr(
+                        text,
+                        "本机桥检测未完成",
+                        "Local bridge check did not complete",
+                    ),
+                    &message,
+                ),
+                Action::Preview { client, .. } => show_client_failure(
+                    tab,
+                    client,
+                    tr(
+                        text,
+                        "客户端操作预览未完成",
+                        "Client operation preview did not complete",
+                    ),
+                    &message,
+                ),
+                Action::Mutate(kind) => show_client_failure(
+                    tab,
+                    kind,
+                    tr(
+                        text,
+                        "客户端连接修改未完成",
+                        "Client connection change did not complete",
+                    ),
+                    &message,
+                ),
+                _ => {}
+            }
             if matches!(result.action, Action::Login) {
                 tab.identity.set_label(tr(
                     text,
@@ -1557,6 +1614,17 @@ pub(super) fn apply_result(
     };
     match result.action {
         Action::Refresh => apply_snapshot(tab, text, value),
+        Action::RefreshAfterLogin => {
+            apply_snapshot(tab, text, value);
+            for row in &tab.clients {
+                row.status.set_label(tr(
+                    text,
+                    "登录成功。请“预览接入”并确认，添加或更新此客户端连接，再检测本机桥；“检查”可先读取当前配置及 MCP 名称。",
+                    "Signed in. Preview and confirm the connection to add or update this client, then check the local bridge. Inspect can first read the current settings and MCP name.",
+                ));
+                row.status.wrap(920);
+            }
+        }
         Action::RefreshSaved => {
             let fields = form_fields(tab);
             let selected_id = tab.state.borrow().selected_id.clone();
@@ -1624,7 +1692,7 @@ pub(super) fn apply_result(
                 }
             } else if value.get("state").and_then(Value::as_str) == Some("authenticated") {
                 clear_login_material(tab);
-                start(tab, tx, Action::Refresh, "/manage/status", None);
+                start(tab, tx, Action::RefreshAfterLogin, "/manage/status", None);
             }
         }
         Action::Logout | Action::Cancel => {
@@ -1715,9 +1783,31 @@ pub(super) fn apply_result(
                     .unwrap_or("Verification code requested"),
             ));
         }
-        Action::Inspect(kind) | Action::Mutate(kind) => {
+        Action::Inspect(kind) => {
             let value = value.get("status").cloned().unwrap_or(value);
-            apply_client(tab, &kind, value);
+            if value.get("available").and_then(Value::as_bool) != Some(false) {
+                tab.status.set_label(tr(
+                    text,
+                    "已读取客户端配置。下方显示当前 MCP 名称及连接设置；“检测本机桥”可读取工具清单并确认连接。",
+                    "Client settings were read. See the current MCP name and settings below. Check local bridge reads the tool list and verifies the connection.",
+                ));
+            } else {
+                tab.status.set_label(tr(
+                    text,
+                    "客户端配置尚未读取，请查看下方的操作提示。",
+                    "Client settings could not be read. See the instructions below.",
+                ));
+            }
+            apply_client(tab, &kind, value, true);
+        }
+        Action::Mutate(kind) => {
+            let value = value.get("status").cloned().unwrap_or(value);
+            apply_client(tab, &kind, value, false);
+            tab.status.set_label(tr(
+                text,
+                "客户端连接设置已修改，请查看下方结果和下一步提示。",
+                "Client connection settings were changed. See the result and next steps below.",
+            ));
         }
         Action::Preview {
             client,
@@ -1740,7 +1830,26 @@ pub(super) fn apply_result(
                 .and_then(Value::as_str)
                 .unwrap_or("无法取得客户端预览详情");
             if !allowed || fingerprint.is_empty() {
-                tab.status.set_label(&display_message(text, detail));
+                let message = if allowed {
+                    tr(
+                        text,
+                        "未取得最新客户端配置，暂时无法保存。请重新检查，再预览接入。",
+                        "The latest client settings were not returned, so saving is unavailable. Inspect the client and preview the connection again.",
+                    )
+                    .to_string()
+                } else {
+                    display_message(text, detail)
+                };
+                if let Some(status) = value.get("status") {
+                    apply_client(tab, &client, status.clone(), false);
+                }
+                tab.status.set_label(&message);
+                show_client_failure(
+                    tab,
+                    &client,
+                    tr(text, "此次预览无法继续保存", "This preview cannot be saved"),
+                    &message,
+                );
             } else {
                 let target_path = value
                     .pointer("/status/targetPath")
@@ -1781,11 +1890,17 @@ pub(super) fn apply_result(
                         .or_else(|| value.get("previousServerName"))
                         .and_then(Value::as_str)
                         .filter(|name| !name.trim().is_empty() && *name != mcp_name)
-                        .map(|previous| match text.locale {
-                            GuiLocale::ZhCn => {
-                                format!("\n当前名称：{previous}；确认后更新为上方 MCP 名称。")
-                            }
-                            GuiLocale::EnUs => format!(
+                        .map(|previous| match (text.locale, value.pointer("/status/present").and_then(Value::as_bool)) {
+                            (GuiLocale::ZhCn, Some(false)) => format!(
+                                "\n历史名称：{previous}（客户端中已缺失）；确认后按上方 MCP 名称重新添加。"
+                            ),
+                            (GuiLocale::EnUs, Some(false)) => format!(
+                                "\nPrevious name: {previous} (missing from the client); confirmation adds the MCP name above."
+                            ),
+                            (GuiLocale::ZhCn, _) => format!(
+                                "\n当前名称：{previous}；确认后更新为上方 MCP 名称。"
+                            ),
+                            (GuiLocale::EnUs, _) => format!(
                                 "\nCurrent name: {previous}; confirmation updates it to the MCP name above."
                             ),
                         })
@@ -1887,7 +2002,19 @@ pub(super) fn apply_result(
     tab.page.fit_inside();
 }
 
-fn apply_client(tab: &NvwaTab, kind: &str, value: Value) {
+fn show_client_failure(tab: &NvwaTab, kind: &str, title: &str, message: &str) {
+    if let Some(row) = tab.clients.iter().find(|row| row.kind == kind) {
+        row.status.set_label(&format!("{title}\n{message}"));
+        row.status.wrap(920);
+    }
+    let mut state = tab.state.borrow_mut();
+    if let Some(status) = state.clients.get_mut(kind) {
+        status["bridgeState"] = json!("unknown");
+        status["bridgeCheckedAtMs"] = Value::Null;
+    }
+}
+
+fn apply_client(tab: &NvwaTab, kind: &str, value: Value, inspected: bool) {
     if let Some(row) = tab.clients.iter().find(|row| row.kind == kind) {
         let detail = value
             .get("detail")
@@ -1905,28 +2032,62 @@ fn apply_client(tab: &NvwaTab, kind: &str, value: Value) {
             .get("bridgeState")
             .and_then(Value::as_str)
             .unwrap_or("");
-        let load = match load {
-            "pending_client_refresh" => tr(
-                tab.text,
-                "下一步：刷新客户端或重开会话，并按提示确认使用。",
-                "Next: refresh the client or reopen a session and follow its confirmation prompts.",
-            ),
-            "next_turn" => tr(
-                tab.text,
-                "下一步：在天工下一轮对话中查看工具。",
-                "Next: check the tools in the next TianGong conversation turn.",
-            ),
-            "not_configured" => tr(
-                tab.text,
-                "下一步：登录成功后点击“预览接入”。",
-                "Next: sign in, then select Preview connection.",
-            ),
-            "unavailable" => tr(
+        let requires_access = value["requiresClientAccess"].as_bool() == Some(true)
+            && value["owned"].as_bool() == Some(true);
+        let missing_managed = value["available"].as_bool() == Some(true)
+            && value["present"].as_bool() == Some(false)
+            && value["owned"].as_bool() == Some(true)
+            && value["modified"].as_bool() == Some(false);
+        let load = if value["available"].as_bool() == Some(false) {
+            tr(
                 tab.text,
                 "下一步：先打开并连接客户端，再点击“检查”。",
                 "Next: open and connect the client, then select Inspect.",
-            ),
-            _ => "",
+            )
+        } else if value["modified"].as_bool() == Some(true)
+            || value["nameConflict"].as_bool() == Some(true)
+        {
+            tr(
+                tab.text,
+                "下一步：按上方提示核对连接，再点击“检查”；本次未覆盖现有设置。",
+                "Next: review the connection as described above, then select Inspect. Existing settings were preserved.",
+            )
+        } else if missing_managed {
+            tr(
+                tab.text,
+                "下一步：登录成功后点击“预览接入”并确认，重新添加已缺失的连接，再检测本机桥。",
+                "Next: after signing in, preview and confirm the connection to add the missing entry again, then check the local bridge.",
+            )
+        } else if requires_access {
+            tr(
+                tab.text,
+                "下一步：登录成功后点击“预览接入”并确认，更新客户端连接，再检测本机桥。",
+                "Next: after signing in, preview and confirm the connection to update the client, then check the local bridge.",
+            )
+        } else {
+            match load {
+                "pending_client_refresh" => tr(
+                    tab.text,
+                    "下一步：刷新客户端或重开会话，并按提示确认使用。",
+                    "Next: refresh the client or reopen a session and follow its confirmation prompts.",
+                ),
+                "next_turn" => tr(
+                    tab.text,
+                    "下一步：在天工下一轮对话中查看工具。",
+                    "Next: check the tools in the next TianGong conversation turn.",
+                ),
+                "not_configured" => tr(
+                    tab.text,
+                    "下一步：登录成功后点击“预览接入”。",
+                    "Next: sign in, then select Preview connection.",
+                ),
+                "unavailable" => tr(
+                    tab.text,
+                    "下一步：先打开并连接客户端，再点击“检查”。",
+                    "Next: open and connect the client, then select Inspect.",
+                ),
+                _ => "",
+            }
         };
         let bridge = match bridge {
             "checked" | "tools_discovered" => tr(
@@ -1936,19 +2097,83 @@ fn apply_client(tab: &NvwaTab, kind: &str, value: Value) {
             ),
             _ => tr(
                 tab.text,
-                "Hub 尚未检测这条工具连接。",
-                "Hub has not checked this tool connection yet.",
+                "“检查”读取连接设置；接入后，“检测本机桥”可读取工具清单并确认连接。",
+                "Inspect reads the connection settings. After connecting, Check local bridge reads the tool list and verifies the connection.",
             ),
         };
         let detail = display_message(tab.text, detail);
-        let mcp_name = value
-            .get("serverName")
+        let current_name = value
+            .get("previousServerName")
             .and_then(Value::as_str)
             .filter(|name| !name.trim().is_empty())
-            .map(|name| format!("{}{name}\n", tr(tab.text, "MCP 名称：", "MCP name: ")))
-            .unwrap_or_default();
+            .or_else(|| {
+                value
+                    .get("serverName")
+                    .and_then(Value::as_str)
+                    .filter(|name| !name.trim().is_empty())
+            });
+        let desired_name = value
+            .get("desiredServerName")
+            .and_then(Value::as_str)
+            .filter(|name| !name.trim().is_empty());
+        let mcp_name = match (current_name, desired_name) {
+            (Some(current), Some(desired))
+                if current != desired && value["previousServerName"].as_str().is_some() =>
+            {
+                format!(
+                    "{}{current}\n{}{desired}\n{}\n",
+                    if missing_managed {
+                        tr(
+                            tab.text,
+                            "历史 MCP 名称（客户端中已缺失）：",
+                            "Previous MCP name (missing from the client): ",
+                        )
+                    } else {
+                        tr(tab.text, "当前 MCP 名称：", "Current MCP name: ")
+                    },
+                    if missing_managed {
+                        tr(tab.text, "重新接入 MCP 名称：", "MCP name to add again: ")
+                    } else {
+                        tr(tab.text, "更新后 MCP 名称：", "MCP name after updating: ")
+                    },
+                    if missing_managed {
+                        tr(
+                            tab.text,
+                            "点击“预览接入”并确认，将按环境名称重新添加连接。",
+                            "Select Preview connection and confirm to add the missing connection under the environment name.",
+                        )
+                    } else {
+                        tr(
+                            tab.text,
+                            "点击“预览接入”并确认，才会将旧名称更新为环境名称。",
+                            "Select Preview connection and confirm to change the old name to the environment name.",
+                        )
+                    },
+                )
+            }
+            (Some(name), _) => format!(
+                "{}{name}\n",
+                if missing_managed {
+                    tr(tab.text, "待重新接入 MCP 名称：", "MCP name to add again: ")
+                } else if value["present"].as_bool() == Some(false) {
+                    tr(tab.text, "待接入 MCP 名称：", "MCP name to add: ")
+                } else {
+                    tr(tab.text, "MCP 名称：", "MCP name: ")
+                },
+            ),
+            _ => String::new(),
+        };
+        let inspected = if inspected && value["available"].as_bool() != Some(false) {
+            tr(
+                tab.text,
+                "已读取客户端配置。\n",
+                "Client settings were read.\n",
+            )
+        } else {
+            ""
+        };
         row.status
-            .set_label(&format!("{mcp_name}{detail}\n{load}\n{bridge}"));
+            .set_label(&format!("{inspected}{mcp_name}{detail}\n{load}\n{bridge}"));
         row.status.wrap(920);
     }
     tab.state

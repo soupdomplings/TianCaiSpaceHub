@@ -304,7 +304,13 @@ pub(crate) async fn inspect(ctx: &AdapterContext, target: &AdapterTarget) -> Res
     }
     let read = read_target(ctx, target, &location).await?;
     reconcile_journal(ctx, target, &location, &root, &read, &mut ledger)?;
-    status(target, &location, &read, ledger.entries.get(&location.key))
+    status_with_backup(
+        ctx,
+        target,
+        &location,
+        &read,
+        ledger.entries.get(&location.key),
+    )
 }
 
 /// Check all recorded explicit paths, not only the three default targets.
@@ -353,9 +359,15 @@ pub(crate) async fn preview(
         && let Some(previous) = &status.previous_server_name
         && let Some(desired) = &status.desired_server_name
     {
-        warnings.push(format!(
-            "本次将把 Codex 中的受管连接“{previous}”更新为“{desired}”，确认保存后移除旧名称，不保留重复连接。"
-        ));
+        warnings.push(if status.present {
+            format!(
+                "本次将把 Codex 中的受管连接“{previous}”更新为“{desired}”，确认保存后移除旧名称，不保留重复连接。"
+            )
+        } else {
+            format!(
+                "历史连接“{previous}”已不在 Codex 配置中；确认后将按环境名称“{desired}”重新添加。"
+            )
+        });
     }
     Ok(AdapterPreview {
         operation,
@@ -450,7 +462,8 @@ async fn mutate(
     let mut ledger = load_ledger(&root)?;
     let before = read_target(ctx, target, &location).await?;
     reconcile_journal(ctx, target, &location, &root, &before, &mut ledger)?;
-    let current = status(
+    let current = status_with_backup(
+        ctx,
         target,
         &location,
         &before,
@@ -465,7 +478,14 @@ async fn mutate(
         !current.present || current.owned,
         "同名 MCP 条目不是 Hub 管理，本次未接管"
     );
-    let previous_managed = ledger.entries.get(&location.key).cloned();
+    let previous_managed = ledger.entries.get(&location.key).cloned().map(|mut entry| {
+        // A confirmed re-add backs up the actual absent entry. Restoring it
+        // must not claim that the externally removed old entry still exists.
+        if before.snapshot.is_none() && !entry.pending {
+            entry.fingerprint = "missing".into();
+        }
+        entry
+    });
     let next_managed;
     match operation {
         AdapterOperation::Restore => {
@@ -572,8 +592,13 @@ async fn mutate(
             if mutation.is_err() {
                 warnings.push("操作时未收到明确回复，随后已检查并确认本次修改已完成。".into());
             }
-            let updated_status =
-                status(target, &location, &after, ledger.entries.get(&location.key))?;
+            let updated_status = status_with_backup(
+                ctx,
+                target,
+                &location,
+                &after,
+                ledger.entries.get(&location.key),
+            )?;
             Ok(AdapterOutcome {
                 backup_ref: updated_status.backup_ref.clone(),
                 status: updated_status,
@@ -866,13 +891,18 @@ fn status(
     managed: Option<&ManagedEntry>,
 ) -> Result<AdapterStatus> {
     let owned = managed.is_some();
-    let modified = managed.is_some_and(|entry| {
-        fingerprint(read.snapshot.as_ref(), true, target.client)
-            .ok()
-            .as_deref()
-            != Some(entry.fingerprint.as_str())
-    });
     let present = read.snapshot.is_some();
+    // Missing entries can be explicitly recreated. Keep pending journals and
+    // edits to existing entries protected; neither is a confirmed deletion.
+    let deleted =
+        !present && managed.is_some_and(|entry| !entry.pending && entry.fingerprint != "missing");
+    let modified = managed.is_some_and(|entry| {
+        !deleted
+            && fingerprint(read.snapshot.as_ref(), true, target.client)
+                .ok()
+                .as_deref()
+                != Some(entry.fingerprint.as_str())
+    });
     let enabled = read
         .snapshot
         .as_ref()
@@ -889,6 +919,8 @@ fn status(
     let configured = present && owned && !modified && !managed.is_some_and(|entry| entry.pending);
     let detail = if managed.is_some_and(|entry| entry.pending) {
         "上次修改的结果还未确认。请查看客户端中的这条连接，再回 Hub 重新检查；修改前的备份已保留。"
+    } else if deleted {
+        "此前的接入记录仍在，但客户端中的连接已不存在。点击“预览接入”并确认，可重新添加连接。"
     } else if modified {
         "这条连接与 Hub 上次保存的设置不同。请先核对客户端中的设置，Hub 会保留这些改动。"
     } else if present && !owned {
@@ -915,7 +947,11 @@ fn status(
         modified,
         enabled,
         target_fingerprint: fingerprint(read.snapshot.as_ref(), false, target.client)?,
-        backup_ref: managed.map(|entry| entry.backup_ref.clone()),
+        // The old backup describes a different after-image and cannot restore
+        // an externally removed entry. Retain it privately for history only.
+        backup_ref: (!deleted)
+            .then(|| managed.map(|entry| entry.backup_ref.clone()))
+            .flatten(),
         load_state: if configured {
             if target.client == ClientKind::Tiangong {
                 "next_turn"
@@ -930,6 +966,33 @@ fn status(
         native_connected,
         detail: detail.into(),
     })
+}
+
+fn status_with_backup(
+    ctx: &AdapterContext,
+    target: &AdapterTarget,
+    location: &Location,
+    read: &TargetRead,
+    managed: Option<&ManagedEntry>,
+) -> Result<AdapterStatus> {
+    let mut status = status(target, location, read, managed)?;
+    if let Some(reference) = &status.backup_ref {
+        // Recovery metadata may refer to an older, now missing entry after a
+        // re-add is restored. Offer Restore only for this exact after-image.
+        let matches = load_backup(&ctx.secrets, reference)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<ProtectedBackup>(&bytes).ok())
+            .is_some_and(|backup| {
+                backup.version == 1
+                    && backup.target_key == location.key
+                    && fingerprint(read.snapshot.as_ref(), true, target.client)
+                        .is_ok_and(|actual| actual == backup.after_fingerprint)
+            });
+        if !matches {
+            status.backup_ref = None;
+        }
+    }
+    Ok(status)
 }
 
 fn unavailable(target: &AdapterTarget, managed: Option<&ManagedEntry>) -> AdapterStatus {
@@ -1042,4 +1105,79 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
         .persist(path)
         .map_err(|_| anyhow::anyhow!("无法原子替换 MCP 配置"))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::*;
+
+    fn fixture() -> (AdapterTarget, Location, ManagedEntry, Snapshot) {
+        let target = AdapterTarget {
+            profile_id: "historical-profile".into(),
+            client: ClientKind::Codex,
+            server_name: managed_server_name("historical-profile").unwrap(),
+            override_path: None,
+        };
+        let snapshot = codex::desired(
+            &target.server_name,
+            "http://127.0.0.1:3849/mcp/historical-profile/codex",
+            "synthetic-test-credential-never-used",
+        );
+        let location = Location {
+            path: None,
+            key: "synthetic-target-key".into(),
+        };
+        let entry = ManagedEntry {
+            profile_id: target.profile_id.clone(),
+            client: target.client,
+            server_name: target.server_name.clone(),
+            target_path: None,
+            fingerprint: fingerprint(Some(&snapshot), true, target.client).unwrap(),
+            backup_ref: "synthetic-backup-reference".into(),
+            pending: false,
+        };
+        (target, location, entry, snapshot)
+    }
+
+    #[test]
+    fn deleted_owned_entry_allows_explicit_readd_without_stale_restore() {
+        let (target, location, entry, _) = fixture();
+        let read = TargetRead {
+            snapshot: None,
+            file_bytes: None,
+        };
+        let status = status(&target, &location, &read, Some(&entry)).unwrap();
+        assert!(status.owned);
+        assert!(!status.present && !status.configured && !status.modified);
+        assert!(status.backup_ref.is_none());
+    }
+
+    #[test]
+    fn pending_missing_entry_still_blocks_readd() {
+        let (target, location, mut entry, _) = fixture();
+        entry.pending = true;
+        let read = TargetRead {
+            snapshot: None,
+            file_bytes: None,
+        };
+        let status = status(&target, &location, &read, Some(&entry)).unwrap();
+        assert!(status.modified);
+        assert!(!status.configured);
+    }
+
+    #[test]
+    fn modified_existing_entry_still_blocks_readd() {
+        let (target, location, entry, _) = fixture();
+        let read = TargetRead {
+            snapshot: Some(codex::desired(
+                &target.server_name,
+                "http://127.0.0.1:3849/mcp/historical-profile/codex",
+                "different-synthetic-test-credential",
+            )),
+            file_bytes: None,
+        };
+        let status = status(&target, &location, &read, Some(&entry)).unwrap();
+        assert!(status.present && status.modified);
+        assert!(!status.configured);
+    }
 }

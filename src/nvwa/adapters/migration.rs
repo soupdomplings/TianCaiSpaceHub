@@ -279,6 +279,48 @@ fn matches_before(backup: &CodexBackup, state: &FileState) -> Result<bool> {
     Ok(true)
 }
 
+/// v2 ownership is validated separately before reading all of its slots. This
+/// additional check controls only whether the public preview offers Restore.
+fn restorable_backup(
+    bytes: &[u8],
+    actual_key: &str,
+    record: &ManagedEntry,
+    state: &FileState,
+) -> Result<bool> {
+    if let Ok(backup) = serde_json::from_slice::<CodexBackup>(bytes) {
+        return Ok(backup.version == 2
+            && backup.next_records.get(actual_key).is_some_and(|next| {
+                !next.pending
+                    && next.profile_id == record.profile_id
+                    && next.client == record.client
+                    && next.server_name == record.server_name
+                    && next.fingerprint == record.fingerprint
+                    && next.backup_ref == record.backup_ref
+            })
+            && matches_after(&backup, state)?);
+    }
+    if let Ok(backup) = serde_json::from_slice::<ProtectedBackup>(bytes) {
+        return Ok(backup.version == 1
+            && backup.target_key == actual_key
+            && backup.after_fingerprint == slot_fingerprint(state, &record.server_name)?);
+    }
+    Ok(false)
+}
+
+fn previous_record_for_state(mut record: ManagedEntry, state: &FileState) -> ManagedEntry {
+    // Keep history and its exact ownership key, but align a deleted entry's
+    // recovery marker with the independently verified current before-image.
+    // Restore must leave it absent rather than reviving the former entry.
+    if state
+        .slots
+        .get(&record.server_name)
+        .is_some_and(Option::is_none)
+    {
+        record.fingerprint = "missing".into();
+    }
+    record
+}
+
 fn install_records(
     ledger: &mut Ledger,
     target: &AdapterTarget,
@@ -424,9 +466,11 @@ async fn plan(
     }
     // Include the latest migration's old name in preview CAS, so Restore
     // cannot remove/recreate a target changed since the confirmation preview.
-    if let Some(record) = &record
-        && let Ok(bytes) = load_backup(&ctx.secrets, &record.backup_ref)
-        && let Ok(backup) = serde_json::from_slice::<CodexBackup>(&bytes)
+    let recovery_bytes = record
+        .as_ref()
+        .and_then(|record| load_backup(&ctx.secrets, &record.backup_ref).ok());
+    if let Some(bytes) = &recovery_bytes
+        && let Ok(backup) = serde_json::from_slice::<CodexBackup>(bytes)
     {
         validate_backup(&backup, target, location)?;
         names.extend(backup_names(&backup));
@@ -438,6 +482,17 @@ async fn plan(
         file_bytes: None,
     };
     let mut public = status(&actual, &actual_location, &read, record.as_ref())?;
+    let restore_matches = match (&record, recovery_bytes.as_deref()) {
+        (Some(record), Some(bytes)) => {
+            restorable_backup(bytes, &actual_location.key, record, &state)?
+        }
+        _ => false,
+    };
+    if !restore_matches {
+        // Missing/unreadable backups and stale after-images remain private
+        // history, never a promise that Restore can overwrite current slots.
+        public.backup_ref = None;
+    }
     public.desired_server_name = Some(target.server_name.clone());
     public.previous_server_name =
         (actual_name != target.server_name && record.is_some()).then_some(actual_name.clone());
@@ -701,6 +756,7 @@ pub(super) async fn mutate(
     let previous_records = scoped_records(target, &location, &ledger)?
         .into_iter()
         .filter(|(_, record)| names.contains(&record.server_name))
+        .map(|(key, record)| (key, previous_record_for_state(record, &before)))
         .collect();
     let mut slots = Vec::new();
     for (name, after) in &desired_slots {
@@ -806,5 +862,130 @@ pub(super) async fn mutate(
             bail!("Codex 保存结果未确认或新旧名称被并发修改；没有重放或覆盖，请重新检查");
         }
         Err(_) => bail!("Codex 写入后无法核对新旧名称；保护恢复记录已保留，请重新检查"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn record(name: &str, fingerprint: &str) -> ManagedEntry {
+        ManagedEntry {
+            profile_id: "fixture-profile".into(),
+            client: ClientKind::Codex,
+            server_name: name.into(),
+            target_path: None,
+            fingerprint: fingerprint.into(),
+            backup_ref: "fixture-backup".into(),
+            pending: false,
+        }
+    }
+
+    fn state(slots: BTreeMap<String, Option<Snapshot>>) -> FileState {
+        FileState { raw: None, slots }
+    }
+
+    #[test]
+    fn deleted_previous_record_tracks_missing_before_image_without_reviving_it() {
+        let original = record("nvwa-old", "historical-present-fingerprint");
+        let missing = state(BTreeMap::from([("nvwa-old".into(), None)]));
+        let normalized = previous_record_for_state(original.clone(), &missing);
+        assert_eq!(normalized.fingerprint, "missing");
+        assert_eq!(normalized.backup_ref, original.backup_ref);
+        assert_eq!(normalized.server_name, original.server_name);
+        assert_eq!(normalized.profile_id, original.profile_id);
+        assert_eq!(normalized.target_path, original.target_path);
+        assert!(!normalized.pending);
+    }
+
+    #[test]
+    fn previous_record_keeps_fingerprint_for_present_or_unread_slots() {
+        let original = record("nvwa-old", "historical-present-fingerprint");
+        let changed = state(BTreeMap::from([(
+            "nvwa-old".into(),
+            Some(Snapshot::Toml("different current contents".into())),
+        )]));
+        assert_eq!(
+            previous_record_for_state(original.clone(), &changed).fingerprint,
+            original.fingerprint
+        );
+        assert_eq!(
+            previous_record_for_state(original.clone(), &state(BTreeMap::new())).fingerprint,
+            original.fingerprint
+        );
+    }
+
+    #[test]
+    fn legacy_restore_rejects_deleted_after_image_and_stale_missing_marker() {
+        let original = record("nvwa-old", "historical-present-fingerprint");
+        let missing = state(BTreeMap::from([("nvwa-old".into(), None)]));
+        let backup = ProtectedBackup {
+            version: 1,
+            target_key: "fixture-key".into(),
+            before: None,
+            after_fingerprint: original.fingerprint.clone(),
+            previous_managed: None,
+        };
+        let bytes = serde_json::to_vec(&backup).unwrap();
+        assert!(!restorable_backup(&bytes, "fixture-key", &original, &missing).unwrap());
+        let marker = previous_record_for_state(original, &missing);
+        assert!(!restorable_backup(&bytes, "fixture-key", &marker, &missing).unwrap());
+        assert!(!restorable_backup(b"unreadable", "fixture-key", &marker, &missing).unwrap());
+    }
+
+    #[test]
+    fn legacy_removal_backup_is_restorable_only_for_its_missing_target() {
+        let marker = record("nvwa-old", "missing");
+        let missing = state(BTreeMap::from([("nvwa-old".into(), None)]));
+        let backup = ProtectedBackup {
+            version: 1,
+            target_key: "fixture-key".into(),
+            before: Some(Snapshot::Toml("fixture removed entry".into())),
+            after_fingerprint: "missing".into(),
+            previous_managed: None,
+        };
+        let bytes = serde_json::to_vec(&backup).unwrap();
+        assert!(restorable_backup(&bytes, "fixture-key", &marker, &missing).unwrap());
+        assert!(!restorable_backup(&bytes, "another-key", &marker, &missing).unwrap());
+    }
+
+    #[test]
+    fn migration_restore_requires_both_slots_and_current_owner_to_match() {
+        let current_entry = Snapshot::Toml("fixture rebuilt current entry".into());
+        let after = fingerprint(Some(&current_entry), false, ClientKind::Codex).unwrap();
+        let current = record("MCP196", &after);
+        let backup = CodexBackup {
+            version: 2,
+            scope: "fixture-scope".into(),
+            slots: vec![
+                CodexSlot {
+                    server_name: "nvwa-old".into(),
+                    before: None,
+                    after_fingerprint: "missing".into(),
+                },
+                CodexSlot {
+                    server_name: "MCP196".into(),
+                    before: None,
+                    after_fingerprint: after,
+                },
+            ],
+            previous_records: BTreeMap::from([("old-key".into(), record("nvwa-old", "missing"))]),
+            next_records: BTreeMap::from([("new-key".into(), current.clone())]),
+        };
+        let bytes = serde_json::to_vec(&backup).unwrap();
+        let mut actual = state(BTreeMap::from([
+            ("nvwa-old".into(), None),
+            ("MCP196".into(), Some(current_entry)),
+        ]));
+        assert!(restorable_backup(&bytes, "new-key", &current, &actual).unwrap());
+        assert!(!restorable_backup(&bytes, "old-key", &current, &actual).unwrap());
+        let mut another_owner = current.clone();
+        another_owner.backup_ref = "other-backup".into();
+        assert!(!restorable_backup(&bytes, "new-key", &another_owner, &actual).unwrap());
+        actual.slots.insert(
+            "nvwa-old".into(),
+            Some(Snapshot::Toml("externally added connection".into())),
+        );
+        assert!(!restorable_backup(&bytes, "new-key", &current, &actual).unwrap());
     }
 }

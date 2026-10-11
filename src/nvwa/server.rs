@@ -803,6 +803,17 @@ async fn client_operation(
     match operation {
         "inspect" => {
             let mut value = serde_json::to_value(adapters::inspect(&context, &target).await?)?;
+            // A fresh explicit login revokes old client credentials even while
+            // the client's saved entry remains present. Reading that entry is
+            // not evidence that it can use this authentication generation.
+            value["requiresClientAccess"] = Value::Bool(
+                service
+                    .inner
+                    .runtime
+                    .existing_capability(&profile.id, client)
+                    .await
+                    .is_none(),
+            );
             value["bridgeCheckedAtMs"] = service
                 .inner
                 .runtime
@@ -872,7 +883,9 @@ async fn client_operation(
                 .revoke_client(&profile.id, client)
                 .await;
             service.persist_session(&profile.id).await?;
-            Ok(serde_json::to_value(outcome)?)
+            let mut value = serde_json::to_value(outcome)?;
+            value["status"]["requiresClientAccess"] = Value::Bool(true);
+            Ok(value)
         }
         "restore" => {
             let gate = service.gate(&profile.id).await;
@@ -890,7 +903,9 @@ async fn client_operation(
                 .revoke_client(&profile.id, client)
                 .await;
             service.persist_session(&profile.id).await?;
-            Ok(serde_json::to_value(outcome)?)
+            let mut value = serde_json::to_value(outcome)?;
+            value["status"]["requiresClientAccess"] = Value::Bool(true);
+            Ok(value)
         }
         _ => bail!("Unknown client operation"),
     }
