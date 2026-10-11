@@ -1,5 +1,7 @@
 # TianCaiSpaceHub
 
+2026-10-11：用户要求最新 `main`（含 NVWA 自动重新认证）交给两平台 Actions 打包。此前 Windows 失败的 WiX 扩展安装参数已修正，并前移到编译前；macOS 原编译/打包已成功，失败于等待 Windows 发布清单，本次手动 `main` 构建跳过该等待。云端构建待启动，完成后安装包放在对应 Actions 的 Artifacts，既有 v5 标签及 Release 不变，当前运行状态见 [v5 交付](docs/releases/v0.4.30-5.md)。下方旧构建与反馈保留原日期归属。
+
 [English](README.en.md)
 
 [文档总入口](docs/README.md) · [二开功能总表](docs/customizations/README.md) · [二开变更记录](docs/customizations/CHANGELOG.md)

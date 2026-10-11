@@ -1,5 +1,7 @@
 # Dumpling-MCP 接入（NVWA）
 
+2026-10-11 打包安排：用户授权包含下方自动重新认证修复的最新 `main` 交给 Windows/macOS Actions 手动构建。Windows 打包工具扩展参数已补齐，macOS 非标签构建跳过发布清单等待；本次仅上传 Actions 安装包附件，云端构建待启动，既有 v5 标签/Release 不变。详情见 [v5 交付](../releases/v0.4.30-5.md)，安装及实际续认证仍待用户验收。下方 10 月 10 日构建和发布状态保留原阶段归属。
+
 维护日期：2026-10-10。适用版本：`0.4.30-5`。关联：TC-014。
 
 实现状态：接入页、认证 provider、后台本机桥、管理接口与三客户端适配已实现；此前 Dumpling-MCP 页签、帮助菜单显示开关、按钮说明、工具展示及 Codex 环境名迁移已进入 v5 发布基线。该阶段 Windows locked GUI build 22.88 秒、38 条警告通过，独立 EXE 的版本、x64 PE、导入和复制哈希核对通过、开发方未运行，详见 [v5 交付](../releases/v0.4.30-5.md)。此前 auth-expiry 等构建和产物保留原源码身份。用户曾反馈通过 Hub 连入 Codex MCP，另对该 Windows 本机测试版反馈“可以了”并授权发布；这些只记录对应接入/试用及可交付判断，不扩大为 Windows MSI、macOS、全部 MCP 工具调用或期限验收。[v0.4.30-5 Release](https://github.com/soupdomplings/TianCaiSpaceHub/releases/tag/v0.4.30-5) 已创建（非草稿 Pre-release、Latest=false）；此前停止核对时 Windows/macOS Actions 已启动、未确认完成、0 个附件，未执行发布产物或签名核验。安装包由 Actions 成功后自动上传，实际构建与包结果另行登记。

@@ -1,5 +1,16 @@
 # 二开变更记录
 
+## v0.4.30-5 Actions 打包准备 · 2026-10-11 · WiX 扩展 EULA 修复与最新 main 两平台构建
+
+关联 TC-007、TC-014；基于唯一 `main` 的 `207357b875f01ba8d6512289f276a0ff188379bc`，当前工作区修复尚未提交，完整版本保持 `0.4.30-5`。用户授权对最新 `main` 进行 Windows/macOS Actions 打包，要求避开上次已知失败，只确认开始后停止等待。此次源码包含 `06c8524011efd7ceb77b693a175136c4cf8abaaf` 的 NVWA 自动续认证及全部既有产品改动；不是重建旧 v5 标签源码。
+
+- 上次 Windows [38052269127](https://github.com/soupdomplings/TianCaiSpaceHub/actions/runs/38052269127) 的 release Rust 编译成功（14 分 31 秒），随后安装 WiX UI/Util 扩展时因缺少 WiX 7 EULA 参数而报 `WIX7015`，MSI 构建及后续步骤未执行。Windows 工作流为两次 `extension add` 补上 `-acceptEula wix7`，保留 MSI `build` 已有同参数及 WiX/UI/Util `7.0.0`；将整块 WiX 安装移至 .NET SDK 后、长时间 Rust 编译前，先核对打包前置条件。
+- 上次 macOS [38052269076](https://github.com/soupdomplings/TianCaiSpaceHub/actions/runs/38052269076) 的 arm64/x86_64 编译、universal 打包、ad-hoc 签名、DMG checksum `VALID` 与 Upload Artifact 均成功；仅等待旧 Release 的 `latest-windows.json` 90 次仍不可得，导致 Verify Windows Update Manifest 失败、Publish GitHub Release 跳过。已上传 Actions artifact `11669903495`、81,368,459 字节；这不等于完整 run 或 Release 成功，也未下载/实机验收。
+- 此次两平台使用 `workflow_dispatch`、`ref=main`；macOS 的可选 `release_tag` 留空，Windows 本来没有该输入。按现有门槛，两平台更新 metadata 和 Release 发布步骤、macOS 等待 Windows manifest 步骤均跳过，只上传 Actions artifacts：Windows x64 MSI/便携 ZIP，macOS universal DMG/App ZIP；不生成更新 manifest。macOS 工作流不改，保留已有 DMG 容量预检和中间产物清理。
+- 本轮不创建或移动标签，不新建/覆盖既有 `v0.4.30-5` Release 附件；版本、安装升级身份、用户配置和已交付包不改。回退此次 workflow 修复会恢复缺 EULA 的扩展命令及旧前置步骤顺序，可能再次打包失败；程序配置无迁移。后续正式发布需另行明确标签/Release 范围。
+- 当前状态：修复已写入工作区；两份 workflow 的 PyYAML BaseLoader 解析、WXS XML 解析、WiX 唯一步骤位置/参数/固定版本及手动 main 发布门槛静态核对通过。9 个 Windows `pwsh` 内联块将 GitHub 表达式替换为静态占位后 AST 语法解析通过，仅解析、未执行；两平台新 Actions 尚待触发，运行号/提交身份由实际触发后登记。未执行本地安装包构建、产品/安装器/真实认证或模型测试；新产物生成、上传、下载核验、安装升级及 macOS 实机行为仍待确认，不把上次 Windows 编译或 Mac DMG 构建当作本次结果。
+- 同步 [品牌与打包专题](desktop-and-packaging.md)、[v5 交付](../releases/v0.4.30-5.md)、文档索引及发布摘要；保留下方 10 月 10 日停止等待时的历史事实。
+
 ## v0.4.30-5 未发布追加修复 · 2026-10-10 · NVWA 按需自动续认证
 
 关联 TC-014；基于唯一 `main` 的 `9e4f8b0e74846d9674e8dec14bafe6cc8220fdbb`，追加修复源码与同轮文档提交为 `06c8524011efd7ceb77b693a175136c4cf8abaaf`，完整版本保持 `0.4.30-5`。用户要求密码与认证服务共享应用在认证过期后自动取得新认证。现有 v5 标签、Release 及历史包保持原源码身份，此次不移动标签、不创建 Release、不触发新发布构建，也不改写下方各阶段的发布/编译事实。提交身份与本机交付记录随后单独提交，不改变产品源码或 EXE。

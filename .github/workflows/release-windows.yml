@@ -26,6 +26,25 @@ jobs:
         with:
           dotnet-version: 8.0.x
 
+      # Check packaging prerequisites before the long Rust build. Extension
+      # commands require the same WiX 7 EULA argument as the MSI build.
+      - name: Install WiX Toolset
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          dotnet tool install --global wix --version 7.0.0
+          if ($LASTEXITCODE -ne 0) { throw "WiX tool installation failed" }
+          $wix = Join-Path $env:USERPROFILE ".dotnet\tools\wix.exe"
+          if (-not (Test-Path $wix)) {
+            $wix = "wix"
+          }
+          & $wix --version
+          if ($LASTEXITCODE -ne 0) { throw "WiX version check failed" }
+          foreach ($extension in @("WixToolset.UI.wixext/7.0.0", "WixToolset.Util.wixext/7.0.0")) {
+            & $wix extension add -g $extension -acceptEula wix7
+            if ($LASTEXITCODE -ne 0) { throw "WiX extension installation failed: $extension" }
+          }
+
       - name: Restore Cargo Cache
         uses: Swatinem/rust-cache@v2
 
@@ -137,23 +156,6 @@ jobs:
 
           $zip = Join-Path $distRoot $env:WINDOWS_ZIP_NAME
           Compress-Archive -Path "$zipDist\*" -DestinationPath $zip -Force
-
-      - name: Install WiX Toolset
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          dotnet tool install --global wix --version 7.0.0
-          if ($LASTEXITCODE -ne 0) { throw "WiX tool installation failed" }
-          $wix = Join-Path $env:USERPROFILE ".dotnet\tools\wix.exe"
-          if (-not (Test-Path $wix)) {
-            $wix = "wix"
-          }
-          & $wix --version
-          if ($LASTEXITCODE -ne 0) { throw "WiX version check failed" }
-          foreach ($extension in @("WixToolset.UI.wixext/7.0.0", "WixToolset.Util.wixext/7.0.0")) {
-            & $wix extension add -g $extension
-            if ($LASTEXITCODE -ne 0) { throw "WiX extension installation failed: $extension" }
-          }
 
       - name: Build MSI
         shell: pwsh

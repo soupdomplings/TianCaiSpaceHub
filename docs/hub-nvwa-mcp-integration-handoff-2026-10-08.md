@@ -1,5 +1,7 @@
 # Hub 接入 NVWA MCP：当前开发交接
 
+2026-10-11 打包追加：用户授权最新 `main`（含自动重新认证修复）两平台 Actions 手动打包，云端构建待启动。Windows 扩展安装参数错误已修正并提前检查；macOS 上次包已生成，失败是等待 Windows 发布清单，本次非标签构建跳过该步骤，仅上传 Actions 附件。版本仍 `0.4.30-5`，既有 v5 标签/Release 不变；运行与产物边界见 [交付](releases/v0.4.30-5.md)，下方 10 月 10 日状态保留原阶段归属。
+
 维护日期：2026-10-10。目标项目：TianCaiSpaceHub。关联 TC-014，适用 `0.4.30-5`；本文件路径保留首次交接日期。
 
 本文按用户最新决定记录当前源码交接。操作、默认值、系统保护与回滚以 [Dumpling-MCP / NVWA MCP 专题](customizations/nvwa-mcp.md) 为准；同仓依据见 [NVWA 资料索引](nvwa/README.md)。此前 Codex 环境名/旧名迁移、按钮说明、工具中文简介、Dumpling-MCP 页签/透明品牌图标及帮助显示开关已进入 v5 发布基线。ClientSecret 立即保护保存、期限区分与诊断继续保留；历史 build/产物保持原归属，见 [v5 交付](releases/v0.4.30-5.md)。用户曾反馈通过 Hub 接入 Codex MCP，后对 Windows 本机测试版反馈“可以了”并授权发布，均只覆盖当次接入/试用与交付判断。完整标签/非草稿 Pre-release 已创建；此前停止核对时两平台 Actions 已启动、未确认完成，按用户要求停止等待，包完成后自动上传；安装包/macOS/完整 MCP 仍待验收。

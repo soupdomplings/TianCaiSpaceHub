@@ -1,5 +1,7 @@
 # 二开功能总表
 
+2026-10-11 TC-007/TC-014 打包追加：用户授权包含按需续认证修复的最新 `main` 手动触发 Windows/macOS Actions，仅上传 Actions 安装包附件。Windows 扩展安装补齐原 build 已有的 WiX 7 参数，并提前到 Rust 编译前；macOS 旧包已生成，旧流程失败是等不到 Windows 发布清单，本次非标签构建跳过该等待。两工作流 YAML、Windows PowerShell 语法及 WXS 静态核对通过，云端构建待启动、包与安装/实机待验收；版本保持 `0.4.30-5`，既有标签/Release 不变，详情见 [交付](../releases/v0.4.30-5.md)。以下 10 月 10 日状态保留原阶段归属。
+
 维护日期：2026-10-10。当前开发基线为 `v0.4.30-5`，源码只维护 `main`。范围：TianCaiSpaceHub 相对于 CodexHub 上游的定制，以及上游升级时必须保留的兼容衔接。
 
 当前 `main` 追加 [TC-014 按需自动续认证修复](nvwa-mcp.md#有效期恢复与重新认证)：password/application 仅复用此前显式保存的密码/ClientSecret，在下次使用前按需重新登录或取票换 token；身份核验 401、主桥与直连工具检测的真实 HTTP 401 统一失效处理，已发送请求不重放，自动认证失败后同代次重试最小间隔 60 秒。非 401 核验失败保留身份但不放行当前请求，browser/挑战仍需人工。此次已实现、未发布、版本不变，不改既有 v5 标签、Release 和历史包，不触发新发布构建；最终 Windows locked GUI build 32.62 秒、38 条既有警告通过，独立新 debug EXE 版本/PE/x64/复制哈希通过、未运行。macOS 平台中立逻辑静态审阅通过、未原生编译，真实续认证待用户验收；新 EXE 身份见 [专题验证](nvwa-mcp.md#维护定位与验证)。

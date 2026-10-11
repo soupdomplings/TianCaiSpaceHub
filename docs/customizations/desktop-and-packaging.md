@@ -1,6 +1,8 @@
 # 天才空间品牌、桌面行为与交付
 
-维护日期：2026-10-10。当前 `0.4.30-5` 的 [Dumpling-MCP 页签与 NVWA 后台桥](nvwa-mcp.md) 按帮助菜单勾选显示，默认隐藏并保存偏好，采用 Hub 品牌透明线条图标；Codex 使用环境名接入/兼容旧名，按钮说明和工具中文简介同步调整，关联 TC-014/TC-007。本轮同时实现系统会话结束不再触发普通关闭的托盘阻止，以及 Windows MSI 成功页的显式打开/完成按钮。密钥保存、期限与认证隔离保留；本轮必要 Windows 编译、独立产物及用户有限 Codex 接入反馈见 [v5](../releases/v0.4.30-5.md)，历史 build/EXE 保持原身份。上述源码已实现、静态复核通过；用户对 Windows 本机测试版反馈“可以了”并授权发布。[v0.4.30-5 Release](https://github.com/soupdomplings/TianCaiSpaceHub/releases/tag/v0.4.30-5) 已创建，Windows/macOS Actions 已启动、尚未完成，本轮停止核对时 0 个附件，发布产物核验未执行。安装包由 Actions 成功后自动上传；该反馈不覆盖新 MSI、macOS 或全部 MCP 调用验收。保留 TC-001、TC-007、TC-011、TC-012 的既有桌面能力；源码/标签、运行和 Release 身份见 [v5 交付](../releases/v0.4.30-5.md)，此前 [v4](../releases/v0.4.30-4.md) 保持原发布事实。
+维护日期：2026-10-11。当前完整版本保持 `0.4.30-5`，源码只维护 `main`。本次修复 Windows Actions 的 WiX 7 扩展安装：UI/Util 两个 `extension add` 均补 `-acceptEula wix7`，并将整个 WiX 安装步骤移至 .NET SDK 后、Rust release 编译前。源码已实现、静态核对通过；计划从包含 NVWA 自动续认证实现 `06c8524` 的当前 `main` 手动启动 Windows/macOS 构建，macOS 的 `release_tag` 留空，仅生成 Actions artifacts。本次尚待触发，不新建或移动标签、不覆盖既有 Release；只确认开始，不等待完成，包生成、下载核验及用户验收分别记录，见 [当前交付状态](#当前交付状态)。
+
+当前 [Dumpling-MCP 页签与 NVWA 后台桥](nvwa-mcp.md) 按帮助菜单勾选显示，默认隐藏并保存偏好，采用透明线条品牌图标；Codex 使用环境名接入并兼容旧名。系统会话结束不再触发普通关闭的托盘阻止，Windows MSI 成功页提供显式打开/完成按钮；密钥保存、期限、身份隔离与按需自动续认证继续保留。此前 Windows 本机测试版“可以了”仅属该次有限反馈，不覆盖本次 WiX 修复、新 MSI、macOS 或全部 MCP 调用。[v0.4.30-5 Release](https://github.com/soupdomplings/TianCaiSpaceHub/releases/tag/v0.4.30-5) 已创建，但此前 Windows run `38052269127` 失败于 WiX 扩展安装；macOS run `38052269076` 已完成双架构编译、ad-hoc 签名、DMG 校验及 Actions artifact 上传，随后因等不到 Windows 更新清单失败，Release 发布跳过。这些历史结果不能写成两平台 Release 成功，详细身份见 [v5 交付](../releases/v0.4.30-5.md)。TC-001、TC-007、TC-011、TC-012 的既有桌面能力和此前 [v4](../releases/v0.4.30-4.md) 发布事实保持原归属。
 
 `v0.4.30-4` 产品源码 `7b5dd6e…`、注释标签与非草稿 Pre-release 已公开。Windows Actions 与 Mac 修复后同标签重建均成功，八项附件下载静态核验通过；Windows 未签名，Mac universal ad-hoc 且未公证。首次 DMG 失败、工作流修复 `1bd8ffd6…` 与产品源码分开记录，运行程序和升级/同步效果仍待用户验收。旧版与调试 EXE 保持原身份，发布后核验文档使用单独提交进入 `main`，不移动产品标签或改变安装包。
 
@@ -37,7 +39,7 @@
 
 - 主窗口每次启动最大化到系统工作区；不要求用户手动拖大。
 - 关闭窗口隐藏到托盘/菜单栏；需要结束程序时使用“退出”。退出流程停止 GUI 定时器并处理本次启动的后台进程。
-- v0.4.30-5：Windows/macOS 注册专门的系统会话结束事件。关机/注销查询直接允许并消费，避免 wxWidgets 默认关闭主窗口触发普通 × 的 veto/托盘提示；查询不隐藏、弹框、退出或清理资源，系统取消关机后继续运行。真正会话结束设置关闭标志，以不等待的借用/锁尽力停止计时器、移除托盘、终止 GUI 持有的当前/启动中自有 Child，不调用 HTTP 停止、不扫描外部 PID，也不等待后台线程或子进程退出。启动线程发布 Child 后先释放锁再复查关闭标志，负责清理会话结束时因锁被占用而错过的晚到 Child；这项线程内收尾不使 GUI 等待。原生系统终止继续处理，独立的天工/WorkBuddy 桌面进程不被结束。不可 veto 的强制 close 真正退出；主动菜单退出保持原流程。窄事件绑定与回退见 [GUI 维护](../gui-runtime-maintenance.zh-CN.md)，实际关机/注销、取消和后台隔离待用户验收；macOS 此轮只有条件编译下的源码核对，原生构建与实机退出仍待完成。
+- v0.4.30-5：Windows/macOS 注册专门的系统会话结束事件。关机/注销查询直接允许并消费，避免 wxWidgets 默认关闭主窗口触发普通 × 的 veto/托盘提示；查询不隐藏、弹框、退出或清理资源，系统取消关机后继续运行。真正会话结束设置关闭标志，以不等待的借用/锁尽力停止计时器、移除托盘、终止 GUI 持有的当前/启动中自有 Child，不调用 HTTP 停止、不扫描外部 PID，也不等待后台线程或子进程退出。启动线程发布 Child 后先释放锁再复查关闭标志，负责清理会话结束时因锁被占用而错过的晚到 Child；这项线程内收尾不使 GUI 等待。原生系统终止继续处理，独立的天工/WorkBuddy 桌面进程不被结束。不可 veto 的强制 close 真正退出；主动菜单退出保持原流程。窄事件绑定与回退见 [GUI 维护](../gui-runtime-maintenance.zh-CN.md)，实际关机/注销、取消和后台隔离待用户验收。此前 v5 标签源码已在 macOS Actions 完成双架构原生编译；包含后续追加修复的当前 `main` 原生编译仍待本次 Actions，实机退出尚未验收。
 - GUI 保持单实例。Windows 网页导入通过命名管道交给现有实例；macOS 使用系统 URL 事件，CLI/重复 App 通过同用户 Unix socket 转交，失败给出脱敏提示。macOS 重复 App 会短时维持隐藏事件循环接收初始 URL，随后退出。
 - 自 `0.4.28-2` 起，帮助菜单和托盘中的“检查更新”已移除，启动也不自动检查。`0.4.30-1` 保留上游更新诊断源码及其导出覆盖；更新模块仍仅在 `cfg(test)` 下编译，生产入口继续关闭，不能据此宣称本版会主动生成更新诊断日志。既有导出过滤规则已经支持相应日志，本轮只合入新增导出夹具。
 - 主题和语言沿用现有设置；主题实现见 [GUI 主题](../gui-theme.zh-CN.md)。
@@ -56,15 +58,15 @@
 
 Windows MSI 新装或 major upgrade 新产品的完整交互安装成功后显示“安装成功”页面，提供“打开 TianCaiSpaceHub”和“完成”两个明确按钮。默认按钮为“完成”，关闭/Esc 只完成；只有用户点击打开才调用 `WixUnelevatedShellExec`，以安装用户的非提升权限启动已安装文件，然后关闭安装程序。可选打开失败不把已成功安装改为安装失败，用户可从快捷方式再打开。
 
-成功页只在安装成功退出且 `UILevel = 5 AND NOT Installed AND NOT REMOVE AND NOT REINSTALL AND NOT UPGRADINGPRODUCTCODE AND &MainFeature = 3` 时显示，打开动作再次使用同一条件。它覆盖完整交互的新装及 major upgrade 新产品安装；静默/基本 UI、失败、取消、修复、卸载和 major upgrade 旧产品清理不显示该安装成功页、不启动程序。UI/Util 扩展固定 `7.0.0` 与 WiX 工具一致，Actions 安装扩展并传入 build，普通进度/错误/取消对话框复用 `WixUI_Common`；不增加许可页或安装目录选择。Package 显式 `Language=1033` 保持旧 MSI 升级语言匹配，`Codepage=936` 与 `zh-CN` UI 资源显示中文；UpgradeCode、组件 GUID、安装目录及协议关联不变。
+成功页只在安装成功退出且 `UILevel = 5 AND NOT Installed AND NOT REMOVE AND NOT REINSTALL AND NOT UPGRADINGPRODUCTCODE AND &MainFeature = 3` 时显示，打开动作再次使用同一条件。它覆盖完整交互的新装及 major upgrade 新产品安装；静默/基本 UI、失败、取消、修复、卸载和 major upgrade 旧产品清理不显示该安装成功页、不启动程序。UI/Util 扩展固定 `7.0.0` 与 WiX 工具一致，Actions 安装扩展并传入 build，普通进度/错误/取消对话框复用 `WixUI_Common`；不增加许可页或安装目录选择。2026-10-11 两个扩展安装命令补齐 `-acceptEula wix7`，与原有 MSI build 的接受参数一致；整个 `Install WiX Toolset` 步骤移到 .NET SDK 安装后、Rust release 编译前，先检查工具/扩展，避免缺少打包前置条件时耗费完整 Rust 编译。Package 显式 `Language=1033` 保持旧 MSI 升级语言匹配，`Codepage=936` 与 `zh-CN` UI 资源显示中文；UpgradeCode、组件 GUID、安装目录及协议关联不变。
 
-实现入口：[Windows WXS](../../packaging/windows/TianCaiSpaceHub.wxs)、[Windows Actions](../../.github/workflows/release-windows.yml)。旧本地打包脚本只同步扩展参数保留可读兼容，不执行也不作为当前发布渠道。本轮仅 XML/事件条件/官方 WiX 7 源码静态核对，没有生成、安装 MSI 或启动程序；实际 Actions 构建、成功页/非提升启动、升级/修复/卸载及静默流程待验收。独立 EXE 不含安装向导，不能用它证明成功页已运行。回退 WXS/Actions 可恢复旧无成功页行为，不改变升级身份。
+实现入口：[Windows WXS](../../packaging/windows/TianCaiSpaceHub.wxs)、[Windows Actions](../../.github/workflows/release-windows.yml)。旧本地打包脚本只同步扩展参数保留可读兼容，不执行也不作为当前发布渠道。此前已完成 XML/事件条件/官方 WiX 7 源码静态核对，但 v5 Windows Actions 在扩展安装阶段报 `WIX7015`，未执行 MSI build。此次 EULA 参数及步骤顺序已静态核对，尚待新的 Actions 运行；没有本地生成、安装 MSI 或启动程序。成功页/非提升启动、升级/修复/卸载及静默流程仍待用户验收。独立 EXE 不含安装向导，不能用它证明成功页已运行。回退 WXS/Actions 可恢复旧无成功页行为，不改变升级身份；只回退本次工作流修复则可能重新触发扩展安装拒绝。
 
 新开发以 Windows 为先，macOS 为后续优先级，Linux 不纳入。`0.4.30-2` 发布起，版本标签只自动构建 Windows 和 macOS；Linux 历史工作流保留手动入口，macOS 发布不再等待 Linux 清单。不将历史工作流存在解释为新增功能已完成多平台测试。
 
 - [Windows 工作流](../../.github/workflows/release-windows.yml)：使用 Cargo 锁文件构建 MSI、便携 ZIP，ZIP 包含导入说明；有签名凭据时签名。
 - [macOS 工作流](../../.github/workflows/release-macos.yml)：DMG、App ZIP；包含 `tiancaispacehub` 协议声明和导入说明，签名前检查 plist 和双架构程序。保留签名/公证流程和无 Developer ID 凭据时的测试包路径。ad-hoc 签名不等于 Developer ID 签名或公证。普通手动分支构建只上传 Actions artifact；标签触发或显式 `workflow_dispatch.release_tag` 对既有完整标签重建可上传对应 Release，重建使用更新后工作流、原标签产品源码，并校验两者身份。
-- 标签带 `-` 的二开版本沿用 Pre-release 标记，不自动设为 Latest；macOS 发布前最多等待 30 分钟确认同版 Windows 清单。
+- 标签带 `-` 的二开版本沿用 Pre-release 标记，不自动设为 Latest；macOS 仅在标签发布或显式指定 `release_tag` 时，发布前最多等待 30 分钟确认同版 Windows 清单。普通 `main` 分支手动构建且 `release_tag` 留空时，跳过该等待和 Release 发布，产物通过 Actions artifact 交付。
 - [Windows 本地打包](../../scripts/package-hub-import.ps1)：基于已构建的程序生成导入测试包，拒绝覆盖同名产物，并记录版本、构建 profile、基线提交、本地变更、签名状态和 SHA-256。
 
 用户已要求所有发布安装包通过 GitHub Actions 生成；Windows 和 macOS 分别运行对应工作流，手动对分支构建时从 artifact 获取安装包。当前源码本地只做必要编译核对，例如：
@@ -89,6 +91,8 @@ cargo build --locked --release --features gui --bin codexhub
 
 本轮系统会话事件修复不增加配置字段、启动项或协议迁移。回退这次 GUI/wxDragon 窄扩展可能恢复关机被普通关闭处理阻止的行为，回退后可在关机前从托盘“退出”；回退 MSI 成功页及扩展参数只恢复原安装结束界面，不改变升级身份。已有系统会话结束属于尽力收尾，不能保证紧急终止前所有后台任务都完成，也不会因此重放业务请求。
 
+2026-10-11 WiX 修复只改变 CI 扩展安装参数和前置检查顺序，不改变产品版本、普通配置/秘密存储格式、MSI 升级身份或已交付包。回退该工作流修复可能恢复 `WIX7015` 和长编译后才发现打包前置条件失败；本次从 `main` 生成 artifact 不移动既有 `v0.4.30-5` 标签，也不把包含自动续认证的后续源码替换为该标签源码。macOS 工作流本次不修改，既有 DMG 逻辑容量计算、校验和清理步骤继续保留。
+
 本轮 MSI 仍使用同一 UpgradeCode，安排在安装新文件前卸载旧布局；文件和快捷方式路径发生变化的组件使用新 GUID，网页导入注册表组件保持原身份。安装、升级、回滚和卸载必须在 Actions 生成安装包后分别验收，源码和编译核对不能替代 MSI 实机结果。便携旧文件不被源码更名自动删除；拿到新包后应退出旧进程，并从新程序位置重新注册用户级网页导入。回退同样需要使用旧包及对应路径重新注册。
 
 网页导入 MSI 使用系统级关联，便携版使用当前用户关联；用户级关联可能优先，移动便携程序后需重新注册。只解除当前程序拥有的关联，详见 [网页导入](../hub-external-import.md)。
@@ -101,11 +105,17 @@ macOS 保持 `com.codexhub.app` 的安装身份，完整 App 声明导入协议�
 
 ## 当前交付状态
 
-### 本轮：0.4.30-5 Release 已创建，两平台 Actions 构建中
+### 本轮：2026-10-11 main 两平台 Actions 产物准备构建
+
+当前完整版本为 `0.4.30-5`，`main` 已包含 NVWA 按需自动续认证实现 `06c8524` 及后续文档交付 `207357b`，并保留此前 Dumpling-MCP、关机和 MSI 成功页改动。本次 Windows 工作流修复两个 WiX 7 扩展的 EULA 参数，将安装前置到 .NET SDK 后、Rust 编译前；已实现并完成静态核对，实际 CI 修复效果待新运行。Mac 工作流未修改，继续保留 v4 已修复的 DMG 逻辑容量计算、`hdiutil verify` 和清理流程。两份 workflow 经 PyYAML `BaseLoader` 解析、WXS 经 XML 解析通过；已核对唯一 WiX 安装步骤顺序、两个扩展及 MSI build 的 EULA 参数和固定 `7.0.0` 版本。9 个 Windows `pwsh` inline 块用静态占位替代 GitHub 表达式后 AST 解析通过，只解析、不执行工作流命令。
+
+此次使用 Windows/macOS 的 `workflow_dispatch`，ref 均为 `main`，macOS 的可选 `release_tag` 留空。Windows 的更新元数据生成和 Release 发布要求标签 ref；macOS 的更新元数据生成、Windows 清单等待和 Release 发布均要求非空 `RELEASE_TAG`。因此本次仅上传 Actions artifacts：Windows 只包含 MSI/便携 ZIP，macOS 只包含 DMG/App ZIP，不生成两平台更新 manifest。不创建 Release、不新建或移动既有标签、不覆盖历史 Release 资产。实际提交和新 run 身份待触发后登记，只确认构建开始，按用户要求不等待完成。本次两平台安装包尚未生成或下载核验，也没有运行产品测试、实际应用或本地打包；Windows MSI 安装/升级、macOS 实机和新增续认证边界仍待用户验收。此次 artifact 中的程序即使显示同一完整版本，也必须按实际 run/提交区分，不能当作旧 v5 标签包。
+
+### 此前：0.4.30-5 Release 已创建，两平台流程失败于不同阶段
 
 基线为唯一 `main` 的 `8d1ccea7…`，包含上一版产品、CI 修复与交付核验文档。原混合工作区先完整快照，逐项比对并确认主线包含后安全对齐，见 [整理记录](../development/repository-cleanup.md)。本版新增 TC-014、普通引用配置、系统保护恢复、各端定向备份及 GUI 操作，不本地生成发布安装包，不覆盖已交付程序或包。
 
-2026-10-10 当前阶段新增 Dumpling-MCP 显示偏好、透明图标、工具详情与 Codex 环境名迁移，系统会话查询/结束的独立处理和 Windows MSI 成功页。代码及静态复核已完成；会话结束包含启动线程发布后释放锁再复查关闭标志的并发收尾。**最终 Windows locked GUI build 通过（22.88 秒、38 条警告），包含该启动握手；独立 EXE 的版本、x64 PE、DLL 导入及复制前后哈希静态核对通过，未运行**。本轮文件为 `outputs/dumpling-v0.4.30-5-windows-20261010/TianCaiSpaceHub.exe`，61,454,848 字节，SHA-256 `471e14cca4f756e30534661f2768a80a162cc2659e10174242691f6bf3ceb291`；287 个源码文件摘要及完整身份按 [v5 交付](../releases/v0.4.30-5.md) 登记，不复用下一段 auth-expiry 结果。MSI 已完成 XML、条件与官方 WiX 源码静态核对，本地未生成或运行新安装包；Windows Actions 正在构建，本轮未取得成功包或执行核验。普通 ×、系统关机/取消、安装成功页及非提升打开、静默/修复/卸载等实际行为待各自范围验收。全部产品功能以 Windows/macOS 兼容为目标，Mac 平台分支静态复核通过；本次 Mac 原生编译/包构建已启动、尚未完成，实机验收另行进行。
+2026-10-10 此前发布阶段新增 Dumpling-MCP 显示偏好、透明图标、工具详情与 Codex 环境名迁移，系统会话查询/结束的独立处理和 Windows MSI 成功页。代码及静态复核已完成；会话结束包含启动线程发布后释放锁再复查关闭标志的并发收尾。**该阶段最终 Windows locked GUI build 通过（22.88 秒、38 条警告），包含该启动握手；独立 EXE 的版本、x64 PE、DLL 导入及复制前后哈希静态核对通过，未运行**。该阶段文件为 `outputs/dumpling-v0.4.30-5-windows-20261010/TianCaiSpaceHub.exe`，61,454,848 字节，SHA-256 `471e14cca4f756e30534661f2768a80a162cc2659e10174242691f6bf3ceb291`；287 个源码文件摘要及完整身份按 [v5 交付](../releases/v0.4.30-5.md) 登记，不复用下一段 auth-expiry 或后续自动续认证结果。MSI 已完成 XML、条件与官方 WiX 源码静态核对，本地未生成或运行新安装包；该次 Windows Actions 随后在 WiX 扩展安装失败，MSI 未生成。普通 ×、系统关机/取消、安装成功页及非提升打开、静默/修复/卸载等实际行为待各自范围验收。全部产品功能以 Windows/macOS 兼容为目标，Mac 标签源码已完成原生双架构编译及包构建，具体成功步骤与最终失败边界见下文，实机验收另行进行。
 
 2026-10-10 此前应用密钥/期限阶段实现保存环境立即保护保存应用密钥、保存状态/引用恢复、替换/空输入复用/取消移除及分步骤 HTTP 401 说明；密码仍登录成功后记住。新增密码闲置/换票固定期限策略、准确 UTC 到期显示与旧保护快照兼容。**该阶段最终 Windows locked GUI build 通过（16.59 秒、38 条警告），auth-expiry EXE 版本/x64 PE/DLL 导入/复制前后哈希静态核对通过、未运行**，独立目录 `outputs/nvwa-v0.4.30-5-windows-auth-expiry-20261010/`，61,003,264 字节，SHA-256 `a9abeb4fe11a7408eea8d1a525cfabcc32472a738f6c7d15452a869fc2c8e2be`。真实验收待用户；未运行测试、Hub/Codex/WorkBuddy/天工/NVWA 或真实认证/MCP/模型/业务，实际期限和 401 根因尚未联调验证，源码/产物身份见 [v5 交付](../releases/v0.4.30-5.md)。
 
@@ -115,9 +125,14 @@ macOS 保持 `com.codexhub.app` 的安装身份，完整 App 声明导入协议�
 
 上一阶段已实现单服务地址、个人认证简化、折叠高级、切认证清理、挑战式双因子、一致 profile 刷新保留 GUI 内存秘密及可编辑 MCP `/mcp`；当时 Windows locked GUI 编译及 debug EXE 构建通过（17.55 秒、38 条既有警告），产物静态身份已核对。该构建与 `outputs/nvwa-v0.4.30-5-windows-ui-20261010/` 测试 EXE 保留原阶段归属，不代表本轮名称、共享默认和帮助已编译或验收。
 
-此前 NVWA 首版第二轮 `cargo check --locked --target x86_64-pc-windows-msvc --features gui --bin TianCaiSpaceHub` 已通过，27.61 秒、38 条警告；它和后续历史复核/测试 EXE 只属于各自当时源码，不是 2026-10-10 最终修正的编译或验收证据。macOS Keychain 源码/API 已静态核对，本版原生 Mac 编译、Windows/macOS Actions 安装包、签名及实机行为尚未核验。
+此前 NVWA 首版第二轮 `cargo check --locked --target x86_64-pc-windows-msvc --features gui --bin TianCaiSpaceHub` 已通过，27.61 秒、38 条警告；它和后续历史复核/测试 EXE 只属于各自当时源码，不是 2026-10-10 最终修正的编译或验收证据。macOS Keychain 源码/API 已静态核对，原 v5 标签源码的 Mac 原生编译、打包和 ad-hoc 签名步骤已由下述 Actions 完成；新 `main` 的原生编译及两平台新产物待本次 Actions。上述包未下载静态核验，安装运行、签名实机效果和功能仍待用户验收。
 
-用户对本轮 Windows 本机测试版反馈“可以了”，并明确授权发布 `v0.4.30-5`；这是该次本机试用与可交付的有限反馈，不扩称关机全部场景、Windows MSI/macOS 安装升级或全部 MCP 工具调用均已通过。Release 已创建，ID `408945546`、`draft=false/prerelease=true/Latest=false`，发布时间 `2026-10-10T12:41:18Z`；注释标签 `ee8f03bffa85d25b4fec3c25b54d41e345560c51` 指向源码 `3ea7e003c94b6e3a74606fd2ef9fe3159db15418`。[Windows Actions 38052269127](https://github.com/soupdomplings/TianCaiSpaceHub/actions/runs/38052269127)（run 14）和 [macOS Actions 38052269076](https://github.com/soupdomplings/TianCaiSpaceHub/actions/runs/38052269076)（run 18）均已启动、`in_progress`，使用同一标签源码。本轮按用户要求在开始构建后停止等待，尚未取得两平台构建成功或包证据；Release 当时为 0 个附件，下载、产物/签名核验未执行。安装包统一由 Actions 成功后自动上传，不本地打包，也不创建版本/release 分支；上述身份及状态见 [v5 交付](../releases/v0.4.30-5.md)。macOS 原生构建与实机验收、普通/高级界面全部异常、模式清理、保存后继续认证、图形验证码限制/双因子、回调注册、两 token 真实 TTL、原生刷新/信任、目录加载、并发写入、移除/恢复及未知工具结果仍需各自范围的验收。下节保留历史 `v0.4.30-4` 已发布身份和结果。
+用户对此前 Windows 本机测试版反馈“可以了”，并明确授权发布 `v0.4.30-5`；这是该次本机试用与可交付的有限反馈，不扩称关机全部场景、Windows MSI/macOS 安装升级或全部 MCP 工具调用均已通过。Release 已创建，ID `408945546`、`draft=false/prerelease=true/Latest=false`，发布时间 `2026-10-10T12:41:18Z`；注释标签 `ee8f03bffa85d25b4fec3c25b54d41e345560c51` 指向源码 `3ea7e003c94b6e3a74606fd2ef9fe3159db15418`。当时按用户要求在开始构建后停止等待，两个 run 仍 `in_progress`、Release 为 0 个附件；这只是当时的核对边界。2026-10-11 已确认最终流程如下，使用同一标签源码，不把后续 `main` 改动回写到该标签：
+
+- [Windows Actions 38052269127](https://github.com/soupdomplings/TianCaiSpaceHub/actions/runs/38052269127)（run 14）：Rust release build 成功，耗时 14 分 31 秒；随后 `Install WiX Toolset` 的扩展安装缺少接受 WiX 7 EULA 参数，报 `WIX7015` 失败。MSI build 未运行，不能记为 Windows 安装包成功。
+- [macOS Actions 38052269076](https://github.com/soupdomplings/TianCaiSpaceHub/actions/runs/38052269076)（run 18）：arm64/x86_64 编译、ad-hoc 签名、DMG 创建、`hdiutil verify` checksum `VALID` 和 `Upload Artifact` 成功；Actions artifact ID `11669903495`，大小 `81,368,459` 字节。唯一失败步骤为 `Verify Windows Update Manifest`，90 次等待仍未取得同版 `latest-windows.json`，随后 `Publish GitHub Release` 跳过；原 Mac DMG 容量修复仍有效，不能将等待失败当作 Mac 编译或 DMG 失败，也不能写成 Release 发布成功。
+
+上述旧 artifact 未下载、产物/签名本机静态核验未执行；此次不会覆盖或冒用它们。安装包仍统一由 Actions 生成，不本地打包，也不创建版本/release 分支；完整身份见 [v5 交付](../releases/v0.4.30-5.md)。macOS 实机、普通/高级界面全部异常、模式清理、保存后继续认证、图形验证码限制/双因子、回调注册、两 token 真实 TTL、原生刷新/信任、目录加载、并发写入、移除/恢复及未知工具结果仍需各自范围的验收。下节保留历史 `v0.4.30-4` 已发布身份和结果。
 
 ### 已发布：v0.4.30-4 预发布，两平台包已核验
 
