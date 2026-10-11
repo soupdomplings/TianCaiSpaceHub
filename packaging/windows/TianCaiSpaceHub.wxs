@@ -12,14 +12,18 @@
     <!-- Remove the old layout before installing renamed files, within the rollback transaction. -->
     <MajorUpgrade
       AllowSameVersionUpgrades="yes"
+      IgnoreLanguage="yes"
       Schedule="afterInstallInitialize"
       DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
     <Icon Id="TianCaiSpaceHubIcon" SourceFile="$(var.SourceDir)\AppIcon.ico" />
     <Property Id="ARPPRODUCTICON" Value="TianCaiSpaceHubIcon" />
+    <!-- Earlier packages used ProductLanguage=0. Match their UpgradeCode regardless of language. -->
+    <!-- Equal-version rebuilds must replace the EXE; higher file versions still win. -->
+    <Property Id="REINSTALLMODE" Value="emus" />
 
-    <!-- Preserve the existing ProductLanguage/upgrade match; zh-CN resources control the UI text. -->
+    <!-- zh-CN resources control the UI text; MajorUpgrade also detects legacy neutral-language packages. -->
     <!-- A user-selected launch belongs only to the successful full-UI exit page. -->
     <Property Id="WixUnelevatedShellExecTarget" Value="[#TianCaiSpaceHubExe]" />
     <CustomAction
@@ -29,7 +33,7 @@
       Execute="immediate"
       Return="ignore" />
 
-    <!-- Common dialogs supply progress, errors and cancellation without adding a license/welcome wizard. -->
+    <!-- New installs and major upgrades share confirmation, progress and explicit completion. -->
     <UIRef Id="WixUI_Common" />
     <UI Id="TianCaiSpaceHubUI">
       <TextStyle Id="WixUI_Font_Normal" FaceName="Microsoft YaHei UI" Size="9" />
@@ -43,9 +47,22 @@
       <DialogRef Id="ProgressDlg" />
       <DialogRef Id="UserExit" />
 
+      <Dialog Id="TianCaiSpaceHubReadyDlg" Width="370" Height="220" Title="[ProductName] 安装程序">
+        <Control Id="Title" Type="Text" X="20" Y="20" Width="330" Height="25" NoPrefix="yes" Text="{\WixUI_Font_Bigger}安装 / 升级 TianCaiSpaceHub" />
+        <Control Id="Description" Type="Text" X="20" Y="60" Width="330" Height="45" NoPrefix="yes" Text="将安装 TianCaiSpaceHub；检测到旧版本时，会替换为本次版本并保留已有配置。" />
+        <Control Id="ExitReminder" Type="Text" X="20" Y="110" Width="330" Height="50" NoPrefix="yes" Text="开始前请从托盘菜单“退出”Hub，关闭窗口只会隐藏。完成后可选择打开新版程序或结束安装。" />
+        <Control Id="BottomLine" Type="Line" X="0" Y="175" Width="370" Height="0" />
+        <Control Id="Install" Type="PushButton" X="120" Y="190" Width="170" Height="20" Default="yes" ElevationShield="yes" Text="开始安装 / 升级">
+          <Publish Event="EndDialog" Value="Return" />
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="295" Y="190" Width="55" Height="20" Cancel="yes" Text="取消">
+          <Publish Event="EndDialog" Value="Exit" />
+        </Control>
+      </Dialog>
+
       <Dialog Id="TianCaiSpaceHubSuccessDlg" Width="370" Height="180" Title="[ProductName] 安装程序">
-        <Control Id="Title" Type="Text" X="20" Y="20" Width="330" Height="25" NoPrefix="yes" Text="{\WixUI_Font_Bigger}安装成功" />
-        <Control Id="Description" Type="Text" X="20" Y="55" Width="330" Height="55" NoPrefix="yes" Text="TianCaiSpaceHub 已安装成功。点击“打开 TianCaiSpaceHub”立即使用，或点击“完成”关闭安装程序。" />
+        <Control Id="Title" Type="Text" X="20" Y="20" Width="330" Height="25" NoPrefix="yes" Text="{\WixUI_Font_Bigger}安装 / 升级成功" />
+        <Control Id="Description" Type="Text" X="20" Y="55" Width="330" Height="55" NoPrefix="yes" Text="TianCaiSpaceHub 已安装或升级完成。点击“打开 TianCaiSpaceHub”使用新版，或点击“完成”关闭安装程序。" />
         <Control Id="BottomLine" Type="Line" X="0" Y="135" Width="370" Height="0" />
         <Control Id="Open" Type="PushButton" X="20" Y="150" Width="220" Height="20" Text="打开 TianCaiSpaceHub">
           <Publish Event="DoAction" Value="OpenTianCaiSpaceHub" Order="1" Condition="UILevel = 5 AND NOT Installed AND NOT REMOVE AND NOT REINSTALL AND NOT UPGRADINGPRODUCTCODE AND &amp;MainFeature = 3" />
@@ -57,6 +74,7 @@
       </Dialog>
 
       <InstallUISequence>
+        <Show Dialog="TianCaiSpaceHubReadyDlg" Before="ProgressDlg" Condition="UILevel = 5 AND NOT Installed AND NOT REMOVE AND NOT REINSTALL AND NOT UPGRADINGPRODUCTCODE" />
         <Show Dialog="TianCaiSpaceHubSuccessDlg" OnExit="success" Condition="UILevel = 5 AND NOT Installed AND NOT REMOVE AND NOT REINSTALL AND NOT UPGRADINGPRODUCTCODE AND &amp;MainFeature = 3" />
       </InstallUISequence>
     </UI>

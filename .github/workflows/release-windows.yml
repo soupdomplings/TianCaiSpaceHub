@@ -178,6 +178,14 @@ jobs:
             -out $msiPath
           if ($LASTEXITCODE -ne 0) { throw "WiX MSI build failed" }
 
+      - name: Verify MSI Upgrade Metadata
+        shell: pwsh
+        run: |
+          ./scripts/verify-windows-msi.ps1 `
+            -MsiPath (Join-Path "target\dist" $env:WINDOWS_MSI_NAME) `
+            -ExePath "target\msi-source\TianCaiSpaceHub.exe" `
+            -AppVersion $env:APP_VERSION
+
       - name: Sign MSI
         if: env.HAS_WINDOWS_CODESIGN == 'true'
         shell: pwsh
