@@ -2,7 +2,7 @@
 
 ## v0.4.30-5 未发布 · 2026-10-11 · 三端环境名与天工工具刷新兼容
 
-关联 TC-014；基于唯一 `main` 的 `cb1f65e6336688f432c2e5fa0ed2ded5fb46c052`，完整版本保持 `0.4.30-5`。用户最新要求 Codex、WorkBuddy、天工 Claw 均采用已保存环境名称，并同轮反馈天工刷新工具 HTTP 404；本轮已实现重复相同会话头兼容。此前仅 Codex 使用环境名的源码与包范围保留为历史，不继续作为当前需求。源码已实现、必要 Windows 编译及静态核对通过，当前尚未提交、开始打包或发布，实机待用户验收。
+关联 TC-014；基于唯一 `main` 的 `cb1f65e6336688f432c2e5fa0ed2ded5fb46c052`，完整版本保持 `0.4.30-5`。用户最新要求 Codex、WorkBuddy、天工 Claw 均采用已保存环境名称，并同轮反馈天工刷新工具 HTTP 404；本轮已实现重复相同会话头兼容。此前仅 Codex 使用环境名的源码与包范围保留为历史，不继续作为当前需求。源码已实现、必要 Windows 编译及静态核对通过，源码与准备文档 `b3d704e6114223f7096d7f74705418a06f0d5bd5` 已推送 `main`，本轮 [Windows Actions](https://github.com/soupdomplings/TianCaiSpaceHub/actions/runs/38128077676) 和 [macOS Actions](https://github.com/soupdomplings/TianCaiSpaceHub/actions/runs/38128079713) 已确认 job 实际开始运行，按用户要求停止等待完成；包生成、核验、macOS 编译结果及实机尚未确认，未发布或覆盖既有 v5 标签/Release。
 
 - 三端新接入/更新目标统一为已保存环境名，例如 `MCP196`；旧 hash 或前环境名按原 profile、实际配置文件或官方桌面连接范围与受管记录识别，预览确认后迁移，登录/检查不会自动改名。已有修改、同名非受管项、归属歧义、pending、目标不可读取及预览后变化仍保护。
 - Codex TOML 与 WorkBuddy JSON 核对完整文件及所涉名称前像后，在同一文件替换中移除旧名/添加新名，保留其他配置，Windows 文件名核对均忽略大小写；文件两端仅对精确本次结果执行失败补偿。天工官方 PUT 不能改 `server_name`，故确认后删除旧连接再创建新连接，每步前后核对双名静态配置；没有多连接原子事务/CAS/原生改名，未知/部分/元数据失败均不自动补偿或重放，pending 保护停止，仅完整 before/after 能收敛，部分状态不承诺自动恢复入口。成功迁移后按双槽备份恢复是独立的预览确认操作。
@@ -11,7 +11,7 @@
 - 静态官方 `discoverViaStreamableHttp` 同时设置两个大小写形式的相同 session 头，fetch 可合并为相同值的逗号串；原桥整串查 session 会视为未知，吻合 initialize 成功后 tools/list 404 的可能机制。未捕获用户真实请求，不登记为用户 404 唯一确定原因或已实机修复。MCP POST/DELETE 共用解析，仅天工接受最多 4 个、各≤128 ASCII 可见字符的非空且完全相同值；Codex/WorkBuddy 仍拒重复，空/冲突/过多/非法值返回 HTTP 400，缺头仍 None，真实未知/过期 session 仍 404，原身份/代次/凭据核验、initialize 禁复用和不重放保持。
 - Windows/macOS 共用现有适配器及 DPAPI/Keychain，无新增普通环境秘密字段。开发方不运行测试、Hub/客户端、安装器或真实认证/MCP/模型/业务调用，不本地生成发布安装包；实际三端新接入、旧名迁移、环境重命名、冲突/外改/pending/并发保护、天工中间失败停止保护/显式恢复、缺失重建和恢复待用户验收。旧 build/EXE/Actions 保留原阶段身份，不算本轮编译或验收。同步 [专题](nvwa-mcp.md)、[v5 交付](../releases/v0.4.30-5.md)、索引与总表，源码/编译/包/发布/验收分别登记。
 
-最终 Windows `cargo check --locked --target x86_64-pc-windows-msvc --features gui --tests --bin TianCaiSpaceHub` 18.86 秒、64 条警告（25 条重复）通过，本轮 3 个迁移与 2 个会话头纯 fixture 共 5 个仅编译、未执行；同 target/gui/bin 的 locked GUI `cargo build` 49.82 秒、41 条警告通过，包含既有及 3 个重构后旧 helper 未使用警告。最终 EXE 为 61,487,616 字节、显示版 `0.4.30-5`、数字资源 `0.4.30.5`，静态身份通过、未运行、不复制测试包，SHA-256 见 [交付](../releases/v0.4.30-5.md#2026-10-11-三端环境名与天工工具刷新兼容已实现未发布)。6 个源码 rustfmt/diff、8 份 Markdown 严格 UTF-8、487 本地文件链接、四条 UPDATE_NOTES、两 workflow YAML/原打包 guard 静态核对通过。当前未提交、未开始云端打包、未发布，macOS 原生构建与实机待完成；实际天工工具刷新及重复/冲突头、过期/未知 session、身份隔离分别待用户验收。旧阶段 8 个 fixture 的编译结果不作为本轮证据。
+最终 Windows `cargo check --locked --target x86_64-pc-windows-msvc --features gui --tests --bin TianCaiSpaceHub` 18.86 秒、64 条警告（25 条重复）通过，本轮 3 个迁移与 2 个会话头纯 fixture 共 5 个仅编译、未执行；同 target/gui/bin 的 locked GUI `cargo build` 49.82 秒、41 条警告通过，包含既有及 3 个重构后旧 helper 未使用警告。最终 EXE 为 61,487,616 字节、显示版 `0.4.30-5`、数字资源 `0.4.30.5`，静态身份通过、未运行、不复制测试包，SHA-256 见 [交付](../releases/v0.4.30-5.md#2026-10-11-三端环境名与天工工具刷新兼容已实现未发布)。6 个源码 rustfmt/diff、8 份 Markdown 严格 UTF-8、488 本地文件链接、四条 UPDATE_NOTES、两 workflow YAML/原打包 guard 静态核对通过。源码/准备文档 `b3d704e6114223f7096d7f74705418a06f0d5bd5` 已推送，Windows/macOS 本轮 Actions 已开始运行并停止等待完成，运行身份见交付；包结果、macOS 构建与实机待确认，未覆盖既有标签/Release；实际天工工具刷新及重复/冲突头、过期/未知 session、身份隔离分别待用户验收。旧阶段 8 个 fixture 的编译结果不作为本轮证据。
 
 ## v0.4.30-5 未发布修复 · 2026-10-11 · 历史客户端连接缺失重建与检查说明
 
