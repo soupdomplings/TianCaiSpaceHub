@@ -2,7 +2,7 @@
 
 ## v0.4.30-5 未发布修复 · 2026-10-11 · Windows MSI 升级识别、文件替换与确认流程
 
-关联 TC-007；基于唯一 `main` 的 `20475a9e8582a7f3259afcc9c222485583a39e2e`，当前工作区修复尚未提交，完整版本仍 `0.4.30-5`。用户反馈安装今天的 v5 MSI 后仍启动 v4。前一轮 Windows [38116693075](https://github.com/soupdomplings/TianCaiSpaceHub/actions/runs/38116693075) 与 macOS [38116694993](https://github.com/soupdomplings/TianCaiSpaceHub/actions/runs/38116694993) 已成功，但“包构建成功”不等于 Windows 安装升级通过。
+关联 TC-007；基于唯一 `main` 的 `20475a9e8582a7f3259afcc9c222485583a39e2e`，修复与准备文档已提交/推送为 `4966b1fc2bceaf9586c841adac12fc607d939a5e`，完整版本仍 `0.4.30-5`，新 Windows Actions 已开始。用户反馈安装今天的 v5 MSI 后仍启动 v4。前一轮 Windows [38116693075](https://github.com/soupdomplings/TianCaiSpaceHub/actions/runs/38116693075) 与 macOS [38116694993](https://github.com/soupdomplings/TianCaiSpaceHub/actions/runs/38116694993) 已成功，但“包构建成功”不等于 Windows 安装升级通过。
 
 - 本轮核对确认用户安装的 MSI 哈希匹配前一轮 Actions artifact，Windows ZIP 中 EXE 含新功能/菜单字符串，排除了把旧产品源码误当新包的原因。前一轮 Windows artifact 为 `11694121126`；MSI 和 EXE 大小/哈希见 [v5 交付](../releases/v0.4.30-5.md#2026-10-11-前一轮-main-两平台-actions-打包已成功windows-升级未通过)。这些是包身份及静态内容证据，不是已执行新功能的证明。
 - 原因一：旧 v4 MSI 的 `ProductLanguage=0`、`Upgrade.Language` 为空；前一轮 v5 把 `ProductLanguage` 与 `Upgrade.Language` 设为 `1033`，语言过滤漏掉同作用范围、同 UpgradeCode 的旧产品，出现旧/新两项同时注册。此前“1033 保持旧 MSI 升级语言匹配”是实现假设错误，现更正，不记录本机 product code、注册表位置或私有路径。
@@ -11,8 +11,9 @@
 - 安装流程：完整交互的新装、major upgrade 和使用新 ProductCode 的同修订重打包升级，依次显示“安装 / 升级”确认、官方进度及“安装 / 升级成功”双按钮页。确认页提醒从托盘“退出”旧 Hub 并保留已有配置，默认“开始安装 / 升级”；取消/Esc 在执行前退出。成功页默认“完成”，只有用户点击“打开 TianCaiSpaceHub”才以非提升权限启动。同一个 MSI 再次打开属于维护/修复，不新增上述确认/成功页；静默/基本 UI、失败、取消、卸载、修复及旧产品清理不启动程序，不增加许可或选目录页。
 - 新增 [只读 MSI 核验脚本](../../scripts/verify-windows-msi.ps1)，工作流在 Build MSI 后、Sign MSI 前核对实际 Property/File/Upgrade 表的 emus、无语言过滤、三段版本与文件大小/数字/显示版本；追加 Dialog/Control/InstallUISequence/ControlEvent/InstallExecuteSequence 表检查确认→进度→执行顺序、成功条件、默认/取消按钮及按钮事件，打开动作不得自动加入执行序列。脚本不执行安装；前轮问题包按预期因数字 `.0`、缺 emus、Upgrade 语言 `1033` 而拒绝，仅证明升级元数据检查，不是安装或新增 UI 测试，新修复包必须生成后再通过实际表检查。
 - 平台/兼容：只调整 Windows 资源、MSI 升级规则及安装/升级界面，macOS 产品代码及包行为无变化；UpgradeCode、安装作用范围和用户配置/秘密格式保持，不安装本机、不改运行配置或已交付包。回退会恢复语言过滤漏检及相同数字版本覆盖风险，回退本轮确认页恢复此前直接进入进度的流程；已安装修复版后不保证旧 MSI 能自动降级覆盖，应由用户核对任务/备份后走对应安装维护流程，不承诺已经清理共存注册。
-- 当前验证：最终 Windows locked GUI debug build 1 分 43 秒、38 条既有警告通过，只读资源核对显示 `0.4.30-5`、数字 `0.4.30.5`，未执行程序。两 workflow 解析通过；最终 WXS XML、升级属性、确认/成功页条件、默认/取消按钮及控件边界静态核对通过。Windows 10 个内联 pwsh+核验脚本共 11 项 AST 语法解析已通过，工作流当前 16 步；新增实际 UI 表核验后的最终脚本 AST 也已通过，只解析、不执行安装。最终脚本对前轮问题包再次只读核验，按预期因升级元数据及缺少新增确认页而拒绝；不等于修复包正向验证或实际界面测试。新 Windows Actions 的修复包/升级及 UI 实际表/哈希待提交触发后登记，仅重打 Windows、macOS 前轮成功包保留。实际 v4→修复 v5、前一轮 v5/共存状态→修复包、文件替换、快捷方式、确认/进度/成功页中文与 DPI、取消/打开、同 MSI 维护及静默/修复/卸载均待用户验收。开发方未运行 Hub、安装器或真实业务，不本地生成发布安装包，不把此前 build 及包哈希当作本次修复的验证。
-- 同步 [品牌与打包专题](desktop-and-packaging.md) 与 [v5 交付](../releases/v0.4.30-5.md)。保留此前停止等待及各次构建结果的原阶段事实，本条后续只补本次真实提交/构建/验收状态。
+- 当前验证：最终 Windows locked GUI debug build 1 分 43 秒、38 条既有警告通过，只读资源核对显示 `0.4.30-5`、数字 `0.4.30.5`，未执行程序。两 workflow 解析通过；最终 WXS XML、升级属性、确认/成功页条件、默认/取消按钮及控件边界静态核对通过。Windows 10 个内联 pwsh+核验脚本共 11 项 AST 语法解析已通过，工作流当前 16 步；新增实际 UI 表核验后的最终脚本 AST 也已通过，只解析、不执行安装。最终脚本对前轮问题包再次只读核验，按预期因升级元数据及缺少新增确认页而拒绝；不等于修复包正向验证或实际界面测试。新 Windows Actions 已开始编译，修复包生成/升级及 UI 实际表正向核验/哈希待完成，仅重打 Windows、macOS 前轮成功包保留。实际 v4→修复 v5、前一轮 v5/共存状态→修复包、文件替换、快捷方式、确认/进度/成功页中文与 DPI、取消/打开、同 MSI 维护及静默/修复/卸载均待用户验收。开发方未运行 Hub、安装器或真实业务，不本地生成发布安装包，不把此前 build 及包哈希当作本次修复的验证。
+- 本次 Windows [38121034272](https://github.com/soupdomplings/TianCaiSpaceHub/actions/runs/38121034272)（run `16`、job `114415633955`）实际源码为 `4966b1f…`，北京时间 15:20:28 启动、job 15:20:31 开始；核对时 run/job 均为 `in_progress`，WiX 安装已成功，15:21:08 开始 Build Release。MSI 生成与新校验步骤尚未执行，按用户要求确认开始后停止等待、不安排自动监控；本轮仅 Windows Actions artifacts，不移动标签或替换 Release，macOS 沿用前轮成功包。后续状态文档使用单独提交，不改变本次构建输入。
+- 同步 [品牌与打包专题](desktop-and-packaging.md) 与 [v5 交付](../releases/v0.4.30-5.md)。保留此前停止等待及各次构建结果的原阶段事实，安装升级仍待用户验收。
 
 ## v0.4.30-5 Actions 已启动 · 2026-10-11 · WiX 扩展 EULA 修复与最新 main 两平台构建
 

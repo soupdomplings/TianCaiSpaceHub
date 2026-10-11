@@ -1,8 +1,8 @@
 # TianCaiSpaceHub
 
-2026-10-11 安装升级修复：用户反馈 v5 MSI 安装后仍运行 v4。已确认旧包语言标识 `0`、新包升级限定 `1033`，漏掉旧产品；两版数字文件版本也都为 `0.4.30.0`。当前修复忽略升级语言限制、写入数字二开修订号并支持同修订重打包覆盖；新装与升级均显示“确认 → 进度 → 成功”，成功后可选“打开 TianCaiSpaceHub”或“完成”。完整版本仍 `0.4.30-5`。新 Windows Actions 包待生成，安装升级仍待用户验收，详见 [v5 交付](docs/releases/v0.4.30-5.md)；下方首次 main 包不含这次升级修复。
+2026-10-11 安装升级修复：用户反馈 v5 MSI 安装后仍运行 v4。已确认旧包语言标识 `0`、新包升级限定 `1033`，漏掉旧产品；两版数字文件版本也都为 `0.4.30.0`。当前修复忽略升级语言限制、写入数字二开修订号并支持同修订重打包覆盖；新装与升级均显示“确认 → 进度 → 成功”，成功后可选“打开 TianCaiSpaceHub”或“完成”。完整版本仍 `0.4.30-5`。修复 `4966b1f` 已推送，[新 Windows Actions](https://github.com/soupdomplings/TianCaiSpaceHub/actions/runs/38121034272) 已开始编译，WiX 安装已通过，按用户要求停止等待；修复包生成/核验和安装升级仍待完成，详见 [v5 交付](docs/releases/v0.4.30-5.md)。下方首次 main 包不含这次升级修复。
 
-2026-10-11：最新 `main` 的 `b05b489`（含 NVWA 自动重新认证）已启动 [Windows](https://github.com/soupdomplings/TianCaiSpaceHub/actions/runs/38116693075) 和 [macOS](https://github.com/soupdomplings/TianCaiSpaceHub/actions/runs/38116694993) 手动 Actions 打包，两者核对时均为 `in_progress`。此前 Windows 失败的 WiX 扩展安装参数已修正，并前移到编译前；macOS 原编译/打包已成功，失败于等待 Windows 发布清单，本次手动 `main` 构建跳过该等待。按用户要求停止等待完成；成功后安装包放在对应 Actions 的 Artifacts，既有 v5 标签及 Release 不变，完整身份与验证边界见 [v5 交付](docs/releases/v0.4.30-5.md)。下方旧构建与反馈保留原日期归属。
+2026-10-11 前一轮打包启动记录：`main` 的 `b05b489`（含 NVWA 自动重新认证）已启动 [Windows](https://github.com/soupdomplings/TianCaiSpaceHub/actions/runs/38116693075) 和 [macOS](https://github.com/soupdomplings/TianCaiSpaceHub/actions/runs/38116694993) 手动 Actions 打包，两者核对时均为 `in_progress`。此前 Windows 失败的 WiX 扩展安装参数已修正，并前移到编译前；macOS 原编译/打包已成功，失败于等待 Windows 发布清单，本次手动 `main` 构建跳过该等待。按用户要求停止等待完成；成功后安装包放在对应 Actions 的 Artifacts，既有 v5 标签及 Release 不变，完整身份与验证边界见 [v5 交付](docs/releases/v0.4.30-5.md)。下方旧构建与反馈保留原日期归属。
 
 [English](README.en.md)
 
