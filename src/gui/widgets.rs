@@ -74,10 +74,18 @@ pub(super) enum LucideIconKind {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) enum ClientTabIconKind {
+    ChatGptCodex,
+    WorkBuddy,
+    TianGongClaw,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum IconCacheKey {
     Status(StatusIconKind, usize, bool),
     App(usize),
     DumplingMcp(usize),
+    ClientTab(ClientTabIconKind, usize),
     ImChannel(ImChannelKind, usize, bool),
     Provider(ProviderLogoKind, i32),
     Lucide(LucideIconKind, usize),
@@ -549,6 +557,30 @@ pub(super) fn dumpling_mcp_icon_bitmap(size: usize) -> Bitmap {
         let svg =
             include_str!("../../packaging/brand/dumpling-mcp.svg").replace("currentColor", &stroke);
         svg_brand_bitmap("dumpling-mcp.svg", svg.as_bytes(), size)
+    })
+}
+
+/// Client application marks drawn on a transparent canvas in the theme's ink.
+pub(super) fn client_tab_icon_bitmap(kind: ClientTabIconKind, size: usize) -> Bitmap {
+    cached_icon(IconCacheKey::ClientTab(kind, size), || {
+        let (file_name, source) = match kind {
+            ClientTabIconKind::ChatGptCodex => (
+                "chatgpt-codex-line.svg",
+                include_str!("../../packaging/brand/chatgpt-codex-line.svg"),
+            ),
+            ClientTabIconKind::WorkBuddy => (
+                "workbuddy-line.svg",
+                include_str!("../../packaging/brand/workbuddy-line.svg"),
+            ),
+            ClientTabIconKind::TianGongClaw => (
+                "tiangong-claw-line.svg",
+                include_str!("../../packaging/brand/tiangong-claw-line.svg"),
+            ),
+        };
+        let color = theme::theme().ink_primary;
+        let stroke = format!("#{:02x}{:02x}{:02x}", color.r, color.g, color.b);
+        let svg = source.replace("currentColor", &stroke);
+        svg_brand_bitmap(file_name, svg.as_bytes(), size)
     })
 }
 

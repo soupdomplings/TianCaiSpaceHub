@@ -1104,8 +1104,8 @@ impl GuiText {
 
     pub(super) fn codex_tab(self) -> &'static str {
         match self.locale {
-            GuiLocale::ZhCn => "Codex 接入",
-            GuiLocale::EnUs => "Codex",
+            GuiLocale::ZhCn => "ChatGPT(Codex) 接入",
+            GuiLocale::EnUs => "ChatGPT(Codex) Integration",
         }
     }
 

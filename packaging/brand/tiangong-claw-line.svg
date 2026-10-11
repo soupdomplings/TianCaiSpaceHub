@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="2.65" stroke-linecap="round" stroke-linejoin="round">
+  <title>天工 Claw</title>
+  <!-- Five rotating arrow outlines traced from the official tiangong-desktop 1.1.1 public/logo.png. -->
+  <g transform="translate(4.8 6.5) scale(.85)">
+    <path d="M18 18L17 11L29 0L46 7L46 12L31 13L21 21L18 21Z"/>
+    <path d="M53 14L64 20L62 36L58 39L55 36L51 24L40 16L47 12L52 12Z"/>
+    <path d="M36 53L45 45L49 32L56 39L53 56L36 60L33 57Z"/>
+    <path d="M32 46L37 45L33 56L17 59L8 48L7 42L10 41L23 47Z"/>
+    <path d="M16 38L17 41L6 39L0 25L11 12L16 12L13 27Z"/>
+  </g>
+</svg>

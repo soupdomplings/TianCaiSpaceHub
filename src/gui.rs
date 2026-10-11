@@ -61,7 +61,10 @@ const UPDATE_RELEASE_PAGE_URL: &str =
     "https://github.com/soupdomplings/TianCaiSpaceHub/releases/latest";
 const DASHBOARD_REFRESH_INTERVAL_MS: i32 = 10_000;
 const REQUEST_LOG_REFRESH_INTERVAL_MS: i32 = 5_000;
-const REQUEST_LOG_TAB_INDEX: i32 = 3;
+const CODEX_TAB_INDEX: i32 = 0;
+const WORKBUDDY_TAB_INDEX: i32 = 1;
+const GMCLAW_TAB_INDEX: i32 = 2;
+const REQUEST_LOG_TAB_INDEX: i32 = 5;
 /// Poll interval for the short-lived "fetch models" dialog timer. This timer
 /// only runs while that modal dialog is open, so it does not affect idle CPU.
 const DIALOG_RESULT_POLL_MS: i32 = 150;
@@ -209,11 +212,11 @@ use self::session_history::show_session_history_window;
 use self::text::{GuiLocale, GuiText};
 use self::theme::ThemeMode;
 use self::widgets::{
-    ImStatusPanel, LucideIconKind, ProviderLogoKind, StateTone, StatusIconKind, StatusPanel,
-    app_icon_bitmap, apply_dataview_theme, apply_notebook_theme, card_section,
-    centered_status_panel, dataview_table_style, dumpling_mcp_icon_bitmap, im_status_panel,
-    lucide_icon_bitmap, provider_logo_bitmap, set_disabled_status_panel, set_im_channel_row,
-    set_status_panel, status_icon_bitmap, status_panel, table_cell_attr, text_field_row,
+    ClientTabIconKind, ImStatusPanel, LucideIconKind, ProviderLogoKind, StateTone, StatusIconKind,
+    StatusPanel, app_icon_bitmap, apply_dataview_theme, apply_notebook_theme, card_section,
+    centered_status_panel, client_tab_icon_bitmap, dataview_table_style, dumpling_mcp_icon_bitmap,
+    im_status_panel, lucide_icon_bitmap, provider_logo_bitmap, set_disabled_status_panel,
+    set_im_channel_row, set_status_panel, status_panel, table_cell_attr, text_field_row,
 };
 use self::workbuddy::WorkBuddyActionResult;
 
@@ -1198,14 +1201,6 @@ fn build_ui(
     enable_full_repaint_on_resize(&nvwa_tab.page);
 
     notebook.add_page(&codex_tab.page, text.codex_tab(), true, tab_icons[0]);
-    notebook.add_page(&ai_gw_page, text.ai_gateway_tab(), false, tab_icons[1]);
-    notebook.add_page(&feishu_page, text.chat_tab(), false, tab_icons[2]);
-    notebook.add_page(
-        &request_logs_page,
-        text.request_logs_tab(),
-        false,
-        tab_icons[3],
-    );
     notebook.add_page(
         &workbuddy_tab.page,
         text.workbuddy_tab(),
@@ -1215,11 +1210,19 @@ fn build_ui(
     notebook.add_page(
         &gmclaw_tab.page,
         match text.locale {
-            GuiLocale::ZhCn => "天工 Claw 接入",
+            GuiLocale::ZhCn => "天工Claw 接入",
             GuiLocale::EnUs => "GMClaw Integration",
         },
         false,
         tab_icons[5],
+    );
+    notebook.add_page(&ai_gw_page, text.ai_gateway_tab(), false, tab_icons[1]);
+    notebook.add_page(&feishu_page, text.chat_tab(), false, tab_icons[2]);
+    notebook.add_page(
+        &request_logs_page,
+        text.request_logs_tab(),
+        false,
+        tab_icons[3],
     );
     if dumpling_mcp_visible.get() {
         notebook.add_page(&nvwa_tab.page, "Dumpling-MCP", false, tab_icons[6]);
@@ -2208,8 +2211,12 @@ fn create_main_tab_icons(notebook: &Notebook) -> [Option<i32>; 7] {
     // Use 24x24 for better quality on high-DPI displays
     let size = 24;
     let image_list = ImageList::new(size, size, true, 7);
+    // Image slots identify pages independently of their display order.
     let image_ids = [
-        image_list.add_bitmap(&status_icon_bitmap(StatusIconKind::Codex, size as usize)),
+        image_list.add_bitmap(&client_tab_icon_bitmap(
+            ClientTabIconKind::ChatGptCodex,
+            size as usize,
+        )),
         image_list.add_bitmap(&lucide_icon_bitmap(LucideIconKind::Router, size as usize)),
         image_list.add_bitmap(&lucide_icon_bitmap(
             LucideIconKind::MessagesSquare,
@@ -2219,8 +2226,14 @@ fn create_main_tab_icons(notebook: &Notebook) -> [Option<i32>; 7] {
             LucideIconKind::ScrollText,
             size as usize,
         )),
-        image_list.add_bitmap(&lucide_icon_bitmap(LucideIconKind::Router, size as usize)),
-        image_list.add_bitmap(&lucide_icon_bitmap(LucideIconKind::Router, size as usize)),
+        image_list.add_bitmap(&client_tab_icon_bitmap(
+            ClientTabIconKind::WorkBuddy,
+            size as usize,
+        )),
+        image_list.add_bitmap(&client_tab_icon_bitmap(
+            ClientTabIconKind::TianGongClaw,
+            size as usize,
+        )),
         image_list.add_bitmap(&dumpling_mcp_icon_bitmap(size as usize)),
     ];
     let icons = image_ids.map(|id| (id >= 0).then_some(id));
@@ -2322,7 +2335,7 @@ fn toggle_dumpling_mcp_page(
             });
             index.is_some_and(|index| {
                 if page.notebook.selection() == index as i32 {
-                    page.notebook.set_selection(0);
+                    page.notebook.set_selection(CODEX_TAB_INDEX as usize);
                 }
                 page.notebook.remove_page(index)
             })

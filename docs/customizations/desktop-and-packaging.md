@@ -1,5 +1,7 @@
 # 天才空间品牌、桌面行为与交付
 
+当前页签排列与图标调整（2026-10-11）：前三项依次为“ChatGPT(Codex) 接入”“WorkBuddy 接入”“天工Claw 接入”，其后三个公共页和可选 Dumpling-MCP 保持相对顺序。仅这三个客户端的页签小图标改为各自应用标识的透明线条版，内嵌程序并跟随当前主题文字色；配置兼容和回退见 [客户端页签顺序与图标](#客户端页签顺序与图标)，本轮源码、编译、云端包与验收状态见 [v5 交付](../releases/v0.4.30-5.md#2026-10-11-客户端页签排序与应用线条图标)。版本仍 `0.4.30-5`、唯一 `main`；下方安装升级、关机及旧产物记录保留前轮范围。
+
 维护日期：2026-10-11。当前完整版本保持 `0.4.30-5`，源码只维护 `main`。用户反馈此前 Actions 的 v5 MSI 安装后仍运行 v4；已确认旧 MSI 语言 `0` 被新包的 `1033` 升级条件漏检，且旧新 EXE 固定数字版本都为 `0.4.30.0`，同组件文件可能按相同版本跳过替换。本次实现跨语言识别、同数字版本重建覆盖和 Windows 数字第四字段保留二开 revision，并为新装和升级补齐确认、进度及成功后的“打开 / 完成”流程；公开版本、MSI 三段版本和 macOS 产品版本不变。修复 `4966b1f` 已推送，新 Windows Actions 已开始；最终 Windows locked GUI debug build 1 分 43 秒、38 条既有警告通过，资源只读核对显示字符串 `0.4.30-5`、数字 `0.4.30.5`，程序未运行。修复包生成/核验与安装升级验收待完成，macOS 前轮成功包保留，见 [当前交付状态](#当前交付状态)。
 
 当前 [Dumpling-MCP 页签与 NVWA 后台桥](nvwa-mcp.md) 按帮助菜单勾选显示，默认隐藏并保存偏好，采用透明线条品牌图标；Codex 使用环境名接入并兼容旧名。系统会话结束不再触发普通关闭的托盘阻止，Windows MSI 成功页提供显式打开/完成按钮；密钥保存、期限、身份隔离与按需自动续认证继续保留。此前 Windows 本机测试版“可以了”仅属该次有限反馈，不覆盖本次 WiX 修复、新 MSI、macOS 或全部 MCP 调用。[v0.4.30-5 Release](https://github.com/soupdomplings/TianCaiSpaceHub/releases/tag/v0.4.30-5) 已创建，但此前 Windows run `38052269127` 失败于 WiX 扩展安装；macOS run `38052269076` 已完成双架构编译、ad-hoc 签名、DMG 校验及 Actions artifact 上传，随后因等不到 Windows 更新清单失败，Release 发布跳过。这些历史结果不能写成两平台 Release 成功，详细身份见 [v5 交付](../releases/v0.4.30-5.md)。TC-001、TC-007、TC-011、TC-012 的既有桌面能力和此前 [v4](../releases/v0.4.30-4.md) 发布事实保持原归属。
@@ -20,6 +22,7 @@
 | macOS Bundle Identifier | `com.codexhub.app` | 保留既有安装身份 |
 | 图标资源 | [Windows 图标](../../packaging/icons/AppIcon.ico)、[macOS 图标](../../packaging/macos/AppIcon.icns)、[品牌原图](../../assets/tci-hub-icon.png) | 变更时同步各平台所需尺寸及资源引用 |
 | Dumpling-MCP 页签图标 | [品牌线条 SVG](../../packaging/brand/dumpling-mcp.svg) | 饺子、轨道及箭头意象；透明背景，随浅/深主题使用文字颜色，内嵌程序，无新增运行期资源依赖 |
+| 三客户端页签图标 | [ChatGPT(Codex)](../../packaging/brand/chatgpt-codex-line.svg)、[WorkBuddy](../../packaging/brand/workbuddy-line.svg)、[天工Claw](../../packaging/brand/tiangong-claw-line.svg) | 各自应用标识的透明线条版，内嵌程序、随主题文字色显示；仅页签小图标 |
 | 厂商图标 | [来源说明](../provider-logo-assets.zh-CN.md) | 保留来源和许可证 |
 
 配置目录、`CODEXHUB_*` 环境变量、provider/actor/account 等协议标识、日志分类及单实例/网页导入通信身份继续沿用兼容值，不做数据迁移。它们与产品名称、二进制文件名的用途不同。旧版本 `codexhub`/`CodexHub.exe` 进程仍需被已有后台管理正确识别，以便升级过渡；保留识别不表示新构建继续输出旧文件。
@@ -29,6 +32,18 @@
 早期上游曾由 `codex-remote` 改名为 CodexHub。该迁移已经结束，不再执行旧分支合并、远端仓库改名或目录迁移步骤；原始记录可从 Git 历史追溯。
 
 ## 当前桌面行为
+
+### 客户端页签顺序与图标
+
+主窗口从左到右为“ChatGPT(Codex) 接入” → “WorkBuddy 接入” → “天工Claw 接入” → “大模型接入” → “聊天工具接入” → “请求日志” → 可选“Dumpling-MCP”。Codex 英文页签同步为 `ChatGPT(Codex) Integration`，其他页签保留既有英文名称。Dumpling-MCP 继续由帮助菜单勾选显示，默认隐藏；勾选显示后追加在末尾，取消隐藏不停止已授权的后台连接。
+
+前三个页签的小图标分别采用 [ChatGPT(Codex)](../../packaging/brand/chatgpt-codex-line.svg)、[WorkBuddy](../../packaging/brand/workbuddy-line.svg) 和 [天工Claw](../../packaging/brand/tiangong-claw-line.svg) 的应用标识线条版；透明背景，以主题文字色描绘，浅/深色主题均使用同一轮廓。SVG 编译时内嵌，不依赖客户端安装、用户目录或运行期外部资源；主题变更沿用已有重启提示流程。此次只调整页签图标，不改变状态栏图标的含义。
+
+标识来源已静态核对：ChatGPT(Codex) 复用仓库 [codex.svg](../../packaging/brand/codex.svg) 的六瓣应用标识，去除底板与渐变后描线；WorkBuddy 来自官方 5.7.7 安装包 `asar` 的 `renderer/assets/logo-workbuddy-BUNGQxi-.svg`，保留斜向猫耳头像和双眼；天工来自官方 1.1.1 安装包 `asar` 的 `public/logo.png`，保留五片首尾相接的旋转箭头。来源核对只读取资源，没有启动应用；版本号只说明本次取样，不作为运行期版本限制。
+
+维护入口：[页签创建与事件](../../src/gui.rs)、[页签文字](../../src/gui/text.rs)、[SVG 图标缓存](../../src/gui/widgets.rs) 中的 `ClientTabIconKind` / `client_tab_icon_bitmap`、[概览客户端对应](../../src/gui/client_overview.rs)。前三端索引为 `0`、`1`、`2`，请求日志为 `5`；客户端概览与日志定时刷新同步新顺序，公共页继续保留最近接入端视角。既有配置无需迁移，不新增字段；回退还原 GUI 和对应资源后重新打包，无需修改用户配置。静态核对、Windows 编译、Actions 与 Windows/macOS 待用户验收项集中记录于 [本轮交付](../releases/v0.4.30-5.md#2026-10-11-客户端页签排序与应用线条图标)。
+
+### 其他桌面行为
 
 - `0.4.30-5` 的“Dumpling-MCP”认证下拉为“账号密码”和“认证服务连接”，新环境仍默认密码。新切到认证服务连接默认勾选共享应用，主区直接显示共享选项、代表账号、`ClientID`、`ClientSecret` 和“在认证服务管理添加应用服务，获取ClientID和ClientSecret”；取消勾选才使用原浏览器页面授权。加载旧密码/应用/浏览器环境保持各自原值，下拉继续可切换，密码模式隐藏并忽略共享选项。签名算法仅应用模式在高级设置显示，浏览器限定账号仍为高级可选项。
 - 页面 `?` 打开原生帮助对话框，提供完整配置步骤与共享应用身份说明；认证切换、旧检测“重新检查”等常驻文案及应用身份横幅移除，后台取消旧事务、清空材料和撤销授权照常执行。只填一个服务地址，认证地址默认同服务；高级 MCP 默认直接显示 `/mcp`，可改路径或完整 HTTP(S) URL，空值与 `/mcp` 同义，路径跟随部署前缀、完整 URL 独立覆盖。独立认证地址、租户和登录单位仍在高级设置。多环境、直接可见的密码/ClientSecret、真实身份/两 token expiry、只读工具检测和三端预览保留；后台默认 `127.0.0.1:3849`，仅改 NVWA 受管项，原生刷新/信任保留，见 [TC-014](nvwa-mcp.md)。
