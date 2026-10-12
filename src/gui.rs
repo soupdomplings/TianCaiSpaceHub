@@ -115,6 +115,7 @@ struct DumplingMcpPage {
 #[derive(Clone, Copy)]
 struct ZaiAccessControls {
     layout_host: Panel,
+    scroll_host: ScrolledWindow,
     panel: Panel,
     api: RadioButton,
     coding_plan: RadioButton,
@@ -2807,6 +2808,26 @@ fn start_ai_gw_provider_save(
     schedule_dashboard_refresh(api, dashboard_refresh);
 }
 
+/// Limit model editors to the currently visible Hub window. Windows also
+/// supplies its desktop work area; on macOS the parent gives wxWidgets-sized
+/// bounds without mixing native pixels and logical coordinates.
+fn ai_gw_channel_dialog_size(parent: &Frame, preferred: Size) -> Size {
+    let parent_size = parent.get_client_size();
+    let mut width = preferred.width;
+    let mut height = preferred.height;
+    if parent_size.width > 0 {
+        width = width.min((parent_size.width - 24).max(1));
+    }
+    if parent_size.height > 0 {
+        height = height.min((parent_size.height - 24).max(1));
+    }
+    if let Some((work_width, work_height)) = screen_work_area_size() {
+        width = width.min((work_width - 32).max(1));
+        height = height.min((work_height - 48).max(1));
+    }
+    Size::new(width, height)
+}
+
 fn show_ai_gw_channel_dialog(
     parent: &Frame,
     text: GuiText,
@@ -2817,21 +2838,30 @@ fn show_ai_gw_channel_dialog(
         return chatgpt::show_channel_dialog(parent, text, api.clone(), initial);
     }
     const CHATGPT_DIALOG: i32 = 19028;
+    let dialog_size = ai_gw_channel_dialog_size(parent, Size::new(1120, 760));
+    let stacked = dialog_size.width < 1100;
+    let minimum_width = (if stacked { 720 } else { 1100 }).min(dialog_size.width);
     let dialog = Dialog::builder(parent, text.ai_gw_channel_editor())
         .with_style(DialogStyle::DefaultDialogStyle | DialogStyle::ResizeBorder)
-        .with_size(1120, 760)
+        .with_size(dialog_size.width, dialog_size.height)
         .build();
-    dialog.set_min_size(Size::new(920, 640));
+    dialog.set_min_size(Size::new(minimum_width, 360.min(dialog_size.height)));
     dialog.set_background_color(theme::theme().bg_card_alt);
 
-    let panel = Panel::builder(&dialog).build();
+    // The form can exceed a short display. Keep only its contents scrollable;
+    // the save/cancel row belongs to a separate, fixed footer.
+    let panel = ScrolledWindow::builder(&dialog)
+        .with_style(ScrolledWindowStyle::VScroll)
+        .build();
     panel.set_background_color(theme::theme().bg_card_alt);
+    panel.set_min_size(Size::new(0, 0));
     let root = BoxSizer::builder(Orientation::Vertical).build();
 
     let help = StaticText::builder(&panel)
         .with_label(text.ai_gw_channel_editor_help())
         .build();
     help.set_foreground_color(theme::theme().ink_muted);
+    help.wrap((minimum_width - 72).max(240));
     root.add(
         &help,
         0,
@@ -2846,7 +2876,7 @@ fn show_ai_gw_channel_dialog(
         ))
         .build();
     scope_help.set_foreground_color(theme::theme().ink_secondary);
-    scope_help.wrap(1020);
+    scope_help.wrap((minimum_width - 72).max(240));
     root.add(
         &scope_help,
         0,
@@ -2854,11 +2884,16 @@ fn show_ai_gw_channel_dialog(
         18,
     );
 
-    let workspace = BoxSizer::builder(Orientation::Horizontal).build();
+    let workspace = BoxSizer::builder(if stacked {
+        Orientation::Vertical
+    } else {
+        Orientation::Horizontal
+    })
+    .build();
 
     let service_panel = Panel::builder(&panel).build();
     service_panel.set_background_color(theme::theme().bg_card);
-    service_panel.set_min_size(Size::new(300, 500));
+    service_panel.set_min_size(Size::new(300, -1));
     let service_sizer = BoxSizer::builder(Orientation::Vertical).build();
     let service_title = StaticText::builder(&service_panel)
         .with_label(text.ai_gw_provider_service())
@@ -2946,11 +2981,20 @@ fn show_ai_gw_channel_dialog(
     );
     service_sizer.add_stretch_spacer(1);
     service_panel.set_sizer(service_sizer, true);
-    workspace.add(&service_panel, 0, SizerFlag::Expand | SizerFlag::Right, 14);
+    workspace.add(
+        &service_panel,
+        0,
+        SizerFlag::Expand
+            | if stacked {
+                SizerFlag::Bottom
+            } else {
+                SizerFlag::Right
+            },
+        14,
+    );
 
     let form_panel = Panel::builder(&panel).build();
     form_panel.set_background_color(theme::theme().bg_card);
-    form_panel.set_min_size(Size::new(620, 500));
     let form_sizer = BoxSizer::builder(Orientation::Vertical).build();
     let form_title = StaticText::builder(&form_panel)
         .with_label(text.ai_gw_channel_settings())
@@ -3011,7 +3055,11 @@ fn show_ai_gw_channel_dialog(
         .with_label(text.ai_gw_zai_access_mode_help())
         .build();
     zai_access_help.set_foreground_color(theme::theme().ink_muted);
-    zai_access_help.wrap(520);
+    zai_access_help.wrap(if stacked {
+        (minimum_width - 136).clamp(220, 520)
+    } else {
+        520
+    });
     zai_access_sizer.add(
         &zai_access_help,
         0,
@@ -3028,6 +3076,7 @@ fn show_ai_gw_channel_dialog(
     );
     let zai_access_controls = ZaiAccessControls {
         layout_host: form_panel,
+        scroll_host: panel,
         panel: zai_access_panel,
         api: zai_api_radio,
         coding_plan: zai_coding_plan_radio,
@@ -3072,10 +3121,27 @@ fn show_ai_gw_channel_dialog(
         .with_label(text.ai_gw_models_url_help())
         .build();
     models_url_help.set_foreground_color(theme::theme().ink_muted);
-    models_url_help.wrap(540);
+    models_url_help.wrap(if stacked {
+        (minimum_width - 260).clamp(220, 540)
+    } else {
+        540
+    });
     grid.add(&models_url_help, 0, SizerFlag::Expand, 0);
     let key_input = text_field_row(&form_panel, &grid, text.ai_gw_col_api_key(), "");
     let weight_input = text_field_row(&form_panel, &grid, text.ai_gw_weight(), "100");
+    if stacked {
+        let field_width = (minimum_width - 240).clamp(240, 420);
+        for input in [
+            type_input,
+            name_input,
+            base_url_input,
+            models_url_input,
+            key_input,
+            weight_input,
+        ] {
+            input.set_min_size(Size::new(field_width, 30));
+        }
+    }
 
     form_sizer.add_sizer(
         &grid,
@@ -3167,11 +3233,13 @@ fn show_ai_gw_channel_dialog(
     );
 
     let buttons = BoxSizer::builder(Orientation::Horizontal).build();
-    let cancel_button = Button::builder(&panel)
+    let footer = Panel::builder(&dialog).build();
+    footer.set_background_color(theme::theme().bg_card_alt);
+    let cancel_button = Button::builder(&footer)
         .with_id(ID_CANCEL)
         .with_label(text.cancel())
         .build();
-    let save_button = Button::builder(&panel)
+    let save_button = Button::builder(&footer)
         .with_id(ID_OK)
         .with_label(if initial.is_some() {
             text.ai_gw_save_channel()
@@ -3183,16 +3251,21 @@ fn show_ai_gw_channel_dialog(
     buttons.add_stretch_spacer(1);
     buttons.add(&cancel_button, 0, SizerFlag::Right, 8);
     buttons.add(&save_button, 0, SizerFlag::Right, 0);
-    root.add_sizer(
+    let footer_sizer = BoxSizer::builder(Orientation::Vertical).build();
+    footer_sizer.add_sizer(
         &buttons,
         0,
         SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Top | SizerFlag::Bottom,
         18,
     );
+    footer.set_sizer(footer_sizer, true);
 
     panel.set_sizer(root, true);
+    panel.set_scroll_rate(0, 12);
+    panel.fit_inside();
     let dialog_sizer = BoxSizer::builder(Orientation::Vertical).build();
     dialog_sizer.add(&panel, 1, SizerFlag::Expand, 0);
+    dialog_sizer.add(&footer, 0, SizerFlag::Expand, 0);
     dialog.set_sizer(dialog_sizer, true);
 
     apply_ai_gw_dialog_template(
@@ -4172,6 +4245,8 @@ fn set_zai_access_controls(controls: &ZaiAccessControls, mode: ZaiAccessMode, vi
     }
     controls.panel.show(visible);
     controls.layout_host.layout();
+    controls.scroll_host.layout();
+    controls.scroll_host.fit_inside();
 }
 
 fn selected_zai_access_mode(controls: &ZaiAccessControls) -> ZaiAccessMode {

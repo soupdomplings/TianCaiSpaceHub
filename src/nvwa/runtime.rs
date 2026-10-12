@@ -37,6 +37,19 @@ struct ProfileRuntime {
     detail: String,
     verified: bool,
     client_checks: HashMap<ClientKind, u64>,
+    pending_access: Option<PendingClientAccess>,
+}
+
+struct PendingClientAccess {
+    identity: VerifiedIdentity,
+    capabilities: HashMap<ClientKind, String>,
+    session_generation: String,
+}
+
+fn same_identity(left: &VerifiedIdentity, right: &VerifiedIdentity) -> bool {
+    left.user_id == right.user_id
+        && left.identity_id == right.identity_id
+        && left.tenant_id == right.tenant_id
 }
 
 struct Session {
@@ -121,6 +134,7 @@ fn begin_auth(inner: &mut Inner, profile_id: &str) -> String {
             detail: "Waiting for login".into(),
             verified: false,
             client_checks: HashMap::new(),
+            pending_access: None,
         },
     );
     generation
@@ -140,8 +154,6 @@ impl Runtime {
                     Uuid::parse_str(&generation).is_ok(),
                     "Invalid protected session"
                 );
-                let identity: VerifiedIdentity =
-                    serde_json::from_value(record["identity"].clone())?;
                 let token = |value: &Value| -> Result<AuthToken> {
                     let content = value
                         .get("value")
@@ -182,15 +194,6 @@ impl Runtime {
                         expiry_policy,
                     })
                 };
-                let auth = AuthResult {
-                    identity,
-                    personal_token: if record["personalToken"].is_null() {
-                        None
-                    } else {
-                        Some(token(&record["personalToken"])?)
-                    },
-                    mcp_token: token(&record["mcpToken"])?,
-                };
                 let mut capabilities = HashMap::new();
                 for client in [
                     ClientKind::Codex,
@@ -206,14 +209,53 @@ impl Runtime {
                         capabilities.insert(client, capability.to_owned());
                     }
                 }
+                // A pending sign-in keeps the local keys protected, but cannot
+                // restore an upstream token or authorize a client before login.
+                let pending = record
+                    .get("pendingIdentity")
+                    .filter(|value| !value.is_null());
+                let (auth, pending_access, capabilities) = if let Some(identity) = pending {
+                    ensure!(
+                        record["mcpToken"].is_null() && record["personalToken"].is_null(),
+                        "Invalid protected pending login"
+                    );
+                    let identity: VerifiedIdentity = serde_json::from_value(identity.clone())?;
+                    (
+                        None,
+                        Some(PendingClientAccess {
+                            identity,
+                            capabilities,
+                            session_generation: generation.clone(),
+                        }),
+                        HashMap::new(),
+                    )
+                } else {
+                    let auth = AuthResult {
+                        identity: serde_json::from_value(record["identity"].clone())?,
+                        personal_token: if record["personalToken"].is_null() {
+                            None
+                        } else {
+                            Some(token(&record["personalToken"])?)
+                        },
+                        mcp_token: token(&record["mcpToken"])?,
+                    };
+                    (Some(auth), None, capabilities)
+                };
+                let detail = if auth.is_none() {
+                    "Restored client access suspended; explicit login required"
+                } else {
+                    "Restored protected credentials; identity verification pending"
+                }
+                .into();
                 Ok(ProfileRuntime {
                     generation,
-                    auth: Some(auth),
+                    auth,
                     capabilities,
                     tools: None,
-                    detail: "Restored protected credentials; identity verification pending".into(),
+                    detail,
                     verified: false,
                     client_checks: HashMap::new(),
+                    pending_access,
                 })
             })();
             if let Ok(profile) = decoded {
@@ -228,12 +270,21 @@ impl Runtime {
     pub async fn protected_snapshot(&self, id: &str) -> Option<Value> {
         let inner = self.inner.lock().await;
         let profile = inner.profiles.get(id)?;
-        let auth = profile.auth.as_ref()?;
         let token = |token: &AuthToken| json!({"value":token.value,"headerName":token.header_name,"expiresAtMs":token.expires_at_ms,"expiryPolicy":token.expiry_policy});
         let mut capabilities = serde_json::Map::new();
-        for (kind, capability) in &profile.capabilities {
+        let stored_capabilities = profile
+            .pending_access
+            .as_ref()
+            .map(|pending| &pending.capabilities)
+            .unwrap_or(&profile.capabilities);
+        for (kind, capability) in stored_capabilities {
             capabilities.insert(kind.as_str().to_owned(), Value::String(capability.clone()));
         }
+        if let Some(pending) = &profile.pending_access {
+            return Some(json!({"generation":profile.generation,
+                "pendingIdentity":pending.identity,"capabilities":capabilities}));
+        }
+        let auth = profile.auth.as_ref()?;
         Some(
             json!({"generation":profile.generation,"identity":auth.identity,"personalToken":auth.personal_token.as_ref().map(token),
             "mcpToken":token(&auth.mcp_token),"capabilities":capabilities}),
@@ -314,6 +365,55 @@ impl Runtime {
         begin_auth(&mut inner, profile_id)
     }
 
+    pub async fn begin_login(&self, profile_id: &str) -> String {
+        let mut inner = self.inner.lock().await;
+        let pending_access = inner.profiles.remove(profile_id).and_then(|previous| {
+            previous.pending_access.or_else(|| {
+                previous.auth.map(|auth| PendingClientAccess {
+                    identity: auth.identity,
+                    capabilities: previous.capabilities,
+                    session_generation: previous.generation,
+                })
+            })
+        });
+        // Existing sessions are suspended until the exact identity is verified.
+        // In-flight calls are never carried into the new login generation.
+        inner.sessions.retain(|_, session| {
+            session.profile != profile_id
+                || pending_access.as_ref().is_some_and(|pending| {
+                    session.generation == pending.session_generation
+                        && pending
+                            .capabilities
+                            .get(&session.client)
+                            .is_some_and(|key| constant_eq(key, &session.capability))
+                })
+        });
+        let other_sessions: std::collections::HashSet<_> = inner
+            .sessions
+            .iter()
+            .filter(|(_, session)| session.profile != profile_id)
+            .map(|(id, _)| id.clone())
+            .collect();
+        inner
+            .calls
+            .retain(|(session, _), _| other_sessions.contains(session));
+        let generation = Uuid::new_v4().to_string();
+        inner.profiles.insert(
+            profile_id.to_owned(),
+            ProfileRuntime {
+                generation: generation.clone(),
+                auth: None,
+                capabilities: HashMap::new(),
+                tools: None,
+                detail: "Waiting for login; existing client access suspended".into(),
+                verified: false,
+                client_checks: HashMap::new(),
+                pending_access,
+            },
+        );
+        generation
+    }
+
     pub async fn invalidate_generation(&self, profile_id: &str, generation: &str) -> bool {
         let mut inner = self.inner.lock().await;
         if !inner
@@ -334,17 +434,48 @@ impl Runtime {
         profile_id: &str,
         generation: &str,
         auth: AuthResult,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let mut inner = self.inner.lock().await;
         let profile = inner
             .profiles
             .get_mut(profile_id)
             .ok_or_else(|| anyhow::anyhow!("Login was superseded"))?;
         ensure!(profile.generation == generation, "Login was superseded");
+        let pending = profile
+            .pending_access
+            .take()
+            .filter(|pending| same_identity(&pending.identity, &auth.identity));
+        profile.capabilities.clear();
+        if let Some(pending) = &pending {
+            profile.capabilities = pending.capabilities.clone();
+        }
+        let retained = !profile.capabilities.is_empty();
         profile.auth = Some(auth);
         profile.verified = true;
-        profile.detail = "Authenticated; client access must be explicitly applied".into();
-        Ok(())
+        profile.detail = if retained {
+            "Authenticated; existing client access retained"
+        } else {
+            "Authenticated; client access must be explicitly applied"
+        }
+        .into();
+        inner.sessions.retain(|_, session| {
+            if session.profile != profile_id {
+                return true;
+            }
+            if pending.as_ref().is_some_and(|pending| {
+                session.generation == pending.session_generation
+                    && pending
+                        .capabilities
+                        .get(&session.client)
+                        .is_some_and(|key| constant_eq(key, &session.capability))
+            }) {
+                session.generation = generation.to_owned();
+                true
+            } else {
+                false
+            }
+        });
+        Ok(retained)
     }
 
     pub async fn set_detail(&self, profile_id: &str, generation: &str, detail: &str) {
@@ -424,10 +555,23 @@ impl Runtime {
             .cloned()
     }
 
+    pub async fn client_access_suspended(&self, profile_id: &str, client: ClientKind) -> bool {
+        self.inner
+            .lock()
+            .await
+            .profiles
+            .get(profile_id)
+            .and_then(|profile| profile.pending_access.as_ref())
+            .is_some_and(|pending| pending.capabilities.contains_key(&client))
+    }
+
     pub async fn revoke_client(&self, profile_id: &str, client: ClientKind) {
         let mut inner = self.inner.lock().await;
         if let Some(profile) = inner.profiles.get_mut(profile_id) {
             profile.capabilities.remove(&client);
+            if let Some(pending) = &mut profile.pending_access {
+                pending.capabilities.remove(&client);
+            }
             profile.client_checks.remove(&client);
         }
         inner
@@ -437,6 +581,30 @@ impl Runtime {
         inner
             .calls
             .retain(|(session, _), _| retained.contains(session));
+    }
+
+    pub async fn lease_is_current(
+        &self,
+        profile_id: &str,
+        client: ClientKind,
+        bearer: &str,
+        lease: &RequestLease,
+    ) -> bool {
+        let inner = self.inner.lock().await;
+        inner.profiles.get(profile_id).is_some_and(|profile| {
+            profile.generation == lease.generation
+                && profile
+                    .capabilities
+                    .get(&client)
+                    .is_some_and(|key| constant_eq(key, bearer))
+        }) && lease.session_id.as_ref().is_none_or(|id| {
+            inner.sessions.get(id).is_some_and(|session| {
+                session.profile == profile_id
+                    && session.client == client
+                    && session.generation == lease.generation
+                    && constant_eq(&session.capability, bearer)
+            })
+        })
     }
 
     pub async fn admit(
@@ -645,6 +813,7 @@ impl Runtime {
             let runtime = inner.profiles.get(&profile.id);
             let auth = runtime.and_then(|p| p.auth.as_ref());
             let state = match auth {
+                None if runtime.is_some_and(|p| p.pending_access.is_some()) => "login_pending",
                 None => "logged_out",
                 Some(a) if a.mcp_token.expires_at_ms.is_some_and(|expiry| expiry <= now_ms()) => "expired",
                 Some(a) if a.personal_token.as_ref().and_then(|t| t.expires_at_ms).is_some_and(|expiry| expiry <= now_ms()) => "personal_expired",
@@ -662,7 +831,307 @@ impl Runtime {
                 "personalExpired":auth.and_then(|a| a.personal_token.as_ref()).and_then(|t| t.expires_at_ms).is_some_and(|e| e <= now_ms()),
                 "toolCount":runtime.and_then(|p| p.tools.as_ref()).and_then(Value::as_array).map(Vec::len),
                 "detail":runtime.map(|p| p.detail.as_str()).unwrap_or("Login required"),
-                "clientAccess":runtime.map(|p| p.capabilities.keys().map(|k| k.as_str()).collect::<Vec<_>>()).unwrap_or_default()})
+                "clientAccess":runtime.map(|p| p.capabilities.keys().map(|k| k.as_str()).collect::<Vec<_>>()).unwrap_or_default(),
+                "suspendedClientAccess":runtime.and_then(|p| p.pending_access.as_ref()).map(|p| p.capabilities.keys().map(|k| k.as_str()).collect::<Vec<_>>()).unwrap_or_default()})
         }).collect()
+    }
+}
+
+#[cfg(test)]
+mod login_access_tests {
+    use super::*;
+
+    fn auth() -> AuthResult {
+        AuthResult {
+            identity: VerifiedIdentity {
+                user_id: "fixture-user".into(),
+                identity_id: "fixture-identity".into(),
+                tenant_id: "fixture-tenant".into(),
+                username: "fixture".into(),
+            },
+            personal_token: None,
+            mcp_token: AuthToken {
+                value: "fixture-token".into(),
+                header_name: "authorization-ticket-token".into(),
+                expires_at_ms: None,
+                expiry_policy: TokenExpiryPolicy::Fixed,
+            },
+        }
+    }
+
+    async fn connected() -> (Runtime, String, String, String, RequestLease) {
+        let runtime = Runtime::default();
+        let generation = runtime.begin_auth("fixture-profile").await;
+        runtime
+            .commit_auth("fixture-profile", &generation, auth())
+            .await
+            .unwrap();
+        let capability = runtime
+            .capability("fixture-profile", ClientKind::Codex)
+            .await
+            .unwrap();
+        let session = runtime
+            .create_session(
+                "fixture-profile",
+                ClientKind::Codex,
+                &capability,
+                &generation,
+                "2025-03-26",
+            )
+            .await
+            .unwrap();
+        let lease = runtime
+            .admit(
+                "fixture-profile",
+                ClientKind::Codex,
+                &capability,
+                Some(&session),
+                "tools/list",
+                Some(&json!(1)),
+            )
+            .await
+            .unwrap();
+        (runtime, generation, capability, session, lease)
+    }
+
+    #[tokio::test]
+    async fn expiry_and_same_identity_sign_in_keep_client_connection() {
+        let (runtime, generation, capability, session, lease) = connected().await;
+        runtime
+            .mark_expired("fixture-profile", &generation, "fixture-token")
+            .await;
+        assert!(runtime.auth("fixture-profile").await.is_err());
+        runtime
+            .renew_auth("fixture-profile", &generation, auth())
+            .await
+            .unwrap();
+        assert!(
+            runtime
+                .lease_is_current("fixture-profile", ClientKind::Codex, &capability, &lease)
+                .await
+        );
+        let next = runtime.begin_login("fixture-profile").await;
+        assert_ne!(next, generation);
+        assert!(runtime.raw_auth("fixture-profile").await.is_err());
+        assert!(
+            runtime
+                .check_capability("fixture-profile", ClientKind::Codex, &capability)
+                .await
+                .is_err()
+        );
+        assert!(
+            runtime
+                .client_access_suspended("fixture-profile", ClientKind::Codex)
+                .await
+        );
+        assert!(
+            runtime
+                .commit_auth("fixture-profile", &next, auth())
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            runtime
+                .existing_capability("fixture-profile", ClientKind::Codex)
+                .await,
+            Some(capability.clone())
+        );
+        assert!(
+            !runtime
+                .lease_is_current("fixture-profile", ClientKind::Codex, &capability, &lease)
+                .await
+        );
+        let current = runtime
+            .admit(
+                "fixture-profile",
+                ClientKind::Codex,
+                &capability,
+                Some(&session),
+                "tools/list",
+                Some(&json!(1)),
+            )
+            .await
+            .unwrap();
+        runtime.finish(&lease).await;
+        assert!(
+            runtime
+                .cancel_id(&session, &json!(1))
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            runtime
+                .lease_is_current("fixture-profile", ClientKind::Codex, &capability, &current)
+                .await
+        );
+    }
+
+    #[tokio::test]
+    async fn pending_retry_snapshot_and_single_client_revocation_remain_isolated() {
+        let (runtime, _, capability, old_session, _) = connected().await;
+        runtime
+            .capability("fixture-profile", ClientKind::Workbuddy)
+            .await
+            .unwrap();
+        runtime
+            .capability("fixture-profile", ClientKind::Tiangong)
+            .await
+            .unwrap();
+        runtime.begin_login("fixture-profile").await;
+        runtime.begin_login("fixture-profile").await;
+        runtime
+            .revoke_client("fixture-profile", ClientKind::Workbuddy)
+            .await;
+        let snapshot = runtime.protected_snapshot("fixture-profile").await.unwrap();
+        assert!(snapshot["mcpToken"].is_null() && snapshot["personalToken"].is_null());
+        assert!(snapshot["capabilities"]["workbuddy"].is_null());
+        let restored = Runtime::restore(vec![(
+            "fixture-profile".into(),
+            AuthMode::Application,
+            snapshot,
+        )]);
+        assert!(restored.raw_auth("fixture-profile").await.is_err());
+        assert!(
+            restored
+                .existing_capability("fixture-profile", ClientKind::Codex)
+                .await
+                .is_none()
+        );
+        assert!(
+            restored
+                .client_access_suspended("fixture-profile", ClientKind::Codex)
+                .await
+        );
+        let next = restored.begin_login("fixture-profile").await;
+        assert!(
+            restored
+                .commit_auth("fixture-profile", &next, auth())
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            restored
+                .existing_capability("fixture-profile", ClientKind::Codex)
+                .await,
+            Some(capability.clone())
+        );
+        assert!(
+            restored
+                .existing_capability("fixture-profile", ClientKind::Workbuddy)
+                .await
+                .is_none()
+        );
+        assert!(
+            restored
+                .existing_capability("fixture-profile", ClientKind::Tiangong)
+                .await
+                .is_some()
+        );
+        assert!(
+            restored
+                .admit(
+                    "fixture-profile",
+                    ClientKind::Codex,
+                    &capability,
+                    Some(&old_session),
+                    "tools/list",
+                    Some(&json!(1))
+                )
+                .await
+                .is_err()
+        );
+        assert!(
+            restored
+                .admit(
+                    "fixture-profile",
+                    ClientKind::Codex,
+                    &capability,
+                    None,
+                    "initialize",
+                    Some(&json!(1))
+                )
+                .await
+                .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn identity_changes_and_explicit_revocation_never_restore_old_access() {
+        for field in 0..3 {
+            let (runtime, _, capability, session, _) = connected().await;
+            let next = runtime.begin_login("fixture-profile").await;
+            let mut changed = auth();
+            match field {
+                0 => changed.identity.user_id = "other-user".into(),
+                1 => changed.identity.identity_id = "other-identity".into(),
+                _ => changed.identity.tenant_id = "other-tenant".into(),
+            }
+            assert!(
+                !runtime
+                    .commit_auth("fixture-profile", &next, changed)
+                    .await
+                    .unwrap()
+            );
+            assert!(
+                runtime
+                    .existing_capability("fixture-profile", ClientKind::Codex)
+                    .await
+                    .is_none()
+            );
+            assert!(
+                runtime
+                    .check_capability("fixture-profile", ClientKind::Codex, &capability)
+                    .await
+                    .is_err()
+            );
+            assert!(!runtime.inner.lock().await.sessions.contains_key(&session));
+        }
+        let (runtime, _, _, _, _) = connected().await;
+        let cancelled = runtime.begin_login("fixture-profile").await;
+        runtime.logout("fixture-profile").await;
+        assert!(
+            runtime
+                .protected_snapshot("fixture-profile")
+                .await
+                .is_none()
+        );
+        assert!(
+            runtime
+                .commit_auth("fixture-profile", &cancelled, auth())
+                .await
+                .is_err()
+        );
+        let next = runtime.begin_login("fixture-profile").await;
+        assert!(
+            !runtime
+                .commit_auth("fixture-profile", &next, auth())
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn existing_active_snapshot_still_requires_verification_after_restore() {
+        let (runtime, generation, capability, _, _) = connected().await;
+        let snapshot = runtime.protected_snapshot("fixture-profile").await.unwrap();
+        assert!(snapshot.get("pendingIdentity").is_none());
+        let restored = Runtime::restore(vec![(
+            "fixture-profile".into(),
+            AuthMode::Application,
+            snapshot,
+        )]);
+        assert!(restored.auth("fixture-profile").await.is_err());
+        assert_eq!(
+            restored
+                .existing_capability("fixture-profile", ClientKind::Codex)
+                .await,
+            Some(capability)
+        );
+        restored
+            .renew_auth("fixture-profile", &generation, auth())
+            .await
+            .unwrap();
+        assert!(restored.auth("fixture-profile").await.is_ok());
     }
 }

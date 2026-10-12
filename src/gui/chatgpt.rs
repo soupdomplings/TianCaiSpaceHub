@@ -116,15 +116,20 @@ pub(super) fn show_channel_dialog(
     api: ApiClient,
     initial: Option<&ProviderConfig>,
 ) -> Option<ProviderConfig> {
+    let dialog_size = super::ai_gw_channel_dialog_size(parent, Size::new(680, 760));
+    let minimum_width = 610.min(dialog_size.width);
     let dialog = Dialog::builder(parent, text.chatgpt_channel())
         .with_style(DialogStyle::DefaultDialogStyle | DialogStyle::ResizeBorder)
-        .with_size(680, 760)
+        .with_size(dialog_size.width, dialog_size.height)
         .build();
-    dialog.set_min_size(Size::new(610, 500));
+    dialog.set_min_size(Size::new(minimum_width, 360.min(dialog_size.height)));
     let panel = ScrolledWindow::builder(&dialog)
         .with_style(ScrolledWindowStyle::VScroll)
         .build();
+    panel.set_min_size(Size::new(0, 0));
     panel.set_background_color(theme::theme().bg_card);
+    let content_width = (minimum_width - 72).clamp(240, 530);
+    let control_width = content_width.min(480);
     let root = BoxSizer::builder(Orientation::Vertical).build();
     let title = StaticText::builder(&panel)
         .with_label(text.chatgpt_channel())
@@ -138,7 +143,7 @@ pub(super) fn show_channel_dialog(
         ))
         .build();
     scope_help.set_foreground_color(theme::theme().ink_secondary);
-    scope_help.wrap(530);
+    scope_help.wrap(content_width);
     root.add(
         &scope_help,
         0,
@@ -165,8 +170,8 @@ pub(super) fn show_channel_dialog(
     let status = StaticText::builder(&panel)
         .with_label(label(text, "未登录", "Not signed in"))
         .build();
-    status.set_min_size(Size::new(480, 42));
-    status.wrap(530);
+    status.set_min_size(Size::new(control_width, 42));
+    status.wrap(content_width);
     root.add(
         &status,
         0,
@@ -228,7 +233,7 @@ pub(super) fn show_channel_dialog(
         ))
         .with_style(TextCtrlStyle::MultiLine | TextCtrlStyle::ReadOnly)
         .build();
-    usage_view.set_min_size(Size::new(480, 150));
+    usage_view.set_min_size(Size::new(control_width, 150));
     root.add(
         &usage_view,
         0,
@@ -249,7 +254,7 @@ pub(super) fn show_channel_dialog(
         18,
     );
     let models = CheckListBox::builder(&panel).build();
-    models.set_min_size(Size::new(480, 120));
+    models.set_min_size(Size::new(control_width, 120));
     if let Some(provider) = initial {
         for model in &provider.models {
             models.append(&strip_nul(model));

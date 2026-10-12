@@ -224,7 +224,18 @@ impl NvwaService {
 
     pub(crate) async fn persist_session(&self, profile_id: &str) -> Result<()> {
         let _guard = self.inner.persistence.lock().await;
-        if let Some(mut snapshot) = self.inner.runtime.protected_snapshot(profile_id).await {
+        self.store_session_snapshot(
+            profile_id,
+            self.inner.runtime.protected_snapshot(profile_id).await,
+        )
+    }
+
+    fn store_session_snapshot(
+        &self,
+        profile_id: &str,
+        snapshot: Option<serde_json::Value>,
+    ) -> Result<()> {
+        if let Some(mut snapshot) = snapshot {
             snapshot["profileFingerprint"] =
                 serde_json::Value::String(profile_fingerprint(&self.profile(profile_id)?));
             let bytes = serde_json::to_vec(&snapshot)
@@ -233,6 +244,35 @@ impl NvwaService {
         } else {
             self.inner.secrets.delete(&session_key(profile_id))
         }
+    }
+
+    pub(crate) async fn prepare_login_generation(
+        &self,
+        profile_id: &str,
+        generation: &str,
+    ) -> Result<()> {
+        let _guard = self.inner.persistence.lock().await;
+        if !self
+            .inner
+            .runtime
+            .generation_matches(profile_id, generation)
+            .await
+        {
+            return Ok(());
+        }
+        self.inner.identity_checks.lock().await.remove(profile_id);
+        self.inner.renewal_failures.lock().await.remove(profile_id);
+        self.inner
+            .browser
+            .lock()
+            .await
+            .retain(|_, transaction| transaction.profile.id != profile_id);
+        // Replace the protected record directly rather than deleting the
+        // existing client keys before the suspended snapshot is saved.
+        self.store_session_snapshot(
+            profile_id,
+            self.inner.runtime.protected_snapshot(profile_id).await,
+        )
     }
 
     pub(crate) async fn invalidate(&self, profile_id: &str) -> Result<()> {

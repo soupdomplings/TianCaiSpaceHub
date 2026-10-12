@@ -459,6 +459,20 @@ pub(crate) async fn post(
             );
         }
     };
+    if !service
+        .inner
+        .runtime
+        .lease_is_current(&profile_id, client, credential, &lease)
+        .await
+    {
+        return rpc_error(
+            StatusCode::UNAUTHORIZED,
+            original_id,
+            -32000,
+            "Login or client access changed while request was in flight; result unconfirmed; no retry was made",
+            method == "tools/call",
+        );
+    }
     match result {
         Ok(RemoteResponse::Accepted) if original_id.is_none() => Response::builder()
             .status(StatusCode::ACCEPTED)

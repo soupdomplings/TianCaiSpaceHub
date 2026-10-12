@@ -350,13 +350,14 @@ async fn command(service: &NvwaService, operation: &str, body: &Value) -> Result
                     )
                 }
                 Err(error) => {
+                    revoke_mismatched_login(service, profile_id, &generation, &error).await?;
                     service
                         .inner
                         .runtime
                         .set_detail(
                             profile_id,
                             &generation,
-                            "Login failed; previous client access remains revoked",
+                            "Login failed; existing client access remains suspended",
                         )
                         .await;
                     Err(error)
@@ -374,11 +375,18 @@ async fn command(service: &NvwaService, operation: &str, body: &Value) -> Result
         "login/application" => {
             let secret = application_secret(service, &profile, body)?;
             let generation = begin_login(service, profile_id, body).await?;
-            let auth = service
+            let outcome = service
                 .inner
                 .auth
                 .application_login(&profile, &secret)
-                .await?;
+                .await;
+            let auth = match outcome {
+                Ok(auth) => auth,
+                Err(error) => {
+                    revoke_mismatched_login(service, profile_id, &generation, &error).await?;
+                    return Err(error);
+                }
+            };
             ensure!(
                 service
                     .inner
@@ -496,11 +504,13 @@ async fn begin_login(service: &NvwaService, profile_id: &str, body: &Value) -> R
         attempts
             .active
             .insert(profile_id.to_owned(), attempt_id.to_owned());
-        service.inner.runtime.begin_auth(profile_id).await
+        service.inner.runtime.begin_login(profile_id).await
     };
     // OS protection/filesystem work and outbound calls are outside the short
     // admission lock. Cleanup refuses to clear a later generation.
-    service.clear_generation(profile_id, &generation).await?;
+    service
+        .prepare_login_generation(profile_id, &generation)
+        .await?;
     ensure!(
         service
             .inner
@@ -585,7 +595,7 @@ async fn commit(
     auth: AuthResult,
 ) -> Result<Value> {
     let identity = auth.identity.clone();
-    service
+    let client_access_retained = service
         .inner
         .runtime
         .commit_auth(&profile.id, generation, auth)
@@ -597,13 +607,34 @@ async fn commit(
         .await
         .insert(profile.id.clone(), now_ms());
     if let Err(error) = service.persist_session(&profile.id).await {
-        service.invalidate(&profile.id).await?;
+        service
+            .invalidate_generation(&profile.id, generation)
+            .await?;
         return Err(error);
     }
     Ok(
         json!({"profileId":profile.id,"state":"authenticated","identity":identity,
-        "detail":"Verified login; explicitly apply each client to grant access to this identity"}),
+        "clientAccessRetained":client_access_retained,
+        "detail":if client_access_retained {"Verified login; existing client connections retained"}
+            else {"Verified login; connect each client once to use this identity"}}),
     )
+}
+
+async fn revoke_mismatched_login(
+    service: &NvwaService,
+    profile_id: &str,
+    generation: &str,
+    error: &anyhow::Error,
+) -> Result<()> {
+    if matches!(
+        error.downcast_ref::<super::auth::AuthError>(),
+        Some(super::auth::AuthError::IdentityMismatch(_))
+    ) {
+        service
+            .invalidate_generation(profile_id, generation)
+            .await?;
+    }
+    Ok(())
 }
 
 async fn save_profile(service: &NvwaService, body: &Value) -> Result<Value> {
@@ -799,9 +830,9 @@ async fn client_operation(
     match operation {
         "inspect" => {
             let mut value = serde_json::to_value(adapters::inspect(&context, &target).await?)?;
-            // A fresh explicit login revokes old client credentials even while
-            // the client's saved entry remains present. Reading that entry is
-            // not evidence that it can use this authentication generation.
+            // Inspecting the saved entry does not prove that its local key is
+            // active. Same-identity sign-in retains keys; logout or a changed
+            // identity still requires an explicit client grant.
             value["requiresClientAccess"] = Value::Bool(
                 service
                     .inner
@@ -809,6 +840,13 @@ async fn client_operation(
                     .existing_capability(&profile.id, client)
                     .await
                     .is_none(),
+            );
+            value["clientAccessSuspended"] = Value::Bool(
+                service
+                    .inner
+                    .runtime
+                    .client_access_suspended(&profile.id, client)
+                    .await,
             );
             value["bridgeCheckedAtMs"] = service
                 .inner
@@ -1046,11 +1084,24 @@ async fn callback(
                 == profile_fingerprint(&transaction.profile),
             "NVWA profile changed during authorization"
         );
-        let auth = service
+        let outcome = service
             .inner
             .auth
             .complete_browser(&transaction.profile, &ticket, &transaction.app_secret)
-            .await?;
+            .await;
+        let auth = match outcome {
+            Ok(auth) => auth,
+            Err(error) => {
+                revoke_mismatched_login(
+                    &service,
+                    &transaction.profile.id,
+                    &transaction.generation,
+                    &error,
+                )
+                .await?;
+                return Err(error);
+            }
+        };
         ensure!(
             service
                 .inner
