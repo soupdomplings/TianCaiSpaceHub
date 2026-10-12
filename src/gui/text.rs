@@ -666,10 +666,10 @@ impl GuiText {
     pub(super) fn codex_visible_models_warning(self) -> &'static str {
         match self.locale {
             GuiLocale::ZhCn => {
-                "注意：如果 Codex 报 “not configured in any provider”，请在大模型接入里添加对应大模型厂商并配置模型；也可以设置模型映射，例如把 Codex 里的 gpt-5.4-mini 映射到实际可用的 deepseek-v4-flash。"
+                "注意：如果 Codex 提示所选模型不在“大模型接入”的相关模型列表中，请新增大模型厂商或检查对应厂商的模型列表；也可以设置模型映射，例如把 Codex 里的 gpt-5.4-mini 映射到实际可用的 deepseek-v4-flash。"
             }
             GuiLocale::EnUs => {
-                "Note: If Codex reports \"not configured in any provider\", add the matching provider and model in AI Gateway, or map a Codex model name such as gpt-5.4-mini to an available upstream model such as deepseek-v4-flash."
+                "Note: If Codex reports that the selected model is absent from the relevant AI Gateway provider list, add a provider or check its models. You can also map a Codex model name such as gpt-5.4-mini to an available upstream model such as deepseek-v4-flash."
             }
         }
     }

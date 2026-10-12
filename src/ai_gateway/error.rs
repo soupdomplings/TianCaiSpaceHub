@@ -37,7 +37,9 @@ impl GatewayError {
             status: StatusCode::UNPROCESSABLE_ENTITY,
             error_type: "invalid_model_error".to_string(),
             code: "invalid_model".to_string(),
-            message: format!("model '{}' is not configured in any provider", model),
+            message: format!(
+                "所选模型「{model}」不在“大模型接入”的相关模型列表中。请新增大模型厂商，或检查对应厂商的模型列表。"
+            ),
             provider: None,
             upstream_status: None,
             upstream_error_type: None,

@@ -1,6 +1,6 @@
 use serde_json::{Value, json};
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     rc::Rc,
     sync::{
         Arc, Mutex,
@@ -32,7 +32,7 @@ enum Event {
     Account(Result<AccountSummary, String>),
     Connected(Result<AccountSummary, String>),
     Usage(String, Result<AccountUsage, String>),
-    Models(Result<Vec<String>, String>),
+    Models(String, Result<Vec<String>, String>),
     Logout(Result<Value, String>),
 }
 type Events = Arc<Mutex<Vec<Event>>>;
@@ -57,16 +57,16 @@ fn send(events: &Events, event: Event) {
     }
 }
 
-fn fetch_models(api: ApiClient, id: String, events: Events) {
+fn fetch_models(api: ApiClient, id: String, events: Events, closed: Arc<AtomicBool>) {
     thread::spawn(move || {
-        send(
-            &events,
-            Event::Models(api.post_json_with_timeout(
-                "/api/chatgpt/account/models",
-                &json!({"id":id}),
-                Duration::from_secs(75),
-            )),
-        )
+        let result = api.post_json_with_timeout(
+            "/api/chatgpt/account/models",
+            &json!({"id":id}),
+            Duration::from_secs(75),
+        );
+        if !closed.load(Ordering::SeqCst) {
+            send(&events, Event::Models(id, result));
+        }
     });
 }
 
@@ -327,6 +327,8 @@ pub(super) fn show_channel_dialog(
     let issued_auth_ids = Arc::new(Mutex::new(Vec::<String>::new()));
     let account_label = Rc::new(RefCell::new(String::new()));
     let busy = Rc::new(RefCell::new(false));
+    let active_model_fetch = Rc::new(RefCell::new(None::<String>));
+    let save_after_fetch = Rc::new(Cell::new(false));
     let usage_loading = Rc::new(RefCell::new(false));
     logout.enable(auth_id.borrow().is_some());
     fetch.enable(auth_id.borrow().is_some());
@@ -509,24 +511,43 @@ pub(super) fn show_channel_dialog(
             }
         });
     }
-    {
+    let start_model_fetch: Rc<dyn Fn(bool)> = {
         let api = api.clone();
         let events = events.clone();
         let auth_id = auth_id.clone();
         let busy = busy.clone();
-        fetch.on_click(move |_| {
+        let closed = closed.clone();
+        let save_after_fetch = save_after_fetch.clone();
+        let active_model_fetch = active_model_fetch.clone();
+        Rc::new(move |auto_save| {
+            if *busy.borrow()
+                || active_model_fetch.borrow().is_some()
+                || closed.load(Ordering::SeqCst)
+            {
+                return;
+            }
             if let Some(id) = auth_id.borrow().clone() {
                 *busy.borrow_mut() = true;
+                *active_model_fetch.borrow_mut() = Some(id.clone());
+                save_after_fetch.set(auto_save);
+                panel.enable(false);
                 fetch.enable(false);
                 login.enable(false);
                 import.enable(false);
                 refresh_usage.enable(false);
                 logout.enable(false);
                 save.enable(false);
+                if auto_save {
+                    save.set_label(text.ai_gw_fetching_models());
+                }
                 status.set_label(label(text, "正在拉取模型…", "Loading models..."));
-                fetch_models(api.clone(), id, events.clone());
+                fetch_models(api.clone(), id, events.clone(), closed.clone());
             }
-        });
+        })
+    };
+    {
+        let start_model_fetch = start_model_fetch.clone();
+        fetch.on_click(move |_| start_model_fetch(false));
     }
     {
         let api = api.clone();
@@ -534,6 +555,9 @@ pub(super) fn show_channel_dialog(
         let auth_id = auth_id.clone();
         let busy = busy.clone();
         logout.on_click(move |_| {
+            if *busy.borrow() {
+                return;
+            }
             if let Some(id) = auth_id.borrow().clone() {
                 *busy.borrow_mut() = true;
                 login.enable(false);
@@ -571,31 +595,26 @@ pub(super) fn show_channel_dialog(
         }
         entry.destroy();
     });
-    {
-        let auth_id = auth_id.clone();
-        let busy = busy.clone();
+    let validate_save: Rc<dyn Fn(bool) -> bool> = {
         let editing_reserved_channel = initial.is_some_and(ProviderConfig::is_client_reserved);
-        save.on_click(move |_| {
-            if *busy.borrow() || auth_id.borrow().is_none() {
-                return;
-            }
+        Rc::new(move |require_models| {
             let channel_name = strip_nul(&name.get_value()).trim().to_string();
             if channel_name.is_empty() {
                 show_error(&dialog, text.ai_gw_provider_name_empty());
-                return;
+                return false;
             }
             if (is_workbuddy_provider_name(&channel_name) || is_gmclaw_provider_name(&channel_name))
                 && !editing_reserved_channel
             {
                 show_error(&dialog, text.ai_gw_reserved_provider_name());
-                return;
+                return false;
             }
-            if selected_models(models).is_empty() {
+            if require_models && selected_models(models).is_empty() {
                 show_error(
                     &dialog,
                     label(text, "请至少选择一个模型", "Select at least one model"),
                 );
-                return;
+                return false;
             }
             if strip_nul(&priority.get_value())
                 .trim()
@@ -612,12 +631,52 @@ pub(super) fn show_channel_dialog(
                         "Priority must be a positive integer",
                     ),
                 );
+                return false;
+            }
+            true
+        })
+    };
+    {
+        let auth_id = auth_id.clone();
+        let busy = busy.clone();
+        let closed = closed.clone();
+        let start_model_fetch = start_model_fetch.clone();
+        let validate_save = validate_save.clone();
+        let active_model_fetch = active_model_fetch.clone();
+        save.on_click(move |_| {
+            if *busy.borrow()
+                || active_model_fetch.borrow().is_some()
+                || closed.load(Ordering::SeqCst)
+                || auth_id.borrow().is_none()
+            {
                 return;
             }
-            dialog.end_modal(ID_OK);
+            let empty = models.get_count() == 0;
+            if !validate_save(!empty) {
+                return;
+            }
+            if empty {
+                start_model_fetch(true);
+            } else {
+                closed.store(true, Ordering::SeqCst);
+                dialog.end_modal(ID_OK);
+            }
         });
     }
-    cancel.on_click(move |_| dialog.end_modal(ID_CANCEL));
+    {
+        let closed = closed.clone();
+        cancel.on_click(move |_| {
+            closed.store(true, Ordering::SeqCst);
+            dialog.end_modal(ID_CANCEL);
+        });
+    }
+    {
+        let closed = closed.clone();
+        dialog.on_close(move |event| {
+            closed.store(true, Ordering::SeqCst);
+            event.skip(true);
+        });
+    }
     let timer = Timer::new(&dialog);
     {
         let api = api.clone();
@@ -626,7 +685,14 @@ pub(super) fn show_channel_dialog(
         let busy = busy.clone();
         let account_label = account_label.clone();
         let usage_loading = usage_loading.clone();
+        let closed = closed.clone();
+        let save_after_fetch = save_after_fetch.clone();
+        let validate_save = validate_save.clone();
+        let active_model_fetch = active_model_fetch.clone();
         timer.on_tick(move |_| {
+            if closed.load(Ordering::SeqCst) {
+                return;
+            }
             let pending = { std::mem::take(&mut *events.lock().unwrap()) };
             for event in pending {
                 match event {
@@ -654,7 +720,7 @@ pub(super) fn show_channel_dialog(
                         if let Some(account) = result.account {
                             send(&events, Event::Connected(Ok(account)));
                         } else {
-                            *busy.borrow_mut() = false;
+                            *busy.borrow_mut() = active_model_fetch.borrow().is_some();
                             status.set_label(label(
                                 text,
                                 "登录未完成，请重试",
@@ -677,10 +743,18 @@ pub(super) fn show_channel_dialog(
                         refresh_usage.enable(false);
                         usage_view.set_value(label(text, "正在查询用量…", "Loading usage..."));
                         fetch_usage(api.clone(), account.auth_id.clone(), events.clone());
-                        fetch_models(api.clone(), account.auth_id, events.clone());
+                        *busy.borrow_mut() = true;
+                        *active_model_fetch.borrow_mut() = Some(account.auth_id.clone());
+                        panel.enable(false);
+                        fetch_models(
+                            api.clone(),
+                            account.auth_id,
+                            events.clone(),
+                            closed.clone(),
+                        );
                     }
                     Event::Account(Ok(account)) => {
-                        *busy.borrow_mut() = false;
+                        *busy.borrow_mut() = active_model_fetch.borrow().is_some();
                         *account_label.borrow_mut() = account_text(&account, text);
                         status.set_label(&account_label.borrow());
                         if account.needs_login {
@@ -721,27 +795,81 @@ pub(super) fn show_channel_dialog(
                             }
                         }
                     }
-                    Event::Models(Ok(fetched)) => {
+                    Event::Models(id, Ok(fetched)) => {
+                        if active_model_fetch.borrow().as_ref() != Some(&id)
+                            || auth_id.borrow().as_ref() != Some(&id)
+                        {
+                            continue;
+                        }
+                        active_model_fetch.borrow_mut().take();
+                        let auto_save = save_after_fetch.replace(false);
                         let selected = selected_models(models);
-                        let mut all = fetched;
-                        all.extend(selected.clone());
-                        all.sort();
-                        all.dedup();
-                        models.clear();
-                        for model in &all {
-                            models.append(&strip_nul(model));
-                            models.check(
-                                models.get_count() - 1,
-                                selected.contains(model)
-                                    || (selected.is_empty() && model == "gpt-5.5"),
-                            );
+                        let mut all: Vec<_> = fetched
+                            .into_iter()
+                            .map(|model| strip_nul(&model).trim().to_string())
+                            .filter(|model| !model.is_empty())
+                            .collect();
+                        let remote_empty = all.is_empty();
+                        if !remote_empty {
+                            all.extend(selected.clone());
+                            all.sort();
+                            all.dedup();
+                            models.clear();
+                            for model in &all {
+                                models.append(&strip_nul(model));
+                                models.check(
+                                    models.get_count() - 1,
+                                    auto_save
+                                        || selected.contains(model)
+                                        || (selected.is_empty() && model == "gpt-5.5"),
+                                );
+                            }
                         }
                         *busy.borrow_mut() = false;
+                        panel.enable(true);
+                        save.set_label(text.ai_gw_save_channel());
                         if account_label.borrow().is_empty() {
                             status.set_label(label(text, "已登录", "Signed in"));
                         } else {
                             status.set_label(&account_label.borrow());
                         }
+                        if remote_empty {
+                            show_error(&dialog, text.ai_gw_models_empty());
+                        } else if auto_save && validate_save(true) {
+                            closed.store(true, Ordering::SeqCst);
+                            dialog.end_modal(ID_OK);
+                            return;
+                        }
+                    }
+                    Event::Models(id, Err(error)) => {
+                        if active_model_fetch.borrow().as_ref() != Some(&id)
+                            || auth_id.borrow().as_ref() != Some(&id)
+                        {
+                            continue;
+                        }
+                        active_model_fetch.borrow_mut().take();
+                        save_after_fetch.set(false);
+                        *busy.borrow_mut() = false;
+                        panel.enable(true);
+                        save.set_label(text.ai_gw_save_channel());
+                        status.set_label(label(
+                            text,
+                            "获取模型列表失败，请检查后重试",
+                            "Could not load models. Check the settings and retry",
+                        ));
+                        show_error(
+                            &dialog,
+                            &format!(
+                                "{}{}\n{}",
+                                label(text, "获取模型列表失败：", "Could not load models: "),
+                                strip_nul(&error),
+                                label(
+                                    text,
+                                    "请检查账号登录状态和网络连接后重试。",
+                                    "Check the account sign-in status and network connection, then retry.",
+                                ),
+                            ),
+                        );
                     }
                     Event::Logout(Ok(_)) => {
                         *auth_id.borrow_mut() = None;
@@ -752,16 +880,15 @@ pub(super) fn show_channel_dialog(
                             "登录或导入账号后显示用量",
                             "Sign in or import an account to view usage",
                         ));
-                        *busy.borrow_mut() = false;
+                        *busy.borrow_mut() = active_model_fetch.borrow().is_some();
                         status.set_label(label(text, "未登录", "Not signed in"));
                     }
                     Event::Started(Err(error))
                     | Event::Poll(Err(error))
                     | Event::Account(Err(error))
                     | Event::Connected(Err(error))
-                    | Event::Models(Err(error))
                     | Event::Logout(Err(error)) => {
-                        *busy.borrow_mut() = false;
+                        *busy.borrow_mut() = active_model_fetch.borrow().is_some();
                         status.set_label(label(
                             text,
                             "操作未完成，请重试",
@@ -770,7 +897,7 @@ pub(super) fn show_channel_dialog(
                         show_error(&dialog, &error);
                     }
                 }
-                if !*busy.borrow() {
+                if !*busy.borrow() && active_model_fetch.borrow().is_none() {
                     login.enable(true);
                     import.enable(true);
                     logout.enable(auth_id.borrow().is_some());

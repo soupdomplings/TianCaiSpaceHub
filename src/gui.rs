@@ -3685,7 +3685,78 @@ fn show_ai_gw_channel_dialog(
     let fetch_models_result: FetchModelsResultStore = Arc::new(Mutex::new(None));
     let fetch_models_in_flight = Arc::new(AtomicBool::new(false));
     let fetch_models_closed = Arc::new(AtomicBool::new(false));
-    {
+    let save_after_fetch = Rc::new(Cell::new(false));
+    let save_label = if initial.is_some() {
+        text.ai_gw_save_channel()
+    } else {
+        text.ai_gw_create_channel()
+    };
+    let validate_save: Rc<dyn Fn() -> bool> = {
+        let editing_reserved_channel = initial.is_some_and(ProviderConfig::is_client_reserved);
+        Rc::new(move || {
+            let name = strip_nul(&name_input.get_value()).trim().to_string();
+            if name.is_empty() {
+                show_error(&dialog, text.ai_gw_provider_name_empty());
+                return false;
+            }
+            if (is_workbuddy_provider_name(&name) || is_gmclaw_provider_name(&name))
+                && !editing_reserved_channel
+            {
+                show_error(&dialog, text.ai_gw_reserved_provider_name());
+                return false;
+            }
+            let base_url = strip_nul(&base_url_input.get_value()).trim().to_string();
+            if base_url.is_empty() {
+                show_error(&dialog, text.ai_gw_base_url_empty());
+                return false;
+            }
+            if !is_http_url(&base_url) {
+                show_error(
+                    &dialog,
+                    match text.locale {
+                        GuiLocale::ZhCn => "服务地址需要填写完整的 http:// 或 https:// 地址。",
+                        GuiLocale::EnUs => "Enter a complete http:// or https:// service URL.",
+                    },
+                );
+                return false;
+            }
+            let models_url = strip_nul(&models_url_input.get_value()).trim().to_string();
+            if !models_url.is_empty() && !is_http_url(&models_url) {
+                show_error(
+                    &dialog,
+                    match text.locale {
+                        GuiLocale::ZhCn => {
+                            "模型列表接口需要填写完整的 http:// 或 https:// 地址，或留空由 Hub 自动查找。"
+                        }
+                        GuiLocale::EnUs => {
+                            "Enter a complete http:// or https:// model-list URL, or leave it blank for automatic discovery."
+                        }
+                    },
+                );
+                return false;
+            }
+            if strip_nul(&weight_input.get_value())
+                .trim()
+                .parse::<u32>()
+                .ok()
+                .filter(|value| *value > 0)
+                .is_none()
+            {
+                show_error(
+                    &dialog,
+                    match text.locale {
+                        GuiLocale::ZhCn => "优先级需要填写正整数。",
+                        GuiLocale::EnUs => "Priority must be a positive integer.",
+                    },
+                );
+                return false;
+            }
+            true
+        })
+    };
+    // Both buttons use one worker/result path. Keep the request marked busy
+    // until the GUI consumes its result so a second save cannot race it.
+    let start_model_fetch: Rc<dyn Fn(bool)> = {
         let base_url_input = base_url_input;
         let models_url_input = models_url_input;
         let key_input = key_input;
@@ -3693,7 +3764,11 @@ fn show_ai_gw_channel_dialog(
         let fetch_models_result = fetch_models_result.clone();
         let fetch_models_in_flight = fetch_models_in_flight.clone();
         let fetch_models_closed = fetch_models_closed.clone();
-        fetch_models_button.on_click(move |_| {
+        let save_after_fetch = save_after_fetch.clone();
+        Rc::new(move |auto_save| {
+            if fetch_models_closed.load(Ordering::SeqCst) {
+                return;
+            }
             if fetch_models_in_flight.swap(true, Ordering::SeqCst) {
                 return;
             }
@@ -3703,9 +3778,18 @@ fn show_ai_gw_channel_dialog(
                 show_error(&dialog, text.ai_gw_base_url_empty());
                 return;
             }
+            if !is_http_url(&base_url) {
+                fetch_models_in_flight.store(false, Ordering::SeqCst);
+                show_error(
+                    &dialog,
+                    match text.locale {
+                        GuiLocale::ZhCn => "服务地址需要填写完整的 http:// 或 https:// 地址。",
+                        GuiLocale::EnUs => "Enter a complete http:// or https:// service URL.",
+                    },
+                );
+                return;
+            }
 
-            fetch_models_button.enable(false);
-            fetch_models_button.set_label(text.ai_gw_fetching_models());
             let api_key = strip_nul(&key_input.get_value()).trim().to_string();
             let mut template = current_ai_gw_provider_template.borrow().clone();
             template.base_url = base_url.clone();
@@ -3717,11 +3801,17 @@ fn show_ai_gw_channel_dialog(
             let models_url = normalize_optional_url(Some(&models_url_value))
                 .filter(|url| !is_zai || !is_known_zai_models_url(url));
             if is_zai && api_key.is_empty() {
-                fetch_models_button.set_label(text.ai_gw_fetch_models());
-                fetch_models_button.enable(true);
                 fetch_models_in_flight.store(false, Ordering::SeqCst);
                 show_error(&dialog, text.ai_gw_api_key_empty());
                 return;
+            }
+            save_after_fetch.set(auto_save);
+            panel.enable(false);
+            save_button.enable(false);
+            fetch_models_button.enable(false);
+            fetch_models_button.set_label(text.ai_gw_fetching_models());
+            if auto_save {
+                save_button.set_label(text.ai_gw_fetching_models());
             }
             let fallback_models_urls = known_models_urls_for_provider(&template);
             let provider_type = template.provider_type.clone();
@@ -3749,17 +3839,26 @@ fn show_ai_gw_channel_dialog(
                 if let Ok(mut slot) = fetch_models_result.lock() {
                     slot.replace(outcome);
                 }
-                fetch_models_in_flight.store(false, Ordering::SeqCst);
             });
-        });
+        })
+    };
+    {
+        let start_model_fetch = start_model_fetch.clone();
+        fetch_models_button.on_click(move |_| start_model_fetch(false));
     }
     let fetch_models_timer = Timer::new(&dialog);
     {
         let fetch_models_result = fetch_models_result.clone();
         let fetch_models_in_flight = fetch_models_in_flight.clone();
+        let fetch_models_closed = fetch_models_closed.clone();
+        let save_after_fetch = save_after_fetch.clone();
+        let validate_save = validate_save.clone();
         let model_mapping_rows = model_mapping_rows.clone();
         let model_mapping_model = model_mapping_model.clone();
         fetch_models_timer.on_tick(move |_| {
+            if fetch_models_closed.load(Ordering::SeqCst) {
+                return;
+            }
             let Some(outcome) = fetch_models_result
                 .lock()
                 .ok()
@@ -3769,7 +3868,11 @@ fn show_ai_gw_channel_dialog(
             };
             fetch_models_button.set_label(text.ai_gw_fetch_models());
             fetch_models_button.enable(true);
+            panel.enable(true);
+            save_button.enable(true);
+            save_button.set_label(save_label);
             fetch_models_in_flight.store(false, Ordering::SeqCst);
+            let auto_save = save_after_fetch.replace(false);
             match outcome {
                 Ok((models, normalized_base_url)) => {
                     if models.is_empty() {
@@ -3786,7 +3889,16 @@ fn show_ai_gw_channel_dialog(
                             &existing_aliases,
                         );
                         let count = model_mapping_rows.borrow().len();
-                        show_info(&dialog, &text.ai_gw_models_fetched(count));
+                        if auto_save {
+                            if count == 0 {
+                                show_error(&dialog, text.ai_gw_models_empty());
+                            } else if validate_save() {
+                                fetch_models_closed.store(true, Ordering::SeqCst);
+                                dialog.end_modal(ID_OK);
+                            }
+                        } else {
+                            show_info(&dialog, &text.ai_gw_models_fetched(count));
+                        }
                     }
                 }
                 Err(err) => show_error(&dialog, &text.ai_gw_models_fetch_failed(&err)),
@@ -3804,12 +3916,38 @@ fn show_ai_gw_channel_dialog(
     }
     {
         let dialog = dialog;
-        save_button.on_click(move |_| dialog.end_modal(ID_OK));
+        let start_model_fetch = start_model_fetch.clone();
+        let model_mapping_rows = model_mapping_rows.clone();
+        let fetch_models_in_flight = fetch_models_in_flight.clone();
+        let fetch_models_closed = fetch_models_closed.clone();
+        save_button.on_click(move |_| {
+            if fetch_models_closed.load(Ordering::SeqCst)
+                || fetch_models_in_flight.load(Ordering::SeqCst)
+                || !validate_save()
+            {
+                return;
+            }
+            if model_mapping_rows.borrow().is_empty() {
+                start_model_fetch(true);
+            } else {
+                fetch_models_closed.store(true, Ordering::SeqCst);
+                dialog.end_modal(ID_OK);
+            }
+        });
+    }
+    {
+        let fetch_models_closed = fetch_models_closed.clone();
+        dialog.on_close(move |event| {
+            fetch_models_closed.store(true, Ordering::SeqCst);
+            event.skip(true);
+        });
     }
 
     name_input.set_focus();
     dialog.center();
     let result = dialog.show_modal();
+    fetch_models_closed.store(true, Ordering::SeqCst);
+    fetch_models_timer.stop();
 
     let provider = if result == ID_OK {
         let name = initial
@@ -3894,8 +4032,6 @@ fn show_ai_gw_channel_dialog(
         None
     };
 
-    fetch_models_closed.store(true, Ordering::SeqCst);
-    fetch_models_timer.stop();
     dialog.destroy();
     if result == CHATGPT_DIALOG {
         return chatgpt::show_channel_dialog(parent, text, api.clone(), None);
