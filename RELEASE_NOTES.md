@@ -4,7 +4,7 @@ Dumpling-MCP 的密码、ClientSecret 在保存及登录成功后继续明文显
 
 回填绑定当前环境、认证方式与完整 profile，迟到读取不覆盖当前非空输入；保护记录无法读取时明确提示重新填写。专用本机读取沿用实例管理授权与 Host/Origin 校验，普通配置、状态、日志、诊断及客户端配置不增加明文秘密，远端 token 不回显。读取本身不调用远端、不续认证或重写客户端接入，前轮同身份认证恢复及全部既有二开保留。
 
-版本仍 `0.4.30-5`、唯一 `main`，不移动旧标签或覆盖 Release。本轮已实现，Windows 必要编译、EXE 静态身份与文档核对通过，源码推送与两平台 Actions 待登记；Windows/macOS 实际显示及恢复待用户验收。详情见 [本轮交付](docs/releases/v0.4.30-5.md#2026-10-16-已保存密码与应用密钥回显)及 [使用与回退](docs/customizations/nvwa-mcp.md#已保存密码与应用密钥回显)，下方历史结果保留原范围。
+版本仍 `0.4.30-5`、唯一 `main`，不移动旧标签或覆盖 Release。本轮已实现，Windows 必要编译、EXE 静态身份与文档核对通过，源码 `7d4bf04` 已推送，Windows/macOS Actions 已确认 job 开始并停止等待；安装包结果及 Windows/macOS 实际显示、恢复待确认和用户验收。详情见 [本轮交付](docs/releases/v0.4.30-5.md#2026-10-16-已保存密码与应用密钥回显)及 [使用与回退](docs/customizations/nvwa-mcp.md#已保存密码与应用密钥回显)，下方历史结果保留原范围。
 
 ---
 
