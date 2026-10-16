@@ -119,6 +119,9 @@ enum Action {
     Refresh,
     RefreshAfterLogin,
     RefreshSaved,
+    LoadCredential {
+        fingerprint: String,
+    },
     Save,
     Delete,
     Login,
@@ -1266,7 +1269,10 @@ fn start(
     let profile_id = tab.state.borrow().selected_id.clone();
     if let Some(kind) = action.client_kind() {
         set_client_feedback(tab, kind, tr(tab.text, "处理中…", "Working…"));
-    } else if !matches!(action, Action::ResetAuthentication) {
+    } else if !matches!(
+        action,
+        Action::ResetAuthentication | Action::LoadCredential { .. }
+    ) {
         tab.status.set_label("处理中");
     }
     update_controls(tab);
@@ -1302,8 +1308,9 @@ pub(super) fn bind_actions(
         .show_modal();
     });
     let t = tab.clone();
+    let sender = tx.clone();
     tab.profile.on_selection_changed(move |_| {
-        select_profile(&t);
+        select_profile(&t, &sender);
     });
     let t = tab.clone();
     tab.client
@@ -1770,8 +1777,8 @@ fn configuration_help(text: GuiText) -> &'static str {
             "4. 登录后确认账号与租户\n先保存环境，再点击“登录 / 授权”。成功后显示服务实际返回的账号和租户；__default_tenant__ 表示默认租户。高级指定租户通常可留空。登录未成功时，先处理登录提示，再检测 MCP。\n\n",
             "5. 检测并接入\n“检测 MCP”读取可用工具清单。下拉选择 ChatGPT(Codex)、WorkBuddy 或天工Claw，三个客户端共用下方按钮和一处反馈，操作只针对当前选项。首次接入点击“预览接入”，确认环境与保存位置后点“是”添加；已接入可直接“检测本机桥”，也可先“检查”现有配置。保存后刷新客户端或重开会话，并按客户端提示确认使用；天工先检测这条连接，再开始下一轮对话。工具是否能执行，在客户端中确认。\n\n",
             "共享应用勾选切换会保留 ClientID、ClientSecret 和保存密钥选项，取消当前登录并暂时停用旧连接；保存后重新登录，认证目标和真实身份一致时恢复原连接。主认证下拉切换会清空旧方式的输入。\n",
-            "“保存应用密钥”在新环境默认关闭；勾选后点击“保存环境”就保存 ClientSecret，无需先登录成功。已保存环境会显示保存状态并恢复勾选；输入框留空可复用，填写新值并保存可替换。环境设置改变时需要重新填写。取消勾选并保存环境会删除保存的应用密钥。密钥不写入普通配置，也不从后台回填到输入框。\n",
-            "“记住密码”仍在登录成功后交给系统保护存储。HTTP 401 表示服务拒绝了该步请求；请按提示中的失败步骤核对，保存密钥不代表登录成功。\n\n",
+            "“保存应用密钥”在新环境默认关闭；勾选后点击“保存环境”就保存 ClientSecret，无需先登录成功。已保存环境会恢复勾选，并在选择、刷新或重新打开时将 ClientSecret 明文显示在输入框中；填写新值并保存可替换。环境设置改变时需要重新填写。取消勾选并保存环境会删除保存的应用密钥。密钥仍由系统保护存储，不写入普通配置。\n",
+            "“记住密码”仍只在登录成功后保存密码，之后选择、刷新或重新打开环境会明文回显。登录成功后保留本次输入的密码或 ClientSecret；未勾选保存的值只保留在本次页面中。HTTP 401 表示服务拒绝了该步请求；请按提示中的失败步骤核对，保存密钥不代表登录成功。\n\n",
             "6. 有效期与自动重新认证\nClientID + ClientSecret 取票换得的凭证默认固定 24 小时，调用不会延长；认证服务应用的 tokenValidTime 可覆盖。服务返回准确时间时显示到期时间（UTC）和剩余时间，没有返回时只说明默认规则。账号密码登录默认闲置 30 分钟超时，正常认证访问可延长；连续使用不会仅因登录已过 30 分钟被 Hub 判定到期，实际是否有效由服务判断。\n",
             "账号密码需勾选“记住密码”并成功登录；共享应用需勾选“保存应用密钥”并保存环境，再成功登录。认证过期后，Hub 会在下次检测、接入或客户端请求前使用已保存资料获取新认证，保持原账号与租户及已有客户端连接。无需一直打开此页，也不按固定周期提前登录。\n",
             "客户端连接的是 Hub，保存的本机接入凭据与上游会过期的登录 token 分开。手动重新登录或取消登录时已有接入暂时停用；服务确认同一账号身份和租户后自动恢复，无需再次预览接入。Hub 正常重启后由客户端重新建立连接会话，不重写接入设置。只有首次接入、退出登录、认证目标或真实身份变化、接入凭据无法安全恢复时才需要重新预览确认；只改环境名称或更新同一认证目标的保存密钥不应撤销原接入。\n",
@@ -1785,8 +1792,8 @@ fn configuration_help(text: GuiText) -> &'static str {
             "4. Check account and tenant\nSave, then select Sign in. After success, Hub shows the returned account and tenant. __default_tenant__ is the default tenant. Specific tenant can usually be left blank. Resolve sign-in errors before checking MCP.\n\n",
             "5. Check and connect\nCheck MCP reads the available tools. Choose ChatGPT(Codex), WorkBuddy or TianGong Claw from the dropdown; the shared buttons and single result apply only to that client. For first setup, preview the connection, review the environment and save location, then select Yes to add it. Existing connections can use Check local bridge directly, or Inspect to read their settings first. Refresh or reopen the client session and follow its confirmation prompts. For TianGong, check the connection first and start a new conversation turn. Verify actual tool use in the client.\n\n",
             "Toggling shared delegation keeps ClientID, ClientSecret and Save application secret, and cancels sign-in while suspending existing access. Save and sign in again; the same authentication target and verified identity restore the connection. Switching the main sign-in dropdown clears the previous inputs.\n",
-            "Save application secret defaults to off for new environments. Check it and select Save environment to store ClientSecret immediately, even before successful sign-in. Saved environments show its status and restore the checkbox. Leave the input blank to reuse it, or enter a new value and save to replace it. Changed environment settings require entering it again. Uncheck and save to remove the stored application secret. It is not written to ordinary configuration or returned to the input.\n",
-            "Remember password still stores the password only after successful sign-in. HTTP 401 means the service rejected that request step; check the named step. Saving a secret does not sign you in.\n\n",
+            "Save application secret defaults to off for new environments. Check it and select Save environment to store ClientSecret immediately, even before successful sign-in. Selecting, refreshing or reopening a saved environment restores the checkbox and shows its saved ClientSecret as plain text in the input. Enter a new value and save to replace it. Changed environment settings require entering it again. Uncheck and save to remove the stored application secret. System-protected storage is still used; the secret is not written to ordinary configuration.\n",
+            "Remember password still stores the password only after successful sign-in. Selecting, refreshing or reopening the environment then shows the saved password as plain text. Successful sign-in keeps the current password or ClientSecret in the input; unsaved values remain only in the current form. HTTP 401 means the service rejected that request step; check the named step. Saving a secret does not sign you in.\n\n",
             "6. Validity and automatic renewal\nClientID + ClientSecret ticket tokens default to a fixed 24 hours; calls do not extend them. The application's tokenValidTime can override this. Hub shows the expiry time (UTC) and remaining time when supplied by the service; otherwise it explains the default rule. Password sign-in defaults to a 30-minute idle timeout, extended by normal authenticated access. Hub does not expire an actively used session merely because 30 minutes have passed since sign-in; the service decides whether it is valid.\n",
             "For password sign-in, enable Remember password and sign in successfully. For a shared application, enable Save application secret, save the environment and sign in successfully. After expiry, Hub uses the saved credentials before the next check, connection or client request, preserving the account, tenant and existing client connections. This page need not stay open; Hub does not sign in early on a timer.\n",
             "Clients connect to Hub using a local access key, separate from the expiring upstream login token. Manual sign-in or cancellation suspends existing access; it restores when the service verifies the same account identity and tenant, without another preview. After a normal Hub restart, clients rebuild their sessions without rewriting settings. Preview and confirm again only after first setup, sign-out, authentication target or identity changes, or unrecoverable local credentials. Renaming an environment or updating saved credentials for the same authentication target should not revoke access.\n",
@@ -1900,9 +1907,28 @@ pub(super) fn apply_result(
     };
     sync_runtime_profile(tab, &value);
     match result.action {
-        Action::Refresh => apply_snapshot(tab, text, value),
+        Action::Refresh => apply_snapshot(tab, text, value, tx),
         Action::RefreshAfterLogin => {
-            apply_snapshot(tab, text, value);
+            let fields = form_fields(tab);
+            let profile_id = tab.state.borrow().selected_id.clone();
+            let unchanged = value
+                .pointer("/config/profiles")
+                .and_then(Value::as_array)
+                .and_then(|profiles| {
+                    profiles
+                        .iter()
+                        .find(|profile| profile["id"].as_str() == profile_id.as_deref())
+                })
+                .is_some_and(|profile| form_matches_profile(&fields, profile));
+            let password = unchanged.then(|| tab.password.get_value());
+            let secret = unchanged.then(|| tab.client_secret.get_value());
+            apply_snapshot(tab, text, value, tx);
+            if let Some(password) = password.filter(|value| !value.is_empty()) {
+                tab.password.set_value(&password);
+            }
+            if let Some(secret) = secret.filter(|value| !value.is_empty()) {
+                tab.client_secret.set_value(&secret);
+            }
             let kind = selected_client_kind(tab);
             set_client_feedback(tab, kind, &default_client_feedback(tab, kind));
         }
@@ -1926,7 +1952,7 @@ pub(super) fn apply_result(
             let secret = unchanged.then(|| tab.client_secret.get_value());
             let remember_password = unchanged && tab.remember_password.is_checked();
             let remember_secret = unchanged.then(|| tab.remember_secret.is_checked());
-            apply_snapshot(tab, text, value);
+            apply_snapshot(tab, text, value, tx);
             if let Some(password) = password {
                 tab.password.set_value(&password);
             }
@@ -1936,6 +1962,34 @@ pub(super) fn apply_result(
             tab.remember_password.set_value(remember_password);
             if let Some(remember_secret) = remember_secret {
                 tab.remember_secret.set_value(remember_secret);
+            }
+        }
+        Action::LoadCredential { fingerprint } => {
+            let profile = {
+                let state = tab.state.borrow();
+                state
+                    .profiles
+                    .iter()
+                    .find(|profile| profile["id"].as_str() == state.selected_id.as_deref())
+                    .cloned()
+            };
+            if let Some(profile) = profile
+                && saved_profile_fingerprint(&profile).as_deref() == Some(fingerprint.as_str())
+                && value["profileFingerprint"].as_str() == Some(fingerprint.as_str())
+                && value["profileId"].as_str() == profile["id"].as_str()
+                && form_matches_profile(&form_fields(tab), &profile)
+                && let Some(credential) = value["credentialValue"].as_str()
+            {
+                let field = if matches!(profile["authMode"].as_str(), None | Some("password")) {
+                    ("password", tab.password)
+                } else {
+                    ("clientSecret", tab.client_secret)
+                };
+                if value["credentialKind"].as_str() == Some(field.0)
+                    && field.1.get_value().is_empty()
+                {
+                    field.1.set_value(credential);
+                }
             }
         }
         Action::Save => {
@@ -1972,7 +2026,8 @@ pub(super) fn apply_result(
                     show_error(frame, &error);
                 }
             } else if value.get("state").and_then(Value::as_str) == Some("authenticated") {
-                clear_login_material(tab);
+                tab.factor_code.set_value("");
+                tab.state.borrow_mut().twofactor_session = None;
                 start(tab, tx, Action::RefreshAfterLogin, "/manage/status", None);
             }
         }
@@ -2496,7 +2551,12 @@ fn render_client_status(
         .insert(kind.to_string(), value);
 }
 
-fn apply_snapshot(tab: &NvwaTab, text: GuiText, value: Value) {
+fn apply_snapshot(
+    tab: &NvwaTab,
+    text: GuiText,
+    value: Value,
+    tx: &tokio::sync::mpsc::UnboundedSender<GuiMessage>,
+) {
     let config = value.get("config").cloned().unwrap_or(Value::Null);
     let profiles = config
         .get("profiles")
@@ -2523,7 +2583,7 @@ fn apply_snapshot(tab: &NvwaTab, text: GuiText, value: Value) {
         state.snapshot_loaded = true;
     }
     tab.profile.set_selection(selected as u32);
-    select_profile(tab);
+    select_profile(tab, tx);
     if tab.state.borrow().selected_id.is_none() {
         tab.status
             .set_label(tr(text, "后台已就绪", "Backend ready"));
@@ -2743,7 +2803,13 @@ fn render_runtime_status(tab: &NvwaTab, update_detail: bool) {
     }
 }
 
-fn select_profile(tab: &NvwaTab) {
+fn saved_profile_fingerprint(profile: &Value) -> Option<String> {
+    serde_json::from_value::<crate::nvwa::types::NvwaProfile>(profile.clone())
+        .ok()
+        .map(|profile| crate::nvwa::profile_fingerprint(&profile))
+}
+
+fn select_profile(tab: &NvwaTab, tx: &tokio::sync::mpsc::UnboundedSender<GuiMessage>) {
     let index = tab.profile.get_selection().unwrap_or(0) as usize;
     let profile = if index > 0 {
         tab.state.borrow().profiles.get(index - 1).cloned()
@@ -2814,6 +2880,17 @@ fn select_profile(tab: &NvwaTab) {
     set_client_feedback(tab, kind, &default_client_feedback(tab, kind));
     show_runtime_status(tab);
     update_controls(tab);
+    if credential_saved && let Some(fingerprint) = saved_profile_fingerprint(&profile) {
+        start(
+            tab,
+            tx,
+            Action::LoadCredential {
+                fingerprint: fingerprint.clone(),
+            },
+            "/manage/profile/credential/read",
+            Some(json!({"profileId":profile["id"],"expectedProfileFingerprint":fingerprint})),
+        );
+    }
 }
 
 fn update_secret_status(tab: &NvwaTab) {

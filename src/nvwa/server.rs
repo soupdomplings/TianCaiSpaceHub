@@ -17,7 +17,7 @@ use super::{
     config::validate_profile,
     profile_fingerprint,
     runtime::{constant_eq, now_ms, random_capability},
-    types::{AuthOutcome, AuthResult, ClientKind, NvwaProfile, PasswordLoginInput},
+    types::{AuthMode, AuthOutcome, AuthResult, ClientKind, NvwaProfile, PasswordLoginInput},
 };
 
 const BROWSER_TTL_MS: u64 = 10 * 60 * 1000;
@@ -282,6 +282,7 @@ async fn command(service: &NvwaService, operation: &str, body: &Value) -> Result
     let _guard = gate.lock().await;
     let profile = service.profile(profile_id)?;
     match operation {
+        "profile/credential/read" => read_profile_credential(service, &profile, body),
         "profile/delete" => {
             let context = adapter_context(service, ClientKind::Codex).await?;
             ensure!(
@@ -536,6 +537,49 @@ async fn begin_login(service: &NvwaService, profile_id: &str, body: &Value) -> R
         "Login attempt was cancelled"
     );
     Ok(generation)
+}
+
+fn read_profile_credential(
+    service: &NvwaService,
+    profile: &NvwaProfile,
+    body: &Value,
+) -> Result<Value> {
+    let fingerprint = profile_fingerprint(profile);
+    ensure!(
+        constant_eq(required(body, "expectedProfileFingerprint")?, &fingerprint),
+        "环境已变化，请刷新后重新读取已保存的密码或 ClientSecret"
+    );
+    // Only this explicit authenticated management operation reveals the saved
+    // input. Neither ordinary status/configuration nor MCP clients receive it,
+    // and callers cannot select an arbitrary protected-storage key.
+    let value = match profile.credential_secret_ref.as_deref() {
+        Some(reference) => {
+            let bytes = service
+                .inner
+                .secrets
+                .get(reference)
+                .map_err(|_| {
+                    anyhow::anyhow!("无法读取已保存的密码或 ClientSecret，请重新输入并保存")
+                })?
+                .ok_or_else(|| {
+                    anyhow::anyhow!("已保存的密码或 ClientSecret 不可用，请重新输入并保存")
+                })?;
+            ensure!(
+                !bytes.is_empty() && bytes.len() <= 16_384,
+                "已保存的密码或 ClientSecret 格式异常，请重新输入并保存"
+            );
+            Some(String::from_utf8(bytes).map_err(|_| {
+                anyhow::anyhow!("已保存的密码或 ClientSecret 格式异常，请重新输入并保存")
+            })?)
+        }
+        None => None,
+    };
+    Ok(json!({
+        "profileId":profile.id,
+        "profileFingerprint":fingerprint,
+        "credentialKind":if profile.auth_mode == AuthMode::Password {"password"} else {"clientSecret"},
+        "credentialValue":value,
+    }))
 }
 
 fn application_secret(
