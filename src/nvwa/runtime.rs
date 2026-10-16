@@ -38,6 +38,7 @@ struct ProfileRuntime {
     verified: bool,
     client_checks: HashMap<ClientKind, u64>,
     pending_access: Option<PendingClientAccess>,
+    client_access_recovery_failed: bool,
 }
 
 struct PendingClientAccess {
@@ -47,9 +48,7 @@ struct PendingClientAccess {
 }
 
 fn same_identity(left: &VerifiedIdentity, right: &VerifiedIdentity) -> bool {
-    left.user_id == right.user_id
-        && left.identity_id == right.identity_id
-        && left.tenant_id == right.tenant_id
+    left.same_principal(right)
 }
 
 struct Session {
@@ -135,6 +134,7 @@ fn begin_auth(inner: &mut Inner, profile_id: &str) -> String {
             verified: false,
             client_checks: HashMap::new(),
             pending_access: None,
+            client_access_recovery_failed: false,
         },
     );
     generation
@@ -181,6 +181,10 @@ impl Runtime {
                         TokenExpiryPolicy::Fixed
                     };
                     let saved_expiry = value.get("expiresAtMs").and_then(Value::as_u64);
+                    ensure!(
+                        value["expiresAtMs"].is_null() || saved_expiry.is_some(),
+                        "Invalid protected token expiry"
+                    );
                     Ok(AuthToken {
                         value: content,
                         header_name: header,
@@ -195,12 +199,20 @@ impl Runtime {
                     })
                 };
                 let mut capabilities = HashMap::new();
+                ensure!(
+                    record["capabilities"].is_null() || record["capabilities"].is_object(),
+                    "Invalid protected client capabilities"
+                );
                 for client in [
                     ClientKind::Codex,
                     ClientKind::Workbuddy,
                     ClientKind::Tiangong,
                 ] {
-                    if let Some(capability) = record["capabilities"][client.as_str()].as_str() {
+                    let value = &record["capabilities"][client.as_str()];
+                    if !value.is_null() {
+                        let capability = value.as_str().ok_or_else(|| {
+                            anyhow::anyhow!("Invalid protected client capability")
+                        })?;
                         ensure!(
                             capability.len() == 64
                                 && capability.bytes().all(|v| v.is_ascii_hexdigit()),
@@ -214,12 +226,25 @@ impl Runtime {
                 let pending = record
                     .get("pendingIdentity")
                     .filter(|value| !value.is_null());
-                let (auth, pending_access, capabilities) = if let Some(identity) = pending {
+                let identity: VerifiedIdentity =
+                    serde_json::from_value(pending.unwrap_or(&record["identity"]).clone())?;
+                ensure!(
+                    [
+                        &identity.user_id,
+                        &identity.identity_id,
+                        &identity.tenant_id
+                    ]
+                    .into_iter()
+                    .all(|value| !value.trim().is_empty()
+                        && value.len() <= 16_384
+                        && !value.chars().any(char::is_control)),
+                    "Invalid protected identity"
+                );
+                let (auth, pending_access, capabilities) = if pending.is_some() {
                     ensure!(
                         record["mcpToken"].is_null() && record["personalToken"].is_null(),
                         "Invalid protected pending login"
                     );
-                    let identity: VerifiedIdentity = serde_json::from_value(identity.clone())?;
                     (
                         None,
                         Some(PendingClientAccess {
@@ -230,16 +255,32 @@ impl Runtime {
                         HashMap::new(),
                     )
                 } else {
-                    let auth = AuthResult {
-                        identity: serde_json::from_value(record["identity"].clone())?,
-                        personal_token: if record["personalToken"].is_null() {
-                            None
-                        } else {
-                            Some(token(&record["personalToken"])?)
-                        },
-                        mcp_token: token(&record["mcpToken"])?,
-                    };
-                    (Some(auth), None, capabilities)
+                    let restored_auth = (|| -> Result<AuthResult> {
+                        Ok(AuthResult {
+                            identity: identity.clone(),
+                            personal_token: if record["personalToken"].is_null() {
+                                None
+                            } else {
+                                Some(token(&record["personalToken"])?)
+                            },
+                            mcp_token: token(&record["mcpToken"])?,
+                        })
+                    })();
+                    match restored_auth {
+                        Ok(auth) => (Some(auth), None, capabilities),
+                        // A damaged/obsolete upstream token cannot be used, but
+                        // it does not revoke separately validated local grants.
+                        // Only a new login for the exact principal may resume.
+                        Err(_) => (
+                            None,
+                            Some(PendingClientAccess {
+                                identity,
+                                capabilities,
+                                session_generation: generation.clone(),
+                            }),
+                            HashMap::new(),
+                        ),
+                    }
                 };
                 let detail = if auth.is_none() {
                     "Restored client access suspended; explicit login required"
@@ -256,11 +297,21 @@ impl Runtime {
                     verified: false,
                     client_checks: HashMap::new(),
                     pending_access,
+                    client_access_recovery_failed: false,
                 })
             })();
-            if let Ok(profile) = decoded {
-                inner.profiles.insert(id, profile);
-            }
+            let profile = decoded.unwrap_or_else(|_| ProfileRuntime {
+                generation: Uuid::new_v4().to_string(),
+                auth: None,
+                capabilities: HashMap::new(),
+                tools: None,
+                detail: "Protected client access could not be restored; sign in and preview connection once".into(),
+                verified: false,
+                client_checks: HashMap::new(),
+                pending_access: None,
+                client_access_recovery_failed: true,
+            });
+            inner.profiles.insert(id, profile);
         }
         Self {
             inner: Mutex::new(inner),
@@ -333,9 +384,7 @@ impl Runtime {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Login changed during renewal"))?;
         ensure!(
-            previous.identity.user_id == auth.identity.user_id
-                && previous.identity.identity_id == auth.identity.identity_id
-                && previous.identity.tenant_id == auth.identity.tenant_id,
+            previous.identity.same_principal(&auth.identity),
             "NVWA identity changed; explicit login required"
         );
         profile.auth = Some(auth);
@@ -409,6 +458,7 @@ impl Runtime {
                 verified: false,
                 client_checks: HashMap::new(),
                 pending_access,
+                client_access_recovery_failed: false,
             },
         );
         generation
@@ -555,6 +605,7 @@ impl Runtime {
             .cloned()
     }
 
+    #[cfg(test)]
     pub async fn client_access_suspended(&self, profile_id: &str, client: ClientKind) -> bool {
         self.inner
             .lock()
@@ -814,6 +865,7 @@ impl Runtime {
             let auth = runtime.and_then(|p| p.auth.as_ref());
             let state = match auth {
                 None if runtime.is_some_and(|p| p.pending_access.is_some()) => "login_pending",
+                None if runtime.is_some_and(|p| p.client_access_recovery_failed) => "recovery_failed",
                 None => "logged_out",
                 Some(a) if a.mcp_token.expires_at_ms.is_some_and(|expiry| expiry <= now_ms()) => "expired",
                 Some(a) if a.personal_token.as_ref().and_then(|t| t.expires_at_ms).is_some_and(|expiry| expiry <= now_ms()) => "personal_expired",
@@ -831,6 +883,7 @@ impl Runtime {
                 "personalExpired":auth.and_then(|a| a.personal_token.as_ref()).and_then(|t| t.expires_at_ms).is_some_and(|e| e <= now_ms()),
                 "toolCount":runtime.and_then(|p| p.tools.as_ref()).and_then(Value::as_array).map(Vec::len),
                 "detail":runtime.map(|p| p.detail.as_str()).unwrap_or("Login required"),
+                "clientAccessRecoveryFailed":runtime.is_some_and(|p| p.client_access_recovery_failed),
                 "clientAccess":runtime.map(|p| p.capabilities.keys().map(|k| k.as_str()).collect::<Vec<_>>()).unwrap_or_default(),
                 "suspendedClientAccess":runtime.and_then(|p| p.pending_access.as_ref()).map(|p| p.capabilities.keys().map(|k| k.as_str()).collect::<Vec<_>>()).unwrap_or_default()})
         }).collect()
@@ -1133,5 +1186,105 @@ mod login_access_tests {
             .await
             .unwrap();
         assert!(restored.auth("fixture-profile").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn unusable_upstream_tokens_suspend_valid_local_access_until_same_principal_login() {
+        let (runtime, _, capability, _, _) = connected().await;
+        let snapshot = runtime.protected_snapshot("fixture-profile").await.unwrap();
+        for field in 0..3 {
+            let mut damaged = snapshot.clone();
+            match field {
+                0 => damaged["mcpToken"] = Value::Null,
+                1 => damaged["personalToken"] = json!({"value":"obsolete-format"}),
+                _ => damaged["mcpToken"]["expiresAtMs"] = json!("invalid-expiry"),
+            }
+            let restored = Runtime::restore(vec![(
+                "fixture-profile".into(),
+                AuthMode::Application,
+                damaged,
+            )]);
+            assert!(restored.raw_auth("fixture-profile").await.is_err());
+            assert!(
+                restored
+                    .check_capability("fixture-profile", ClientKind::Codex, &capability)
+                    .await
+                    .is_err()
+            );
+            assert!(
+                restored
+                    .client_access_suspended("fixture-profile", ClientKind::Codex)
+                    .await
+            );
+            let pending = restored
+                .protected_snapshot("fixture-profile")
+                .await
+                .unwrap();
+            assert!(pending["mcpToken"].is_null() && pending["personalToken"].is_null());
+            let next = restored.begin_login("fixture-profile").await;
+            let mut refreshed = auth();
+            refreshed.identity.username = "changed-display-name".into();
+            assert!(
+                restored
+                    .commit_auth("fixture-profile", &next, refreshed)
+                    .await
+                    .unwrap()
+            );
+            assert_eq!(
+                restored
+                    .existing_capability("fixture-profile", ClientKind::Codex)
+                    .await,
+                Some(capability.clone())
+            );
+            restored
+                .renew_auth("fixture-profile", &next, auth())
+                .await
+                .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn corrupt_principal_keys_or_pending_token_mix_report_recovery_failure() {
+        let (runtime, _, capability, _, _) = connected().await;
+        let snapshot = runtime.protected_snapshot("fixture-profile").await.unwrap();
+        let profiles = [NvwaProfile {
+            id: "fixture-profile".into(),
+            ..Default::default()
+        }];
+        for field in 0..4 {
+            let mut damaged = snapshot.clone();
+            match field {
+                0 => damaged["identity"]["userId"] = json!(""),
+                1 => damaged["capabilities"]["codex"] = json!("invalid-capability"),
+                2 => damaged["capabilities"]["codex"] = json!(42),
+                _ => damaged["pendingIdentity"] = damaged["identity"].clone(),
+            }
+            let restored = Runtime::restore(vec![(
+                "fixture-profile".into(),
+                AuthMode::Application,
+                damaged,
+            )]);
+            let status = restored.status(&profiles).await;
+            assert_eq!(status[0]["state"], "recovery_failed");
+            assert_eq!(status[0]["clientAccessRecoveryFailed"], true);
+            assert!(restored.raw_auth("fixture-profile").await.is_err());
+            assert!(
+                restored
+                    .protected_snapshot("fixture-profile")
+                    .await
+                    .is_none()
+            );
+            assert!(
+                !restored
+                    .client_access_suspended("fixture-profile", ClientKind::Codex)
+                    .await
+            );
+            assert!(
+                restored
+                    .check_capability("fixture-profile", ClientKind::Codex, &capability)
+                    .await
+                    .is_err()
+            );
+        }
     }
 }

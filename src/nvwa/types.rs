@@ -111,6 +111,15 @@ pub struct VerifiedIdentity {
     pub username: String,
 }
 
+impl VerifiedIdentity {
+    /// Account display names can change without changing the verified principal.
+    pub fn same_principal(&self, other: &Self) -> bool {
+        self.user_id == other.user_id
+            && self.identity_id == other.identity_id
+            && self.tenant_id == other.tenant_id
+    }
+}
+
 /// Public metadata describing the service's expiration rule.
 #[derive(Clone, Copy, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

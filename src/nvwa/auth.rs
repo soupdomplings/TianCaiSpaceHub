@@ -394,7 +394,7 @@ impl AuthClient {
                 RequestStage::VerifySavedLogin,
             )
             .await?;
-        if identity != session.identity {
+        if !identity.same_principal(&session.identity) {
             return Err(
                 AuthError::IdentityMismatch("NVWA 当前身份或租户已变化，请重新认证").into(),
             );
@@ -548,7 +548,13 @@ impl AuthClient {
             tenant_id,
             username,
         };
-        ensure_requested_identity(profile, &identity)?;
+        // The saved login is checked against its stable principal by
+        // verify_session. A changed display username alone must not revoke it.
+        if !matches!(stage, RequestStage::VerifySavedLogin) {
+            ensure_requested_identity(profile, &identity)?;
+        } else if !profile.tenant.is_empty() && profile.tenant != identity.tenant_id {
+            return Err(AuthError::IdentityMismatch("NVWA 返回的租户与环境配置不一致").into());
+        }
         Ok(identity)
     }
 

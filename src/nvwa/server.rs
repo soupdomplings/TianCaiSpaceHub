@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use super::{
     NvwaService,
     adapters::{self, AdapterContext, AdapterOperation, AdapterTarget},
-    bridge,
+    auth_scope_fingerprint, bridge,
     config::validate_profile,
     profile_fingerprint,
     runtime::{constant_eq, now_ms, random_capability},
@@ -230,16 +230,30 @@ async fn command(service: &NvwaService, operation: &str, body: &Value) -> Result
                 attempts.cancel(profile_id, &active)?;
             }
             attempts.active.remove(profile_id);
-            service.inner.runtime.begin_auth(profile_id).await
+            if operation == "login/cancel" {
+                service.inner.runtime.begin_login(profile_id).await
+            } else {
+                service.inner.runtime.begin_auth(profile_id).await
+            }
         };
-        service.clear_generation(profile_id, &generation).await?;
+        if operation == "login/cancel" {
+            service
+                .prepare_login_generation(profile_id, &generation)
+                .await?;
+        } else {
+            service.clear_generation(profile_id, &generation).await?;
+        }
         service
             .inner
             .runtime
             .set_detail(
                 profile_id,
                 &generation,
-                "Logged out; previous client access revoked",
+                if operation == "login/cancel" {
+                    "Sign-in cancelled; existing client access suspended"
+                } else {
+                    "Logged out; previous client access revoked"
+                },
             )
             .await;
         let remote_logout = if operation == "logout" {
@@ -256,10 +270,11 @@ async fn command(service: &NvwaService, operation: &str, body: &Value) -> Result
         } else {
             false
         };
-        return Ok(
-            json!({"profileId":profile_id,"state":"logged_out","remoteLogoutConfirmed":remote_logout,
-            "detail":"Local sessions and previous client credentials revoked"}),
-        );
+        return Ok(json!({"profileId":profile_id,
+            "state":if operation == "login/cancel" { "login_cancelled" } else { "logged_out" },
+            "remoteLogoutConfirmed":remote_logout,
+            "detail":if operation == "login/cancel" { "Sign-in cancelled; existing client access suspended" }
+                else { "Local sessions and previous client credentials revoked" }}));
     }
     let gate = service.gate(profile_id).await;
     // No outbound call holds the config/global runtime lock. Each explicit
@@ -464,6 +479,7 @@ async fn command(service: &NvwaService, operation: &str, body: &Value) -> Result
                         .is_ok(),
                 );
             }
+            detected["runtimeProfile"] = runtime_profile(service, &profile).await;
             Ok(detected)
         }
         value if value.starts_with("client/") => {
@@ -685,7 +701,11 @@ async fn save_profile(service: &NvwaService, body: &Value) -> Result<Value> {
         .profiles
         .iter()
         .find(|p| p.id == id)
-        .is_none_or(|p| profile_fingerprint(p) != profile_fingerprint(&profile));
+        .map(|existing| -> Result<bool> {
+            Ok(auth_scope_fingerprint(existing)? != auth_scope_fingerprint(&profile)?)
+        })
+        .transpose()?
+        .unwrap_or(true);
     // A saved password/application secret belongs to its old authentication
     // target, user and mode. Never carry it into a changed environment.
     if changed {
@@ -748,6 +768,10 @@ async fn save_profile(service: &NvwaService, body: &Value) -> Result<Value> {
     let credential_changed = existing_reference != profile.credential_secret_ref;
     config.profiles.retain(|p| p.id != id);
     config.profiles.push(profile.clone());
+    // A late 401 or cancellation may persist without the profile gate. Hold
+    // the persistence boundary across the config write and runtime update so
+    // old credentials can never be stamped with the new authentication scope.
+    let _persistence = service.inner.persistence.lock().await;
     let saved = match service.inner.store.save(&config, expected_revision) {
         Ok(saved) => saved,
         Err(error) => {
@@ -757,13 +781,25 @@ async fn save_profile(service: &NvwaService, body: &Value) -> Result<Value> {
             return Err(error);
         }
     };
-    if changed || credential_changed {
-        let invalidated = service.invalidate(&id).await;
-        if credential_changed && let Some(reference) = existing_reference {
-            service.inner.secrets.delete(&reference)?;
-        }
-        invalidated?;
+    let persisted = if changed {
+        service.invalidate_guarded(&id).await
+    } else if credential_changed {
+        // Remembering/replacing/removing a secret does not prove a different
+        // principal. Suspend local access and let the next verified same-user
+        // sign-in restore it without rewriting any client configuration.
+        let generation = service.inner.runtime.begin_login(&id).await;
+        service
+            .prepare_login_generation_guarded(&id, &generation)
+            .await
+    } else {
+        // Upgrade an eligible legacy snapshot when metadata (e.g. the display
+        // name) is saved, without coupling client grants to that metadata.
+        service.store_session_snapshot(&id, service.inner.runtime.protected_snapshot(&id).await)
+    };
+    if credential_changed && let Some(reference) = existing_reference {
+        service.inner.secrets.delete(&reference)?;
     }
+    persisted?;
     Ok(json!({"profile":profile,"config":saved}))
 }
 
@@ -830,24 +866,6 @@ async fn client_operation(
     match operation {
         "inspect" => {
             let mut value = serde_json::to_value(adapters::inspect(&context, &target).await?)?;
-            // Inspecting the saved entry does not prove that its local key is
-            // active. Same-identity sign-in retains keys; logout or a changed
-            // identity still requires an explicit client grant.
-            value["requiresClientAccess"] = Value::Bool(
-                service
-                    .inner
-                    .runtime
-                    .existing_capability(&profile.id, client)
-                    .await
-                    .is_none(),
-            );
-            value["clientAccessSuspended"] = Value::Bool(
-                service
-                    .inner
-                    .runtime
-                    .client_access_suspended(&profile.id, client)
-                    .await,
-            );
             value["bridgeCheckedAtMs"] = service
                 .inner
                 .runtime
@@ -860,6 +878,9 @@ async fn client_operation(
             } else {
                 value["bridgeState"] = "unknown".into();
             }
+            let runtime = runtime_profile(service, profile).await;
+            set_client_access_status(&mut value, &runtime, client);
+            value["runtimeProfile"] = runtime;
             Ok(value)
         }
         "preview" => {
@@ -904,7 +925,11 @@ async fn client_operation(
                 &credential,
             )
             .await?;
-            Ok(serde_json::to_value(outcome)?)
+            let mut value = serde_json::to_value(outcome)?;
+            let runtime = runtime_profile(service, profile).await;
+            set_client_access_status(&mut value["status"], &runtime, client);
+            value["runtimeProfile"] = runtime;
+            Ok(value)
         }
         "remove" => {
             let gate = service.gate(&profile.id).await;
@@ -918,7 +943,9 @@ async fn client_operation(
                 .await;
             service.persist_session(&profile.id).await?;
             let mut value = serde_json::to_value(outcome)?;
-            value["status"]["requiresClientAccess"] = Value::Bool(true);
+            let runtime = runtime_profile(service, profile).await;
+            set_client_access_status(&mut value["status"], &runtime, client);
+            value["runtimeProfile"] = runtime;
             Ok(value)
         }
         "restore" => {
@@ -938,11 +965,39 @@ async fn client_operation(
                 .await;
             service.persist_session(&profile.id).await?;
             let mut value = serde_json::to_value(outcome)?;
-            value["status"]["requiresClientAccess"] = Value::Bool(true);
+            let runtime = runtime_profile(service, profile).await;
+            set_client_access_status(&mut value["status"], &runtime, client);
+            value["runtimeProfile"] = runtime;
             Ok(value)
         }
         _ => bail!("Unknown client operation"),
     }
+}
+
+async fn runtime_profile(service: &NvwaService, profile: &NvwaProfile) -> Value {
+    service
+        .inner
+        .runtime
+        .status(std::slice::from_ref(profile))
+        .await
+        .into_iter()
+        .next()
+        .unwrap_or(Value::Null)
+}
+
+fn set_client_access_status(status: &mut Value, runtime: &Value, client: ClientKind) {
+    let includes_client = |field: &str| {
+        runtime[field].as_array().is_some_and(|clients| {
+            clients
+                .iter()
+                .any(|value| value.as_str() == Some(client.as_str()))
+        })
+    };
+    // Derive both fields from one runtime snapshot. An owned configuration
+    // entry alone is not evidence of an active local access grant.
+    status["requiresClientAccess"] = Value::Bool(!includes_client("clientAccess"));
+    status["clientAccessSuspended"] = Value::Bool(includes_client("suspendedClientAccess"));
+    status["clientAccessRecoveryFailed"] = runtime["clientAccessRecoveryFailed"].clone();
 }
 
 async fn update_tiangong_catalog(

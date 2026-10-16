@@ -74,15 +74,25 @@ impl NvwaService {
         let mut records = Vec::new();
         for profile in &config.profiles {
             if let Some(bytes) = secrets.get(&session_key(&profile.id))? {
-                if let Ok(record) = serde_json::from_slice::<serde_json::Value>(&bytes)
-                    && record
-                        .get("profileFingerprint")
-                        .and_then(serde_json::Value::as_str)
-                        == Some(profile_fingerprint(profile).as_str())
+                if let Ok(mut record) = serde_json::from_slice::<serde_json::Value>(&bytes)
+                    && snapshot_matches_profile(&record, profile)
                 {
+                    if record.get("schemaVersion").is_none() {
+                        record["schemaVersion"] = serde_json::Value::from(2);
+                        record["authScopeFingerprint"] =
+                            serde_json::Value::String(auth_scope_fingerprint(profile)?);
+                        secrets.set(&session_key(&profile.id), &serde_json::to_vec(&record)?)?;
+                    }
                     records.push((profile.id.clone(), profile.auth_mode, record));
                 } else {
                     secrets.delete(&session_key(&profile.id))?;
+                    // Do not silently present a damaged or out-of-scope saved
+                    // grant as a client that was never connected.
+                    records.push((
+                        profile.id.clone(),
+                        profile.auth_mode,
+                        serde_json::Value::Null,
+                    ));
                 }
             }
         }
@@ -236,8 +246,12 @@ impl NvwaService {
         snapshot: Option<serde_json::Value>,
     ) -> Result<()> {
         if let Some(mut snapshot) = snapshot {
+            let profile = self.profile(profile_id)?;
+            snapshot["schemaVersion"] = serde_json::Value::from(2);
+            snapshot["authScopeFingerprint"] =
+                serde_json::Value::String(auth_scope_fingerprint(&profile)?);
             snapshot["profileFingerprint"] =
-                serde_json::Value::String(profile_fingerprint(&self.profile(profile_id)?));
+                serde_json::Value::String(profile_fingerprint(&profile));
             let bytes = serde_json::to_vec(&snapshot)
                 .map_err(|_| anyhow::anyhow!("Cannot protect NVWA authentication state"))?;
             self.inner.secrets.set(&session_key(profile_id), &bytes)
@@ -252,6 +266,15 @@ impl NvwaService {
         generation: &str,
     ) -> Result<()> {
         let _guard = self.inner.persistence.lock().await;
+        self.prepare_login_generation_guarded(profile_id, generation)
+            .await
+    }
+
+    async fn prepare_login_generation_guarded(
+        &self,
+        profile_id: &str,
+        generation: &str,
+    ) -> Result<()> {
         if !self
             .inner
             .runtime
@@ -279,6 +302,10 @@ impl NvwaService {
         // Order snapshot writes and explicit revocation so a late writer
         // cannot resurrect a logged-out generation after daemon restart.
         let _guard = self.inner.persistence.lock().await;
+        self.invalidate_guarded(profile_id).await
+    }
+
+    async fn invalidate_guarded(&self, profile_id: &str) -> Result<()> {
         self.inner.runtime.logout(profile_id).await;
         self.inner.identity_checks.lock().await.remove(profile_id);
         self.inner.renewal_failures.lock().await.remove(profile_id);
@@ -320,12 +347,7 @@ impl NvwaService {
         if let Some(bytes) = self.inner.secrets.get(&session_key(&profile.id))? {
             let matches = serde_json::from_slice::<serde_json::Value>(&bytes)
                 .ok()
-                .is_some_and(|snapshot| {
-                    snapshot
-                        .get("profileFingerprint")
-                        .and_then(serde_json::Value::as_str)
-                        == Some(profile_fingerprint(profile).as_str())
-                });
+                .is_some_and(|snapshot| snapshot_matches_profile(&snapshot, profile));
             if !matches {
                 self.invalidate_generation(&profile.id, &generation).await?;
                 anyhow::bail!("NVWA profile changed; explicit login required");
@@ -536,6 +558,162 @@ pub(crate) fn profile_fingerprint(profile: &NvwaProfile) -> String {
     hex::encode(Sha256::digest(
         serde_json::to_vec(profile).unwrap_or_default(),
     ))
+}
+
+// Client access belongs to an authentication target and verified principal,
+// not a display name or the opaque reference used to remember credentials.
+// Keep the full-profile fingerprint above for in-flight configuration checks
+// and reading legacy records, but do not use it as the grant lifetime.
+pub(crate) fn auth_scope_fingerprint(profile: &NvwaProfile) -> Result<String> {
+    use sha2::{Digest, Sha256};
+
+    let base = |value: &str| -> Result<String> {
+        let mut url = config::validate_url(value)?;
+        let path = url.path().trim_end_matches('/').to_owned();
+        url.set_path(&path);
+        Ok(url.to_string())
+    };
+    let certification_base = if profile.certification_base_url.is_empty() {
+        &profile.product_base_url
+    } else {
+        &profile.certification_base_url
+    };
+    let default_header = if profile.auth_mode == AuthMode::Password {
+        "authorization"
+    } else {
+        "authorization-ticket-token"
+    };
+    let scope = serde_json::json!({
+        "profileId": profile.id,
+        "productBaseUrl": base(&profile.product_base_url)?,
+        "certificationBaseUrl": base(certification_base)?,
+        "mcpUrl": config::resolve_mcp_url(profile)?.to_string(),
+        "authMode": profile.auth_mode,
+        "clientId": profile.client_id,
+        "username": profile.username,
+        "tenant": profile.tenant,
+        "loginUnit": profile.login_unit,
+        "mcpAuthHeader": profile.mcp_auth_header.as_deref().unwrap_or(default_header).to_ascii_lowercase(),
+        "signatureAlgorithm": profile.signature_algorithm,
+        "extra": profile.extra,
+    });
+    Ok(hex::encode(Sha256::digest(serde_json::to_vec(&scope)?)))
+}
+
+fn snapshot_matches_profile(snapshot: &serde_json::Value, profile: &NvwaProfile) -> bool {
+    match snapshot.get("schemaVersion") {
+        Some(version) if version.as_u64() == Some(2) => auth_scope_fingerprint(profile)
+            .ok()
+            .is_some_and(|fingerprint| {
+                snapshot
+                    .get("authScopeFingerprint")
+                    .and_then(serde_json::Value::as_str)
+                    == Some(fingerprint.as_str())
+            }),
+        // Legacy snapshots have no independent authentication scope. Only
+        // migrate them when the original complete profile still matches.
+        None if snapshot.get("authScopeFingerprint").is_none() => {
+            snapshot
+                .get("profileFingerprint")
+                .and_then(serde_json::Value::as_str)
+                == Some(profile_fingerprint(profile).as_str())
+        }
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod access_scope_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn profile() -> NvwaProfile {
+        NvwaProfile {
+            id: "fixture-profile".into(),
+            name: "Fixture".into(),
+            product_base_url: "https://nvwa.example.invalid/product".into(),
+            username: "fixture-user".into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn metadata_and_equivalent_defaults_do_not_revoke_access() {
+        let original = profile();
+        let mut saved = original.clone();
+        saved.name = "Renamed".into();
+        saved.credential_secret_ref = Some("fixture-reference".into());
+        saved.product_base_url.push('/');
+        saved.certification_base_url = original.product_base_url.clone();
+        saved.mcp_url = "/mcp".into();
+        saved.mcp_auth_header = Some("Authorization".into());
+        assert_eq!(
+            auth_scope_fingerprint(&original).unwrap(),
+            auth_scope_fingerprint(&saved).unwrap()
+        );
+        assert_ne!(profile_fingerprint(&original), profile_fingerprint(&saved));
+    }
+
+    #[test]
+    fn actual_authentication_scope_changes_require_new_access() {
+        let original = profile();
+        let mut variants = Vec::new();
+        for field in [
+            "product",
+            "certification",
+            "mcp",
+            "user",
+            "tenant",
+            "unit",
+            "client",
+            "mode",
+            "header",
+            "extra",
+        ] {
+            let mut changed = original.clone();
+            match field {
+                "product" => {
+                    changed.product_base_url = "https://other.example.invalid/product".into()
+                }
+                "certification" => {
+                    changed.certification_base_url = "https://auth.example.invalid".into()
+                }
+                "mcp" => changed.mcp_url = "/other-mcp".into(),
+                "user" => changed.username = "other-user".into(),
+                "tenant" => changed.tenant = "other-tenant".into(),
+                "unit" => changed.login_unit = Some("other-unit".into()),
+                "client" => changed.client_id = "other-client".into(),
+                "mode" => changed.auth_mode = AuthMode::Application,
+                "header" => changed.mcp_auth_header = Some("authorization-ticket-token".into()),
+                "extra" => {
+                    changed.extra.insert("futureScope".into(), json!(true));
+                }
+                _ => unreachable!(),
+            }
+            variants.push(changed);
+        }
+        let expected = auth_scope_fingerprint(&original).unwrap();
+        for changed in variants {
+            assert_ne!(expected, auth_scope_fingerprint(&changed).unwrap());
+        }
+    }
+
+    #[test]
+    fn protected_snapshot_migration_requires_a_proven_scope() {
+        let original = profile();
+        let legacy = json!({"profileFingerprint":profile_fingerprint(&original)});
+        let mut renamed = original.clone();
+        renamed.name = "Renamed".into();
+        assert!(snapshot_matches_profile(&legacy, &original));
+        assert!(!snapshot_matches_profile(&legacy, &renamed));
+        let current = json!({"schemaVersion":2,"authScopeFingerprint":auth_scope_fingerprint(&original).unwrap()});
+        assert!(snapshot_matches_profile(&current, &renamed));
+        renamed.username = "other-user".into();
+        assert!(!snapshot_matches_profile(&current, &renamed));
+        let mut unknown = current;
+        unknown["schemaVersion"] = json!(3);
+        assert!(!snapshot_matches_profile(&unknown, &original));
+    }
 }
 
 async fn bind_listener(addr: std::net::SocketAddr) -> std::io::Result<tokio::net::TcpListener> {
