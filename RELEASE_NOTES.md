@@ -2,7 +2,7 @@ TianCaiSpaceHub v0.4.30-5 Codex 配置兼容与提示简化（2026-10-18）
 
 修复初始化后只显示 MAX 的兼容问题：增强启动为本 Hub 受管本机 Provider 定向适配 ULTRA 模型过滤、Fast 界面及请求判断，保留真实模型能力、requirements、默认模型、思考强度和速度。沿用原配置备份与恢复，不新增配置字段，不改全局账号态或 Codex 安装文件。
 
-Hub 中英文配置页、帮助、悬浮说明和配置更新成功弹窗仅使用普通接入提示。配置后请完全退出 Codex，再从 Hub 增强启动。Windows 必要编译与安装源码静态核对通过；源码和两平台 Actions 状态见 [本轮交付](docs/releases/v0.4.30-5.md#2026-10-18-ultra与fast显示兼容修复)，实际显示、请求和 Windows/macOS 实机待用户验收。版本仍 `0.4.30-5`、唯一 `main`，不移动旧标签或覆盖 Release；完整配置、边界与回退见 [模型控制选项](docs/dynamic-codex-models.zh-CN.md#初始化开启-maxultra-与-fast-选项)。
+Hub 中英文配置页、帮助、悬浮说明和配置更新成功弹窗仅使用普通接入提示。配置后请完全退出 Codex，再从 Hub 增强启动。Windows 必要编译与安装源码静态核对通过；修复源码 `15cc35c` 已推送，两平台 Actions 已确认 job 开始并停止等待，完整身份见 [本轮交付](docs/releases/v0.4.30-5.md#2026-10-18-ultra与fast显示兼容修复)，实际显示、请求和 Windows/macOS 实机待用户验收。版本仍 `0.4.30-5`、唯一 `main`，不移动旧标签或覆盖 Release；完整配置、边界与回退见 [模型控制选项](docs/dynamic-codex-models.zh-CN.md#初始化开启-maxultra-与-fast-选项)。
 
 ---
 
