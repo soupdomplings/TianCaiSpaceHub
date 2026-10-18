@@ -7,7 +7,7 @@
 - 设置入口：只读安装源码定位“模型功能 / 工作空间依赖项”的局部 gate，在原 Hub 受管 Provider、Fast=true、本机 host 范围内补齐；保留 Work 排除、local kind、真实 primaryRuntime 和中间 gate，不自动安装或重置依赖。设置延迟模块独立标记，不要求打开设置才能启动成功。
 - 传输及错误：库默认单帧 16 MiB，安装大脚本 base64 约 19.2 MB；此前连接中断可静默进入外层超时。帧/消息改为有限 64 MiB，增强会话禁用资源缓存、改写响应 no-store，中断立即报告；超时列实际缺项，GUI 仅对增强启动接口取中文 error 原因，其他 API 保持原错误格式。未取得测试机私有日志，不把静态发现断言为该机唯一触发原因。
 - 兼容与回退：source marker v2、增强脚本 v23，原三个核心适配仍须实际生效；不放松 ready、不将 settingsSections 纳入 ready/刷新。配置、manifest、默认模型/强度/速度、全局账号态、真实能力、原恢复及新窗口 load 后单次刷新规则不变；内存适配随完全退出结束，旧 Hub 不具本轮修复，原配置恢复规则保留。
-- 验证与交付：本轮必要 Windows 编译、静态源码/EXE/文档核对及双平台 Actions 身份以 [v5 交付](../releases/v0.4.30-5.md#2026-10-18-配置区块与增强启动超时修复) 为准。未执行测试/fixture、产品、安装器或真实请求，不改运行配置/安装资源、不本地生成发布安装包；ULTRA、两个区块、增强启动及 Windows/macOS 实机仍待用户验收，前轮 Fast 有限反馈保持原范围。
+- 验证与交付：Windows locked GUI check 30.61 秒、build 92.33 秒和源码/EXE/文档静态核对通过；修复源码 `ff935c7` 已推送，两平台 Actions 已确认 job 开始，按用户要求停止等待；包结果及实机待确认。完整双平台运行身份以 [v5 交付](../releases/v0.4.30-5.md#2026-10-18-配置区块与增强启动超时修复) 为准。未执行测试/fixture、产品、安装器或真实请求，不改运行配置/安装资源、不本地生成发布安装包；ULTRA、两个区块、增强启动及 Windows/macOS 实机仍待用户验收，前轮 Fast 有限反馈保持原范围。
 - 文档：同步 [动态模型](../dynamic-codex-models.zh-CN.md#初始化开启-maxultra-与-fast-选项)、[Provider 取舍](../codex-app-web-run-model-visibility-tradeoff.zh-CN.md#已实现的配置写入)、[CDP 启动](../codex-app-cdp-model-diagnostics.zh-CN.md#增强模式启动)、[Statsig](../codex-app-fast-startup-statsig.zh-CN.md#当前维护的-gate)、总表、索引及根发布摘要。既有标签/Release/前轮包不覆盖。
 
 ## v0.4.30-5 未发布 · 2026-10-18 · ULTRA与Fast显示兼容修复
