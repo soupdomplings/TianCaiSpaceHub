@@ -1,6 +1,18 @@
 # 二开变更记录
 
+## v0.4.30-5 未发布 · 2026-10-18 · 配置区块与增强启动超时修复
+
+关联 TC-006、TC-007；基于唯一 `main` 的 `22fe6dd057bda6b7042c6cf4ee71b2cf6a1eb990`，版本仍 `0.4.30-5`。用户确认前轮 Fast 标志已显示，ULTRA 仍缺；测试机配置页缺少两个区块，增强启动反复返回“模型选项或语言设置未同步完成”。
+
+- 设置入口：只读安装源码定位“模型功能 / 工作空间依赖项”的局部 gate，在原 Hub 受管 Provider、Fast=true、本机 host 范围内补齐；保留 Work 排除、local kind、真实 primaryRuntime 和中间 gate，不自动安装或重置依赖。设置延迟模块独立标记，不要求打开设置才能启动成功。
+- 传输及错误：库默认单帧 16 MiB，安装大脚本 base64 约 19.2 MB；此前连接中断可静默进入外层超时。帧/消息改为有限 64 MiB，增强会话禁用资源缓存、改写响应 no-store，中断立即报告；超时列实际缺项，GUI 仅对增强启动接口取中文 error 原因，其他 API 保持原错误格式。未取得测试机私有日志，不把静态发现断言为该机唯一触发原因。
+- 兼容与回退：source marker v2、增强脚本 v23，原三个核心适配仍须实际生效；不放松 ready、不将 settingsSections 纳入 ready/刷新。配置、manifest、默认模型/强度/速度、全局账号态、真实能力、原恢复及新窗口 load 后单次刷新规则不变；内存适配随完全退出结束，旧 Hub 不具本轮修复，原配置恢复规则保留。
+- 验证与交付：本轮必要 Windows 编译、静态源码/EXE/文档核对及双平台 Actions 身份以 [v5 交付](../releases/v0.4.30-5.md#2026-10-18-配置区块与增强启动超时修复) 为准。未执行测试/fixture、产品、安装器或真实请求，不改运行配置/安装资源、不本地生成发布安装包；ULTRA、两个区块、增强启动及 Windows/macOS 实机仍待用户验收，前轮 Fast 有限反馈保持原范围。
+- 文档：同步 [动态模型](../dynamic-codex-models.zh-CN.md#初始化开启-maxultra-与-fast-选项)、[Provider 取舍](../codex-app-web-run-model-visibility-tradeoff.zh-CN.md#已实现的配置写入)、[CDP 启动](../codex-app-cdp-model-diagnostics.zh-CN.md#增强模式启动)、[Statsig](../codex-app-fast-startup-statsig.zh-CN.md#当前维护的-gate)、总表、索引及根发布摘要。既有标签/Release/前轮包不覆盖。
+
 ## v0.4.30-5 未发布 · 2026-10-18 · ULTRA与Fast显示兼容修复
+
+后续有限反馈：用户确认 Fast 标志已显示，ULTRA 仍缺，设置区块和增强启动仍有问题；继续修复见上节。下方验证与 Actions 只属于该轮源码。
 
 关联 TC-006、TC-007；基于唯一 `main` 的 `2b0aaf4f9d7b986bee02e78f7c399e0f4f38597f`，版本仍 `0.4.30-5`。用户反馈与本机相同的 Codex 版本、多个模型、增强启动仍只显示 MAX，并要求 Hub 不显示专门开启 MAX/ULTRA/Fast 的说明。
 

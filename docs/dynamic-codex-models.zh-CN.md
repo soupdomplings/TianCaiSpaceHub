@@ -1,6 +1,6 @@
 # 动态 Codex 可见模型
 
-维护日期：2026-10-18。当前开发版本：`v0.4.30-5`、唯一 `main`。关联 TC-006、TC-007；本轮修复初始化后 ULTRA/Fast 不显示，源码、编译、Actions 与待用户验收见 [v5 交付](releases/v0.4.30-5.md#2026-10-18-ultra与fast显示兼容修复)。前轮仅写入选项的包已收到“只显示 MAX”反馈，不作为本轮效果证据。此前保存时自动获取及模型未配置提示见 [前轮交付](releases/v0.4.30-5.md#2026-10-12-空模型自动获取与模型未配置提示)；历史 `v0.4.30-2` 预发布及验证保持原归属。版本沿革见 [二开变更记录](customizations/CHANGELOG.md)，上游目录来源见 [v0.4.30 整合](upstream-v0.4.30-integration.md)，入口隔离见 [接入点用途与隔离](customizations/client-channel-scope.md)。
+维护日期：2026-10-18。当前开发版本：`v0.4.30-5`、唯一 `main`。关联 TC-006、TC-007；本轮继续修复 ULTRA、配置区块缺失及增强启动未同步提示，源码、必要编译、Actions 与待用户验收见 [v5 交付](releases/v0.4.30-5.md#2026-10-18-配置区块与增强启动超时修复)。用户已确认前轮 Fast 标志出现，但 ULTRA 仍未通过验收；只读源码定位不等于测试机故障已实测解决。此前保存流程见 [前轮交付](releases/v0.4.30-5.md#2026-10-12-空模型自动获取与模型未配置提示)，版本沿革见 [二开变更记录](customizations/CHANGELOG.md)，上游来源见 [v0.4.30 整合](upstream-v0.4.30-integration.md)，入口隔离见 [接入点用途与隔离](customizations/client-channel-scope.md)。
 
 Codex 可见模型现在支持内置目录之外的模型。模型来源包括已配置渠道保存的模型列表，以及 Codex 接入页中手动输入的模型 ID。
 
@@ -24,7 +24,11 @@ Fast 开关依据 [OpenAI 官方速度配置说明](https://learn.chatgpt.com/do
 
 现在增强启动通过原有本机 CDP 会话，定向适配内存中加载的模型控制脚本：只在当前 Provider 确认为本 Hub 受管 `ai-gateway`、且 `features.fast_mode=true` 时启用，具体例外还限定 `hostId=local`。Fast 两处保留认证读取、真实 requirements 查询、缓存、显式禁止项和失败处理，只增加本地 Hub 的可用性分支；不改全局 `authMethod` 或 Provider 身份。ULTRA 只放行本地模型查询中的显示过滤，保留推理列表勾选和模型自身能力；不全局覆盖该 Statsig gate，其他调用仍读官方值。已静态追踪“配置 → 模型功能”的查询入口：`wvo` 默认 `includeUltraReasoningEffort=true`，该页仅传 host；无需改 ChatGPT 账号设置。安装 schema 中的 `show-ultra-in-model-picker-slider` 在此版本不参与这条 Codex 查询，本轮不额外写入。
 
-该适配使用 Windows/macOS 共用协议，不改 Codex 安装文件、签名或用户套餐。只拦截已知 `app://.../assets/` 模型脚本响应，必须唯一匹配且局部变量一致才修改；未知布局或正文获取失败保留原脚本，最多等待 10 秒后放行。增强启动核对三处适配标记实际加载后才报告同步成功；未生效则给通用失败提示，详细诊断写链路日志。首次启动若错过早期挂载，只在该新窗口 `load` 完成后的下一任务中按需刷新一次，避免中断首次 `loadURL`；已运行的用户窗口不因本适配刷新，正常操作仍要求完全退出后增强启动。维护入口：[配置及恢复](../src/codex_app_config.rs)、[增强启动](../src/codex_app_enhanced.rs)、[模型脚本适配](../src/codex_app_enhanced/model_controls.rs)。
+同一增强会话现在还适配“设置 → 配置”的“模型功能”和“工作空间依赖项”入口。安装源码中它们分别受 `3693343337`、`3026692602` 控制；仅在原本机受管范围内增加例外，保留 Work 页面排除、local host kind 与真实 `primaryRuntime` 检查，中间 `2106641128` 不改。没有依赖运行时的客户端不会凭空出现可安装内容；Hub 不安装、重置或伪造工作空间依赖。设置模块按访问加载，`settingsSections` 独立合并，既不纳入启动 ready，也不纳入首屏刷新条件，不必先打开设置才能启动成功。
+
+该适配使用 Windows/macOS 共用协议，不改 Codex 安装文件、签名或用户套餐。只拦截已知 `app://.../assets/` 的模型与配置脚本响应，四类结构必须唯一匹配且局部变量一致才修改；未知布局或正文获取失败保留原脚本，最多等待 10 秒后放行。增强会话先启用 Network、禁用该会话资源缓存，再启用 Fetch；改写响应移除旧缓存/长度等元数据并加 `Cache-Control: no-store`。browser/page CDP 的帧和消息上限都设为有限 64 MiB：本机脚本原文 14,403,933 字节，base64 为 19,205,244 字节，可能超过库默认 16 MiB 单帧限制；此前中断可静默转成外层 45 秒超时。该缺陷已修，但未取得测试机私有日志，不能认定它是本次故障的唯一原因。
+
+增强启动仍核对 Fast UI、Fast request、Ultra models 三个实际执行标记，source marker 更新为 v2、增强脚本为 v23，不通过放松校验报告成功。连接中断立即反馈本机连接问题；45 秒内未齐则列出实际缺失的模型列表、语言或桌面配置等步骤。GUI 对该启动接口直接显示中文原因，不再套原始 HTTP 500/JSON。首次启动若错过早期挂载，只在该新窗口 load 完成后按需刷新一次，已运行窗口不刷新。维护入口：[配置及恢复](../src/codex_app_config.rs)、[增强启动](../src/codex_app_enhanced.rs)、[模型与设置脚本适配](../src/codex_app_enhanced/model_controls.rs)、[启动错误显示](../src/gui/api.rs)。
 
 MAX/ULTRA 的 desktop 键来自安装 schema 和只读配置白名单，官方通用配置页面未列出这些键；不读取或登记完整个人配置、密钥与私有日志。普通启动、CLI 和其他客户端不经过这条桌面适配。可选项仍须模型真实支持：例如当前目录的 `gpt-6-luna` 有 MAX、无 ULTRA；无速度档的模型不制造 Fast 按钮。启用入口不代表已选择 Fast，不强制请求服务档，也不承诺代理或上游实际提速。
 

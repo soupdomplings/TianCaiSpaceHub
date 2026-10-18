@@ -1,7 +1,7 @@
 use std::{
     collections::HashSet,
     process::Command,
-    sync::{Mutex, OnceLock},
+    sync::{Arc, Mutex, OnceLock},
     time::{Duration, Instant},
 };
 
@@ -9,7 +9,10 @@ use anyhow::{Context, Result, anyhow, bail};
 use futures_util::{SinkExt, StreamExt};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
-use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async, tungstenite::Message};
+use tokio_tungstenite::{
+    MaybeTlsStream, WebSocketStream, connect_async_with_config,
+    tungstenite::{Message, protocol::WebSocketConfig},
+};
 use url::{Host, Url};
 
 use crate::chain_log;
@@ -25,8 +28,19 @@ const ENHANCED_INJECTION_TIMEOUT: Duration = Duration::from_secs(45);
 // after that window so a cold renderer does not accumulate retry timers.
 const ENHANCED_SCRIPT_RETRY_INTERVAL: Duration = Duration::from_secs(43);
 const ENHANCED_STATUS_POLL_INTERVAL: Duration = Duration::from_millis(250);
-const ENHANCED_SCRIPT_VERSION: u64 = 22;
+const ENHANCED_SCRIPT_VERSION: u64 = 23;
 type CdpSocket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
+type BrowserSessionFailure = Arc<Mutex<Option<&'static str>>>;
+
+fn cdp_socket_config() -> WebSocketConfig {
+    // Fetch.getResponseBody can return a base64 script over 16 MiB in one
+    // Chromium frame. Keep a finite bound for both frames and messages.
+    WebSocketConfig {
+        max_message_size: Some(64 * 1024 * 1024),
+        max_frame_size: Some(64 * 1024 * 1024),
+        ..Default::default()
+    }
+}
 
 #[derive(Default)]
 struct RetainedCdpSessions {
@@ -164,6 +178,7 @@ struct EarlyBrowserSession {
     elapsed_ms: u64,
     model_controls: model_controls::Interceptor,
     adapt_model_controls: bool,
+    failure: BrowserSessionFailure,
 }
 
 #[derive(Default)]
@@ -196,6 +211,7 @@ pub async fn launch_and_inject(
         .build()?;
     let adapt_model_controls = crate::codex_app_config::model_controls_runtime_enabled(backend_url);
     let source = enhanced_statsig_script(&models, backend_url, adapt_model_controls)?;
+    let browser_failure = BrowserSessionFailure::default();
     let mut launched = false;
     let mut early_attach = EarlyAttachDiagnostics::default();
     let app_running = tokio::task::spawn_blocking(codex_app_is_running)
@@ -234,6 +250,7 @@ pub async fn launch_and_inject(
                 DEFAULT_CDP_PORT,
                 &source,
                 adapt_model_controls,
+                browser_failure.clone(),
             )
             .await
             {
@@ -270,8 +287,15 @@ pub async fn launch_and_inject(
         early_attach.applied
     ));
 
-    let (target, status) =
-        inject_until_ready(&client, DEFAULT_CDP_PORT, target, &models, &source).await?;
+    let (target, status) = inject_until_ready(
+        &client,
+        DEFAULT_CDP_PORT,
+        target,
+        &models,
+        &source,
+        &browser_failure,
+    )
+    .await?;
     chain_log::write_line(format!(
         "[codex_app_enhanced] event=injection_applied elapsed_ms={} target_id={}",
         started.elapsed().as_millis(),
@@ -454,6 +478,7 @@ async fn attach_to_initial_renderer(
     port: u16,
     source: &str,
     adapt_model_controls: bool,
+    failure: BrowserSessionFailure,
 ) -> Result<EarlyBrowserSession> {
     let started = Instant::now();
     let deadline = tokio::time::Instant::now() + EARLY_ATTACH_TIMEOUT;
@@ -466,9 +491,10 @@ async fn attach_to_initial_renderer(
         }
         tokio::time::sleep(EARLY_ATTACH_POLL_INTERVAL).await;
     };
-    let (mut socket, _) = connect_async(websocket_url)
-        .await
-        .context("连接 Codex browser CDP 失败")?;
+    let (mut socket, _) =
+        connect_async_with_config(websocket_url, Some(cdp_socket_config()), false)
+            .await
+            .context("连接 Codex browser CDP 失败")?;
     let mut command_id = 1_u64;
     let enable_id = send_cdp_request(
         &mut socket,
@@ -557,6 +583,7 @@ async fn attach_to_initial_renderer(
                 elapsed_ms: started.elapsed().as_millis() as u64,
                 model_controls,
                 adapt_model_controls,
+                failure,
             });
         }
     }
@@ -624,6 +651,11 @@ fn attached_target_commands(
     };
     if adapt_model_controls {
         commands.insert(0, ("Fetch.enable", model_controls::fetch_options()));
+        commands.insert(
+            0,
+            ("Network.setCacheDisabled", json!({"cacheDisabled": true})),
+        );
+        commands.insert(0, ("Network.enable", json!({})));
     }
     commands
 }
@@ -716,9 +748,10 @@ async fn connect_and_install(
     source: &str,
 ) -> Result<ActiveInjection> {
     let websocket_url = validated_websocket_url(target, port)?;
-    let (mut socket, _) = connect_async(websocket_url)
-        .await
-        .context("连接 Codex App CDP 失败")?;
+    let (mut socket, _) =
+        connect_async_with_config(websocket_url, Some(cdp_socket_config()), false)
+            .await
+            .context("连接 Codex App CDP 失败")?;
     let mut command_id = 1_u64;
     for (method, params) in enhanced_script_install_commands(source) {
         let result = cdp_command(&mut socket, &mut command_id, method, params).await?;
@@ -814,6 +847,7 @@ fn retain_browser_cdp_session(session: EarlyBrowserSession, source: String) {
         let mut socket = session.socket;
         let mut command_id = session.command_id;
         let mut model_controls = session.model_controls;
+        let failure = session.failure;
         let mut release_tick = tokio::time::interval(Duration::from_secs(1));
         release_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
@@ -821,17 +855,20 @@ fn retain_browser_cdp_session(session: EarlyBrowserSession, source: String) {
                 message = socket.next() => message,
                 _ = release_tick.tick() => {
                     if model_controls.release_expired(&mut socket, &mut command_id).await.is_err() {
+                        record_browser_session_failure(&failure, "request_release_failed");
                         break;
                     }
                     continue;
                 }
             };
             let Some(message) = message else {
+                record_browser_session_failure(&failure, "connection_closed");
                 break;
             };
             match message {
                 Ok(Message::Ping(payload)) => {
                     if socket.send(Message::Pong(payload)).await.is_err() {
+                        record_browser_session_failure(&failure, "connection_closed");
                         break;
                     }
                 }
@@ -846,6 +883,7 @@ fn retain_browser_cdp_session(session: EarlyBrowserSession, source: String) {
                         chain_log::write_line(format!(
                             "[codex_app_enhanced] event=model_controls_interception_failed error={err}"
                         ));
+                        record_browser_session_failure(&failure, "script_transport_failed");
                         break;
                     }
                     if let Some(target) = attached_target_from_event(&message)
@@ -862,6 +900,7 @@ fn retain_browser_cdp_session(session: EarlyBrowserSession, source: String) {
                             "[codex_app_enhanced] event=browser_target_injection_failed target_id={} error={err}",
                             target.target_id
                         ));
+                        record_browser_session_failure(&failure, "target_injection_failed");
                         break;
                     }
                     if let Some(error) = cdp_response_error(&message) {
@@ -870,7 +909,20 @@ fn retain_browser_cdp_session(session: EarlyBrowserSession, source: String) {
                         ));
                     }
                 }
-                Ok(Message::Close(_)) | Err(_) => break,
+                Err(err) => {
+                    let reason =
+                        if matches!(err, tokio_tungstenite::tungstenite::Error::Capacity(_)) {
+                            "message_too_large"
+                        } else {
+                            "connection_failed"
+                        };
+                    record_browser_session_failure(&failure, reason);
+                    break;
+                }
+                Ok(Message::Close(_)) => {
+                    record_browser_session_failure(&failure, "connection_closed");
+                    break;
+                }
                 _ => {}
             }
         }
@@ -882,6 +934,15 @@ fn retain_browser_cdp_session(session: EarlyBrowserSession, source: String) {
     if let Some(previous) = retained.browser.replace(handle) {
         previous.abort();
     }
+}
+
+fn record_browser_session_failure(failure: &BrowserSessionFailure, reason: &'static str) {
+    *failure
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(reason);
+    chain_log::write_line(format!(
+        "[codex_app_enhanced] event=browser_session_interrupted reason={reason}"
+    ));
 }
 
 async fn cdp_command<S>(
@@ -970,13 +1031,26 @@ async fn inject_until_ready(
     initial_target: CdpTarget,
     expected_models: &[String],
     source: &str,
+    browser_failure: &BrowserSessionFailure,
 ) -> Result<(CdpTarget, InjectedStatus)> {
     let deadline = tokio::time::Instant::now() + ENHANCED_INJECTION_TIMEOUT;
     let mut initial_target = Some(initial_target);
     let mut active: Option<ActiveInjection> = None;
     let mut last_error = None::<String>;
     let mut last_status_detail = None::<String>;
+    let mut missing = "启动连接".to_string();
     loop {
+        if let Some(reason) = *browser_failure
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        {
+            chain_log::write_line(format!(
+                "[codex_app_enhanced] event=startup_connection_interrupted reason={reason}"
+            ));
+            bail!(
+                "Codex 已打开，但 Hub 与它的本机连接已中断，本次增强配置未完成同步。请保留此提示并反馈，便于检查客户端兼容性。"
+            );
+        }
         let target = match initial_target.take() {
             Some(target) => Some(target),
             None => match find_app_target(client, port).await {
@@ -1013,6 +1087,7 @@ async fn inject_until_ready(
                         let should_reapply =
                             should_reapply_script(&status, connection.installed_at.elapsed());
                         last_status_detail = Some(injected_status_detail(&status));
+                        missing = missing_configuration(&status, expected_models);
                         if ready {
                             let connection = active
                                 .take()
@@ -1049,11 +1124,45 @@ async fn inject_until_ready(
                 "[codex_app_enhanced] event=startup_incomplete detail={detail}"
             ));
             bail!(
-                "Codex App 已启动，但模型选项或语言设置未同步完成。请完全退出 Codex 后再从 Hub 增强启动；若仍失败，请反馈此提示。"
+                "Codex 已打开，但配置同步尚未完成。未完成：{missing}。请保留此提示并反馈，便于检查客户端兼容性。"
             );
         }
         tokio::time::sleep(ENHANCED_STATUS_POLL_INTERVAL).await;
     }
+}
+
+fn missing_configuration(status: &InjectedStatus, expected_models: &[String]) -> String {
+    let mut missing = Vec::new();
+    if !status.script_installed
+        || !status.script_applied
+        || status.script_version != Some(ENHANCED_SCRIPT_VERSION)
+    {
+        missing.push("启动适配");
+    }
+    if !status.ready
+        || status.available_models != expected_models
+        || status.use_hidden_models
+        || !status.model_config_supported
+        || !(status.official_base_available || status.local_base_available)
+    {
+        missing.push("模型列表");
+    }
+    if !status.i18n_enabled || !status.i18n_layer_supported {
+        missing.push("语言设置");
+    }
+    if status.key_gates_enabled != SUPPORTED_FEATURE_GATES.len() {
+        missing.push("界面设置");
+    }
+    if status.model_controls_enabled && !status.model_controls_ready {
+        missing.push("桌面配置适配");
+    }
+    if !status.plugin_catalog_bridge_installed || !status.plugin_catalog_dispatch_patched {
+        missing.push("工具目录");
+    }
+    if !status.local_initialize_installed || status.compatibility_adapters.is_empty() {
+        missing.push("本机配置连接");
+    }
+    missing.join("、")
 }
 
 fn should_reapply_script(status: &InjectedStatus, installed_for: Duration) -> bool {
@@ -1143,7 +1252,7 @@ async fn inspect_injected_status_on_socket(active: &mut ActiveInjection) -> Resu
              scriptApplied: Boolean(enhanced?.applied),
              scriptVersion: enhanced?.version ?? null,
             modelControlsEnabled: enhanced?.modelControlsEnabled === true,
-            modelControlsReady: modelControls?.version === 1
+            modelControlsReady: modelControls?.version === 2
               && modelControls.fastUi === true
               && modelControls.fastRequest === true
               && modelControls.ultraModels === true,
@@ -3023,7 +3132,7 @@ mod tests {
         assert!(script.contains("const modelIsV2"));
         assert!(script.contains("installStorePatch"));
         assert!(script.contains("patchCachedI18nLayer"));
-        assert!(script.contains("SCRIPT_VERSION = 22"));
+        assert!(script.contains("SCRIPT_VERSION = 23"));
         assert!(script.contains("state.pluginCatalogCacheRefreshAttempts < 240"));
         assert!(script.contains("state.pluginCatalogCacheRefreshAttempts < 80 ? 25 : 250"));
         assert!(script.contains("PLUGIN_DIRECTORY_LINK_ID"));
@@ -3368,6 +3477,19 @@ mod tests {
         };
 
         assert!(injected_status_is_ready(&status, &expected_models));
+        // Lazy settings chunks are not part of startup readiness. Core source
+        // adaptation still must be present rather than reporting false success.
+        status.model_controls_enabled = true;
+        assert!(!injected_status_is_ready(&status, &expected_models));
+        assert_eq!(
+            missing_configuration(&status, &expected_models),
+            "桌面配置适配"
+        );
+        status.model_controls_ready = true;
+        assert!(injected_status_is_ready(&status, &expected_models));
+        let socket_config = cdp_socket_config();
+        assert_eq!(socket_config.max_frame_size, Some(64 * 1024 * 1024));
+        assert_eq!(socket_config.max_message_size, socket_config.max_frame_size);
         let detail = injected_status_detail(&status);
         assert!(detail.contains("store=Bootstrap"));
         assert!(detail.contains("model=107580212:true"));

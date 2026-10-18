@@ -127,10 +127,18 @@ impl ApiClient {
             }
         })?;
         let status = response.status();
+        let enhanced_launch_error = response.url().path() == "/api/codex-app/enhanced-launch";
         let text = response.text().map_err(|err| err.to_string())?;
         if status.is_success() {
             Ok(text)
         } else {
+            if enhanced_launch_error
+                && let Ok(body) = serde_json::from_str::<Value>(&text)
+                && let Some(message) = body.get("error").and_then(Value::as_str)
+                && !message.trim().is_empty()
+            {
+                return Err(message.to_string());
+            }
             Err(format!("HTTP {status}: {text}"))
         }
     }
