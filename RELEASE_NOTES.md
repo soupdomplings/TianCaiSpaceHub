@@ -1,4 +1,12 @@
-TianCaiSpaceHub v0.4.30-5 已保存密码与应用密钥回显（2026-10-16）
+TianCaiSpaceHub v0.4.30-5 Codex 模型选项初始化（2026-10-18）
+
+点击“初始化／更新 Codex 配置”自动补齐 MAX、ULTRA 并开启 Fast 选择开关，保留已有推理列表、默认模型、思考强度和速度。配置缺项可直接更新；成功后完全退出并重新打开 Codex App，实际选项仍要求模型支持。
+
+模型选项纳入原恢复配置流程，兼容旧备份，保留用户后续修改。Fast 图标还依赖模型速度档，本轮不改变 App 安装文件或伪造未知模型能力。版本仍 `0.4.30-5`、唯一 `main`；本轮编译、源码、两平台 Actions 与待用户验收见 [交付](docs/releases/v0.4.30-5.md#2026-10-18-初始化开启-maxultra-与-fast-选项)，详细配置与回退见 [模型控制选项](docs/dynamic-codex-models.zh-CN.md#初始化开启-maxultra-与-fast-选项)。下方历史结果保留原范围。
+
+---
+
+TianCaiSpaceHub v0.4.30-5 已保存密码与应用密钥回显（2026-10-16，前轮）
 
 Dumpling-MCP 的密码、ClientSecret 在保存及登录成功后继续明文显示。加载环境、刷新或重启 Hub 后，从 Windows DPAPI/macOS Keychain 回填当前环境已显式保存的对应资料；未保存输入仅留在本次表单，保存时机及默认不勾选规则不变。
 

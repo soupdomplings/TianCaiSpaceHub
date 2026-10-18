@@ -1,8 +1,36 @@
 # 动态 Codex 可见模型
 
-维护日期：2026-10-12。当前开发版本：`v0.4.30-5`、唯一 `main`。关联 TC-006、TC-007；本轮保存时自动获取及模型未配置提示的源码、必要编译、Actions 和待用户验收状态见 [v5 交付](releases/v0.4.30-5.md#2026-10-12-空模型自动获取与模型未配置提示)。历史 `v0.4.30-2` 预发布及其验证结果保持原归属；版本沿革见 [二开变更记录](customizations/CHANGELOG.md)，上游目录来源见 [v0.4.30 整合](upstream-v0.4.30-integration.md)，当前用途标识和完整保留名称隔离见 [接入点用途与隔离](customizations/client-channel-scope.md)。
+维护日期：2026-10-18。当前开发版本：`v0.4.30-5`、唯一 `main`。关联 TC-006、TC-007；本轮初始化开启模型选项的源码、必要编译、Actions 和待用户验收状态见 [v5 交付](releases/v0.4.30-5.md#2026-10-18-初始化开启-maxultra-与-fast-选项)。此前保存时自动获取及模型未配置提示见 [前轮交付](releases/v0.4.30-5.md#2026-10-12-空模型自动获取与模型未配置提示)；历史 `v0.4.30-2` 预发布及验证保持原归属。版本沿革见 [二开变更记录](customizations/CHANGELOG.md)，上游目录来源见 [v0.4.30 整合](upstream-v0.4.30-integration.md)，入口隔离见 [接入点用途与隔离](customizations/client-channel-scope.md)。
 
 Codex 可见模型现在支持内置目录之外的模型。模型来源包括已配置渠道保存的模型列表，以及 Codex 接入页中手动输入的模型 ID。
+
+## 初始化开启 MAX、ULTRA 与 Fast 选项
+
+在“ChatGPT(Codex) 接入”点击“初始化 Codex 配置”或“更新 Codex 配置”时，Hub 同时补齐模型控制选项。已有接入但缺少这些设置时，按钮显示可更新；只升级 Hub、启动或查看接入状态不会自动改写 Codex 配置。操作成功后完全退出并重新打开 Codex App，再由用户核对模型选择器。
+
+写入目标沿用当前 Codex home（默认 `~/.codex/config.toml`，支持原有 home 覆盖），Windows/macOS 使用同一 TOML 读写流程：
+
+```toml
+[desktop]
+enabled-reasoning-efforts = ["low", "medium", "high", "xhigh", "max", "ultra"]
+
+[features]
+fast_mode = true
+```
+
+已有 `enabled-reasoning-efforts` 数组时，保留原条目、顺序和数组注释，只补缺少的 `max`、`ultra`，不重复追加；只有原键不存在时使用示例六档，原空数组只补两档。其他 desktop/features 设置、当前 `model`、`model_reasoning_effort`、`service_tier` 及 `desktop.default-service-tier` 均保留，不自动切换当前使用的强度或速度。内联表按原有 helper 合并；desktop/features 类型错误、推理列表不是纯文字数组或 fast_mode 不是布尔值时，在写入 config.toml 前提示修正，不清空这些配置来强行初始化。
+
+Fast 的开关依据 [OpenAI 官方速度配置说明](https://learn.chatgpt.com/docs/agent-configuration/speed)：`features.fast_mode` 允许选择 Fast，实际使用速度由 `service_tier` 等选择决定。本轮只开启选择开关。只读核对本机 Codex `26.1013.4894.0` 安装源码确认，闪电按钮还依赖所选模型提供 Fast/priority 速度档；MAX、ULTRA 同样依赖模型支持的推理等级。Hub 现有目录及同族继承已包含部分模型的速度档，本轮不伪造不支持模型的能力、不修改 App 安装文件或前端实验开关。实际图标显示、请求速度与上游支持仍待用户验收，不把配置写入等同于已验证加速。
+
+MAX/ULTRA 配置键来自用户授权的本机生效配置白名单及安装源码 schema 核对，官方通用配置页面未列出该 desktop 键；不读取或登记完整个人配置、密钥与私有日志。`show-ultra-in-model-picker-slider` 属另一项显示偏好，本轮不写入，沿用本机已验证启用列表的配置方式。
+
+### 备份与恢复
+
+沿用 Hub 受管备份 manifest v2，新增可选 `model_controls`，记录原推理列表（缺失和空数组区分）、最后写入列表及原 fast_mode 值；不含账号或秘密。旧 v1/v2 备份在首次显式初始化/更新时补记，不重置原 ChatGPT 登录备份。重复初始化且受管值未变时保留原恢复点；用户手工改过列表或关闭/删除 Fast 后再显式初始化，则分别以本次修改前的对应值为新恢复点。
+
+“恢复配置”仅在当前推理列表仍等于 Hub 最后写入列表、或 fast_mode 仍为 Hub 写入的 true 时，分别还原对应原值；原键缺失则删除，空表清理，其他 desktop/features 字段保留。用户后来修改/删除的项不覆盖；没有受管记录时不猜测并删除模型选项。若需回退旧程序，应先用新程序恢复；旧程序不识别新增备份字段，也不会负责撤回它们。原有逐次 config.toml 备份与原子文件写入继续保留，配置和 manifest 为分步写入，不宣称跨文件事务。
+
+维护入口：[初始化、更新状态与恢复](../src/codex_app_config.rs)（`enable_model_controls`、`desktop_reasoning_efforts`、`managed_gateway_config_is_current`、`restore_model_controls`）、[按钮入口](../src/gui/codex_tab.rs)、[中英文帮助及成功提示](../src/gui/text.rs)。开发方只做必要编译与静态核对，不运行 Hub/Codex、测试夹具或真实模型请求，不改本机正在使用的配置；Windows/macOS 实机分别待用户验收，完整构建身份见本轮交付。
 
 ## 厂商保存时自动获取模型
 

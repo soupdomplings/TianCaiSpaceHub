@@ -60,6 +60,10 @@ const CODEXHUB_BUNDLED_REMOTE_ID_PREFIX: &str = "plugins~codexhub-bundled-";
 const REMOTE_PLUGIN_INSTALL_METADATA_FILE: &str = ".codex-remote-plugin-install.json";
 const PLUGIN_BLOCKING_FEATURE_FLAGS: &[&str] =
     &["plugins", "computer_use", "browser_use", "in_app_browser"];
+const DESKTOP_REASONING_EFFORTS_KEY: &str = "enabled-reasoning-efforts";
+const DEFAULT_DESKTOP_REASONING_EFFORTS: &[&str] =
+    &["low", "medium", "high", "xhigh", "max", "ultra"];
+const REQUIRED_DESKTOP_REASONING_EFFORTS: &[&str] = &["max", "ultra"];
 const REQUIRED_OPENAI_BUNDLED_PLUGIN_IDS: &[&str] = &[
     "browser@openai-bundled",
     "chrome@openai-bundled",
@@ -206,6 +210,15 @@ struct ManagedCodexAppBackupManifest {
     original_model_provider: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     original_gateway_features: Option<GatewayFeaturesBackup>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    model_controls: Option<ModelControlsBackup>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ModelControlsBackup {
+    original_reasoning_efforts: Option<Vec<String>>,
+    managed_reasoning_efforts: Vec<String>,
+    original_fast_mode: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1525,6 +1538,21 @@ fn managed_gateway_config_is_current(
     {
         return false;
     }
+    if features
+        .and_then(|features| features.get("fast_mode"))
+        .and_then(toml_edit::Item::as_bool)
+        != Some(true)
+        || !desktop_reasoning_efforts(&doc)
+            .ok()
+            .flatten()
+            .is_some_and(|efforts| {
+                REQUIRED_DESKTOP_REASONING_EFFORTS
+                    .iter()
+                    .all(|required| efforts.iter().any(|effort| effort == required))
+            })
+    {
+        return false;
+    }
     let auth = std::fs::read(auth_path)
         .ok()
         .and_then(|raw| serde_json::from_slice::<serde_json::Value>(&raw).ok());
@@ -1657,6 +1685,7 @@ fn write_config_toml(path: &Path, options: &ConfigureCodexAppOptions) -> Result<
         toml_edit::DocumentMut::new()
     };
     let codex_home = path.parent().unwrap_or_else(|| Path::new("."));
+    enable_model_controls(codex_home, &mut doc)?;
 
     let codex_backend_url = options.codex_backend_url();
     doc["chatgpt_base_url"] = toml_edit::value(&codex_backend_url);
@@ -1752,6 +1781,141 @@ fn write_config_toml(path: &Path, options: &ConfigureCodexAppOptions) -> Result<
     let raw = normalize_config_toml_order(&doc.to_string());
     backup_existing(path)?;
     write_file_atomically(path, raw.as_bytes())
+}
+
+fn desktop_reasoning_efforts(doc: &toml_edit::DocumentMut) -> Result<Option<Vec<String>>> {
+    let Some(desktop) = doc.get("desktop") else {
+        return Ok(None);
+    };
+    let desktop = desktop
+        .as_table_like()
+        .ok_or_else(|| anyhow!("Codex 配置中的 desktop 必须是配置表，请修正后再初始化。"))?;
+    let Some(efforts) = desktop.get(DESKTOP_REASONING_EFFORTS_KEY) else {
+        return Ok(None);
+    };
+    let efforts = efforts.as_array().ok_or_else(|| {
+        anyhow!(
+            "Codex 配置中的 desktop.enabled-reasoning-efforts 必须是文字列表，请修正后再初始化。"
+        )
+    })?;
+    efforts
+        .iter()
+        .map(|effort| {
+            effort.as_str().map(str::to_owned).ok_or_else(|| {
+                anyhow!("Codex 配置中的 desktop.enabled-reasoning-efforts 只能包含文字，请修正后再初始化。")
+            })
+        })
+        .collect::<Result<Vec<_>>>()
+        .map(Some)
+}
+
+fn enable_model_controls(codex_home: &Path, doc: &mut toml_edit::DocumentMut) -> Result<()> {
+    let original_reasoning_efforts = desktop_reasoning_efforts(doc)?;
+    let features = doc.get("features");
+    if features.is_some_and(|features| features.as_table_like().is_none()) {
+        return Err(anyhow!(
+            "Codex 配置中的 features 必须是配置表，请修正后再初始化。"
+        ));
+    }
+    let fast_mode = features.and_then(|features| features.get("fast_mode"));
+    if fast_mode.is_some_and(|value| value.as_bool().is_none()) {
+        return Err(anyhow!(
+            "Codex 配置中的 features.fast_mode 必须为 true 或 false，请修正后再初始化。"
+        ));
+    }
+    let original_fast_mode = fast_mode.and_then(toml_edit::Item::as_bool);
+    let mut efforts = doc
+        .get("desktop")
+        .and_then(|desktop| desktop.get(DESKTOP_REASONING_EFFORTS_KEY))
+        .and_then(toml_edit::Item::as_array)
+        .cloned()
+        .unwrap_or_else(|| DEFAULT_DESKTOP_REASONING_EFFORTS.iter().copied().collect());
+    for required in REQUIRED_DESKTOP_REASONING_EFFORTS {
+        if !efforts
+            .iter()
+            .any(|effort| effort.as_str() == Some(required))
+        {
+            efforts.push(*required);
+        }
+    }
+    let managed_reasoning_efforts: Vec<String> = efforts
+        .iter()
+        .map(|effort| {
+            effort
+                .as_str()
+                .expect("validated reasoning effort")
+                .to_owned()
+        })
+        .collect();
+    let backup = managed_backup_paths(codex_home);
+    if backup.manifest_path.exists() {
+        let mut manifest = read_managed_backup_manifest(&backup.manifest_path)?;
+        let mut controls = manifest
+            .model_controls
+            .unwrap_or_else(|| ModelControlsBackup {
+                original_reasoning_efforts: original_reasoning_efforts.clone(),
+                managed_reasoning_efforts: managed_reasoning_efforts.clone(),
+                original_fast_mode,
+            });
+        // A later explicit setup starts from the user's latest edits. Repeated
+        // setup of our unchanged values must retain the earlier restore point.
+        if original_reasoning_efforts.as_ref() != Some(&controls.managed_reasoning_efforts) {
+            controls.original_reasoning_efforts = original_reasoning_efforts.clone();
+        }
+        controls.managed_reasoning_efforts = managed_reasoning_efforts.clone();
+        if original_fast_mode != Some(true) {
+            controls.original_fast_mode = original_fast_mode;
+        }
+        manifest.model_controls = Some(controls);
+        write_file_atomically(
+            &backup.manifest_path,
+            &serde_json::to_vec_pretty(&manifest)?,
+        )?;
+    }
+    if original_reasoning_efforts.as_ref() != Some(&managed_reasoning_efforts) {
+        ensure_config_table(doc, "desktop")[DESKTOP_REASONING_EFFORTS_KEY] =
+            toml_edit::value(efforts);
+    }
+    if original_fast_mode != Some(true) {
+        ensure_config_table(doc, "features")["fast_mode"] = toml_edit::value(true);
+    }
+    Ok(())
+}
+
+fn restore_model_controls(doc: &mut toml_edit::DocumentMut, controls: &ModelControlsBackup) {
+    if desktop_reasoning_efforts(doc).ok().flatten().as_ref()
+        == Some(&controls.managed_reasoning_efforts)
+    {
+        if let Some(desktop) = doc
+            .get_mut("desktop")
+            .and_then(toml_edit::Item::as_table_like_mut)
+        {
+            if let Some(original) = &controls.original_reasoning_efforts {
+                let efforts: toml_edit::Array = original.iter().map(String::as_str).collect();
+                desktop.insert(DESKTOP_REASONING_EFFORTS_KEY, toml_edit::value(efforts));
+            } else {
+                desktop.remove(DESKTOP_REASONING_EFFORTS_KEY);
+            }
+            if desktop.is_empty() {
+                doc.remove("desktop");
+            }
+        }
+    }
+    if let Some(features) = doc
+        .get_mut("features")
+        .and_then(toml_edit::Item::as_table_like_mut)
+    {
+        if features.get("fast_mode").and_then(toml_edit::Item::as_bool) == Some(true) {
+            if let Some(original) = controls.original_fast_mode {
+                features.insert("fast_mode", toml_edit::value(original));
+            } else {
+                features.remove("fast_mode");
+            }
+        }
+        if features.is_empty() {
+            doc.remove("features");
+        }
+    }
 }
 
 fn backup_gateway_features(codex_home: &Path, doc: &toml_edit::DocumentMut) -> Result<()> {
@@ -2112,7 +2276,7 @@ fn normalize_config_toml_order(raw: &str) -> String {
 }
 
 fn uninstall_config_toml(path: &Path, backend_url: &str) -> Result<(bool, bool)> {
-    cleanup_codexhub_config(path, backend_url, true, None, None)
+    cleanup_codexhub_config(path, backend_url, true, None, None, None)
 }
 
 fn managed_provider_names_in_config(
@@ -2749,6 +2913,7 @@ fn ensure_managed_backup(codex_home: &Path, config_path: &Path, auth_path: &Path
             None
         },
         original_gateway_features: None,
+        model_controls: None,
     };
     if manifest.auth_existed {
         std::fs::copy(auth_path, &backup.auth_path).with_context(|| {
@@ -2794,6 +2959,7 @@ fn uninstall_with_managed_state(
         manifest.config_existed,
         original_model_provider.as_deref(),
         manifest.original_gateway_features.as_ref(),
+        manifest.model_controls.as_ref(),
     )?;
     let removed_auth = restore_or_remove_managed_file(
         auth_path,
@@ -2825,6 +2991,7 @@ fn cleanup_codexhub_config(
     config_existed_before_first_write: bool,
     original_model_provider: Option<&str>,
     original_gateway_features: Option<&GatewayFeaturesBackup>,
+    model_controls: Option<&ModelControlsBackup>,
 ) -> Result<(bool, bool)> {
     if !path.exists() {
         return Ok((false, false));
@@ -2891,6 +3058,10 @@ fn cleanup_codexhub_config(
                 doc.remove("features");
             }
         }
+    }
+
+    if let Some(controls) = model_controls {
+        restore_model_controls(&mut doc, controls);
     }
 
     if doc.iter().next().is_none() {
