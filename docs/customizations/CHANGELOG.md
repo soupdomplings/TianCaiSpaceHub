@@ -7,7 +7,7 @@
 - 配置与结果：初始化/更新合并 `desktop.enabled-reasoning-efforts`，保留已有项/顺序，仅补 max/ultra；无键默认六档、空数组只补两档。同时写 `features.fast_mode=true`，不改当前默认模型、强度、service_tier 或 desktop 默认速度；不在启动/检查时自动改配置。缺项时接入状态允许“更新配置”，中英文帮助及成功提示说明重开 App 和模型能力前提。
 - 研究边界：只读检查本机生效字段及 Codex `26.1013.4894.0` 安装 schema；MAX/ULTRA 键由本机证据确认，Fast 开关另有官方文档。Fast 图标还要求模型速度档，不扩写未知模型能力、不改安装文件/实验开关，不承诺仅写配置就已验证加速。
 - 兼容与恢复：旧 manifest v1/v2 通过可选 `model_controls` 补记原/受管列表及原 Fast 值；重复未变初始化保留恢复点，用户修改后再次初始化分别采纳本次前像。恢复仅撤回仍匹配受管值的项，保留后改和其他配置；非法表、数组或布尔类型在 config.toml 写入前报错。回退前宜用新程序恢复，逐次备份及原子写入沿用，分文件不保证跨文件事务。
-- 验证与交付：源码已实现，Windows locked `cargo check --tests` 53.00 秒、GUI `cargo build` 123.48 秒通过，已有警告数量不变；只编译、未执行测试。EXE 的版本/PE/x64/哈希、2 个源码格式/diff、8 份 Markdown 严格 UTF-8、528 个本地文件链接、四条 UPDATE_NOTES 与未改打包 guard 核对通过，详细身份及后续源码/Actions 状态见 [本轮交付](../releases/v0.4.30-5.md#2026-10-18-初始化开启-maxultra-与-fast-选项)。不运行产品/客户端或真实模型调用，不修改用户运行配置；Windows/macOS 分别待用户验收，历史包保持原身份。
+- 验证与交付：源码已实现，Windows locked `cargo check --tests` 53.00 秒、GUI `cargo build` 123.48 秒通过，已有警告数量不变；只编译、未执行测试。EXE 的版本/PE/x64/哈希、2 个源码格式/diff、8 份 Markdown 严格 UTF-8、528 个本地文件链接、四条 UPDATE_NOTES 与未改打包 guard 核对通过；源码 `a68b5a6c87e524f725da3f9ffe787be8a2ff6653` 已推送，两平台 Actions 已确认 job 开始并停止等待，详细身份及运行链接见 [本轮交付](../releases/v0.4.30-5.md#2026-10-18-初始化开启-maxultra-与-fast-选项)。不运行产品/客户端或真实模型调用，不修改用户运行配置；最终包结果及 Windows/macOS 分别待用户验收，历史包保持原身份。
 - 文档：更新 [动态模型](../dynamic-codex-models.zh-CN.md#初始化开启-maxultra-与-fast-选项)、[初始化方案衔接](../codex-app-web-run-model-visibility-tradeoff.zh-CN.md#已实现的配置写入)、[总表](README.md)、[总入口](../README.md)与发布摘要。
 
 ## v0.4.30-5 未发布 · 2026-10-16 · 已保存密码与应用密钥回显
