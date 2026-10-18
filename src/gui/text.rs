@@ -626,10 +626,10 @@ impl GuiText {
     pub(super) fn codex_local_config_help(self) -> &'static str {
         match self.locale {
             GuiLocale::ZhCn => {
-                "初始化 TianCaiSpaceHub 接入，并开启 MAX、ULTRA 和 Fast 模式选项；保留当前默认思考强度与速度。可恢复受管配置，包括原 ChatGPT 登录状态。"
+                "初始化 TianCaiSpaceHub 接入。可恢复受管配置，包括原 ChatGPT 登录状态。"
             }
             GuiLocale::EnUs => {
-                "Set up TianCaiSpaceHub integration and enable MAX, ULTRA and Fast options, keeping your default effort and speed. Managed settings and the original ChatGPT sign-in can be restored."
+                "Set up TianCaiSpaceHub integration. Managed settings and the original ChatGPT sign-in can be restored."
             }
         }
     }
@@ -1069,12 +1069,8 @@ impl GuiText {
 
     pub(super) fn inject_codex_access_help(self) -> &'static str {
         match self.locale {
-            GuiLocale::ZhCn => {
-                "让 Codex 使用本地服务，并开启 MAX、ULTRA 和 Fast 选项；模型须支持对应能力。"
-            }
-            GuiLocale::EnUs => {
-                "Use the local service and enable MAX, ULTRA and Fast options for supported models."
-            }
+            GuiLocale::ZhCn => "让 Codex 使用 TianCaiSpaceHub 本地服务。",
+            GuiLocale::EnUs => "Connect Codex to the local TianCaiSpaceHub service.",
         }
     }
 
@@ -1966,11 +1962,9 @@ impl GuiText {
 
     pub(super) fn codex_app_config_injected(self) -> &'static str {
         match self.locale {
-            GuiLocale::ZhCn => {
-                "Codex 本地配置已写入，已开启 MAX、ULTRA 和 Fast 模式选项。请完全退出后重新打开 Codex App；实际可选项取决于所选模型支持的能力。"
-            }
+            GuiLocale::ZhCn => "Codex 本地配置已更新。请完全退出 Codex App 后，从 Hub 增强启动。",
             GuiLocale::EnUs => {
-                "Local Codex settings were written with MAX, ULTRA and Fast options enabled. Fully quit and reopen Codex App. Available options depend on the selected model's capabilities."
+                "Local Codex settings have been updated. Fully quit Codex App, then launch it in enhanced mode from Hub."
             }
         }
     }

@@ -1,6 +1,18 @@
 # 二开变更记录
 
+## v0.4.30-5 未发布 · 2026-10-18 · ULTRA与Fast显示兼容修复
+
+关联 TC-006、TC-007；基于唯一 `main` 的 `2b0aaf4f9d7b986bee02e78f7c399e0f4f38597f`，版本仍 `0.4.30-5`。用户反馈与本机相同的 Codex 版本、多个模型、增强启动仍只显示 MAX，并要求 Hub 不显示专门开启 MAX/ULTRA/Fast 的说明。
+
+- 原因与结果：只读安装源码确认 ULTRA 模型查询受额外 gate 过滤，Fast 的 UI 和请求辅助函数还限制 ChatGPT/PAT 账号态；原配置写入不足。当前通过增强启动的本机 CDP 响应适配这三处，仅在本 Hub 受管 `ai-gateway`、Fast 开关已开启及 `hostId=local` 时增加可用分支，保留真实 requirements、显式禁止值、模型能力和默认选择。不修改全局认证态、`requires_openai_auth=false + Actor Authorization`、安装文件或用户套餐。
+- 显示与兼容：中英文配置帮助、初始化悬浮说明和更新成功弹窗仅用普通接入提示。配置及 manifest 格式沿用前轮，不新增字段；当前 Codex 模型功能页沿默认 include=true 的查询读取，不额外写旧 Ultra 滑块偏好或更改 ChatGPT 账号设置。
+- 加载与回退：仅匹配已知 app assets 的唯一行为结构并核对局部变量；未知布局/正文失败放行原响应，未处理请求最多 10 秒后释放，三个源码标记实际加载才报同步成功。仅本次新启动、错过早挂载的首个窗口在 app 文档 load 完成后按需刷新一次；不刷新已运行窗口，不中断首次 loadURL。适配仅存在于增强会话内存；退出后结束，配置恢复仍按原记录保留后改，退回旧 Hub 即恢复旧增强行为。
+- 验证与交付：Windows 必要编译和源码/文档静态核对、源码推送及两平台 Actions 以 [本轮交付](../releases/v0.4.30-5.md#2026-10-18-ultra与fast显示兼容修复) 为准。只编译不执行测试或产品，不读取真实凭据/私有日志，不改本机运行配置或 Codex 安装资源；Windows/macOS 显示、Fast 实际请求及启动刷新边界分别待用户验收。既有标签、Release 和前轮包保持原身份。
+- 文档：更新 [动态模型](../dynamic-codex-models.zh-CN.md#初始化开启-maxultra-与-fast-选项)、[Provider 取舍](../codex-app-web-run-model-visibility-tradeoff.zh-CN.md#已实现的配置写入)、[CDP 启动与诊断](../codex-app-cdp-model-diagnostics.zh-CN.md#增强模式启动)、[Statsig 边界](../codex-app-fast-startup-statsig.zh-CN.md#当前维护的-gate)、总表、总入口及发布摘要。
+
 ## v0.4.30-5 未发布 · 2026-10-18 · 初始化开启 MAX、ULTRA 与 Fast 选项
+
+前轮记录：用户后续反馈同版本、多模型、增强启动后仅 MAX 显示；ULTRA/Fast 未通过本轮用户验收，追加处理见上节。下方编译及 Actions 保留该轮身份，当时专门的配置提示已由上节移除。
 
 关联 TC-006、TC-007；基于唯一 `main` 的 `2444144319a3ad62865399d77bb1c99094459708`，完整版本仍 `0.4.30-5`。用户要求 Hub 初始化时免去在客户端手工勾选 MAX/ULTRA，并研究补上 Fast 选择入口，开发后由用户测试。
 

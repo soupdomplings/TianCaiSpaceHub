@@ -38,7 +38,7 @@
 
 ### 已实现的配置写入
 
-2026-10-18 增补：现行初始化/更新还合并 MAX、ULTRA 列表并开启 Fast 选择开关，保留当前默认模型、强度、速度；受管备份、后改保护和回退见 [模型控制选项](dynamic-codex-models.zh-CN.md#初始化开启-maxultra-与-fast-选项)。下方配置保留原搜索/目录方案范围，不能作为本轮客户端显示已验收的证据。
+2026-10-18 增补：现行初始化/更新合并 MAX、ULTRA 列表并开启 Fast 选择开关，保留默认模型、强度、速度；前轮只写配置后已收到“只显示 MAX”反馈。本轮增强启动在本 Hub 受管本机 Provider 内定向适配模型查询及 Fast 两处判断，继续保留 `requires_openai_auth=false + Actor Authorization`、真实 requirements、模型能力及全局账号态，不以切换账号模式修复显示。Hub 配置页/弹窗只显示普通接入结果。受管备份、后改保护和回退见 [模型控制选项](dynamic-codex-models.zh-CN.md#初始化开启-maxultra-与-fast-选项)，本轮源码与 Windows/macOS 待用户验收见 [交付](releases/v0.4.30-5.md#2026-10-18-ultra与fast显示兼容修复)。下方配置保留原搜索/目录方案范围，不作为本轮客户端显示已验收的证据。
 
 以下组合已由 `src/codex_app_config.rs` 的默认初始化流程写入，尚未发布。手动合并时不能重复创建 `[features]` 或同名 provider 表。
 

@@ -386,6 +386,22 @@ pub fn inspect_codex_app_config(
     inspect_codex_app_config_for_mode(codex_home, backend_url, false)
 }
 
+pub(crate) fn model_controls_runtime_enabled(backend_url: &str) -> bool {
+    let config_path = default_codex_home().join("config.toml");
+    if !inspect_managed_ai_gateway_provider(&config_path, backend_url) {
+        return false;
+    }
+    let Ok(doc) = parse_existing_config_toml(&config_path) else {
+        return false;
+    };
+    doc.get("model_provider").and_then(toml_edit::Item::as_str) == Some(AI_GATEWAY_PROVIDER_NAME)
+        && doc
+            .get("features")
+            .and_then(|features| features.get("fast_mode"))
+            .and_then(toml_edit::Item::as_bool)
+            == Some(true)
+}
+
 pub fn prepare_codex_app_config_recovery_snapshot(
     codex_home: Option<PathBuf>,
 ) -> Result<Option<PathBuf>> {

@@ -2,6 +2,8 @@
 
 资料定位（2026-09-30）：本文混合早期快速启动记录与后续增强启动兼容说明，保留作排障参考。文中客户端版本、缓存结构和实验数据只适用于对应记录，不宣称已验证当前所有客户端。二开现状及后续维护入口见 [总表](customizations/README.md)，不再按历史 `8000` 方案部署。
 
+现行增补（2026-10-18）：增强启动对本 Hub 受管本机 Provider 增加 ULTRA/Fast 脚本响应适配；核心 gate 列表仍为 5 项，不全局覆盖 `1186680773`，仅在本地模型查询中加受限例外。Fast 两处继续读取真实 requirements，账号模式和模型能力保持。新启动错过早挂载时仅在首个 app 文档 load 完成后按需刷新一次，已运行窗口不刷新；Hub 配置页/弹窗不列选项名称。当前行为与回退见 [模型控制选项](dynamic-codex-models.zh-CN.md#初始化开启-maxultra-与-fast-选项)，源码、必要编译及两平台待验收见 [交付](releases/v0.4.30-5.md#2026-10-18-ultra与fast显示兼容修复)。
+
 > 状态：`localhost:8000` 快速启动方案已于 2026-07-16 废弃。本文后续内容仅保留为历史协议记录。
 >
 > 当前 CodexHub 默认设置 `CODEX_API_BASE_URL=http://127.0.0.1:3847/api`，在 3847 主服务上复用旧 dev API 的轻量协议语义，不再提供 8000 listener，也不再显示快速启动开关。需要同步 Codex App 前端模型列表时，用户从 Codex 接入页主动选择“增强模式启动 Codex App”。
@@ -228,7 +230,7 @@ dynamic config / layer config 推荐使用间接引用:
 | `3657624089` | `OwlPermissions` | 保留官方值 |
 | `3245360288` | `OwlPrinting` | 保留官方值 |
 | `3646210497` | `OwlOpenAIGoLinks` | 保留官方值 |
-| `1186680773` | 模型列表和动态工具中的 Ultra reasoning effort | 当前不属于核心兼容目标，保留官方值 |
+| `1186680773` | 模型列表和动态工具中的 Ultra reasoning effort | 全局仍保留官方值；2026-10-18 仅本 Hub 受管本机模型查询做定向例外，不覆盖动态工具等其他调用 |
 | `1042620455` | remote-control / slingshot 入口 | CodexHub 强制 true |
 | `4114442250` | `features.remote_connections` fallback 和侧栏远程连接状态 | CodexHub 强制 true |
 | `824038554` | 旧版远控、移动端或 browser-use 相关 UI；当前 `26.721.4979.0` 已无引用 | 清理 CodexHub 旧值，保留官方值 |

@@ -1,8 +1,10 @@
 # Codex App 模型选择器 CDP 诊断
 
-日期：2026-07-16
+首次记录：2026-07-16；现行增强启动说明更新：2026-10-18。
 
 状态：调研工具，不进入 CodexHub 正式运行链路。
+
+上面的“调研工具”仅指本文的只读诊断脚本；增强启动属于正式功能。2026-10-18 在原链路内新增本 Hub 受管本机 Provider 的模型控制脚本响应适配，处理 ULTRA/Fast 显示；不改全局账号态或安装文件，不在 Hub 显示专门选项提示。当前行为、配置及回退见 [模型控制选项](dynamic-codex-models.zh-CN.md#初始化开启-maxultra-与-fast-选项)，源码、必要编译和 Windows/macOS 待用户验收见 [本轮交付](releases/v0.4.30-5.md#2026-10-18-ultra与fast显示兼容修复)。本文历史实机结果保持原版本范围。
 
 ## 目标
 
@@ -298,7 +300,7 @@ Codex App 也可能直接进入 pre-login Statsig 路径，此时不会发出 `/
 
 运行时有三条独立适配路径：`statsig-store` 使用现有 Store 增量更新，`statsig-public-api` 包装
 `getDynamicConfig/getLayer/checkGate`，`fast-initialize` 负责完整缓存快速初始化。私有 Store 改名时，
-公开 API 路径仍可工作；三条路径都不可用时增强启动报告兼容失败，而不是修改或刷新页面。
+公开 API 路径仍可工作；三条 Statsig 路径都不可用时增强启动报告兼容失败，不靠刷新重试这些路径。2026-10-18 新增的模型脚本适配有独立的首次 load 后单次刷新边界，见下一节。
 
 该做法没有伪造 `/v1/initialize` 响应，也没有修改 ASAR、LevelDB 或系统代理。启动日志中的
 `fast_initialize_applied=true` 和 `fast_initialize_source` 用于确认是否命中；命中缓存时可把首屏
@@ -313,18 +315,18 @@ Codex 接入页提供“增强模式启动 Codex”按钮。按钮只在 Codex �
 1. 用户主动选择增强模式启动后，CodexHub 设置 `CODEX_API_BASE_URL=<本地 backend-api>`；
 2. Windows 通过隐藏进程激活 Store/MSIX App，macOS 通过 `open --args` 启动；
 3. CDP 只监听 `127.0.0.1:9335`；
-4. 页面目标出现后，CodexHub 先在当前 renderer 立即执行脚本，再注册 `Page.addScriptToEvaluateOnNewDocument`；目标探测间隔为 50ms，且当前文档注入不等待 `Page.enable`，尽量保证 hook 早于 React root render；不主动刷新页面，后续若发生应用自身的自然导航，新文档仍会自动注入；
+4. 启动时优先 browser CDP 早挂载，注册新文档脚本后释放等待的 renderer；已有 target 则立即执行并注册 `Page.addScriptToEvaluateOnNewDocument`，页面探测间隔为 50ms。受管本机 Provider 且 Fast 配置开启时，同时拦截已知模型脚本响应，核对结构后仅在内存适配；只在新启动错过早挂载的首个 app 文档 load 完成后按需刷新一次，已运行窗口不刷新，后续自然导航继续自动注入；
 5. 注入脚本在 post-login 路径只对完整官方 Statsig 缓存响应启动期 `/wham/statsig/bootstrap`，并修补
    Statsig 缓存；pre-login 路径同样只使用完整官方缓存；没有完整缓存时保留官方初始化路径；
 6. SDK 就绪后优先通过 Store 合并；Store 不可用时使用公开 API overlay，官方其他配置保持原样；
 7. daemon 在启动期间用短生命周期检查发现 renderer 是否被替换，并持有最终 CDP WebSocket，使新文档注入注册在本次 renderer 生命周期内保持有效；再次增强启动会替换旧 session，不创建持久后台轮询；
-8. daemon 以模型、语言、关键 gate、完整官方底座和至少一个兼容 adapter 均生效作为完成条件，最多等待 45 秒；GUI 请求保留 60 秒，避免客户端先超时；`app routes mounted` 和 bootstrap 是否被拦截仅作为诊断信息。
+8. daemon 以模型、语言、关键 gate、完整官方底座和至少一个兼容 adapter 均生效作为完成条件；启用模型控制适配时还核对 Fast UI、Fast request、Ultra models 三个实际加载标记，最多等待 45 秒。未知脚本/正文失败放行原响应，挂起超时 10 秒释放，不能仅据配置写入或请求已发送报告显示成功。GUI 请求保留 60 秒，`app routes mounted` 和 bootstrap 是否被拦截仅作为诊断信息。
 
 按钮位于原“快速启动”复选框位置。Codex App 未运行时，点击按钮会直接使用增强模式启动，不要求用户额外确认。只有检测到 Codex App 正在运行时才显示关闭提示并禁用启动按钮；用户完全退出后，短生命周期检测 timer 会自动启用按钮。弹窗关闭后 timer 立即销毁，不形成后台轮询。用户界面不展示 CDP、端口或网络请求等实现细节。
 
 普通启动、VS Code 插件和 CLI 不经过这条 CDP 链路。增强状态只在本次 Codex App 进程期间存在，完全退出后 9335 端口和内存注入同时消失，不修改 ASAR、LevelDB 或快捷方式。
 
-实机回归结果：12 个模型全部进入 Statsig 和真实菜单，模型与 i18n ID 均由 `schema` 自动发现，
+历史实机回归结果（对应当时版本，不覆盖 2026-10-18 模型控制适配）：12 个模型全部进入 Statsig 和真实菜单，模型与 i18n ID 均由 `schema` 自动发现，
 `use_hidden_models=false`，当前 5 个兼容 gate 全部启用，三个 adapter 均被识别，
 `compatibilityFailure=null`；`codex-primary-runtime` layer 和其他官方字段保持不变。
 
@@ -342,10 +344,12 @@ Desktop bootstrap failed to start the main app
 `ERR_FAILED (-2) loading data:text/html...`。这不是模型接口、账号或上游网络错误，而是增强模式
 主动刷新与 Electron 首次导航发生竞态。
 
-修复后的增强模式不再调用 `Page.reload`：脚本先注册给未来文档，再通过 `Runtime.evaluate` 在当前
+当时修复后的增强模式不再调用 `Page.reload`：脚本先注册给未来文档，再通过 `Runtime.evaluate` 在当前
 页面立即执行。启动期间如果 renderer target 被 Codex 替换，启动器会重新连接新 target；同一 renderer
 在内部重试窗口结束后才会再次执行脚本。若 45 秒后仍未生效，接口会报告增强配置失败，但不会为了重试
 而刷新或破坏已经启动的 Codex App，用户仍可按普通模式继续使用。
+
+2026-10-18 的新增边界：模型脚本必须在模块执行前适配，错过早挂载时只给新启动的首个窗口安排 load 完成后 250ms 的一次性检查；仅 app 文档且三个标记未齐才 `location.reload()`，不在主进程首次 loadURL 尚未完成时刷新，也不对已运行用户窗口或后续导航循环刷新。此竞态保护已静态审阅，当前 Windows/macOS 实机效果仍待用户验收，不能用上面的历史回归代替。
 
 ### Codex App 26.715.4045 超长历史恢复崩溃
 

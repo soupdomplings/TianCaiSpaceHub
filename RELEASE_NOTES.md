@@ -1,4 +1,14 @@
-TianCaiSpaceHub v0.4.30-5 Codex 模型选项初始化（2026-10-18）
+TianCaiSpaceHub v0.4.30-5 Codex 配置兼容与提示简化（2026-10-18）
+
+修复初始化后只显示 MAX 的兼容问题：增强启动为本 Hub 受管本机 Provider 定向适配 ULTRA 模型过滤、Fast 界面及请求判断，保留真实模型能力、requirements、默认模型、思考强度和速度。沿用原配置备份与恢复，不新增配置字段，不改全局账号态或 Codex 安装文件。
+
+Hub 中英文配置页、帮助、悬浮说明和配置更新成功弹窗仅使用普通接入提示。配置后请完全退出 Codex，再从 Hub 增强启动。Windows 必要编译与安装源码静态核对通过；源码和两平台 Actions 状态见 [本轮交付](docs/releases/v0.4.30-5.md#2026-10-18-ultra与fast显示兼容修复)，实际显示、请求和 Windows/macOS 实机待用户验收。版本仍 `0.4.30-5`、唯一 `main`，不移动旧标签或覆盖 Release；完整配置、边界与回退见 [模型控制选项](docs/dynamic-codex-models.zh-CN.md#初始化开启-maxultra-与-fast-选项)。
+
+---
+
+TianCaiSpaceHub v0.4.30-5 Codex 模型选项初始化（2026-10-18，前轮）
+
+前轮只写配置的版本已收到“只显示 MAX”反馈；ULTRA/Fast 未通过验收，专门的配置提示已由本轮移除。下方保持当时交付身份。
 
 点击“初始化／更新 Codex 配置”自动补齐 MAX、ULTRA 并开启 Fast 选择开关，保留已有推理列表、默认模型、思考强度和速度。配置缺项可直接更新；成功后完全退出并重新打开 Codex App，实际选项仍要求模型支持。
 

@@ -14,6 +14,8 @@ use url::{Host, Url};
 
 use crate::chain_log;
 
+mod model_controls;
+
 const DEFAULT_CDP_PORT: u16 = 9335;
 const CODEX_APP_READY_TIMEOUT: Duration = Duration::from_secs(30);
 const EARLY_ATTACH_TIMEOUT: Duration = Duration::from_secs(8);
@@ -23,7 +25,7 @@ const ENHANCED_INJECTION_TIMEOUT: Duration = Duration::from_secs(45);
 // after that window so a cold renderer does not accumulate retry timers.
 const ENHANCED_SCRIPT_RETRY_INTERVAL: Duration = Duration::from_secs(43);
 const ENHANCED_STATUS_POLL_INTERVAL: Duration = Duration::from_millis(250);
-const ENHANCED_SCRIPT_VERSION: u64 = 21;
+const ENHANCED_SCRIPT_VERSION: u64 = 22;
 type CdpSocket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 
 #[derive(Default)]
@@ -100,6 +102,8 @@ pub struct EnhancedLaunchReport {
     pub plugin_catalog_cache_refreshed: bool,
     pub plugin_catalog_cache_refresh_error: Option<String>,
     pub startup_elapsed_ms: u64,
+    pub model_controls_enabled: bool,
+    pub model_controls_ready: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -158,6 +162,8 @@ struct EarlyBrowserSession {
     target_id: String,
     applied: bool,
     elapsed_ms: u64,
+    model_controls: model_controls::Interceptor,
+    adapt_model_controls: bool,
 }
 
 #[derive(Default)]
@@ -188,7 +194,8 @@ pub async fn launch_and_inject(
         .no_proxy()
         .timeout(Duration::from_secs(2))
         .build()?;
-    let source = enhanced_statsig_script(&models, backend_url)?;
+    let adapt_model_controls = crate::codex_app_config::model_controls_runtime_enabled(backend_url);
+    let source = enhanced_statsig_script(&models, backend_url, adapt_model_controls)?;
     let mut launched = false;
     let mut early_attach = EarlyAttachDiagnostics::default();
     let app_running = tokio::task::spawn_blocking(codex_app_is_running)
@@ -222,7 +229,14 @@ pub async fn launch_and_inject(
             ));
             early_attach.fallback = Some(fallback);
         } else {
-            match attach_to_initial_renderer(&client, DEFAULT_CDP_PORT, &source).await {
+            match attach_to_initial_renderer(
+                &client,
+                DEFAULT_CDP_PORT,
+                &source,
+                adapt_model_controls,
+            )
+            .await
+            {
                 Ok(session) => {
                     early_attach.applied = session.applied;
                     early_attach.target_id = Some(session.target_id.clone());
@@ -351,6 +365,8 @@ pub async fn launch_and_inject(
         plugin_catalog_cache_refreshed: status.plugin_catalog_cache_refreshed,
         plugin_catalog_cache_refresh_error: status.plugin_catalog_cache_refresh_error,
         startup_elapsed_ms,
+        model_controls_enabled: status.model_controls_enabled,
+        model_controls_ready: status.model_controls_ready,
     })
 }
 
@@ -437,6 +453,7 @@ async fn attach_to_initial_renderer(
     client: &reqwest::Client,
     port: u16,
     source: &str,
+    adapt_model_controls: bool,
 ) -> Result<EarlyBrowserSession> {
     let started = Instant::now();
     let deadline = tokio::time::Instant::now() + EARLY_ATTACH_TIMEOUT;
@@ -467,6 +484,7 @@ async fn attach_to_initial_renderer(
     .await?;
     let mut auto_attach_enabled = false;
     let mut renderer = None::<AttachedTarget>;
+    let mut model_controls = model_controls::Interceptor::default();
 
     loop {
         let now = tokio::time::Instant::now();
@@ -482,6 +500,9 @@ async fn attach_to_initial_renderer(
             Message::Ping(payload) => socket.send(Message::Pong(payload)).await?,
             Message::Text(text) => {
                 let message: Value = serde_json::from_str(&text)?;
+                model_controls
+                    .handle(&mut socket, &mut command_id, &message)
+                    .await?;
                 if message.get("id").and_then(Value::as_u64) == Some(enable_id) {
                     if let Some(error) = message.get("error") {
                         bail!("CDP Target.setAutoAttach 失败: {error}");
@@ -490,9 +511,31 @@ async fn attach_to_initial_renderer(
                 }
                 if let Some(target) = attached_target_from_event(&message) {
                     let is_renderer = is_codex_renderer_target(&target);
-                    install_on_attached_target(&mut socket, &mut command_id, &target, source)
-                        .await?;
+                    install_on_attached_target(
+                        &mut socket,
+                        &mut command_id,
+                        &target,
+                        source,
+                        adapt_model_controls,
+                    )
+                    .await?;
                     if is_renderer && renderer.is_none() {
+                        // Only a freshly launched renderer may be reloaded. An
+                        // already running user's window is never refreshed here.
+                        if adapt_model_controls && !target.waiting_for_debugger {
+                            send_cdp_request(
+                                &mut socket,
+                                &mut command_id,
+                                Some(&target.session_id),
+                                "Runtime.evaluate",
+                                json!({"expression": model_controls::startup_reload_guard(), "returnByValue": true}),
+                            )
+                            .await?;
+                            chain_log::write_line(
+                                "[codex_app_enhanced] event=model_controls_startup_reload_guard_installed"
+                                    .to_string(),
+                            );
+                        }
                         renderer = Some(target);
                     }
                 }
@@ -512,6 +555,8 @@ async fn attach_to_initial_renderer(
                 target_id: target.target_id,
                 applied: target.waiting_for_debugger,
                 elapsed_ms: started.elapsed().as_millis() as u64,
+                model_controls,
+                adapt_model_controls,
             });
         }
     }
@@ -546,14 +591,18 @@ fn is_codex_renderer_target(target: &AttachedTarget) -> bool {
             || target.url == "about:blank")
 }
 
-fn attached_target_commands(target: &AttachedTarget, source: &str) -> Vec<(&'static str, Value)> {
+fn attached_target_commands(
+    target: &AttachedTarget,
+    source: &str,
+    adapt_model_controls: bool,
+) -> Vec<(&'static str, Value)> {
     if !is_codex_renderer_target(target) {
         return target
             .waiting_for_debugger
             .then(|| vec![("Runtime.runIfWaitingForDebugger", json!({}))])
             .unwrap_or_default();
     }
-    if target.waiting_for_debugger {
+    let mut commands = if target.waiting_for_debugger {
         vec![
             (
                 "Page.addScriptToEvaluateOnNewDocument",
@@ -572,7 +621,11 @@ fn attached_target_commands(target: &AttachedTarget, source: &str) -> Vec<(&'sta
                 json!({ "source": source }),
             ),
         ]
+    };
+    if adapt_model_controls {
+        commands.insert(0, ("Fetch.enable", model_controls::fetch_options()));
     }
+    commands
 }
 
 async fn install_on_attached_target(
@@ -580,8 +633,9 @@ async fn install_on_attached_target(
     command_id: &mut u64,
     target: &AttachedTarget,
     source: &str,
+    adapt_model_controls: bool,
 ) -> Result<()> {
-    for (method, params) in attached_target_commands(target, source) {
+    for (method, params) in attached_target_commands(target, source, adapt_model_controls) {
         send_cdp_request(socket, command_id, Some(&target.session_id), method, params).await?;
     }
     if is_codex_renderer_target(target) {
@@ -759,7 +813,22 @@ fn retain_browser_cdp_session(session: EarlyBrowserSession, source: String) {
     let handle = tokio::spawn(async move {
         let mut socket = session.socket;
         let mut command_id = session.command_id;
-        while let Some(message) = socket.next().await {
+        let mut model_controls = session.model_controls;
+        let mut release_tick = tokio::time::interval(Duration::from_secs(1));
+        release_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            let message = tokio::select! {
+                message = socket.next() => message,
+                _ = release_tick.tick() => {
+                    if model_controls.release_expired(&mut socket, &mut command_id).await.is_err() {
+                        break;
+                    }
+                    continue;
+                }
+            };
+            let Some(message) = message else {
+                break;
+            };
             match message {
                 Ok(Message::Ping(payload)) => {
                     if socket.send(Message::Pong(payload)).await.is_err() {
@@ -770,12 +839,22 @@ fn retain_browser_cdp_session(session: EarlyBrowserSession, source: String) {
                     let Ok(message) = serde_json::from_str::<Value>(&text) else {
                         continue;
                     };
+                    if let Err(err) = model_controls
+                        .handle(&mut socket, &mut command_id, &message)
+                        .await
+                    {
+                        chain_log::write_line(format!(
+                            "[codex_app_enhanced] event=model_controls_interception_failed error={err}"
+                        ));
+                        break;
+                    }
                     if let Some(target) = attached_target_from_event(&message)
                         && let Err(err) = install_on_attached_target(
                             &mut socket,
                             &mut command_id,
                             &target,
                             &source,
+                            session.adapt_model_controls,
                         )
                         .await
                     {
@@ -879,6 +958,10 @@ struct InjectedStatus {
     plugin_catalog_cache_refresh_attempted: bool,
     plugin_catalog_cache_refreshed: bool,
     plugin_catalog_cache_refresh_error: Option<String>,
+    #[serde(default)]
+    model_controls_enabled: bool,
+    #[serde(default)]
+    model_controls_ready: bool,
 }
 
 async fn inject_until_ready(
@@ -962,7 +1045,12 @@ async fn inject_until_ready(
             let detail = (!details.is_empty())
                 .then(|| format!("（{}）", details.join("；")))
                 .unwrap_or_default();
-            bail!("Codex App 已启动，但增强配置（模型列表/语言）未在 45 秒内生效{detail}");
+            chain_log::write_line(format!(
+                "[codex_app_enhanced] event=startup_incomplete detail={detail}"
+            ));
+            bail!(
+                "Codex App 已启动，但模型选项或语言设置未同步完成。请完全退出 Codex 后再从 Hub 增强启动；若仍失败，请反馈此提示。"
+            );
         }
         tokio::time::sleep(ENHANCED_STATUS_POLL_INTERVAL).await;
     }
@@ -988,13 +1076,14 @@ fn injected_status_is_ready(status: &InjectedStatus, expected_models: &[String])
         && (status.official_base_available || status.local_base_available)
         && status.model_config_supported
         && status.i18n_layer_supported
+        && (!status.model_controls_enabled || status.model_controls_ready)
         && status.plugin_catalog_bridge_installed
         && status.plugin_catalog_dispatch_patched
         && !status.compatibility_adapters.is_empty()
 }
 
 fn injected_status_detail(status: &InjectedStatus) -> String {
-    format!(
+    let detail = format!(
         "script={} attempts={} store={} official_base={} local_base={} local_initialize={}:{} local_initialize_error={} model={}:{} i18n={}:{} gates={}/{} plugin_bridge={} plugin_dispatch={} plugin_responses={} plugin_cache={}:{} plugin_cache_error={} adapters={} failure={}",
         status
             .script_version
@@ -1024,6 +1113,10 @@ fn injected_status_detail(status: &InjectedStatus) -> String {
             .unwrap_or("none"),
         status.compatibility_adapters.join(","),
         status.compatibility_failure.as_deref().unwrap_or("none")
+    );
+    format!(
+        "{detail} modelControls={}:{}",
+        status.model_controls_enabled, status.model_controls_ready
     )
 }
 
@@ -1044,10 +1137,16 @@ async fn inspect_injected_status_on_socket(active: &mut ActiveInjection) -> Resu
            const config = client?.getDynamicConfig?.(modelConfigId)?.value;
            const i18n = client?.getLayer?.(i18nLayerId);
            const gates = {gates};
+           const modelControls = window.__CODEXHUB_MODEL_CONTROLS_SOURCE__;
            return {{
              scriptInstalled: Boolean(enhanced?.installed),
              scriptApplied: Boolean(enhanced?.applied),
              scriptVersion: enhanced?.version ?? null,
+            modelControlsEnabled: enhanced?.modelControlsEnabled === true,
+            modelControlsReady: modelControls?.version === 1
+              && modelControls.fastUi === true
+              && modelControls.fastRequest === true
+              && modelControls.ultraModels === true,
              ready: Boolean(Array.isArray(config?.available_models)),
             availableModels: config?.available_models ?? [],
             useHiddenModels: config?.use_hidden_models ?? true,
@@ -1109,7 +1208,11 @@ async fn inspect_injected_status_on_socket(active: &mut ActiveInjection) -> Resu
     Ok(serde_json::from_value(value)?)
 }
 
-fn enhanced_statsig_script(models: &[String], backend_url: &str) -> Result<String> {
+fn enhanced_statsig_script(
+    models: &[String],
+    backend_url: &str,
+    adapt_model_controls: bool,
+) -> Result<String> {
     let models = serde_json::to_string(models)?;
     let gates = serde_json::to_string(SUPPORTED_FEATURE_GATES)?;
     let legacy_gates = serde_json::to_string(LEGACY_CODEXHUB_FEATURE_GATES)?;
@@ -1124,12 +1227,14 @@ fn enhanced_statsig_script(models: &[String], backend_url: &str) -> Result<Strin
         r#"(() => {{
   const MARKER = "__CODEXHUB_ENHANCED_MODE__";
   const SCRIPT_VERSION = {script_version};
+  const MODEL_CONTROLS_ENABLED = {adapt_model_controls};
   const MODELS = {models};
   const SUPPORTED_GATES = {gates};
   const LEGACY_CODEXHUB_GATES = {legacy_gates};
   const LOCAL_STATSIG_INITIALIZE_URL = {local_initialize_url};
   const existing = window[MARKER];
   if (existing?.installed && existing.version === SCRIPT_VERSION) {{
+      existing.modelControlsEnabled = MODEL_CONTROLS_ENABLED;
       existing.update?.(MODELS);
       existing.installPluginCatalogDispatchPatch?.();
       existing.refreshPluginCatalogCache?.();
@@ -1143,6 +1248,7 @@ fn enhanced_statsig_script(models: &[String], backend_url: &str) -> Result<Strin
   const state = {{
     installed: true,
     version: SCRIPT_VERSION,
+    modelControlsEnabled: MODEL_CONTROLS_ENABLED,
     applied: false,
     attempts: 0,
     client: null,
@@ -2901,6 +3007,7 @@ mod tests {
         let script = enhanced_statsig_script(
             &["gpt-5.6-sol".into(), "grok-4.6".into()],
             "http://127.0.0.1:3847/api",
+            false,
         )
         .expect("script");
         assert!(script.contains("gpt-5.6-sol"));
@@ -2916,7 +3023,7 @@ mod tests {
         assert!(script.contains("const modelIsV2"));
         assert!(script.contains("installStorePatch"));
         assert!(script.contains("patchCachedI18nLayer"));
-        assert!(script.contains("SCRIPT_VERSION = 21"));
+        assert!(script.contains("SCRIPT_VERSION = 22"));
         assert!(script.contains("state.pluginCatalogCacheRefreshAttempts < 240"));
         assert!(script.contains("state.pluginCatalogCacheRefreshAttempts < 80 ? 25 : 250"));
         assert!(script.contains("PLUGIN_DIRECTORY_LINK_ID"));
@@ -3040,7 +3147,7 @@ mod tests {
             url: "app://-/index.html".into(),
             waiting_for_debugger: true,
         };
-        let commands = attached_target_commands(&target, "window.testEnhanced = true;");
+        let commands = attached_target_commands(&target, "window.testEnhanced = true;", false);
         let methods = commands
             .iter()
             .map(|(method, _)| *method)
@@ -3067,7 +3174,7 @@ mod tests {
             url: "blob:worker".into(),
             waiting_for_debugger: true,
         };
-        let commands = attached_target_commands(&target, "window.testEnhanced = true;");
+        let commands = attached_target_commands(&target, "window.testEnhanced = true;", false);
 
         assert_eq!(commands.len(), 1);
         assert_eq!(commands[0].0, "Runtime.runIfWaitingForDebugger");
@@ -3082,7 +3189,7 @@ mod tests {
             url: "app://-/index.html".into(),
             waiting_for_debugger: false,
         };
-        let methods = attached_target_commands(&target, "window.testEnhanced = true;")
+        let methods = attached_target_commands(&target, "window.testEnhanced = true;", false)
             .into_iter()
             .map(|(method, _)| method)
             .collect::<Vec<_>>();
@@ -3256,6 +3363,8 @@ mod tests {
             plugin_catalog_cache_refresh_attempted: true,
             plugin_catalog_cache_refreshed: true,
             plugin_catalog_cache_refresh_error: None,
+            model_controls_enabled: false,
+            model_controls_ready: false,
         };
 
         assert!(injected_status_is_ready(&status, &expected_models));
@@ -3322,6 +3431,8 @@ mod tests {
             plugin_catalog_cache_refresh_attempted: false,
             plugin_catalog_cache_refreshed: false,
             plugin_catalog_cache_refresh_error: None,
+            model_controls_enabled: false,
+            model_controls_ready: false,
         };
 
         assert!(!should_reapply_script(&status, Duration::from_secs(2)));
