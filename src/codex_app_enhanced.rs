@@ -179,6 +179,7 @@ struct EarlyBrowserSession {
     model_controls: model_controls::Interceptor,
     adapt_model_controls: bool,
     failure: BrowserSessionFailure,
+    attached_sessions: HashSet<String>,
 }
 
 #[derive(Default)]
@@ -287,6 +288,41 @@ pub async fn launch_and_inject(
         early_attach.applied
     ));
 
+    let injection_deadline = tokio::time::Instant::now() + ENHANCED_INJECTION_TIMEOUT;
+    // The page-only fallback installs the enhanced script, but cannot serve
+    // Fetch events. Explicitly attach the browser session if early auto-attach
+    // missed this renderer (including an already running app).
+    if adapt_model_controls && early_attach.target_id.as_deref() != Some(target.id.as_str()) {
+        stop_retained_browser_cdp_session().await;
+        *browser_failure
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+        let session = tokio::time::timeout(
+            EARLY_ATTACH_TIMEOUT,
+            attach_to_existing_renderer(
+                &client,
+                DEFAULT_CDP_PORT,
+                &target,
+                &source,
+                launched,
+                browser_failure.clone(),
+            ),
+        )
+        .await
+        .context("补装 Codex 桌面配置适配超时，请保留此提示并反馈")?
+        .map_err(|err| {
+            chain_log::write_line(format!(
+                "[codex_app_enhanced] event=browser_fallback_failed error={err:#}"
+            ));
+            anyhow!("补装 Codex 桌面配置适配失败，请保留此提示并反馈")
+        })?;
+        chain_log::write_line(format!(
+            "[codex_app_enhanced] event=browser_fallback_ready elapsed_ms={} startup_reload_allowed={}",
+            session.elapsed_ms, launched
+        ));
+        retain_browser_cdp_session(session, source.clone());
+    }
+
     let (target, status) = inject_until_ready(
         &client,
         DEFAULT_CDP_PORT,
@@ -294,6 +330,7 @@ pub async fn launch_and_inject(
         &models,
         &source,
         &browser_failure,
+        injection_deadline,
     )
     .await?;
     chain_log::write_line(format!(
@@ -511,6 +548,7 @@ async fn attach_to_initial_renderer(
     let mut auto_attach_enabled = false;
     let mut renderer = None::<AttachedTarget>;
     let mut model_controls = model_controls::Interceptor::default();
+    let mut attached_sessions = HashSet::new();
 
     loop {
         let now = tokio::time::Instant::now();
@@ -535,7 +573,9 @@ async fn attach_to_initial_renderer(
                     }
                     auto_attach_enabled = true;
                 }
-                if let Some(target) = attached_target_from_event(&message) {
+                if let Some(target) = attached_target_from_event(&message)
+                    && attached_sessions.insert(target.session_id.clone())
+                {
                     let is_renderer = is_codex_renderer_target(&target);
                     install_on_attached_target(
                         &mut socket,
@@ -584,7 +624,114 @@ async fn attach_to_initial_renderer(
                 model_controls,
                 adapt_model_controls,
                 failure,
+                attached_sessions,
             });
+        }
+    }
+}
+
+async fn attach_to_existing_renderer(
+    client: &reqwest::Client,
+    port: u16,
+    target: &CdpTarget,
+    source: &str,
+    allow_startup_reload: bool,
+    failure: BrowserSessionFailure,
+) -> Result<EarlyBrowserSession> {
+    let started = Instant::now();
+    let websocket_url = find_browser_websocket_url(client, port)
+        .await?
+        .context("Codex browser CDP 未开放，无法补装桌面配置适配")?;
+    let (mut socket, _) =
+        connect_async_with_config(websocket_url, Some(cdp_socket_config()), false)
+            .await
+            .context("连接 Codex browser CDP 失败")?;
+    let mut command_id = 1;
+    // Attach to the page we actually found. Do not wait for another automatic
+    // event or create a second auto-attach session for the same renderer.
+    let result = cdp_command(
+        &mut socket,
+        &mut command_id,
+        "Target.attachToTarget",
+        json!({"targetId": target.id, "flatten": true}),
+    )
+    .await?;
+    let attached = AttachedTarget {
+        session_id: result["sessionId"]
+            .as_str()
+            .filter(|id| !id.is_empty())
+            .context("Codex browser CDP 未返回窗口会话")?
+            .to_owned(),
+        target_id: target.id.clone(),
+        target_type: target.target_type.clone(),
+        url: target.url.clone(),
+        waiting_for_debugger: false,
+    };
+    let mut pending =
+        install_on_attached_target(&mut socket, &mut command_id, &attached, source, true).await?;
+    let mut model_controls = model_controls::Interceptor::default();
+    let mut reload_guard_sent = !allow_startup_reload;
+    let mut release_tick = tokio::time::interval(Duration::from_secs(1));
+    release_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        if pending.is_empty() {
+            if reload_guard_sent {
+                return Ok(EarlyBrowserSession {
+                    socket,
+                    command_id,
+                    target_id: target.id.clone(),
+                    applied: false,
+                    elapsed_ms: started.elapsed().as_millis() as u64,
+                    model_controls,
+                    adapt_model_controls: true,
+                    failure,
+                    attached_sessions: HashSet::from([attached.session_id.clone()]),
+                });
+            }
+            // Fetch and the new-document script must both be acknowledged
+            // before a fresh window can schedule its single load-safe reload.
+            let id = send_cdp_request(
+                &mut socket,
+                &mut command_id,
+                Some(&attached.session_id),
+                "Runtime.evaluate",
+                json!({"expression": model_controls::startup_reload_guard(), "returnByValue": true}),
+            )
+            .await?;
+            pending.push((id, "Runtime.evaluate"));
+            reload_guard_sent = true;
+        }
+        let message = tokio::select! {
+            message = socket.next() => message,
+            _ = release_tick.tick() => {
+                model_controls.release_expired(&mut socket, &mut command_id).await?;
+                continue;
+            }
+        }
+        .context("Codex browser CDP 在补装适配时关闭")??;
+        match message {
+            Message::Ping(payload) => socket.send(Message::Pong(payload)).await?,
+            Message::Text(text) => {
+                let message: Value = serde_json::from_str(&text)?;
+                // Service paused scripts even while waiting for install acks.
+                model_controls
+                    .handle(&mut socket, &mut command_id, &message)
+                    .await?;
+                if let Some(index) = pending
+                    .iter()
+                    .position(|(id, _)| message["id"].as_u64() == Some(*id))
+                {
+                    let (_, method) = pending.remove(index);
+                    if let Some(error) = message.get("error") {
+                        bail!("CDP {method} 失败: {error}");
+                    }
+                    if method == "Runtime.evaluate" {
+                        ensure_runtime_evaluation_succeeded(&message["result"])?;
+                    }
+                }
+            }
+            Message::Close(_) => bail!("Codex browser CDP 在补装适配时关闭"),
+            _ => {}
         }
     }
 }
@@ -666,9 +813,12 @@ async fn install_on_attached_target(
     target: &AttachedTarget,
     source: &str,
     adapt_model_controls: bool,
-) -> Result<()> {
+) -> Result<Vec<(u64, &'static str)>> {
+    let mut pending = Vec::new();
     for (method, params) in attached_target_commands(target, source, adapt_model_controls) {
-        send_cdp_request(socket, command_id, Some(&target.session_id), method, params).await?;
+        let id =
+            send_cdp_request(socket, command_id, Some(&target.session_id), method, params).await?;
+        pending.push((id, method));
     }
     if is_codex_renderer_target(target) {
         chain_log::write_line(format!(
@@ -676,7 +826,7 @@ async fn install_on_attached_target(
             target.target_id, target.url, target.waiting_for_debugger
         ));
     }
-    Ok(())
+    Ok(pending)
 }
 
 async fn send_cdp_request(
@@ -848,6 +998,7 @@ fn retain_browser_cdp_session(session: EarlyBrowserSession, source: String) {
         let mut command_id = session.command_id;
         let mut model_controls = session.model_controls;
         let failure = session.failure;
+        let mut attached_sessions = session.attached_sessions;
         let mut release_tick = tokio::time::interval(Duration::from_secs(1));
         release_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
@@ -887,6 +1038,7 @@ fn retain_browser_cdp_session(session: EarlyBrowserSession, source: String) {
                         break;
                     }
                     if let Some(target) = attached_target_from_event(&message)
+                        && attached_sessions.insert(target.session_id.clone())
                         && let Err(err) = install_on_attached_target(
                             &mut socket,
                             &mut command_id,
@@ -936,6 +1088,22 @@ fn retain_browser_cdp_session(session: EarlyBrowserSession, source: String) {
     }
 }
 
+async fn stop_retained_browser_cdp_session() {
+    let previous = {
+        let sessions =
+            ENHANCED_CDP_SESSIONS.get_or_init(|| Mutex::new(RetainedCdpSessions::default()));
+        sessions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .browser
+            .take()
+    };
+    if let Some(previous) = previous {
+        previous.abort();
+        let _ = previous.await;
+    }
+}
+
 fn record_browser_session_failure(failure: &BrowserSessionFailure, reason: &'static str) {
     *failure
         .lock()
@@ -978,6 +1146,15 @@ where
         return Ok(response.get("result").cloned().unwrap_or(Value::Null));
     }
     bail!("Codex App 在响应 CDP {method} 前关闭了连接")
+}
+
+#[derive(Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelControlsSourceStatus {
+    fast_ui: bool,
+    fast_request: bool,
+    ultra_models: bool,
+    settings_sections: bool,
 }
 
 #[derive(serde::Deserialize)]
@@ -1023,6 +1200,8 @@ struct InjectedStatus {
     model_controls_enabled: bool,
     #[serde(default)]
     model_controls_ready: bool,
+    #[serde(default)]
+    model_controls_source: ModelControlsSourceStatus,
 }
 
 async fn inject_until_ready(
@@ -1032,8 +1211,8 @@ async fn inject_until_ready(
     expected_models: &[String],
     source: &str,
     browser_failure: &BrowserSessionFailure,
+    deadline: tokio::time::Instant,
 ) -> Result<(CdpTarget, InjectedStatus)> {
-    let deadline = tokio::time::Instant::now() + ENHANCED_INJECTION_TIMEOUT;
     let mut initial_target = Some(initial_target);
     let mut active: Option<ActiveInjection> = None;
     let mut last_error = None::<String>;
@@ -1121,7 +1300,7 @@ async fn inject_until_ready(
                 .then(|| format!("（{}）", details.join("；")))
                 .unwrap_or_default();
             chain_log::write_line(format!(
-                "[codex_app_enhanced] event=startup_incomplete detail={detail}"
+                "[codex_app_enhanced] level=warn event=startup_incomplete detail={detail}"
             ));
             bail!(
                 "Codex 已打开，但配置同步尚未完成。未完成：{missing}。请保留此提示并反馈，便于检查客户端兼容性。"
@@ -1224,8 +1403,13 @@ fn injected_status_detail(status: &InjectedStatus) -> String {
         status.compatibility_failure.as_deref().unwrap_or("none")
     );
     format!(
-        "{detail} modelControls={}:{}",
-        status.model_controls_enabled, status.model_controls_ready
+        "{detail} modelControls={}:{} fastUi={} fastRequest={} ultraModels={} settingsSections={}",
+        status.model_controls_enabled,
+        status.model_controls_ready,
+        status.model_controls_source.fast_ui,
+        status.model_controls_source.fast_request,
+        status.model_controls_source.ultra_models,
+        status.model_controls_source.settings_sections,
     )
 }
 
@@ -1256,6 +1440,12 @@ async fn inspect_injected_status_on_socket(active: &mut ActiveInjection) -> Resu
               && modelControls.fastUi === true
               && modelControls.fastRequest === true
               && modelControls.ultraModels === true,
+            modelControlsSource: {{
+              fastUi: modelControls?.fastUi === true,
+              fastRequest: modelControls?.fastRequest === true,
+              ultraModels: modelControls?.ultraModels === true,
+              settingsSections: modelControls?.settingsSections === true,
+            }},
              ready: Boolean(Array.isArray(config?.available_models)),
             availableModels: config?.available_models ?? [],
             useHiddenModels: config?.use_hidden_models ?? true,
@@ -3474,6 +3664,7 @@ mod tests {
             plugin_catalog_cache_refresh_error: None,
             model_controls_enabled: false,
             model_controls_ready: false,
+            model_controls_source: ModelControlsSourceStatus::default(),
         };
 
         assert!(injected_status_is_ready(&status, &expected_models));
@@ -3555,6 +3746,7 @@ mod tests {
             plugin_catalog_cache_refresh_error: None,
             model_controls_enabled: false,
             model_controls_ready: false,
+            model_controls_source: ModelControlsSourceStatus::default(),
         };
 
         assert!(!should_reapply_script(&status, Duration::from_secs(2)));

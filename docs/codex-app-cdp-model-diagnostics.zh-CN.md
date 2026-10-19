@@ -1,10 +1,10 @@
 # Codex App 模型选择器 CDP 诊断
 
-首次记录：2026-07-16；现行增强启动说明更新：2026-10-18。
+首次记录：2026-07-16；现行增强启动说明更新：2026-10-19。
 
 状态：调研工具，不进入 CodexHub 正式运行链路。
 
-上面的“调研工具”仅指本文的只读诊断脚本；增强启动属于正式功能。2026-10-18 在受管本机增强会话内继续修复模型及配置区块入口，处理大脚本传输上限、资源缓存和同步失败反馈；不改全局账号态、安装文件或 Hub 普通提示规则。当前行为与回退见 [模型控制选项](dynamic-codex-models.zh-CN.md#初始化开启-maxultra-与-fast-选项)，源码、必要编译与 Windows/macOS 待验收见 [本轮交付](releases/v0.4.30-5.md#2026-10-18-配置区块与增强启动超时修复)。用户仅确认前轮 Fast 标志出现；本文历史实机记录不覆盖本轮修复。
+上面的“调研工具”仅指本文的只读诊断脚本；增强启动属于正式功能。2026-10-19 诊断包定位早期 renderer 挂载超时后的备用路径漏装 Fetch，当前补齐按实际窗口显式挂载、安装确认和持续事件处理；保留前轮传输/缓存修正、真实成功校验及新启动首窗单次刷新边界。不改全局账号态、安装文件或 Hub 普通提示规则。当前行为与回退见 [模型控制选项](dynamic-codex-models.zh-CN.md#初始化开启-maxultra-与-fast-选项)，源码、必要编译与 Windows/macOS 待验收见 [本轮交付](releases/v0.4.30-5.md#2026-10-19-早期挂载超时后的桌面适配补装)。用户仅确认前轮 Fast 标志出现；本文历史实机记录不覆盖本轮修复。
 
 ## 目标
 
@@ -315,12 +315,12 @@ Codex 接入页提供“增强模式启动 Codex”按钮。按钮只在 Codex �
 1. 用户主动选择增强模式启动后，CodexHub 设置 `CODEX_API_BASE_URL=<本地 backend-api>`；
 2. Windows 通过隐藏进程激活 Store/MSIX App，macOS 通过 `open --args` 启动；
 3. CDP 只监听 `127.0.0.1:9335`；
-4. 启动时优先 browser CDP 早挂载，注册新文档脚本后释放等待的 renderer；已有 target 则立即执行并注册 `Page.addScriptToEvaluateOnNewDocument`，页面探测间隔为 50ms。受管本机 Provider 且 Fast 配置开启时，同时拦截已知模型脚本响应，核对结构后仅在内存适配；只在新启动错过早挂载的首个 app 文档 load 完成后按需刷新一次，已运行窗口不刷新，后续自然导航继续自动注入；
+4. 启动时优先 browser CDP 早挂载，注册新文档脚本后释放等待的 renderer；页面探测间隔为 50ms。早期挂载超时或未覆盖实际 app target 时，以真实 targetId 显式 `Target.attachToTarget(flatten=true)`，等待 Network/缓存、Fetch、立即执行和新文档脚本安装确认，同时持续处理暂停请求；替换前释放旧 browser 连接，同 session 去重。仅 page 注入不能替代此 browser 拦截链路。受管本机 Provider 且 Fast 配置开启时，同时拦截已知模型脚本响应，核对结构后仅在内存适配；只在新启动错过早挂载的首个 app 文档 load 完成后按需刷新一次，已运行窗口不刷新，后续自然导航继续自动注入；
 5. 注入脚本在 post-login 路径只对完整官方 Statsig 缓存响应启动期 `/wham/statsig/bootstrap`，并修补
    Statsig 缓存；pre-login 路径同样只使用完整官方缓存；没有完整缓存时保留官方初始化路径；
 6. SDK 就绪后优先通过 Store 合并；Store 不可用时使用公开 API overlay，官方其他配置保持原样；
 7. daemon 在启动期间用短生命周期检查发现 renderer 是否被替换，并持有最终 CDP WebSocket，使新文档注入注册在本次 renderer 生命周期内保持有效；再次增强启动会替换旧 session，不创建持久后台轮询；
-8. daemon 以模型、语言、关键 gate、完整官方底座和至少一个兼容 adapter 均生效作为完成条件；启用模型控制适配时仍核对 Fast UI、Fast request、Ultra models 三个实际加载标记（source v2 / 脚本 v23），最多等待 45 秒；延迟加载的 settingsSections 不参与启动成功或刷新判断。未知脚本/正文失败放行原响应，挂起超时 10 秒释放。browser/page CDP 的帧与消息均有限 64 MiB，增强会话先禁用资源缓存再启用 Fetch，改写正文不保留旧缓存元数据。保留连接中断立即报告固定原因；超时列出实际未完成步骤，GUI 对增强启动错误仅显示中文原因。不能用配置写入、请求已发送或放松标记校验报告成功。GUI 请求保留 60 秒，`app routes mounted` 和 bootstrap 是否被拦截仅作为诊断信息。
+8. daemon 以模型、语言、关键 gate、完整官方底座和至少一个兼容 adapter 均生效作为完成条件；启用模型控制适配时仍核对 Fast UI、Fast request、Ultra models 三个实际加载标记（source v2 / 脚本 v23），最多等待 45 秒（包含 browser 补装时间）；延迟加载的 settingsSections 不参与启动成功或刷新判断。未知脚本/正文失败放行原响应，挂起超时 10 秒释放。browser/page CDP 的帧与消息均有限 64 MiB，增强会话先禁用资源缓存再启用 Fetch，改写正文不保留旧缓存元数据。普通日志保留固定的补装、改写/原样放行和中断事件，失败状态记录四项源码加载布尔值，不采集私有正文/凭据。保留连接中断立即报告固定原因；超时以 warn 落盘并列出实际未完成步骤，GUI 对增强启动错误仅显示中文原因。不能用配置写入、请求已发送或放松标记校验报告成功。GUI 请求保留 60 秒，`app routes mounted` 和 bootstrap 是否被拦截仅作为诊断信息。
 
 按钮位于原“快速启动”复选框位置。Codex App 未运行时，点击按钮会直接使用增强模式启动，不要求用户额外确认。只有检测到 Codex App 正在运行时才显示关闭提示并禁用启动按钮；用户完全退出后，短生命周期检测 timer 会自动启用按钮。弹窗关闭后 timer 立即销毁，不形成后台轮询。用户界面不展示 CDP、端口或网络请求等实现细节。
 

@@ -142,6 +142,16 @@ fn should_write_default(line: &str) -> bool {
         || lower.contains("err=")
         || lower.contains("failed")
         || lower.contains("timeout")
+        || matches!(
+            line.strip_prefix("[codex_app_enhanced] event=")
+                .and_then(|event| event.split_ascii_whitespace().next()),
+            Some(
+                "browser_fallback_ready"
+                    | "model_controls_source_adapted"
+                    | "model_controls_source_preserved"
+                    | "browser_session_interrupted"
+            )
+        )
 }
 
 fn should_flush(line: &str) -> bool {
