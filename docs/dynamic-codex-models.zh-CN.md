@@ -1,6 +1,6 @@
 # 动态 Codex 可见模型
 
-维护日期：2026-10-20。当前开发版本 `v0.4.30-7`、唯一 `main`，关联 TC-006、TC-007。保留前轮 Fast 布尔/访问状态结构、Ultra 模型过滤、设置入口与独立可选启动策略；v6 增强脚本 v24 新增 Power、Ultra 本地偏好 fallback、Goal、语言和插件/浏览器组件的定向适配，并提供统一的 [检查与修复中心](customizations/codex-repair-center.md)。缺项仍不阻塞模型列表、语言等基础启动检查。v7 启动修复另补齐程序路径绑定，见 [启动修复](customizations/codex-startup-repair.md#程序路径修复与恢复)。当前源码、构建、测试包及待用户验收状态见 [v7 交付](releases/v0.4.30-7.md)，尚未提交、推送或发布。前轮源码与 Actions、现有 Fast 请求核对保留在 [v5 历史交付](releases/v0.4.30-5.md)；这些结果不等于本轮全部选项或 macOS 已验收。版本沿革见 [二开变更记录](customizations/CHANGELOG.md)。
+维护日期：2026-10-20。当前版本 `v0.4.30-7`、唯一 `main`，关联 TC-006、TC-007。保留前轮 Fast 布尔/访问状态结构、Ultra 模型过滤、设置入口与独立可选启动策略；v6 增强脚本 v24 新增 Power、Ultra 本地偏好 fallback、Goal、语言和插件/浏览器组件的定向适配，并提供统一的 [检查与修复中心](customizations/codex-repair-center.md)。缺项仍不阻塞模型列表、语言等基础启动检查。v7 启动修复另补齐程序路径绑定，见 [启动修复](customizations/codex-startup-repair.md#程序路径修复与恢复)。源码已推送（`3b96fa6`），Windows/macOS Actions 均已确认开始，包结果和实机待确认；准确源码、构建及测试包身份见 [v7 交付](releases/v0.4.30-7.md)，本轮未创建标签或发布 Release。前轮源码与 Actions、现有 Fast 请求核对保留在 [v5 历史交付](releases/v0.4.30-5.md)；这些结果不等于本轮全部选项或 macOS 已验收。版本沿革见 [二开变更记录](customizations/CHANGELOG.md)。
 
 Codex 可见模型现在支持内置目录之外的模型。模型来源包括已配置渠道保存的模型列表，以及 Codex 接入页中手动输入的模型 ID。
 

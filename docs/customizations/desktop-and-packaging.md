@@ -1,6 +1,6 @@
 # 天才空间品牌、桌面行为与交付
 
-2026-10-20 当前开发：`v0.4.30-7` 在统一 [检查与修复](codex-repair-center.md) 窗口补齐程序路径分支，Windows 当前用户与 Mac 登录会话分别更新 `CODEX_CLI_PATH`、备份及恢复，数据库没有迁移冲突也可修复路径。Hub 保持运行；新本地包和验证状态见 [v7 交付](../releases/v0.4.30-7.md)，未提交/推送，实机待用户验收。[v6 交付](../releases/v0.4.30-6.md) 及下文 v5 产物保持原身份。
+2026-10-20 当前交付：`v0.4.30-7` 在统一 [检查与修复](codex-repair-center.md) 窗口补齐程序路径分支，Windows 当前用户与 Mac 登录会话分别更新 `CODEX_CLI_PATH`、备份及恢复，数据库没有迁移冲突也可修复路径，Hub 保持运行。完整修复中心与路径修复源码已推送到 `main`（`3b96fa6`）；Windows x64、macOS universal Actions 均已确认 job 开始并停止等待，准确运行及本地包身份见 [v7 交付](../releases/v0.4.30-7.md)。本轮生成 Actions artifacts，包结果与实机待确认；[v6 交付](../releases/v0.4.30-6.md) 及下文 v5 产物保持原身份。
 
 2026-10-20 最新交付：按用户要求，组织设置修复按钮、原生迁移保护及 Commands 对话模式修复已提交到 GitHub 唯一 `main`（`500574c`），版本仍 `0.4.30-5`。Windows x64 与 macOS universal Actions 均已确认 job 开始，按既有要求停止等待；运行链接和准确源码身份见 [本轮打包](../releases/v0.4.30-5.md#2026-10-20-启动修复源码提交与两平台打包已启动)。Hub 内置按钮保持 Hub 打开，仅要求关闭 ChatGPT/Codex，自动定位、备份和验证已知冲突，无需解压、终端或 Python；用法与恢复见 [启动修复](codex-startup-repair.md)。本轮只生成 Actions artifacts，构建结果/正式新包及实机尚待确认；此前本地包、独立脚本和未推送记录保留当时身份，不代表已发布或验收。
 

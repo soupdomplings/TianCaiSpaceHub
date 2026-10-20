@@ -1,6 +1,6 @@
 # TianCaiSpaceHub 文档总入口
 
-2026-10-20 当前开发：`v0.4.30-7` 补齐“无法加载组织设置 / 启动失败”的程序路径修复。检查分别报告 `CODEX_CLI_PATH` 与状态库，未发现迁移冲突时仍可重新绑定当前内置程序，并可从记录恢复原路径。Windows 当前用户环境与 Mac 登录会话分别处理，Hub 保持运行；详细行为见 [启动修复](customizations/codex-startup-repair.md) 与 [修复中心](customizations/codex-repair-center.md)，构建、新测试包和待用户验收状态见 [v7 交付](releases/v0.4.30-7.md)。源码尚未提交或推送；[v6 分类修复窗口测试包](releases/v0.4.30-6.md) 保留历史身份，原增强启动适配继续保留。
+2026-10-20 当前交付：`v0.4.30-7` 的分类修复中心、增强启动 v24 和程序路径修复已提交并推送到 GitHub 唯一 `main`（`3b96fa6`）；Windows x64、macOS universal Actions 均已确认 job 开始，按用户要求停止等待完成。运行链接、源码身份和打包边界见 [v7 两平台打包](releases/v0.4.30-7.md#2026-10-20-源码已推送与两平台-actions-已开始)。启动修复分别报告 `CODEX_CLI_PATH` 与状态库，无迁移冲突仍可修路径，Hub 保持运行；使用与恢复见 [启动修复](customizations/codex-startup-repair.md)、[修复中心](customizations/codex-repair-center.md)。本轮仅生成 Actions artifacts，包结果和两平台实机待确认；[v6 测试包](releases/v0.4.30-6.md) 与 v7 本地包保留原身份，不当作正式发布结果。
 
 以下 v5 及更早阶段的状态按当时事实保留，不代替 v7 交付。
 
