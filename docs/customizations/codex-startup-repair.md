@@ -2,7 +2,7 @@
 
 维护日期：2026-10-20。适用开发基线：`v0.4.30-5`、唯一 `main`，关联 TC-007。
 
-实现状态：Windows / macOS 共用的 Hub 原生修复按钮、状态库防复发保护已实现。按钮位于“ChatGPT(Codex) 接入”的本地配置区域，Hub 保持运行，仅要求 ChatGPT/Codex 完全退出；无需解压脚本、终端或 Python。必要编译、本地 Windows 测试 MSI 与验收边界见 [按钮交付](../releases/v0.4.30-5.md#2026-10-20-hub-内置组织设置修复按钮)。源码未提交/推送，Windows/macOS 实机待用户验收；此前独立脚本包保持原身份。
+实现状态：Windows / macOS 共用的 Hub 原生修复按钮、状态库防复发保护已实现，源码 `500574c` 已提交到 GitHub 的唯一 `main`；Windows x64 / macOS universal Actions 均确认 job 开始并停止等待，见 [最新交付](../releases/v0.4.30-5.md#2026-10-20-启动修复源码提交与两平台打包已启动)。按钮位于“ChatGPT(Codex) 接入”的本地配置区，Hub 保持运行，仅要求 ChatGPT/Codex 完全退出，无需解压、终端或 Python。此前必要编译、16 项原生合成测试及本地 MSI 身份见 [按钮交付](../releases/v0.4.30-5.md#2026-10-20-hub-内置组织设置修复按钮)；本轮 Actions 构建结果与两平台实机待确认，未改既有标签/Release，原独立脚本包保持原身份。
 
 ## 原因与证据范围
 

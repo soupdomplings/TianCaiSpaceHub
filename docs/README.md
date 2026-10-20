@@ -1,6 +1,6 @@
 # TianCaiSpaceHub 文档总入口
 
-2026-10-20 TC-007 当前追加（未推送）：新增安装包自带“修复无法加载组织设置”按钮，位于 ChatGPT(Codex) 接入的本地配置区。Hub 保持打开，仅要求 ChatGPT/Codex 完全退出；自动定位、检查已知迁移冲突，先备份和验证副本再处理，同用户文件锁协调 Hub 相关操作，无需解压、终端或 Python。初始化/增强启动仅保留防复发保护，不自动修旧库。用法与恢复见 [启动修复](customizations/codex-startup-repair.md)，必要编译、本地 Windows 测试 MSI 与实机待验收边界见 [按钮交付](releases/v0.4.30-5.md#2026-10-20-hub-内置组织设置修复按钮)。前轮脚本包及旧 MSI 保持原身份；没有推送、Actions 或发布。
+2026-10-20 最新交付：按用户要求，组织设置修复按钮、原生迁移保护及 Commands 对话模式修复已提交到 GitHub 唯一 `main`（`500574c`），版本仍 `0.4.30-5`。Windows x64 与 macOS universal Actions 均已确认 job 开始，按既有要求停止等待；运行链接和准确源码身份见 [本轮打包](releases/v0.4.30-5.md#2026-10-20-启动修复源码提交与两平台打包已启动)。Hub 内置按钮保持 Hub 打开，仅要求关闭 ChatGPT/Codex，自动定位、备份和验证已知冲突，无需解压、终端或 Python；用法与恢复见 [启动修复](customizations/codex-startup-repair.md)。本轮只生成 Actions artifacts，构建结果/正式新包及实机尚待确认；此前本地包、独立脚本和未推送记录保留当时身份，不代表已发布或验收。
 
 2026-10-20 当前追加（TC-006/TC-007，未推送）：初始化、更新配置和每次增强启动前，确保 `[desktop].conversationDetailMode="STEPS_COMMANDS"`；缺失或其他字符串先备份再修正，正确值的启动预检查不重写，运行中的旧模式要求先退出。受管恢复记录原值并保留用户后改，不提供 Work 浏览器身份。使用、兼容及回滚见 [对话模式](dynamic-codex-models.zh-CN.md#初始化与增强启动固定-codex-对话模式)，本轮编译与本地测试包见 [交付](releases/v0.4.30-5.md#2026-10-20-初始化与增强启动修正对话模式)；Windows/macOS 实机待用户验收，下方已启动 Actions 不包含本轮修改。
 

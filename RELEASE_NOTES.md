@@ -1,3 +1,13 @@
+TianCaiSpaceHub v0.4.30-5 源码推送与两平台打包启动（2026-10-20）
+
+Commands 对话模式、原生迁移保护和 Hub 内置修复按钮已随 `500574c` 提交到 GitHub main。Windows x64 与 macOS universal Actions 均已确认任务开始，按要求停止等待；[完整运行与源码身份](docs/releases/v0.4.30-5.md#2026-10-20-启动修复源码提交与两平台打包已启动)。
+
+修复按钮保持 Hub 打开，只要求关闭 ChatGPT/Codex，自动检查、备份和验证已知冲突。版本保持不变，本轮仅生成 Actions artifacts，不变更既有标签或 Release；构建结果与实机待确认，下方本地包和未推送记录保留当时身份。
+
+---
+
+此前本地测试阶段：
+
 TianCaiSpaceHub v0.4.30-5 本地测试追加：Hub 内置组织设置修复按钮（2026-10-20）
 
 在 ChatGPT(Codex) 接入的本地配置区新增“修复无法加载组织设置”。Hub 全程保持打开，仅要求退出 ChatGPT/Codex；自动定位、检查，确认已知冲突后先备份和验证副本，再应用修复，提供重试与恢复。安装用户无需解压、运行命令或安装 Python，增强启动不自动修复数据库。
