@@ -57,6 +57,7 @@ pub fn move_thread_to_provider(
     rollout_path: Option<PathBuf>,
     target_provider: &str,
 ) -> Result<SessionProviderMoveReport> {
+    let _access = crate::codex_access::operation()?;
     let thread_id = thread_id.trim();
     if thread_id.is_empty() {
         return Err(anyhow!("thread_id is required"));

@@ -937,6 +937,24 @@ impl GuiText {
         }
     }
 
+    pub(super) fn codex_startup_repair(self) -> &'static str {
+        match self.locale {
+            GuiLocale::ZhCn => "修复无法加载组织设置",
+            GuiLocale::EnUs => "Repair organization settings error",
+        }
+    }
+
+    pub(super) fn codex_startup_repair_help(self) -> &'static str {
+        match self.locale {
+            GuiLocale::ZhCn => {
+                "请先完全退出 ChatGPT/Codex。Hub 保持打开，自动检查启动问题；确认状态库冲突后先备份再修复，无需运行命令或安装其他软件。"
+            }
+            GuiLocale::EnUs => {
+                "Fully quit ChatGPT/Codex first. Hub stays open while it checks startup and backs up confirmed state conflicts before repair. No terminal or extra software required."
+            }
+        }
+    }
+
     pub(super) fn codex_enhanced_launching(self) -> &'static str {
         match self.locale {
             GuiLocale::ZhCn => "正在增强模式启动 Codex...",

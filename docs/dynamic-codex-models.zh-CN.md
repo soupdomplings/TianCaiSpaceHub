@@ -4,9 +4,30 @@
 
 Codex 可见模型现在支持内置目录之外的模型。模型来源包括已配置渠道保存的模型列表，以及 Codex 接入页中手动输入的模型 ID。
 
+## 初始化与增强启动固定 Codex 对话模式
+
+「无法加载组织设置」且原生日志为 SQLite 初始化失败的情况，可点击本页本地配置区的“修复无法加载组织设置”，见 [状态库检查与修复](customizations/codex-startup-repair.md#hub-内置按钮与使用)。Hub 保持打开，仅要求 ChatGPT/Codex 完全退出，自动检查备份，无需单独脚本或 Python。本轮 Hub 源码停止提前创建原生远程控制 schema，增强启动不自动修复旧库；该问题与本节 Work 模式身份检查分开处理，修正对话模式不能替代状态库修复。
+
+2026-10-20：初始化、“更新 Codex 配置”和每次增强启动前，Hub 都确保当前 Codex home 的 `config.toml` 包含以下值。键属于 `[desktop]`，不是 TOML 顶层或 Provider 段：
+
+```toml
+[desktop]
+conversationDetailMode = "STEPS_COMMANDS"
+```
+
+原键缺失、为 `STEPS_PROSE`、`STEPS_EXECUTION` 或其他字符串时，先备份再改成 `STEPS_COMMANDS`。受管配置缺少该值或值不同时，接入页显示可以更新；仅查看状态或升级 Hub 不写配置。增强启动预检查发现值已正确时不重写配置或受管恢复点；需要修改时只处理模式键，不重新初始化认证或模型选项，保留其他字段。
+
+修正在创建 Codex 进程前完成。GUI 沿用先退出已运行 Codex 的流程；直接调用启动接口时，如果 Codex 仍在运行且模式需要修正，提示先完全退出再增强启动，避免只改磁盘却把进程内旧模式当作已修复。配置格式、字段类型、备份或写入失败时返回错误，不继续创建新进程；模式正确的运行实例仍按原 CDP 规则处理。普通直接打开客户端不经过预检查；用户随后在客户端切换 Work 时，原生应用仍可能改回 `STEPS_PROSE`，下一次 Hub 增强启动再修正，不在会话中持续强制模式。
+
+问题依据：本机 Windows Codex `26.1013.4894.0` 的只读资源显示，`STEPS_PROSE` 会使 `requireWorkBrowserIdentity=true`；浏览器运行配置存在、已认证身份为空时，于提交前抛出 `Work browser access requires an authenticated account`。[社区 issue #2539](https://github.com/yetone/magpie/issues/2539) 也报告切回 Commands 后 Codex 可用、切回 Work 会复发。该修改用于恢复 Codex 模式，不提供 Work 浏览器账号身份。实现按 TOML 字段工作，不修改 ASAR、签名或按 Codex 版本号分支；Windows/macOS 共用实现，客户端实机仍待用户验收。
+
+沿用受管 manifest v1/v2，新增可选 `conversation_mode.original_mode`，记录本次修正前的模式字符串或原键缺失，不含秘密。旧 manifest 缺少该项时正常读取，首次确需修改时补记；受管值未变的重复初始化/启动保留恢复点，用户更改或删除后再次修正，以这次修改前的值为新恢复点。“恢复配置”仅在当前模式仍为 Hub 写入的 `STEPS_COMMANDS` 时还原记录；原键缺失则移除，用户后改的模式保留。`config.toml.bak` 和原子写入继续使用，manifest 与 TOML 分步写入，不宣称跨文件事务；回退旧 Hub 前先用新版恢复，旧程序不负责撤回新增字段。
+
+维护入口：[配置、检查与恢复](../src/codex_app_config.rs)（`set_managed_commands_mode`、`prepare_codex_app_conversation_mode`、`managed_gateway_config_is_current`、`restore_conversation_mode`）、[增强启动](../src/codex_app_enhanced.rs)（进程状态检查后、创建进程前）。回归代码覆盖初始化/重复更新、启动修正、正确值不重写、运行中拒绝修正、缺失键恢复及用户后改保护；本轮编译、测试包身份和未执行项见 [本轮交付](releases/v0.4.30-5.md#2026-10-20-初始化与增强启动修正对话模式)。
+
 ## 初始化开启 MAX、ULTRA 与 Fast 选项
 
-在“ChatGPT(Codex) 接入”点击“初始化 Codex 配置”或“更新 Codex 配置”时，Hub 同时补齐模型控制选项。已有接入但缺少这些设置时，按钮显示可更新；只升级 Hub、启动或查看接入状态不会自动改写 Codex 配置。操作成功后完全退出 Codex App，再从 Hub“增强启动”打开。配置页、按钮说明、悬浮说明和成功弹窗使用通用接入提示，不额外列出 MAX/ULTRA/Fast。
+在“ChatGPT(Codex) 接入”点击“初始化 Codex 配置”或“更新 Codex 配置”时，Hub 同时补齐模型控制选项。已有接入但缺少这些设置时，按钮显示可更新；只升级 Hub、启动或查看接入状态不会自动补写本节的模型控制选项。增强启动会另行检查并修正上节的对话模式。操作成功后完全退出 Codex App，再从 Hub“增强启动”打开。配置页、按钮说明、悬浮说明和成功弹窗使用通用接入提示，不额外列出 MAX/ULTRA/Fast。
 
 写入目标沿用当前 Codex home（默认 `~/.codex/config.toml`，支持原有 home 覆盖），Windows/macOS 使用同一 TOML 读写流程：
 
@@ -18,7 +39,7 @@ enabled-reasoning-efforts = ["low", "medium", "high", "xhigh", "max", "ultra"]
 fast_mode = true
 ```
 
-已有 `enabled-reasoning-efforts` 数组时，保留原条目、顺序和数组注释，只补缺少的 `max`、`ultra`，不重复追加；只有原键不存在时使用示例六档，原空数组只补两档。其他 desktop/features 设置、当前 `model`、`model_reasoning_effort`、`service_tier` 及 `desktop.default-service-tier` 均保留，不自动切换当前使用的强度或速度。内联表按原有 helper 合并；desktop/features 类型错误、推理列表不是纯文字数组或 Fast 开关不是布尔值时，在写入 config.toml 前提示修正，不清空这些配置来强行初始化。本轮不新增配置字段。
+已有 `enabled-reasoning-efforts` 数组时，保留原条目、顺序和数组注释，只补缺少的 `max`、`ultra`，不重复追加；只有原键不存在时使用示例六档，原空数组只补两档。除上节受管对话模式外，其他 desktop/features 设置、当前 `model`、`model_reasoning_effort`、`service_tier` 及 `desktop.default-service-tier` 均保留，不自动切换当前使用的强度或速度。内联表按原有 helper 合并；desktop/features 类型错误、推理列表不是纯文字数组或 Fast 开关不是布尔值时，在写入 config.toml 前提示修正，不清空这些配置来强行初始化。模型控制选项沿用既有字段。
 
 Fast 开关依据 [OpenAI 官方速度配置说明](https://learn.chatgpt.com/docs/agent-configuration/speed)。它不足以独立保证自定义 Provider 的桌面入口显示。只读核对 Codex `26.1013.4894.0` 确认：默认 `requires_openai_auth=false + Actor Authorization` 时，界面没有 ChatGPT 登录态；Fast 的界面和请求辅助函数分别据此返回不可用，ULTRA 的模型列表还受 `1186680773` 控制。前轮 `a68b5a6` 只写配置，用户在同版本、增强启动、多个模型下反馈仅 MAX 显示。
 
@@ -68,7 +89,7 @@ Fast 在 OpenAI Responses 请求正文中对应 `service_tier: "priority"`；思
 
 ### 备份与恢复
 
-沿用 Hub 受管备份 manifest v2，可选 `model_controls` 记录原推理列表（缺失和空数组区分）、最后写入列表及原 fast_mode，不含账号或秘密，本轮不增加备份字段。旧 v1/v2 在首次显式初始化/更新时补记，不重置原 ChatGPT 登录备份。重复初始化且受管值未变时保留原恢复点；用户手工修改/删除对应项后再显式初始化，分别以本次修改前值为新恢复点。
+沿用 Hub 受管备份 manifest v2，可选 `model_controls` 记录原推理列表（缺失和空数组区分）、最后写入列表及原 fast_mode，不含账号或秘密；对话模式使用上节独立的可选 `conversation_mode`。旧 v1/v2 在首次显式初始化/更新时补记，不重置原 ChatGPT 登录备份。重复初始化且受管值未变时保留原恢复点；用户手工修改/删除对应项后再显式初始化，分别以本次修改前值为新恢复点。
 
 “恢复配置”仅在当前推理列表仍等于 Hub 最后写入列表、或对应开关仍为 Hub 写入的 true 时，分别还原原值；原键缺失则删除，其他 desktop/features 字段保留。用户后来修改/删除的项不覆盖；没有受管记录时不猜测并删除模型选项。前端适配只在本次增强会话内存中，完全退出 Codex 后结束；不必修复安装包。若需回退旧程序，应先用新程序恢复；旧程序不识别新增备份字段，也不会负责撤回它们。原有逐次 config.toml 备份与原子文件写入继续保留，配置和 manifest 为分步写入，不宣称跨文件事务。布尔型 Fast 兼容没有新增持久配置或备份字段；只回退本轮匹配修改会失去旧布尔型 Fast 适配，但上一轮可选启动策略继续生效，缺项仍可启动。若同时回退上一轮启动策略，才会恢复 Fast/Ultra 必须齐备及可选连接失败阻止启动的旧条件；两者均无需迁移用户数据。
 

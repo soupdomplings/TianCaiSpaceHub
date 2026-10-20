@@ -61,6 +61,8 @@ const REMOTE_PLUGIN_INSTALL_METADATA_FILE: &str = ".codex-remote-plugin-install.
 const PLUGIN_BLOCKING_FEATURE_FLAGS: &[&str] =
     &["plugins", "computer_use", "browser_use", "in_app_browser"];
 const DESKTOP_REASONING_EFFORTS_KEY: &str = "enabled-reasoning-efforts";
+const DESKTOP_CONVERSATION_MODE_KEY: &str = "conversationDetailMode";
+const DESKTOP_COMMANDS_MODE: &str = "STEPS_COMMANDS";
 const DEFAULT_DESKTOP_REASONING_EFFORTS: &[&str] =
     &["low", "medium", "high", "xhigh", "max", "ultra"];
 const REQUIRED_DESKTOP_REASONING_EFFORTS: &[&str] = &["max", "ultra"];
@@ -212,6 +214,13 @@ struct ManagedCodexAppBackupManifest {
     original_gateway_features: Option<GatewayFeaturesBackup>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     model_controls: Option<ModelControlsBackup>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    conversation_mode: Option<ConversationModeBackup>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ConversationModeBackup {
+    original_mode: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -248,6 +257,7 @@ struct ManagedAppServerProxyEnvironmentBackup {
 }
 
 pub fn configure_codex_app(options: ConfigureCodexAppOptions) -> Result<ConfigureCodexAppReport> {
+    let _access = crate::codex_access::operation()?;
     let codex_home = options
         .codex_home
         .clone()
@@ -343,6 +353,7 @@ pub fn uninstall_codex_app(
     codex_home: Option<PathBuf>,
     backend_url: &str,
 ) -> Result<UninstallCodexAppReport> {
+    let _access = crate::codex_access::operation()?;
     let codex_home = codex_home.unwrap_or_else(default_codex_home);
     let config_path = codex_home.join("config.toml");
     let auth_path = codex_home.join("auth.json");
@@ -405,6 +416,7 @@ pub(crate) fn model_controls_runtime_enabled(backend_url: &str) -> bool {
 pub fn prepare_codex_app_config_recovery_snapshot(
     codex_home: Option<PathBuf>,
 ) -> Result<Option<PathBuf>> {
+    let _access = crate::codex_access::operation()?;
     let codex_home = codex_home.unwrap_or_else(default_codex_home);
     let config_path = codex_home.join("config.toml");
     if !config_path.exists() {
@@ -419,6 +431,37 @@ pub fn prepare_codex_app_config_recovery_snapshot(
         backup.display()
     ));
     Ok(Some(backup))
+}
+
+pub(crate) fn prepare_codex_app_conversation_mode(
+    codex_home: Option<PathBuf>,
+    app_running: bool,
+) -> Result<bool> {
+    let _access = crate::codex_access::operation()?;
+    let codex_home = codex_home.unwrap_or_else(default_codex_home);
+    let config_path = codex_home.join("config.toml");
+    let mut doc = if config_path.exists() {
+        parse_existing_config_toml_for_update(&config_path)?
+    } else {
+        toml_edit::DocumentMut::new()
+    };
+    if desktop_conversation_mode(&doc)?.as_deref() == Some(DESKTOP_COMMANDS_MODE) {
+        return Ok(false);
+    }
+    // An existing process has already cached its mode. A disk-only change must
+    // not be reported as an effective repair of that running client.
+    if app_running {
+        return Err(anyhow!(
+            "Codex 正在运行，需要先完全退出，再使用增强启动加载修正后的对话模式。"
+        ));
+    }
+    std::fs::create_dir_all(&codex_home)
+        .with_context(|| format!("failed to create Codex home {}", codex_home.display()))?;
+    backup_existing(&config_path)?;
+    set_managed_commands_mode(&codex_home, &mut doc)?;
+    let raw = normalize_config_toml_order(&doc.to_string());
+    write_file_atomically(&config_path, raw.as_bytes())?;
+    Ok(true)
 }
 
 pub fn inspect_codex_app_config_for_mode(
@@ -491,6 +534,7 @@ pub fn delete_codex_app_provider(
     codex_home: Option<PathBuf>,
     provider_name: &str,
 ) -> Result<PathBuf> {
+    let _access = crate::codex_access::operation()?;
     let codex_home = codex_home.unwrap_or_else(default_codex_home);
     let config_path = codex_home.join("config.toml");
     delete_provider_from_config_toml(&config_path, provider_name)?;
@@ -502,6 +546,7 @@ pub fn set_codex_app_provider_websocket(
     provider_name_value: &str,
     enabled: bool,
 ) -> Result<PathBuf> {
+    let _access = crate::codex_access::operation()?;
     let provider_name = provider_name(Some(provider_name_value))?;
     let codex_home = codex_home.unwrap_or_else(default_codex_home);
     let config_path = codex_home.join("config.toml");
@@ -530,6 +575,7 @@ fn enable_remote_control_switch_in_home(
     codex_home: &Path,
     preference: Option<RemoteControlPreferenceInput<'_>>,
 ) -> Result<CodexAppRemoteControlSwitchStatus> {
+    let _access = crate::codex_access::operation()?;
     let sqlite_dir = codex_home.join(CODEX_APP_SQLITE_DIR);
     std::fs::create_dir_all(&sqlite_dir).with_context(|| {
         format!(
@@ -652,15 +698,22 @@ fn upsert_official_remote_control_enrollment(
     backend_url: &str,
     account_id: &str,
 ) -> Result<()> {
-    let installation_id = resolve_codex_installation_id(codex_home)?;
-    let websocket_url = normalize_remote_control_websocket_url(backend_url)?;
     let state_db_path = codex_home.join(CODEX_APP_STATE_DB);
-    let connection = Connection::open(&state_db_path).with_context(|| {
-        format!(
-            "failed to open Codex App state DB {}",
-            state_db_path.display()
-        )
-    })?;
+    if !state_db_path.is_file() {
+        chain_log::write_line(
+            "[codex_app_config] event=official_enrollment_deferred reason=state_db_missing",
+        );
+        return Ok(());
+    }
+    // The bundled CLI owns this database's schema and SQLx migration ledger.
+    // Creating its table/column here can make native migrations 24/37 fail.
+    let connection = Connection::open_with_flags(&state_db_path, OpenFlags::SQLITE_OPEN_READ_WRITE)
+        .with_context(|| {
+            format!(
+                "failed to open Codex App state DB {}",
+                state_db_path.display()
+            )
+        })?;
     connection
         .busy_timeout(SQLITE_WRITE_BUSY_TIMEOUT)
         .with_context(|| {
@@ -669,7 +722,15 @@ fn upsert_official_remote_control_enrollment(
                 state_db_path.display()
             )
         })?;
-    ensure_remote_control_enrollments_schema(&connection, &state_db_path)?;
+    if !remote_control_enrollments_schema_ready(&connection)? {
+        chain_log::write_line(
+            "[codex_app_config] event=official_enrollment_deferred reason=native_schema_pending",
+        );
+        return Ok(());
+    }
+
+    let installation_id = resolve_codex_installation_id(codex_home)?;
+    let websocket_url = normalize_remote_control_websocket_url(backend_url)?;
 
     let server_id = stable_remote_control_id("srv", &installation_id);
     let environment_id = stable_remote_control_id("env", &installation_id);
@@ -714,66 +775,42 @@ fn upsert_official_remote_control_enrollment(
     Ok(())
 }
 
-fn ensure_remote_control_enrollments_schema(
-    connection: &Connection,
-    state_db_path: &Path,
-) -> Result<()> {
-    connection
-        .execute_batch(
-            r#"
-            CREATE TABLE IF NOT EXISTS remote_control_enrollments (
-                websocket_url TEXT NOT NULL,
-                account_id TEXT NOT NULL,
-                app_server_client_name TEXT NOT NULL,
-                server_id TEXT NOT NULL,
-                environment_id TEXT NOT NULL,
-                server_name TEXT NOT NULL,
-                updated_at INTEGER NOT NULL,
-                remote_control_enabled INTEGER,
-                PRIMARY KEY (websocket_url, account_id, app_server_client_name)
-            );
-            "#,
-        )
-        .with_context(|| {
-            format!(
-                "failed to ensure remote_control_enrollments in {}",
-                state_db_path.display()
-            )
-        })?;
-
-    if !sqlite_table_has_column(
-        connection,
-        "remote_control_enrollments",
-        "remote_control_enabled",
-    )? {
-        connection
-            .execute(
-                "ALTER TABLE remote_control_enrollments ADD COLUMN remote_control_enabled INTEGER",
-                [],
-            )
-            .with_context(|| {
-                format!(
-                    "failed to add remote_control_enabled column in {}",
-                    state_db_path.display()
-                )
-            })?;
+fn remote_control_enrollments_schema_ready(connection: &Connection) -> Result<bool> {
+    let ledger_exists: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='_sqlx_migrations')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !ledger_exists {
+        return Ok(false);
     }
-    Ok(())
-}
-
-fn sqlite_table_has_column(
-    connection: &Connection,
-    table_name: &str,
-    column_name: &str,
-) -> Result<bool> {
-    let mut statement = connection.prepare(&format!("PRAGMA table_info({table_name})"))?;
-    let columns = statement.query_map([], |row| row.get::<_, String>(1))?;
-    for column in columns {
-        if column? == column_name {
-            return Ok(true);
+    let native_steps: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM _sqlx_migrations WHERE version IN (24, 37) AND success=1",
+        [],
+        |row| row.get(0),
+    )?;
+    if native_steps != 2 {
+        return Ok(false);
+    }
+    let mut statement = connection.prepare("PRAGMA table_info(remote_control_enrollments)")?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<std::result::Result<HashSet<_>, _>>()?;
+    for required in [
+        "websocket_url",
+        "account_id",
+        "app_server_client_name",
+        "server_id",
+        "environment_id",
+        "server_name",
+        "updated_at",
+        "remote_control_enabled",
+    ] {
+        if !columns.contains(required) {
+            return Ok(false);
         }
     }
-    Ok(false)
+    Ok(true)
 }
 
 fn normalize_remote_control_websocket_url(backend_url: &str) -> Result<String> {
@@ -1566,6 +1603,7 @@ fn managed_gateway_config_is_current(
                     .iter()
                     .all(|required| efforts.iter().any(|effort| effort == required))
             })
+        || desktop_conversation_mode(&doc).ok().flatten().as_deref() != Some(DESKTOP_COMMANDS_MODE)
     {
         return false;
     }
@@ -1702,6 +1740,7 @@ fn write_config_toml(path: &Path, options: &ConfigureCodexAppOptions) -> Result<
     };
     let codex_home = path.parent().unwrap_or_else(|| Path::new("."));
     enable_model_controls(codex_home, &mut doc)?;
+    set_managed_commands_mode(codex_home, &mut doc)?;
 
     let codex_backend_url = options.codex_backend_url();
     doc["chatgpt_base_url"] = toml_edit::value(&codex_backend_url);
@@ -1797,6 +1836,66 @@ fn write_config_toml(path: &Path, options: &ConfigureCodexAppOptions) -> Result<
     let raw = normalize_config_toml_order(&doc.to_string());
     backup_existing(path)?;
     write_file_atomically(path, raw.as_bytes())
+}
+
+fn desktop_conversation_mode(doc: &toml_edit::DocumentMut) -> Result<Option<String>> {
+    let Some(desktop) = doc.get("desktop") else {
+        return Ok(None);
+    };
+    let desktop = desktop.as_table_like().ok_or_else(|| {
+        anyhow!("Codex 配置中的 desktop 必须是配置表，请修正后再初始化或增强启动。")
+    })?;
+    desktop
+        .get(DESKTOP_CONVERSATION_MODE_KEY)
+        .map(|mode| {
+            mode.as_str().map(str::to_owned).ok_or_else(|| {
+                anyhow!("Codex 配置中的 desktop.conversationDetailMode 必须是文字，请修正后再初始化或增强启动。")
+            })
+        })
+        .transpose()
+}
+
+fn set_managed_commands_mode(codex_home: &Path, doc: &mut toml_edit::DocumentMut) -> Result<()> {
+    let original_mode = desktop_conversation_mode(doc)?;
+    if original_mode.as_deref() == Some(DESKTOP_COMMANDS_MODE) {
+        return Ok(());
+    }
+    ensure_managed_backup(
+        codex_home,
+        &codex_home.join("config.toml"),
+        &codex_home.join("auth.json"),
+    )?;
+    let backup = managed_backup_paths(codex_home);
+    let mut manifest = read_managed_backup_manifest(&backup.manifest_path)?;
+    // Repeated launches of the managed value leave the restore point intact.
+    // A later explicit change is the new restore point when we correct it.
+    manifest.conversation_mode = Some(ConversationModeBackup { original_mode });
+    write_file_atomically(
+        &backup.manifest_path,
+        &serde_json::to_vec_pretty(&manifest)?,
+    )?;
+    ensure_config_table(doc, "desktop")[DESKTOP_CONVERSATION_MODE_KEY] =
+        toml_edit::value(DESKTOP_COMMANDS_MODE);
+    Ok(())
+}
+
+fn restore_conversation_mode(doc: &mut toml_edit::DocumentMut, backup: &ConversationModeBackup) {
+    if desktop_conversation_mode(doc).ok().flatten().as_deref() != Some(DESKTOP_COMMANDS_MODE) {
+        return;
+    }
+    if let Some(desktop) = doc
+        .get_mut("desktop")
+        .and_then(toml_edit::Item::as_table_like_mut)
+    {
+        if let Some(original) = &backup.original_mode {
+            desktop.insert(DESKTOP_CONVERSATION_MODE_KEY, toml_edit::value(original));
+        } else {
+            desktop.remove(DESKTOP_CONVERSATION_MODE_KEY);
+        }
+        if desktop.is_empty() {
+            doc.remove("desktop");
+        }
+    }
 }
 
 fn desktop_reasoning_efforts(doc: &toml_edit::DocumentMut) -> Result<Option<Vec<String>>> {
@@ -2292,7 +2391,7 @@ fn normalize_config_toml_order(raw: &str) -> String {
 }
 
 fn uninstall_config_toml(path: &Path, backend_url: &str) -> Result<(bool, bool)> {
-    cleanup_codexhub_config(path, backend_url, true, None, None, None)
+    cleanup_codexhub_config(path, backend_url, true, None, None, None, None)
 }
 
 fn managed_provider_names_in_config(
@@ -2930,6 +3029,7 @@ fn ensure_managed_backup(codex_home: &Path, config_path: &Path, auth_path: &Path
         },
         original_gateway_features: None,
         model_controls: None,
+        conversation_mode: None,
     };
     if manifest.auth_existed {
         std::fs::copy(auth_path, &backup.auth_path).with_context(|| {
@@ -2976,6 +3076,7 @@ fn uninstall_with_managed_state(
         original_model_provider.as_deref(),
         manifest.original_gateway_features.as_ref(),
         manifest.model_controls.as_ref(),
+        manifest.conversation_mode.as_ref(),
     )?;
     let removed_auth = restore_or_remove_managed_file(
         auth_path,
@@ -3008,6 +3109,7 @@ fn cleanup_codexhub_config(
     original_model_provider: Option<&str>,
     original_gateway_features: Option<&GatewayFeaturesBackup>,
     model_controls: Option<&ModelControlsBackup>,
+    conversation_mode: Option<&ConversationModeBackup>,
 ) -> Result<(bool, bool)> {
     if !path.exists() {
         return Ok((false, false));
@@ -3078,6 +3180,9 @@ fn cleanup_codexhub_config(
 
     if let Some(controls) = model_controls {
         restore_model_controls(&mut doc, controls);
+    }
+    if let Some(mode) = conversation_mode {
+        restore_conversation_mode(&mut doc, mode);
     }
 
     if doc.iter().next().is_none() {
@@ -3539,6 +3644,7 @@ pub(crate) fn default_codex_home() -> PathBuf {
 }
 
 pub(crate) fn clear_codex_models_cache(codex_home: Option<PathBuf>) -> Result<bool> {
+    let _access = crate::codex_access::operation()?;
     let cache_path = codex_home
         .unwrap_or_else(default_codex_home)
         .join(CODEX_MODELS_CACHE_FILE);
@@ -3867,6 +3973,101 @@ mod tests {
     }
 
     #[test]
+    fn conversation_mode_setup_and_launch_preserve_the_restore_point() {
+        let home = unique_temp_dir();
+        let config_path = home.join("config.toml");
+        std::fs::write(
+            &config_path,
+            "[desktop]\nconversationDetailMode = 'STEPS_PROSE'\ncustom = 'keep'\n",
+        )
+        .unwrap();
+        let options = test_configure_options(home.clone());
+        configure_codex_app(options.clone()).unwrap();
+        configure_codex_app(options).unwrap();
+        let configured = std::fs::read(&config_path).unwrap();
+        let auth = std::fs::read(home.join("auth.json")).unwrap();
+        assert!(!prepare_codex_app_conversation_mode(Some(home.clone()), false).unwrap());
+        assert_eq!(std::fs::read(&config_path).unwrap(), configured);
+        assert_eq!(std::fs::read(home.join("auth.json")).unwrap(), auth);
+        let backup = managed_backup_paths(&home);
+        let manifest = read_managed_backup_manifest(&backup.manifest_path).unwrap();
+        assert_eq!(
+            manifest.conversation_mode.unwrap().original_mode.as_deref(),
+            Some("STEPS_PROSE")
+        );
+
+        let mut doc = parse_existing_config_toml(&config_path).unwrap();
+        doc["desktop"][DESKTOP_CONVERSATION_MODE_KEY] = toml_edit::value("STEPS_EXECUTION");
+        std::fs::write(&config_path, doc.to_string()).unwrap();
+        assert!(prepare_codex_app_conversation_mode(Some(home.clone()), false).unwrap());
+        assert_eq!(
+            desktop_conversation_mode(&parse_existing_config_toml(&config_path).unwrap())
+                .unwrap()
+                .as_deref(),
+            Some(DESKTOP_COMMANDS_MODE)
+        );
+        uninstall_codex_app(Some(home.clone()), "http://127.0.0.1:3847/backend-api").unwrap();
+        let restored = parse_existing_config_toml(&config_path).unwrap();
+        assert_eq!(
+            desktop_conversation_mode(&restored).unwrap().as_deref(),
+            Some("STEPS_EXECUTION")
+        );
+        assert_eq!(restored["desktop"]["custom"].as_str(), Some("keep"));
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn conversation_mode_launch_preserves_running_or_invalid_configuration() {
+        let home = unique_temp_dir();
+        let config_path = home.join("config.toml");
+        for raw in [
+            "[desktop]\nconversationDetailMode = 'STEPS_PROSE'\n",
+            "[desktop]\nconversationDetailMode = 42\n",
+            "[desktop\n",
+        ] {
+            std::fs::write(&config_path, raw).unwrap();
+            assert!(prepare_codex_app_conversation_mode(Some(home.clone()), true).is_err());
+            assert_eq!(std::fs::read_to_string(&config_path).unwrap(), raw);
+            assert!(!managed_backup_paths(&home).manifest_path.exists());
+        }
+        let correct = "# keep formatting\n[desktop]\nconversationDetailMode='STEPS_COMMANDS'\n";
+        std::fs::write(&config_path, correct).unwrap();
+        assert!(!prepare_codex_app_conversation_mode(Some(home.clone()), true).unwrap());
+        assert_eq!(std::fs::read_to_string(&config_path).unwrap(), correct);
+        assert!(!managed_backup_paths(&home).manifest_path.exists());
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn conversation_mode_launch_restores_missing_key_and_keeps_later_changes() {
+        for later_change in [None, Some("STEPS_PROSE")] {
+            let home = unique_temp_dir();
+            let config_path = home.join("config.toml");
+            std::fs::write(&config_path, "model = 'keep-model'\n").unwrap();
+            let original_auth = r#"{"auth_mode":"apikey","OPENAI_API_KEY":"test-key"}"#;
+            std::fs::write(home.join("auth.json"), original_auth).unwrap();
+            assert!(prepare_codex_app_conversation_mode(Some(home.clone()), false).unwrap());
+            assert_eq!(
+                std::fs::read_to_string(home.join("auth.json")).unwrap(),
+                original_auth
+            );
+            if let Some(mode) = later_change {
+                let mut doc = parse_existing_config_toml(&config_path).unwrap();
+                doc["desktop"][DESKTOP_CONVERSATION_MODE_KEY] = toml_edit::value(mode);
+                std::fs::write(&config_path, doc.to_string()).unwrap();
+            }
+            uninstall_codex_app(Some(home.clone()), "http://127.0.0.1:3847/backend-api").unwrap();
+            let restored = parse_existing_config_toml(&config_path).unwrap();
+            assert_eq!(
+                desktop_conversation_mode(&restored).unwrap().as_deref(),
+                later_change
+            );
+            assert_eq!(restored["model"].as_str(), Some("keep-model"));
+            let _ = std::fs::remove_dir_all(home);
+        }
+    }
+
+    #[test]
     fn configure_codex_app_writes_provider_and_local_auth() {
         let codex_home = unique_temp_dir();
         let report = configure_codex_app(ConfigureCodexAppOptions {
@@ -3898,6 +4099,12 @@ mod tests {
         assert!(!config.contains("windows_wsl_setup_acknowledged"));
         assert!(!config.contains("web_search = \"live\""));
         assert!(config.contains("[features]"));
+        assert_eq!(
+            desktop_conversation_mode(&config.parse::<toml_edit::DocumentMut>().unwrap())
+                .unwrap()
+                .as_deref(),
+            Some(DESKTOP_COMMANDS_MODE)
+        );
         assert!(config.contains("apps = false"));
         assert!(!config.contains("image_generation = false"));
         assert!(config.contains("[model_providers.ai-codex]"));
@@ -4400,6 +4607,22 @@ http_headers = { x-openai-actor-authorization = "codexhub-local" }
             &auth_path,
             backend_url
         ));
+
+        for mode in [None, Some("STEPS_PROSE")] {
+            let mut doc = current.parse::<toml_edit::DocumentMut>().unwrap();
+            let desktop = doc["desktop"].as_table_mut().unwrap();
+            if let Some(mode) = mode {
+                desktop[DESKTOP_CONVERSATION_MODE_KEY] = toml_edit::value(mode);
+            } else {
+                desktop.remove(DESKTOP_CONVERSATION_MODE_KEY);
+            }
+            std::fs::write(&config_path, doc.to_string()).unwrap();
+            assert!(!managed_gateway_config_is_current(
+                &config_path,
+                &auth_path,
+                backend_url
+            ));
+        }
 
         for key in [
             "requires_openai_auth",
@@ -5241,6 +5464,74 @@ base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     }
 
     #[test]
+    fn remote_control_preference_never_creates_native_state() {
+        let home = unique_temp_dir();
+        upsert_official_remote_control_enrollment(
+            &home,
+            "http://127.0.0.1:3847/backend-api",
+            "acct_test",
+        )
+        .expect("defer missing native state");
+        assert!(!home.join(CODEX_APP_STATE_DB).exists());
+        assert!(!home.join(CODEX_APP_INSTALLATION_ID).exists());
+        let db = Connection::open(home.join(CODEX_APP_STATE_DB)).unwrap();
+        db.execute_batch("CREATE TABLE _sqlx_migrations (version INTEGER PRIMARY KEY, success INTEGER NOT NULL); INSERT INTO _sqlx_migrations VALUES (23, 1);").unwrap();
+        drop(db);
+        upsert_official_remote_control_enrollment(
+            &home,
+            "http://127.0.0.1:3847/backend-api",
+            "acct_test",
+        )
+        .expect("defer pending native migration");
+        let db = Connection::open(home.join(CODEX_APP_STATE_DB)).unwrap();
+        let count: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name='remote_control_enrollments'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0);
+        drop(db);
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn remote_control_preference_never_adds_native_column() {
+        let home = unique_temp_dir();
+        create_remote_control_enrollment_state_db(&home);
+        let db = Connection::open(home.join(CODEX_APP_STATE_DB)).unwrap();
+        // Model the schema after native migration 24, before native step 37.
+        db.execute_batch("DROP TABLE remote_control_enrollments; CREATE TABLE remote_control_enrollments (websocket_url TEXT NOT NULL, account_id TEXT NOT NULL, app_server_client_name TEXT NOT NULL, server_id TEXT NOT NULL, environment_id TEXT NOT NULL, server_name TEXT NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY(websocket_url, account_id, app_server_client_name)); DELETE FROM _sqlx_migrations WHERE version=37;").unwrap();
+        drop(db);
+        upsert_official_remote_control_enrollment(
+            &home,
+            "http://127.0.0.1:3847/backend-api",
+            "acct_test",
+        )
+        .expect("defer incomplete native schema");
+        let db = Connection::open(home.join(CODEX_APP_STATE_DB)).unwrap();
+        let columns: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('remote_control_enrollments')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(columns, 7);
+        let count: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM remote_control_enrollments",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0);
+        drop(db);
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
     fn configure_codex_app_persists_official_remote_control_preference() {
         let codex_home = unique_temp_dir();
         let installation_id = "11111111-1111-4111-8111-111111111111";
@@ -5937,6 +6228,11 @@ base_url = "https://api.example.invalid"
                     remote_control_enabled INTEGER,
                     PRIMARY KEY (websocket_url, account_id, app_server_client_name)
                 );
+                CREATE TABLE _sqlx_migrations (
+                    version INTEGER PRIMARY KEY,
+                    success INTEGER NOT NULL
+                );
+                INSERT INTO _sqlx_migrations VALUES (24, 1), (37, 1);
                 "#,
             )
             .expect("create remote control enrollment table");

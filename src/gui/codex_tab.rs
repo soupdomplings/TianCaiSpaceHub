@@ -39,6 +39,7 @@ pub(super) struct CodexTab {
     clear_button: Button,
     session_history_button: Button,
     enhanced_launch_button: Button,
+    startup_repair_button: Button,
     websocket_checkbox: CheckBox,
     websocket_enabled: Rc<Cell<bool>>,
     websocket_saving: Rc<Cell<bool>>,
@@ -126,6 +127,18 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> CodexTab {
         &local_config_actions,
         0,
         SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Top,
+        10,
+    );
+
+    let startup_repair_button = Button::builder(&local_config_box)
+        .with_label(text.codex_startup_repair())
+        .build();
+    startup_repair_button.set_tooltip(text.codex_startup_repair_help());
+    startup_repair_button.enable(cfg!(any(windows, target_os = "macos")));
+    local_config_section.add(
+        &startup_repair_button,
+        0,
+        SizerFlag::AlignRight | SizerFlag::Right | SizerFlag::Top,
         10,
     );
 
@@ -319,6 +332,7 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> CodexTab {
         clear_button,
         session_history_button,
         enhanced_launch_button,
+        startup_repair_button,
         websocket_checkbox,
         websocket_enabled: Rc::new(Cell::new(false)),
         websocket_saving: Rc::new(Cell::new(false)),
@@ -348,6 +362,7 @@ pub(super) fn bind_actions(
     gui_tx: &UnboundedSender<super::GuiMessage>,
     in_flight: &Arc<AtomicBool>,
 ) {
+    super::startup_repair::bind_button(&tab.startup_repair_button, frame, tab.text, in_flight);
     bind_inject_action(api, frame, tab, refresh, gui_tx, in_flight);
     bind_websocket_action(api, frame, tab, refresh, gui_tx, in_flight);
     bind_enhanced_launch_action(api, frame, tab, refresh, gui_tx, in_flight);

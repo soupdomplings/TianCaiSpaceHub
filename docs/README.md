@@ -1,5 +1,9 @@
 # TianCaiSpaceHub 文档总入口
 
+2026-10-20 TC-007 当前追加（未推送）：新增安装包自带“修复无法加载组织设置”按钮，位于 ChatGPT(Codex) 接入的本地配置区。Hub 保持打开，仅要求 ChatGPT/Codex 完全退出；自动定位、检查已知迁移冲突，先备份和验证副本再处理，同用户文件锁协调 Hub 相关操作，无需解压、终端或 Python。初始化/增强启动仅保留防复发保护，不自动修旧库。用法与恢复见 [启动修复](customizations/codex-startup-repair.md)，必要编译、本地 Windows 测试 MSI 与实机待验收边界见 [按钮交付](releases/v0.4.30-5.md#2026-10-20-hub-内置组织设置修复按钮)。前轮脚本包及旧 MSI 保持原身份；没有推送、Actions 或发布。
+
+2026-10-20 当前追加（TC-006/TC-007，未推送）：初始化、更新配置和每次增强启动前，确保 `[desktop].conversationDetailMode="STEPS_COMMANDS"`；缺失或其他字符串先备份再修正，正确值的启动预检查不重写，运行中的旧模式要求先退出。受管恢复记录原值并保留用户后改，不提供 Work 浏览器身份。使用、兼容及回滚见 [对话模式](dynamic-codex-models.zh-CN.md#初始化与增强启动固定-codex-对话模式)，本轮编译与本地测试包见 [交付](releases/v0.4.30-5.md#2026-10-20-初始化与增强启动修正对话模式)；Windows/macOS 实机待用户验收，下方已启动 Actions 不包含本轮修改。
+
 2026-10-20 最新打包状态：按用户后续要求，`main` 的 `645f6fd` 已触发 Windows 和 macOS universal Actions，两平台 job 均已开始；按既有要求停止等待。运行链接、源码和边界见 [本轮打包](releases/v0.4.30-5.md#2026-10-20-最新-main-两平台-actions-打包已启动)。版本仍 `0.4.30-5`，仅生成 Actions artifacts；包结果及实机待确认，下方未启动 Actions 等表述保留源码提交阶段的事实。
 
 2026-10-20 源码已推送（TC-006/TC-007）：按用户要求，10 月 19 日增强启动超时、有限重连、可选增强项降级及旧版 Fast/Ultra 兼容修复已提交并推送到唯一 `main`（修复提交 `8745292`），版本仍为 `0.4.30-5`；完整身份见 [本轮交付](releases/v0.4.30-5.md#2026-10-20-兼容修复源码提交与-fast-参数核对)。本次没有启动新 Actions 或发布新包，下方“未推送”等记录保留当时状态。只读核对用户自行发起的请求已看到 MAX 的 Fast 参数完整传递并获上游回报；其他样本入站即无 Fast 参数，不能推导仅 MAX 支持。复核入口见 [模型专题](dynamic-codex-models.zh-CN.md#fast-实际请求核对)，完整平台与组合仍待用户验收。
@@ -67,6 +71,7 @@
 | 启停 Hub/天工、选择完整项目目录、回复状态、会话同步与审批 | [天工外部消息执行端](customizations/gmclaw-im.md) |
 | 区分天工模型配置、本地模型连接、IM 授权与上游流式 | [天工 Claw 模型接入](customizations/gmclaw.md)、[请求日志](ai-gateway-request-log-detail-patch.zh-CN.md) |
 | 设置自定义模型与能力继承 | [动态 Codex 可见模型](dynamic-codex-models.zh-CN.md) |
+| 检查 Windows/macOS「无法加载组织设置」与状态库迁移冲突 | [Hub 内置修复按钮与独立工具](customizations/codex-startup-repair.md) |
 | 从 Sub2API 网页导入渠道 | [网页导入](hub-external-import.md)、[两端接口约定](HUB_EXTERNAL_IMPORT_CONTRACT_V1.md) |
 | 查看品牌、桌面行为和打包约定 | [品牌、桌面与交付](customizations/desktop-and-packaging.md) |
 | 了解最新上游合并及待验收项 | [v0.4.30 整合记录](upstream-v0.4.30-integration.md) |
@@ -92,6 +97,7 @@
 | [请求日志详情](ai-gateway-request-log-detail-patch.zh-CN.md) | v0.4.30-3：保留 `stream` 的客户端语义，新增可空 `upstreamStream` 记录实际最终上游请求；天工非流式客户端与上游流式聚合分别展示，旧日志上游模式未知 |
 | [OpenAI Chat Completions](openai-chat-completions.md) | 通用兼容渠道与按渠道关闭推理；已实现 |
 | [动态模型](dynamic-codex-models.zh-CN.md) | 手填、远端获取、路由补齐和能力继承；v5 普通/ChatGPT 厂商空列表保存先自动获取，成功继续保存、失败留窗，客户端未配置模型中文指引；本轮状态见 v5 交付，实机待用户验收 |
+| [Codex 启动修复](customizations/codex-startup-repair.md) | TC-007：原生按钮保持 Hub 运行，仅要求退出 ChatGPT/Codex；自动定位、备份并验证已知状态库冲突，文件锁协调操作，无需 Python。原生迁移保护和独立工具保留；Windows 本地 MSI 已构建，实机待用户验收 |
 | [网页导入](hub-external-import.md) | Windows/macOS 系统接入已随 v0.4.30-2 成功构建打包并预发布；本版实机导入待用户验收 |
 | [导入协议 v1](HUB_EXTERNAL_IMPORT_CONTRACT_V1.md) | Hub 与 Sub2API 联调契约；不表示主站已上线 |
 | [品牌、桌面与交付](customizations/desktop-and-packaging.md) | 产品与程序统一 TianCaiSpaceHub，配置/升级身份兼容；v0.4.30-5：系统关机放行、普通 × 隐藏托盘，Windows MSI 完整交互成功页提供“打开”和“完成”。Windows EXE 编译与静态核对通过，关机/安装待验收、包由 Actions 生成 |

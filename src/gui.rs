@@ -172,6 +172,7 @@ mod provider;
 mod request_log_detail;
 mod request_logs;
 mod session_history;
+pub(crate) mod startup_repair;
 mod text;
 mod theme;
 mod tray;

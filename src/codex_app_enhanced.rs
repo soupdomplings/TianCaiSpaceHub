@@ -201,6 +201,7 @@ pub async fn launch_and_inject(
     models: Vec<String>,
     backend_url: &str,
 ) -> Result<EnhancedLaunchReport> {
+    let _access = crate::codex_access::operation()?;
     tokio::time::timeout(
         ENHANCED_LAUNCH_TIMEOUT,
         launch_and_inject_inner(models, backend_url),
@@ -243,6 +244,11 @@ async fn launch_and_inject_inner(
     let app_running = tokio::task::spawn_blocking(codex_app_is_running)
         .await
         .context("检测 Codex App 进程失败")??;
+    let conversation_mode_changed =
+        crate::codex_app_config::prepare_codex_app_conversation_mode(None, app_running)?;
+    chain_log::write_line(format!(
+        "[codex_app_enhanced] event=conversation_mode_ready mode=STEPS_COMMANDS changed={conversation_mode_changed}"
+    ));
     let mut target = if app_running {
         match find_app_target(&client, DEFAULT_CDP_PORT).await? {
             Some(target) => {
@@ -374,6 +380,22 @@ async fn launch_and_inject_inner(
         started.elapsed().as_millis(),
         target.id
     ));
+    // Retry the preference after native startup has had an opportunity to
+    // migrate its state. Missing native schema stays optional; never create it.
+    let preference_backend = backend_url.to_string();
+    let preference_result = tokio::task::spawn_blocking(move || {
+        crate::codex_app_config::enable_codex_app_remote_control_switch_for_backend(
+            None,
+            &preference_backend,
+        )
+    })
+    .await;
+    chain_log::write_line(match preference_result {
+        Ok(Ok(_)) => "[codex_app_enhanced] event=remote_control_preference_checked",
+        _ => {
+            "[codex_app_enhanced] event=remote_control_preference_deferred reason=optional_state_unavailable"
+        }
+    });
     chain_log::write_line(format!(
         "[codex_app_enhanced] event=model_controls_optional_status enabled={} complete={} fast_ui={} fast_request={} ultra_models={} settings_sections={}",
         status.model_controls_enabled,
