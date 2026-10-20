@@ -1,5 +1,11 @@
 # 天才空间品牌、桌面行为与交付
 
+2026-10-20 源码提交：用户本次要求将此前本地测试阶段的 Codex 增强启动及 Fast/Ultra 兼容修复提交 GitHub，统一进入 `main`，版本保持 `0.4.30-5`。提交与推送身份见 [最新交付](../releases/v0.4.30-5.md#2026-10-20-兼容修复源码提交与-fast-参数核对)；本次复用源码一致的既有编译结果，没有生成新包、启动 Actions 或改动已有标签 / Release。下方本地包、未提交 / 未推送等描述保留对应日期的事实。
+
+2026-10-19 旧版 Fast 追加兼容：实际旧机资源已补齐，布尔型 Fast 界面/请求与较新访问状态型均按关键结构处理，三份资源静态核对通过；上一轮可选项缺失不阻塞基础启动的规则保留。源码、必要编译与独立本地测试 MSI 身份见 [本轮交付](../releases/v0.4.30-5.md#2026-10-19-旧版布尔型-fast-结构兼容)，安装与启动效果由用户验收，未推送发布。版本保持 `0.4.30-5`，只回退本轮匹配不会撤销上一轮可选启动策略。
+
+2026-10-19 测试交付安排：Windows 测试 MSI 按用户要求在本地生成，产物放 `target/`，记录未提交源码、构建 profile、EXE/MSI 哈希及静态升级核验，由用户安装；测试完毕再推送和发布，正式 Windows/macOS 发布仍走 Actions。本轮将 Fast、Ultra 与设置入口改为可选独立适配：缺项保留原行为，已成功项保留，不阻塞基础启动；可选 browser 补装在原 45 秒同步预算中最多占 30 秒，失败或其会话中断后继续独立 page 基础配置。模型/语言等必要配置实际校验、窗口握手有限重连及整体 80/GUI 90 秒保护保留。只有新启动首窗未有 v2 标记时可能单次刷新，不因部分缺项刷新，已运行窗口不自动刷新；普通成功提示不增加专项内容。源码与本地包身份见 [本轮交付](../releases/v0.4.30-5.md#2026-10-19-模型增强按能力启用且不阻塞启动)，本轮两平台实机待用户验收。客户端官方版本检查/协助更新仅为评估方案，尚无更新入口，不修改 Codex 安装资源或用户运行配置。
+
 2026-10-12 保存流程追加优化：普通/ChatGPT 厂商编辑窗口的模型列表没有任何条目时，“保存”先后台获取远端模型，非空结果成功后继续保存；失败或空结果弹窗并留在编辑窗口。ChatGPT 须已授权，有条目但未勾选仍要求选择；手动获取不自动保存。网关模型未配置正文改为中文配置指引，HTTP 状态与机器字段不变。当前行为见 [动态模型](../dynamic-codex-models.zh-CN.md#厂商保存时自动获取模型)、[入口与错误](client-channel-scope.md#模型未配置提示)，本轮源码、必要编译、两平台 Actions 及待用户验收状态见 [v5 交付](../releases/v0.4.30-5.md#2026-10-12-空模型自动获取与模型未配置提示)。基线 `eeb0352285af39b14a5cec85d334702b59d39efa`、唯一 `main`、版本仍 `0.4.30-5`；下方前轮窗口和打包记录保留原范围。
 
 2026-10-12 当前调整：Dumpling-MCP 同环境、同真实身份重新登录可保留已接入客户端，客户端区改为默认 ChatGPT(Codex) 的单一下拉；完整认证、挂起和撤销规则见 [Dumpling-MCP](nvwa-mcp.md)。大模型新增/编辑窗口改为可滚动表单与固定保存/取消按钮，按 Hub 当前可见大小适配，窄窗改为上下布局。基于唯一 `main` 的 `069ed14a11606ec9a71702878e274cf0397a6533`，版本仍 `0.4.30-5`；本轮编译、源码、Actions 与待用户验收状态见 [v5 交付](../releases/v0.4.30-5.md#2026-10-12-重新登录保留接入客户端选择与编辑窗口滚动)。下方旧阶段构建与安装记录保持原归属。
@@ -91,7 +97,7 @@ Windows MSI 完整交互的新装、major upgrade，以及使用新 ProductCode 
 
 确认页通过 `Before="ProgressDlg"` 排在进度前，条件为 `UILevel = 5 AND NOT Installed AND NOT REMOVE AND NOT REINSTALL AND NOT UPGRADINGPRODUCTCODE`。成功页只在安装成功退出且同一条件加 `&MainFeature = 3` 时显示，打开动作再次使用成功页条件。major upgrade 的新 ProductCode 满足 `NOT Installed`；同一个 MSI 再次打开属于维护/修复，本轮不为它增加上述确认和成功页。静默/基本 UI、失败、取消、修复、卸载和 major upgrade 旧产品清理不启动程序。UI/Util 扩展固定 `7.0.0` 与 WiX 工具一致，Actions 安装扩展并传入 build，普通进度/错误/取消对话框复用 `WixUI_Common`。2026-10-11 两个扩展安装命令补齐 `-acceptEula wix7`，与原有 MSI build 的接受参数一致；整个 `Install WiX Toolset` 步骤移到 .NET SDK 安装后、Rust release 编译前，先检查工具/扩展，避免缺少打包前置条件时耗费完整 Rust 编译。Package 保留 `Language=1033`，`Codepage=936` 与 `zh-CN` UI 资源显示中文；它不匹配旧 v4 的 `ProductLanguage=0`。此前“1033 保持旧 MSI 升级语言匹配”的说明有误，本次用 `MajorUpgrade IgnoreLanguage=yes` 兼容旧中性语言包。UpgradeCode、组件 GUID、安装目录及协议关联不变。
 
-实现入口：[Windows WXS](../../packaging/windows/TianCaiSpaceHub.wxs)、[Windows Actions](../../.github/workflows/release-windows.yml)、[资源版本构建脚本](../../build.rs)、[MSI 元数据核验](../../scripts/verify-windows-msi.ps1)。旧本地打包脚本只同步扩展参数保留可读兼容，不执行也不作为当前发布渠道。此前 v5 标签构建在 WiX 扩展安装报 `WIX7015`；补 EULA 后的 `b05b489` 两平台 Actions 已成功，Windows MSI/ZIP 已取得并静态核对，但用户从旧 v4 升级仍未通过。本次 WXS/资源修复的必要 Windows 编译与 EXE 数字资源核对通过，最终 WXS 的显示条件、默认/取消按钮及控件边界静态核对通过，新 Actions MSI 尚待生成；开发方没有本地打包、安装 MSI 或启动程序。确认/进度/成功页的中文显示、DPI、取消及非提升启动，升级/修复/卸载与静默流程仍待用户验收。独立 EXE 不含安装向导，不能用它证明界面已运行。回退本轮确认页恢复此前直接进入进度的流程；回退此前成功页恢复原安装结束界面，升级身份不变；回退 WiX EULA 修复可能重新触发扩展安装拒绝。
+实现入口：[Windows WXS](../../packaging/windows/TianCaiSpaceHub.wxs)、[Windows Actions](../../.github/workflows/release-windows.yml)、[资源版本构建脚本](../../build.rs)、[MSI 元数据核验](../../scripts/verify-windows-msi.ps1)。本地测试包复用相同 WXS 与只读 MSI 元数据核验，不作为正式发布渠道；下面保留 2026-10-11 的历史验证边界。此前 v5 标签构建在 WiX 扩展安装报 `WIX7015`；补 EULA 后的 `b05b489` 两平台 Actions 已成功，Windows MSI/ZIP 已取得并静态核对，但用户从旧 v4 升级仍未通过。当时 WXS/资源修复的必要 Windows 编译与 EXE 数字资源核对通过，最终 WXS 的显示条件、默认/取消按钮及控件边界静态核对通过，新 Actions MSI 尚待生成；当时开发方没有本地打包、安装 MSI 或启动程序。确认/进度/成功页的中文显示、DPI、取消及非提升启动，升级/修复/卸载与静默流程仍待用户验收。独立 EXE 不含安装向导，不能用它证明界面已运行。回退本轮确认页恢复此前直接进入进度的流程；回退此前成功页恢复原安装结束界面，升级身份不变；回退 WiX EULA 修复可能重新触发扩展安装拒绝。
 
 当前 Windows 升级使用同一 UpgradeCode 和 `perMachine` scope，保留 `AllowSameVersionUpgrades=yes`、`Schedule=afterInstallInitialize`，识别到旧产品后在事务内先卸载旧布局。`IgnoreLanguage=yes` 让升级关系不再因旧包语言 `0` 与新包 `1033` 不同而漏检；不通过换 UpgradeCode 或安装 scope 绕过旧注册。`REINSTALLMODE=emus` 让参与重新安装的文件在缺失、同数字版本或较旧时重新复制，保留更高数字文件版本，并重写相应机器/用户注册表与快捷方式；用于同完整版本、不同 ProductCode 重建的安装时，参与安装或重新安装的文件仍按该规则复制；再次打开同一个 MSI 不会因此自动升级或重装。
 
@@ -106,7 +112,7 @@ Windows Actions 在 `Build MSI` 后、`Sign MSI` 前新增 `Verify MSI Upgrade M
 - 标签带 `-` 的二开版本沿用 Pre-release 标记，不自动设为 Latest；macOS 仅在标签发布或显式指定 `release_tag` 时，发布前最多等待 30 分钟确认同版 Windows 清单。普通 `main` 分支手动构建且 `release_tag` 留空时，跳过该等待和 Release 发布，产物通过 Actions artifact 交付。
 - [Windows 本地打包](../../scripts/package-hub-import.ps1)：基于已构建的程序生成导入测试包，拒绝覆盖同名产物，并记录版本、构建 profile、基线提交、本地变更、签名状态和 SHA-256。
 
-用户已要求所有发布安装包通过 GitHub Actions 生成；Windows 和 macOS 分别运行对应工作流，手动对分支构建时从 artifact 获取安装包。当前源码本地只做必要编译核对，例如：
+正式发布通过 GitHub Actions 生成安装包；Windows 和 macOS 分别运行对应工作流，手动对分支构建时从 artifact 获取安装包。2026-10-19 起按用户要求允许本地生成 Windows 测试 MSI，存放 `target/`，由用户安装，测试完毕再推送。必要本地编译示例：
 
 ```powershell
 cargo check --locked --target x86_64-pc-windows-msvc --features gui --tests --bin TianCaiSpaceHub
@@ -132,7 +138,7 @@ cargo build --locked --release --features gui --bin codexhub
 
 本次安装升级修复不新增普通配置或秘密存储字段，不修改用户运行配置、系统关联或已交付包；旧 MSI/EXE 的元数据和哈希保留原身份。回退 `IgnoreLanguage` 会恢复对旧语言 `0` 包的漏检；回退 `REINSTALLMODE` 或 Windows 资源 revision 会恢复同数字版本重建可能跳过文件的行为；回退本轮确认页会恢复此前直接进入进度的流程，维护/修复仍按对应包处理。回退产品须正常退出、备份并核对配置兼容，按所选包明确处理已有安装；同三段 MSI 版本与第四字段文件版本分别比较，不能承诺直接覆盖安装旧包即完成降级。本机已发生的新旧产品同时注册属于待用户验证的升级修复场景，本轮不由开发方执行卸载、注册表清理或关联重置。
 
-本轮 MSI 仍使用同一 UpgradeCode，安排在安装新文件前卸载旧布局；文件和快捷方式路径发生变化的组件使用新 GUID，网页导入注册表组件保持原身份。安装、升级、回滚和卸载必须在 Actions 生成安装包后分别验收，源码和编译核对不能替代 MSI 实机结果。便携旧文件不被源码更名自动删除；拿到新包后应退出旧进程，并从新程序位置重新注册用户级网页导入。回退同样需要使用旧包及对应路径重新注册。
+本轮 MSI 仍使用同一 UpgradeCode，安排在安装新文件前卸载旧布局；文件和快捷方式路径发生变化的组件使用新 GUID，网页导入注册表组件保持原身份。安装、升级、回滚和卸载必须使用实际交付包分别验收，源码和编译核对不能替代 MSI 实机结果；本地测试包与正式 Actions 包分别记录。便携旧文件不被源码更名自动删除；拿到新包后应退出旧进程，并从新程序位置重新注册用户级网页导入。回退同样需要使用旧包及对应路径重新注册。
 
 网页导入 MSI 使用系统级关联，便携版使用当前用户关联；用户级关联可能优先，移动便携程序后需重新注册。只解除当前程序拥有的关联，详见 [网页导入](../hub-external-import.md)。
 
@@ -143,6 +149,8 @@ macOS 保持 `com.codexhub.app` 的安装身份，完整 App 声明导入协议�
 根目录 `RELEASE_NOTES.md` 和 `UPDATE_NOTES.md` 仍被发布工作流读取，不能当作旧残留删除；后者保持最多四条。新包必须记录实际构建来源和是否签名，不自动发布或覆盖已交付文件。
 
 ## 当前交付状态
+
+最新为 [2026-10-20 源码提交](../releases/v0.4.30-5.md#2026-10-20-兼容修复源码提交与-fast-参数核对)。2026-10-19 的本地 debug MSI 继续保留原文件与哈希，尚无本次正式新包；下方为安装机制及较早 Actions 交付历史，不表示已为最新源码重打包。
 
 ### 本轮：2026-10-11 Windows MSI 升级识别、文件版本与安装流程修复
 

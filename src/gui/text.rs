@@ -964,6 +964,17 @@ impl GuiText {
         }
     }
 
+    pub(super) fn codex_enhanced_launch_timeout(self) -> &'static str {
+        match self.locale {
+            GuiLocale::ZhCn => {
+                "增强启动等待超时，尚未确认配置同步完成。请保留此提示并导出连接诊断包。"
+            }
+            GuiLocale::EnUs => {
+                "Enhanced startup timed out before configuration sync could be confirmed. Keep this message and export connection diagnostics."
+            }
+        }
+    }
+
     pub(super) fn codex_enhanced_launch_close_title(self) -> &'static str {
         match self.locale {
             GuiLocale::ZhCn => "请先关闭 Codex App",

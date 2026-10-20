@@ -15,7 +15,8 @@ use super::{
 };
 
 const GUI_SESSION_HISTORY_TIMEOUT: Duration = Duration::from_secs(30);
-const GUI_CODEX_ENHANCED_LAUNCH_TIMEOUT: Duration = Duration::from_secs(60);
+const GUI_CODEX_ENHANCED_LAUNCH_TIMEOUT: Duration =
+    crate::codex_app_enhanced::ENHANCED_LAUNCH_TIMEOUT.saturating_add(Duration::from_secs(10));
 const GUI_REQUEST_LOG_CLEANUP_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const GUI_WECHAT_ONBOARD_POLL_TIMEOUT: Duration = Duration::from_secs(45);
 
@@ -116,10 +117,22 @@ impl ApiClient {
         &self,
         request: reqwest::blocking::RequestBuilder,
     ) -> Result<String, String> {
+        self.request_text_with_launch_context(request, false)
+    }
+
+    fn request_text_with_launch_context(
+        &self,
+        request: reqwest::blocking::RequestBuilder,
+        enhanced_launch: bool,
+    ) -> Result<String, String> {
         let response = request.send().map_err(|err| {
             let err_text = err.to_string();
             if err.is_timeout() {
-                self.text.api_timeout(&self.base_url, &err_text)
+                if enhanced_launch {
+                    self.text.codex_enhanced_launch_timeout().to_string()
+                } else {
+                    self.text.api_timeout(&self.base_url, &err_text)
+                }
             } else if err.is_connect() {
                 self.text.api_connect_failed(&self.base_url, &err_text)
             } else {
@@ -276,10 +289,14 @@ impl ApiClient {
     }
 
     pub(super) fn launch_codex_app_enhanced(&self) -> Result<serde_json::Value, String> {
-        self.post_empty_with_timeout(
-            "/api/codex-app/enhanced-launch",
-            GUI_CODEX_ENHANCED_LAUNCH_TIMEOUT,
-        )
+        let path = "/api/codex-app/enhanced-launch";
+        let body = self.request_text_with_launch_context(
+            self.http
+                .post(self.url(path))
+                .timeout(GUI_CODEX_ENHANCED_LAUNCH_TIMEOUT),
+            true,
+        )?;
+        self.parse_response(path, &body)
     }
 
     pub(super) fn codex_app_enhanced_preflight(

@@ -147,8 +147,13 @@ fn should_write_default(line: &str) -> bool {
                 .and_then(|event| event.split_ascii_whitespace().next()),
             Some(
                 "browser_fallback_ready"
+                    | "browser_fallback_attach_started"
+                    | "browser_fallback_attached"
+                    | "browser_fallback_install_started"
                     | "model_controls_source_adapted"
                     | "model_controls_source_preserved"
+                    | "model_controls_optional_status"
+                    | "model_controls_optional_unavailable"
                     | "browser_session_interrupted"
             )
         )

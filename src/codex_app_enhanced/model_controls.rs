@@ -26,9 +26,9 @@ pub(super) fn startup_reload_guard() -> &'static str {
       const afterLoad = () => setTimeout(() => {
         if (window.location.protocol !== 'app:') return;
         const source = window.__CODEXHUB_MODEL_CONTROLS_SOURCE__;
-        const ready = source?.version === 2 && source.fastUi === true
-          && source.fastRequest === true && source.ultraModels === true;
-        if (!ready && window.__CODEXHUB_ENHANCED_MODE__?.modelControlsEnabled === true) {
+        // Only retry a missed initial capture. A partial adaptation is usable;
+        // unsupported optional components must not trigger another refresh.
+        if (source?.version !== 2 && window.__CODEXHUB_ENHANCED_MODE__?.modelControlsEnabled === true) {
           window.location.reload();
         }
       }, 250);
@@ -114,13 +114,19 @@ fn replace_unique(
 
 fn adapt_source(source: String) -> AdaptedSource {
     static FAST_UI: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r#"(?P<host>[$\w]+)=e\?\.hostId\?\?[$\w]+,(?P<auth>[$\w]+)=[$\w]+\((?P<auth_host>[$\w]+)\),(?P<allowed>[$\w]+)=(?P<chat_auth>[$\w]+)\?\.authMethod===`chatgpt`\|\|(?P<pat_auth>[$\w]+)\?\.authMethod===`personalAccessToken`"#).expect("Fast UI adapter pattern")
+        // Boolean availability and access-state layouts share this auth/host
+        // prefix. Validate the matching result and requirements in the tail.
+        Regex::new(r#"(?P<host>[$\w]+)=e\?\.hostId\?\?[$\w]+,(?P<auth>[$\w]+)=[$\w]+\((?P<auth_host>[$\w]+)\),(?P<allowed>[$\w]+)=(?P<chat_auth>[$\w]+)\?\.authMethod===`chatgpt`(?:\|\|(?P<pat_auth>[$\w]+)\?\.authMethod===`personalAccessToken`)?,"#).expect("Fast UI adapter pattern")
     });
     static FAST_REQUEST: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r#"async function [$\w]+\((?P<scope>[$\w]+),(?P<host>[$\w]+)\)\{let (?P<auth>[$\w]+)=await [$\w]+\((?P<auth_scope>[$\w]+),(?P<auth_host>[$\w]+)\);if\((?P<chat_auth>[$\w]+)!==`chatgpt`&&(?P<pat_auth>[$\w]+)!==`personalAccessToken`\)return null;let (?P<requirements>[$\w]+)=await [$\w]+\((?P<requirements_scope>[$\w]+),(?P<requirements_host>[$\w]+),\{priority:`critical`\}\);return (?P<cache_scope>[$\w]+)\.query\.setData\([$\w]+,\{authMethod:(?P<cache_auth>[$\w]+),hostId:(?P<cache_host>[$\w]+)\},(?P<cache_requirements>[$\w]+)\),[$\w]+\((?P<access_requirements>[$\w]+)\)\}"#).expect("Fast request adapter pattern")
+        // Preserve each helper's original return type, query/cache operations
+        // and requirements result; only scope its authentication early return.
+        Regex::new(r#"async function [$\w]+\((?P<scope>[$\w]+),(?P<host>[$\w]+)\)\{let (?P<auth>[$\w]+)=await [$\w]+\((?P<auth_scope>[$\w]+),(?P<auth_host>[$\w]+)\);(?P<denial>if\((?P<chat_auth>[$\w]+)!==`chatgpt`(?:&&(?P<pat_auth>[$\w]+)!==`personalAccessToken`)?\))return(?: null|!1);let (?P<requirements>[$\w]+)=await [$\w]+\((?P<requirements_scope>[$\w]+),(?P<requirements_host>[$\w]+),\{priority:`critical`\}\);return (?P<cache_scope>[$\w]+)\.query\.setData\([$\w]+,\{authMethod:(?P<cache_auth>[$\w]+),hostId:(?P<cache_host>[$\w]+)\},(?P<cache_requirements>[$\w]+)\),(?:[$\w]+\((?P<access_requirements>[$\w]+)\)|(?P<boolean_requirements>[$\w]+)\.requirements\?\.featureRequirements\?\.fast_mode!==!1)\}"#).expect("Fast request adapter pattern")
     });
     static ULTRA_MODELS: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r#"hostId:(?P<host>[$\w]+),includeUltraReasoningEffort:(?P<include>[$\w]+),isCustomModelProvider:[$\w]+,limit:[$\w]+,modelCatalogPath:[$\w]+,modelProvider:[$\w]+,teamCatalog:[$\w]+\},\{get:(?P<get>[$\w]+),queryClient:[$\w]+,scope:[$\w]+\}\)=>\{[^;\n]{0,1600}?,(?P<gate>[$\w]+)=(?P<requested>[$\w]+)&&(?P<getter>[$\w]+)\([$\w]+,`1186680773`\);return\{queryKey:"#).expect("Ultra models adapter pattern")
+        // 26.1007 omits teamCatalog; 26.1013 adds it to the same query.
+        // Both layouts still require the exact gate and verified reused locals.
+        Regex::new(r#"hostId:(?P<host>[$\w]+),includeUltraReasoningEffort:(?P<include>[$\w]+),isCustomModelProvider:[$\w]+,limit:[$\w]+,modelCatalogPath:[$\w]+,modelProvider:[$\w]+(?:,teamCatalog:[$\w]+)?\},\{get:(?P<get>[$\w]+),queryClient:[$\w]+,scope:[$\w]+\}\)=>\{[^;\n]{0,1600}?,(?P<gate>[$\w]+)=(?P<requested>[$\w]+)&&(?P<getter>[$\w]+)\([$\w]+,`1186680773`\);return\{queryKey:"#).expect("Ultra models adapter pattern")
     });
     static SETTINGS_SECTIONS: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r#"function [$\w]+\(e\)\{let [$\w]+=[^;\n]{0,100}?,\{workConfiguration:(?P<work>[$\w]+)\}=e,\{selectedHostId:(?P<host>[$\w]+)\}=[$\w]+\(\),[^;\n]{0,300}?,(?P<dependencies>[$\w]+)=(?P<gate_fn>[$\w]+)\((?P<dependencies_gate>[$\w]+)\),(?P<other>[$\w]+)=(?P<other_gate_fn>[$\w]+)\(`2106641128`\),(?P<models>[$\w]+)=(?P<models_gate_fn>[$\w]+)\(`3693343337`\)"#).expect("Configuration sections adapter pattern")
@@ -133,19 +139,29 @@ fn adapt_source(source: String) -> AdaptedSource {
         return adapted;
     }
     adapted.fast_ui = replace_unique(&mut adapted.source, &FAST_UI, |c, tail| {
-        if c["auth"] != c["chat_auth"] || c["auth"] != c["pat_auth"] || c["host"] != c["auth_host"]
+        if c["auth"] != c["chat_auth"]
+            || c.name("pat_auth")
+                .is_some_and(|auth| auth.as_str() != &c["auth"])
+            || c["host"] != c["auth_host"]
         {
             return None;
         }
         let tail: String = tail.chars().take(1000).collect();
         let tail = tail.split("}var ").next()?;
-        if !tail.contains("serviceTierAccess:")
+        let recognized_result = tail.contains("serviceTierAccess:")
+            || (tail.contains("isServiceTierAllowed:")
+                && tail.contains("?.requirements?.featureRequirements?.fast_mode!==!1"));
+        if !recognized_result
             || !tail.contains(&format!("={}&&!", &c["allowed"]))
             || !tail.contains(&format!("hostId:{}", &c["host"]))
         {
             return None;
         }
-        Some(format!("{}||{}", &c[0], local_guard(&c["host"])))
+        Some(format!(
+            "{}||{},",
+            c[0].strip_suffix(',')?,
+            local_guard(&c["host"])
+        ))
     });
     adapted.fast_request = replace_unique(&mut adapted.source, &FAST_REQUEST, |c, _| {
         for (expected, names) in [
@@ -157,27 +173,29 @@ fn adapt_source(source: String) -> AdaptedSource {
                 "host",
                 &["auth_host", "requirements_host", "cache_host"][..],
             ),
-            ("auth", &["chat_auth", "pat_auth", "cache_auth"][..]),
-            (
-                "requirements",
-                &["cache_requirements", "access_requirements"][..],
-            ),
+            ("auth", &["chat_auth", "cache_auth"][..]),
+            ("requirements", &["cache_requirements"][..]),
         ] {
             if names.iter().any(|name| c[expected] != c[*name]) {
                 return None;
             }
         }
-        let denial = format!(
-            "if({}!==`chatgpt`&&{}!==`personalAccessToken`)",
-            &c["auth"], &c["auth"]
-        );
+        let returned_requirements = c
+            .name("access_requirements")
+            .or_else(|| c.name("boolean_requirements"))?;
+        if returned_requirements.as_str() != &c["requirements"]
+            || c.name("pat_auth")
+                .is_some_and(|auth| auth.as_str() != &c["auth"])
+        {
+            return None;
+        }
+        let denial = &c["denial"];
         let scoped_denial = format!(
-            "if({}!==`chatgpt`&&{}!==`personalAccessToken`&&!{})",
-            &c["auth"],
-            &c["auth"],
+            "{}&&!{})",
+            denial.strip_suffix(')')?,
             local_guard(&c["host"])
         );
-        Some(c[0].replacen(&denial, &scoped_denial, 1))
+        Some(c[0].replacen(denial, &scoped_denial, 1))
     });
     adapted.ultra_models = replace_unique(&mut adapted.source, &ULTRA_MODELS, |c, tail| {
         if c["include"] != c["requested"] || c["get"] != c["getter"] {
@@ -452,6 +470,8 @@ mod tests {
 
     const UI: &str = "function picker(e){let root=getRoot(),host=e?.hostId??root,auth=readAuth(host),allowed=auth?.authMethod===`chatgpt`||auth?.authMethod===`personalAccessToken`,method=auth?.authMethod??null,query={authMethod:method,hostId:host};let data=readRequirements(query),result=allowed&&!loading&&data!=null?access(data):null;return{serviceTierAccess:result,isLoading:loading}}var next;";
     const REQUEST: &str = "async function request(scope,host){let auth=await readAuth(scope,host);if(auth!==`chatgpt`&&auth!==`personalAccessToken`)return null;let requirements=await readRequirements(scope,host,{priority:`critical`});return scope.query.setData(requirementsQuery,{authMethod:auth,hostId:host},requirements),access(requirements)}";
+    const BOOLEAN_UI: &str = "function picker(e){let root=getRoot(),host=e?.hostId??root,auth=readAuth(host),allowed=auth?.authMethod===`chatgpt`,method=auth?.authMethod??null,query={authMethod:method,hostId:host};let{data:requirements,isPending:pending}=readRequirements(query),loading=!!auth?.isLoading||allowed&&pending,result=allowed&&!loading&&requirements!=null&&requirements?.requirements?.featureRequirements?.fast_mode!==!1;return{isServiceTierAllowed:result,isLoading:loading}}var next;";
+    const BOOLEAN_REQUEST: &str = "async function request(scope,host){let auth=await readAuth(scope,host);if(auth!==`chatgpt`)return!1;let requirements=await readRequirements(scope,host,{priority:`critical`});return scope.query.setData(requirementsQuery,{authMethod:auth,hostId:host},requirements),requirements.requirements?.featureRequirements?.fast_mode!==!1}";
     const MODELS: &str = "modelsQuery=readQuery(scope,({hostId:host,includeUltraReasoningEffort:include,isCustomModelProvider:custom,limit:limit,modelCatalogPath:path,modelProvider:provider,teamCatalog:team},{get:getter,queryClient:queryClient,scope:scope})=>{let enabled=include&&getter(gate,`1186680773`);return{queryKey:[host],queryFn:()=>client.sendRequest(`model/list`,{}),select:({data})=>select({includeUltraReasoningEffort:enabled,models:data})}})";
 
     #[test]
@@ -493,6 +513,8 @@ mod tests {
             ),
             REQUEST.replace("hostId:host", "hostId:different"),
             REQUEST.replace("access(requirements)", "access(different)"),
+            BOOLEAN_REQUEST.replace("hostId:host", "hostId:different"),
+            BOOLEAN_REQUEST.replace("),requirements.requirements?", "),different.requirements?"),
         ] {
             let adapted = adapt_source(altered.clone());
             assert!(!adapted.changed());
@@ -501,10 +523,41 @@ mod tests {
     }
 
     #[test]
+    fn boolean_fast_controls_keep_loading_requirements_and_return_types() {
+        let adapted = adapt_source(format!("{BOOLEAN_UI}{BOOLEAN_REQUEST}"));
+        assert!(adapted.fast_ui && adapted.fast_request);
+        assert!(!adapted.ultra_models && !adapted.settings_sections);
+        assert!(adapted.source.contains("if(auth!==`chatgpt`&&!"));
+        assert!(adapted.source.contains(
+            "loading=!!auth?.isLoading||allowed&&pending,result=allowed&&!loading&&requirements!=null&&requirements?.requirements?.featureRequirements?.fast_mode!==!1"
+        ));
+        assert!(adapted.source.contains(
+            "requirements),requirements.requirements?.featureRequirements?.fast_mode!==!1"
+        ));
+        assert!(
+            adapted
+                .source
+                .contains("readRequirements(scope,host,{priority:`critical`})")
+        );
+        assert!(adapted.source.contains(
+            "query.setData(requirementsQuery,{authMethod:auth,hostId:host},requirements)"
+        ));
+        assert!(
+            adapted
+                .source
+                .contains("modelControlsEnabled===true&&host===`local`")
+        );
+        assert!(adapted.source.contains(")return!1;"));
+        assert!(!adapted.source.contains("authMethod:`chatgpt`"));
+    }
+
+    #[test]
     fn unknown_and_ambiguous_modules_keep_original_source() {
         for source in [
             "export const unrelated=true;".to_string(),
             format!("{REQUEST}{REQUEST}"),
+            format!("{REQUEST}{BOOLEAN_REQUEST}"),
+            format!("{UI}{BOOLEAN_UI}"),
         ] {
             let adapted = adapt_source(source.clone());
             assert!(!adapted.changed());
