@@ -44,6 +44,18 @@ pub(super) fn fetch_options() -> Value {
         {"urlPattern": "app://*/assets/read-service-tier-for-request-*.js", "requestStage": "Response"},
         {"urlPattern": "app://*/assets/model-list-filter-*.js", "requestStage": "Response"},
         {"urlPattern": "app://*/assets/configuration-panel-*.js", "requestStage": "Response"}
+        ,{"urlPattern": "app://*/assets/app-primary-*.js", "requestStage": "Response"}
+        ,{"urlPattern": "app://*/assets/model-and-reasoning-*.js", "requestStage": "Response"}
+        ,{"urlPattern": "app://*/assets/use-user-settings-*.js", "requestStage": "Response"}
+        ,{"urlPattern": "app://*/assets/composer-*.js", "requestStage": "Response"}
+        ,{"urlPattern": "app://*/assets/plugins-*.js", "requestStage": "Response"}
+        ,{"urlPattern": "app://*/assets/plugin-*.js", "requestStage": "Response"}
+        ,{"urlPattern": "app://*/assets/use-browser-*.js", "requestStage": "Response"}
+        ,{"urlPattern": "app://*/assets/browser-*.js", "requestStage": "Response"}
+        ,{"urlPattern": "app://*/assets/app-shared-*.js", "requestStage": "Response"}
+        ,{"urlPattern": "app://*/assets/model-picker-*.js", "requestStage": "Response"}
+        ,{"urlPattern": "app://*/assets/use-is-plugins-enabled-*.js", "requestStage": "Response"}
+        ,{"urlPattern": "app://*/assets/use-plugin-install-flow-*.js", "requestStage": "Response"}
     ]})
 }
 
@@ -63,6 +75,18 @@ fn supported_script_url(raw: &str) -> bool {
             "read-service-tier-for-request-",
             "model-list-filter-",
             "configuration-panel-",
+            "app-primary-",
+            "model-and-reasoning-",
+            "use-user-settings-",
+            "composer-",
+            "plugins-",
+            "plugin-",
+            "use-browser-",
+            "browser-",
+            "app-shared-",
+            "model-picker-",
+            "use-is-plugins-enabled-",
+            "use-plugin-install-flow-",
         ]
         .iter()
         .any(|prefix| name.starts_with(prefix))
@@ -81,11 +105,16 @@ struct AdaptedSource {
     fast_request: bool,
     ultra_models: bool,
     settings_sections: bool,
+    extra_controls: bool,
 }
 
 impl AdaptedSource {
     fn changed(&self) -> bool {
-        self.fast_ui || self.fast_request || self.ultra_models || self.settings_sections
+        self.fast_ui
+            || self.fast_request
+            || self.ultra_models
+            || self.settings_sections
+            || self.extra_controls
     }
 }
 
@@ -293,6 +322,7 @@ struct PausedScript {
 pub(super) struct Interceptor {
     pending_bodies: HashMap<u64, PausedScript>,
     pending_fulfillments: HashMap<u64, PausedScript>,
+    pending_adapters: HashMap<u64, (PausedScript, AdaptedSource)>,
 }
 
 impl Interceptor {
@@ -314,6 +344,17 @@ impl Interceptor {
                 }
             }
         }
+        let ids: Vec<_> = self
+            .pending_adapters
+            .iter()
+            .filter(|(_, (p, _))| p.started.elapsed() >= Duration::from_secs(10))
+            .map(|(id, _)| *id)
+            .collect();
+        for id in ids {
+            if let Some((request, _)) = self.pending_adapters.remove(&id) {
+                expired.push(request);
+            }
+        }
         for request in expired {
             continue_script(socket, command_id, &request).await?;
             chain_log::write_line(
@@ -331,6 +372,31 @@ impl Interceptor {
         message: &Value,
     ) -> Result<()> {
         if let Some(id) = message.get("id").and_then(Value::as_u64)
+            && let Some((paused, mut adapted)) = self.pending_adapters.remove(&id)
+        {
+            if message["result"].get("exceptionDetails").is_none()
+                && let Some(value) = message["result"]["result"].get("value")
+                && let Some(source) = value["source"].as_str()
+                && source.len() <= MAX_SCRIPT_BYTES + 128 * 1024
+            {
+                adapted.source = source.to_string();
+                adapted.extra_controls = [
+                    "power",
+                    "ultraPreference",
+                    "goal",
+                    "pluginUi",
+                    "browserUi",
+                    "computerUi",
+                    "locale",
+                ]
+                .iter()
+                .any(|key| value[*key].as_bool() == Some(true));
+            }
+            return self
+                .finish_adaptation(socket, command_id, paused, adapted)
+                .await;
+        }
+        if let Some(id) = message.get("id").and_then(Value::as_u64)
             && let Some(paused) = self.pending_fulfillments.remove(&id)
         {
             if message.get("error").is_some() {
@@ -342,50 +408,26 @@ impl Interceptor {
         if let Some(id) = message.get("id").and_then(Value::as_u64)
             && let Some(paused) = self.pending_bodies.remove(&id)
         {
-            let adapted = decode_and_adapt(message);
-            match adapted {
-                Ok(adapted) if adapted.changed() => {
-                    let mut headers = paused.headers.as_array().cloned().unwrap_or_default();
-                    headers.retain(|header| {
-                        ![
-                            "content-length",
-                            "content-encoding",
-                            "etag",
-                            "cache-control",
-                            "last-modified",
-                        ]
-                        .iter()
-                        .any(|name| {
-                            header["name"]
-                                .as_str()
-                                .is_some_and(|actual| actual.eq_ignore_ascii_case(name))
-                        })
-                    });
-                    headers.push(json!({"name": "Cache-Control", "value": "no-store"}));
-                    let id = send_cdp_request(socket, command_id, Some(&paused.session_id), "Fetch.fulfillRequest", json!({
-                        "requestId": paused.request_id,
-                        "responseCode": paused.status,
-                        "responseHeaders": headers,
-                        "body": base64::engine::general_purpose::STANDARD.encode(adapted.source.as_bytes()),
-                    })).await?;
-                    self.pending_fulfillments.insert(id, paused);
-                    chain_log::write_line(format!(
-                        "[codex_app_enhanced] event=model_controls_source_adapted fast_ui={} fast_request={} ultra_models={} settings_sections={}",
-                        adapted.fast_ui,
-                        adapted.fast_request,
-                        adapted.ultra_models,
-                        adapted.settings_sections
-                    ));
+            match decode_and_adapt(message) {
+                Ok(adapted) => {
+                    // Run the pure optional adapter inside the attached renderer;
+                    // no installed Node/Python dependency and no persistent patch.
+                    let expression = format!(
+                        "({})({})",
+                        include_str!("../../assets/codex-repair/renderer-adapter.js"),
+                        serde_json::to_string(&adapted.source)?
+                    );
+                    let id = send_cdp_request(
+                        socket,
+                        command_id,
+                        Some(&paused.session_id),
+                        "Runtime.evaluate",
+                        json!({"expression": expression, "returnByValue": true, "silent": true}),
+                    )
+                    .await?;
+                    self.pending_adapters.insert(id, (paused, adapted));
                 }
-                other => {
-                    chain_log::write_line(format!(
-                        "[codex_app_enhanced] event=model_controls_source_preserved reason={}",
-                        if other.is_err() {
-                            "body_unavailable"
-                        } else {
-                            "unsupported_layout"
-                        }
-                    ));
+                Err(_) => {
                     continue_script(socket, command_id, &paused).await?;
                 }
             }
@@ -412,7 +454,10 @@ impl Interceptor {
             || !params["request"]["url"]
                 .as_str()
                 .is_some_and(supported_script_url)
-            || self.pending_bodies.len() + self.pending_fulfillments.len() >= 16
+            || self.pending_bodies.len()
+                + self.pending_fulfillments.len()
+                + self.pending_adapters.len()
+                >= 16
         {
             return continue_script(socket, command_id, &paused).await;
         }
@@ -425,6 +470,53 @@ impl Interceptor {
         )
         .await?;
         self.pending_bodies.insert(id, paused);
+        Ok(())
+    }
+
+    async fn finish_adaptation(
+        &mut self,
+        socket: &mut CdpSocket,
+        command_id: &mut u64,
+        paused: PausedScript,
+        adapted: AdaptedSource,
+    ) -> Result<()> {
+        if adapted.changed() {
+            let mut headers = paused.headers.as_array().cloned().unwrap_or_default();
+            headers.retain(|header| {
+                ![
+                    "content-length",
+                    "content-encoding",
+                    "etag",
+                    "cache-control",
+                    "last-modified",
+                ]
+                .iter()
+                .any(|name| {
+                    header["name"]
+                        .as_str()
+                        .is_some_and(|actual| actual.eq_ignore_ascii_case(name))
+                })
+            });
+            headers.push(json!({"name": "Cache-Control", "value": "no-store"}));
+            let id = send_cdp_request(socket, command_id, Some(&paused.session_id), "Fetch.fulfillRequest", json!({
+                        "requestId": paused.request_id,
+                        "responseCode": paused.status,
+                        "responseHeaders": headers,
+                        "body": base64::engine::general_purpose::STANDARD.encode(adapted.source.as_bytes()),
+                    })).await?;
+            self.pending_fulfillments.insert(id, paused);
+            chain_log::write_line(format!(
+                "[codex_app_enhanced] event=model_controls_source_adapted fast_ui={} fast_request={} ultra_models={} settings_sections={} extra_controls={}",
+                adapted.fast_ui,
+                adapted.fast_request,
+                adapted.ultra_models,
+                adapted.settings_sections,
+                adapted.extra_controls
+            ));
+        } else {
+            chain_log::write_line("[codex_app_enhanced] event=model_controls_source_preserved reason=unsupported_layout".to_string());
+            continue_script(socket, command_id, &paused).await?;
+        }
         Ok(())
     }
 }

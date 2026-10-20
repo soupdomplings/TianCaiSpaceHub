@@ -1,12 +1,12 @@
 # 动态 Codex 可见模型
 
-维护日期：2026-10-20。当前开发版本 `v0.4.30-5`、唯一 `main`，关联 TC-006、TC-007。已收到实际旧机资源，补齐布尔型 Fast 界面/请求结构，与较新的访问状态结构共用唯一匹配和局部变量校验；Ultra 既有过滤兼容保留。Fast、Ultra 和设置入口继续独立可选，缺项不阻塞模型列表、语言等基础启动检查。必要编译和本地测试 MSI 见 [构建交付](releases/v0.4.30-5.md#2026-10-19-旧版布尔型-fast-结构兼容)，本次按用户要求提交源码及有限 Fast 参数核对见 [最新状态](releases/v0.4.30-5.md#2026-10-20-兼容修复源码提交与-fast-参数核对)；现有本机请求结果不扩展为本轮测试包、全部版本、全部思考强度或 macOS 已验收。版本沿革见 [二开变更记录](customizations/CHANGELOG.md)。 本轮 Commands 模式、状态库原生迁移保护和独立修复按钮源码已随 `500574c` 推送；Windows/macOS Actions 已开始，见 [最新打包](releases/v0.4.30-5.md#2026-10-20-启动修复源码提交与两平台打包已启动)，不把启动构建当作实机验收。
+维护日期：2026-10-20。当前开发版本 `v0.4.30-7`、唯一 `main`，关联 TC-006、TC-007。保留前轮 Fast 布尔/访问状态结构、Ultra 模型过滤、设置入口与独立可选启动策略；v6 增强脚本 v24 新增 Power、Ultra 本地偏好 fallback、Goal、语言和插件/浏览器组件的定向适配，并提供统一的 [检查与修复中心](customizations/codex-repair-center.md)。缺项仍不阻塞模型列表、语言等基础启动检查。v7 启动修复另补齐程序路径绑定，见 [启动修复](customizations/codex-startup-repair.md#程序路径修复与恢复)。当前源码、构建、测试包及待用户验收状态见 [v7 交付](releases/v0.4.30-7.md)，尚未提交、推送或发布。前轮源码与 Actions、现有 Fast 请求核对保留在 [v5 历史交付](releases/v0.4.30-5.md)；这些结果不等于本轮全部选项或 macOS 已验收。版本沿革见 [二开变更记录](customizations/CHANGELOG.md)。
 
 Codex 可见模型现在支持内置目录之外的模型。模型来源包括已配置渠道保存的模型列表，以及 Codex 接入页中手动输入的模型 ID。
 
 ## 初始化与增强启动固定 Codex 对话模式
 
-「无法加载组织设置」且原生日志为 SQLite 初始化失败的情况，可点击本页本地配置区的“修复无法加载组织设置”，见 [状态库检查与修复](customizations/codex-startup-repair.md#hub-内置按钮与使用)。Hub 保持打开，仅要求 ChatGPT/Codex 完全退出，自动检查备份，无需单独脚本或 Python。本轮 Hub 源码停止提前创建原生远程控制 schema，增强启动不自动修复旧库；该问题与本节 Work 模式身份检查分开处理，修正对话模式不能替代状态库修复。
+「无法加载组织设置」可点击本页本地配置区的“检查与修复”，选择“无法加载组织设置 / 启动失败”，见 [状态库检查与修复](customizations/codex-startup-repair.md#hub-内置按钮与使用)。Hub 保持打开，仅要求 ChatGPT/Codex 完全退出后才能应用修复；窗口分别检查/修复内置程序路径与已知状态库迁移冲突，未命中迁移冲突仍可重绑路径；备份和恢复均在窗口完成，无需单独脚本或 Python。Hub 已停止提前创建原生远程控制 schema，增强启动不自动修复旧库；该问题与本节 Work 模式身份检查分开处理，修正对话模式不能替代状态库修复。
 
 2026-10-20：初始化、“更新 Codex 配置”和每次增强启动前，Hub 都确保当前 Codex home 的 `config.toml` 包含以下值。键属于 `[desktop]`，不是 TOML 顶层或 Provider 段：
 
@@ -45,7 +45,7 @@ Fast 开关依据 [OpenAI 官方速度配置说明](https://learn.chatgpt.com/do
 
 增强启动通过原有本机 CDP 会话，定向适配内存中加载的模型控制脚本：只在当前 Provider 确认为本 Hub 受管 `ai-gateway`、且 `features.fast_mode=true` 时启用，具体例外限定 `hostId=local`。Fast 支持已核对的 `isServiceTierAllowed` 布尔结构和 `serviceTierAccess` 访问状态结构：旧版仅判断 ChatGPT 认证、请求返回 false/布尔 requirements；较新版另支持 PAT、返回 null/访问状态对象。只向各自原认证条件增加受管本机分支，保留原返回类型、认证读取、待加载/空数据保护、真实 requirements、缓存、显式禁止项及失败处理，不强制返回可用，也不改全局账号或 Provider 身份。ULTRA 仅放行本地模型查询的显示过滤，仍须推理列表勾选和模型真实能力，不全局覆盖 Statsig gate。前两份资源的模型配置查询默认 `includeUltraReasoningEffort=true`，Hub 不为此改 ChatGPT 账号设置或额外写入 slider 配置。
 
-适配不按 Codex 版本号、版本白名单或 ASAR 哈希选择分支，而是识别加载模块的关键字段、调用结构并核对局部变量；例如 `teamCatalog` 有无均按实际结构处理。source marker v2 / 增强脚本 v23 是 Hub 自身脚本标记，不是 Codex 版本限制。无法唯一识别的可选结构保持原脚本，不将缺少 Fast 或 Ultra 作为启动错误，也不阻止另一项成功适配。两项都未适配时仍按客户端原有行为启动；已安装的拦截器继续处理后续按需加载的模块。当前不能保证所有历史和未来版本均出现这些选项，成功启动也不代表所有增强选项可用。
+适配不按 Codex 版本号、版本白名单或 ASAR 哈希选择分支，而是识别加载模块的关键字段、调用结构并核对局部变量；例如 `teamCatalog` 有无均按实际结构处理。source marker v2 / 增强脚本 v24 是 Hub 自身脚本标记，不是 Codex 版本限制。无法唯一识别的可选结构保持原脚本，不将缺少 Fast 或 Ultra 作为启动错误，也不阻止另一项成功适配。两项都未适配时仍按客户端原有行为启动；已安装的拦截器继续处理后续按需加载的模块。当前不能保证所有历史和未来版本均出现这些选项，成功启动也不代表所有增强选项可用。修复中心内的原生二进制或旧 service 专项另要求完整文件哈希，不套用本段页面匹配规则。
 
 新提供的实际旧机 ASAR 资源元数据为 `26.917.51856`，与此前 `26.1007.71326` 不同；这些值仅表示资源样本，不是适配白名单或桌面显示版本。旧机使用 `isServiceTierAllowed` 布尔 UI 及返回 false 的请求 helper，旧规则只识别较新访问状态结构，故原日志 Fast 两项未加载，而 Ultra 已加载。本轮补齐这两种 Fast 结构的共同认证/host 前缀和已核对结果形态，增加逗号边界，校验所有复用变量和结果，再在整个模块唯一匹配时修改。三份实际资源中 Fast UI/请求与 Ultra 均各唯一匹配，静态等效改写后完整模块语法通过；旧机本轮实机仍待用户验收。[前轮诊断](releases/v0.4.30-5.md#2026-10-19-较旧客户端-fast-适配缺项诊断) 中“尚缺该机资源”属于当时状态，现已补齐。
 
@@ -57,11 +57,11 @@ Fast 开关依据 [OpenAI 官方速度配置说明](https://learn.chatgpt.com/do
 | Fast 请求 | 布尔型和访问状态型 helper 均有独立认证判断；使用同范围例外，原返回类型、requirements 查询、缓存和结果计算保留 | 显示标志或源码标记不证明请求已使用 Fast；需选择 Fast 后在实际模型请求中核对 `service_tier=priority`，仅模型列表请求或模型口头回复不能证明 |
 | Ultra 模型列表 | 普通 Codex 查询默认 `includeUltraReasoningEffort=true`；随后依次应用 `1186680773`、`enabled-reasoning-efforts` 和真实 `supportedReasoningEfforts`，配置页开关写同一推理列表 | 仅适配本地查询的 gate；已勾选且模型真实支持时才提供该档，不改其他调用的 gate 或模型能力 |
 
-此前两份资源的调查未发现需要套用 skill 旧 Power 滑块或账户迁移 fallback 的证据；新旧机资源中虽存在 `chatgpt-ultra-effort-migration`，本轮不改该账户迁移分支。其 Codex Ultra `model/list` 查询已由现有规则唯一识别，补齐 Fast 不要求同时改写账户偏好或安装 ASAR。只参考 `codex-windows-fast-patch` 的 Fast UI/请求分层和旧布尔型结构保护，没有运行 skill 安装、重签名、修补或真实请求验证；Windows MSIX 工作流也不用于 macOS。Fast 显示、真实 `service_tier=priority` 及各旧机设置入口仍由用户验收，不由静态匹配推导。
+v5 阶段两份资源的调查未发现需要同时套用旧 Power 滑块或账户迁移 fallback 的证据，因此当时只补齐 Fast 和 Ultra 查询，不改账户偏好。v6 按修复中心需求新增可选的 Power 与 Ultra 本地偏好适配：保留正常账号 API 成功路径，只有设置查询失败时使用原本地偏好接口；不强制开启 Ultra，不改变真实模型能力。其余 Goal、语言和插件组件同样独立匹配；完整范围与安装文件修复分界见 [修复中心](customizations/codex-repair-center.md#增强启动的衔接)。没有由开发方运行技能安装、重签名或真实请求验证，Windows MSIX 工作流不用于 macOS。Fast 显示、真实 `service_tier=priority` 及各旧机设置入口仍由用户验收，不由静态匹配推导。
 
 同一增强会话还独立适配“设置 → 配置”的“模型功能”和“工作空间依赖项”入口。安装源码中它们分别受 `3693343337`、`3026692602` 控制；仅在原本机受管范围内增加例外，保留 Work 页面排除、local host kind 与真实 `primaryRuntime` 检查，中间 `2106641128` 不改。没有依赖运行时的客户端不会凭空出现可安装内容；Hub 不安装、重置或伪造工作空间依赖。设置模块按访问加载，`settingsSections` 独立合并，不纳入启动 ready；实际旧机资源未提供现有 `configuration-panel` 结构，当前该标记保持 false，不据此伪造新入口或判定客户端没有设置能力。已有任一 v2 适配标记时，不因其他可选项缺失刷新窗口。
 
-该适配使用 Windows/macOS 共用协议，不改 Codex 安装文件、签名或用户套餐。只拦截已知 `app://.../assets/` 的模型与配置脚本响应，四类结构必须唯一匹配且局部变量一致才修改；未知布局或正文获取失败保留原脚本，最多等待 10 秒后放行。增强会话先启用 Network、禁用该会话资源缓存，再启用 Fetch；改写响应移除旧缓存/长度等元数据并加 `Cache-Control: no-store`。browser/page CDP 的帧和消息上限都设为有限 64 MiB：本机脚本原文 14,403,933 字节，base64 为 19,205,244 字节，可能超过库默认 16 MiB 单帧限制；此前中断可静默转成外层 45 秒超时。该传输边界修正保留。2026-10-19 收到的测试机诊断包明确显示另一处缺口：早期 renderer 自动挂载超时后，原 page 备用路径只安装增强脚本、没有安装 Fetch 拦截器，因此三个模型源码标记无法齐备；不能再将此情况笼统归因于传输大小。自动挂载最初为何错过 renderer，现有日志未能确认。第二次诊断仅有 browser 补装、Fast/设置命中和 ULTRA 未命中的布尔结果；第三次收到测试机原始 ASAR 后确认，其模型查询不含本机较新资源的 `teamCatalog` 字段。原模式要求该字段，测试机 ULTRA 原始模块匹配为零；当前仅将该尾字段设为可选，已在两份原始资源中各唯一匹配，并通过等效改写后完整模块语法核对。其余字段顺序、gate、局部变量及查询/select 校验均保留，未知或歧义结构仍不修改；静态核对不替代用户实机验收。
+该适配使用 Windows/macOS 共用协议，不改 Codex 安装文件、签名或用户套餐。仅拦截已知 `app://.../assets/` 资源家族白名单，原四类模型/配置结构继续要求唯一匹配且局部变量一致；v6 另通过纯函数适配器处理 app、模型选择、用户设置、插件和浏览器组件。未知布局或正文获取失败保留原脚本，最多等待 10 秒后放行。增强会话先启用 Network、禁用该会话资源缓存，再启用 Fetch；改写响应移除旧缓存/长度等元数据并加 `Cache-Control: no-store`。browser/page CDP 的帧和消息上限都设为有限 64 MiB：本机脚本原文 14,403,933 字节，base64 为 19,205,244 字节，可能超过库默认 16 MiB 单帧限制；此前中断可静默转成外层 45 秒超时。该传输边界修正保留。2026-10-19 收到的测试机诊断包明确显示另一处缺口：早期 renderer 自动挂载超时后，原 page 备用路径只安装增强脚本、没有安装 Fetch 拦截器，因此三个模型源码标记无法齐备；不能再将此情况笼统归因于传输大小。自动挂载最初为何错过 renderer，现有日志未能确认。第二次诊断仅有 browser 补装、Fast/设置命中和 ULTRA 未命中的布尔结果；第三次收到测试机原始 ASAR 后确认，其模型查询不含本机较新资源的 `teamCatalog` 字段。原模式要求该字段，测试机 ULTRA 原始模块匹配为零；当前仅将该尾字段设为可选，已在两份原始资源中各唯一匹配，并通过等效改写后完整模块语法核对。其余字段顺序、gate、局部变量及查询/select 校验均保留，未知或歧义结构仍不修改；静态核对不替代用户实机验收。
 
 启动完成条件只检查基础配置：增强脚本已安装且应用、模型列表与预期一致、模型和语言配置可用、必要界面 gate、工具目录及本机配置连接已安装。Fast UI、Fast request、Ultra models 和 settingsSections 分别保留实际加载状态；`modelControlsReady` 仍如实表示前三项是否齐备，允许其为 false 时基础启动成功，不伪造完成标记。普通日志新增 `model_controls_optional_status`（本次状态快照）和 `model_controls_optional_unavailable`（可选连接失败后继续基础配置）；Fast 界面和请求适配不互相冒充，按钮出现不证明实际请求档位。Hub 的正常成功提示与配置弹窗继续使用普通接入说明，不额外提示这些可选功能。
 
@@ -93,7 +93,7 @@ Fast 在 OpenAI Responses 请求正文中对应 `service_tier: "priority"`；思
 
 “恢复配置”仅在当前推理列表仍等于 Hub 最后写入列表、或对应开关仍为 Hub 写入的 true 时，分别还原原值；原键缺失则删除，其他 desktop/features 字段保留。用户后来修改/删除的项不覆盖；没有受管记录时不猜测并删除模型选项。前端适配只在本次增强会话内存中，完全退出 Codex 后结束；不必修复安装包。若需回退旧程序，应先用新程序恢复；旧程序不识别新增备份字段，也不会负责撤回它们。原有逐次 config.toml 备份与原子文件写入继续保留，配置和 manifest 为分步写入，不宣称跨文件事务。布尔型 Fast 兼容没有新增持久配置或备份字段；只回退本轮匹配修改会失去旧布尔型 Fast 适配，但上一轮可选启动策略继续生效，缺项仍可启动。若同时回退上一轮启动策略，才会恢复 Fast/Ultra 必须齐备及可选连接失败阻止启动的旧条件；两者均无需迁移用户数据。
 
-维护入口：[初始化、更新状态与恢复](../src/codex_app_config.rs)（`enable_model_controls`、`desktop_reasoning_efforts`、`managed_gateway_config_is_current`、`restore_model_controls`）、[按钮入口](../src/gui/codex_tab.rs)、[中英文帮助及成功提示](../src/gui/text.rs)。开发方只做必要编译与静态核对，不运行 Hub/Codex、测试夹具或真实模型请求，不改本机正在使用的配置；Windows/macOS 实机分别待用户验收，完整构建身份见本轮交付。
+维护入口：[初始化、更新状态与恢复](../src/codex_app_config.rs)（`enable_model_controls`、`desktop_reasoning_efforts`、`managed_gateway_config_is_current`、`restore_model_controls`）、[按钮入口](../src/gui/codex_tab.rs)、[中英文帮助及成功提示](../src/gui/text.rs)。开发方执行必要编译、静态核对与隔离合成测试，不运行真实 Hub/Codex 或模型请求，不改本机正在使用的配置；Windows/macOS 实机分别待用户验收，完整构建身份见 [v6 交付](releases/v0.4.30-6.md)。
 
 ## 厂商保存时自动获取模型
 

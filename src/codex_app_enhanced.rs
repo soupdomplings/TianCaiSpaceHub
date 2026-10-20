@@ -35,7 +35,7 @@ const BROWSER_ATTACH_MAX_ATTEMPTS: usize = 2;
 // after that window so a cold renderer does not accumulate retry timers.
 const ENHANCED_SCRIPT_RETRY_INTERVAL: Duration = Duration::from_secs(43);
 const ENHANCED_STATUS_POLL_INTERVAL: Duration = Duration::from_millis(250);
-const ENHANCED_SCRIPT_VERSION: u64 = 23;
+const ENHANCED_SCRIPT_VERSION: u64 = 24;
 type CdpSocket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 type BrowserSessionFailure = Arc<Mutex<Option<&'static str>>>;
 

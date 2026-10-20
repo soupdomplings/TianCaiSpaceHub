@@ -1,0 +1,85 @@
+{
+  "repository": "https://github.com/chen0416ccc-cpu/codex-windows-fast-patch-skill",
+  "commit": "4c318c42fb1d9faa09418f96a7eb53bf852f9fb4",
+  "files": [
+    {
+      "path": "patch_codex_fast_mode_windows_msix.ps1",
+      "sourceSha256": "0bfa8012653d86c81624358d9face65a0994beb2ab5b03fd2a30f55670222b49"
+    },
+    {
+      "path": "install-computer-use-local.ps1",
+      "sourceSha256": "095b9a95b4331203e8f12336b072f664152738e903b288c0b80d5135166d8c46"
+    },
+    {
+      "path": "patch-computer-use-node-repl-context.ps1",
+      "sourceSha256": "d81132e0dd8617ec2a77cb06fbe2d305ae5857de2325caa67345ffc2fea26bd7"
+    },
+    {
+      "path": "patch-computer-use-helper-win10.ps1",
+      "sourceSha256": "4853745ca36a0b31c5fd11d9f27caa9c628bf59da5ee9f3de8f76af9cc3ee512"
+    },
+    {
+      "path": "repair-cua-surface-lock.ps1",
+      "sourceSha256": "c876980d4d7700572abadf587b29825231ab0cf60f6d0324e5d1ea9def3b60c1"
+    },
+    {
+      "path": "repair-browser-accessibility-assets.cjs",
+      "sourceSha256": "2f780ca7bd6a6b8885a8d5486e74d6ce2c4cbb0f9cb993018b7294cc00bad647"
+    },
+    {
+      "path": "patch-chrome-custom-provider-headers.cjs",
+      "sourceSha256": "380488f44d272c6676ff800e95045193328b785b28be3adf02f72aa7f34311f4"
+    },
+    {
+      "path": "patch-node-repl-proxy-env.cjs",
+      "sourceSha256": "3875e51e1b276ea109e1b181c81f81768865c3861ce0b5d13806532cd1c47357"
+    },
+    {
+      "path": "patch-windows-store-update-fallback.cjs",
+      "sourceSha256": "4329c07bbca09b450e7e74aedc709c289005483375d43950696fee1f898dd228"
+    },
+    {
+      "path": "lib/windows-cua-runtime.ps1",
+      "sourceSha256": "8da5ea2ba10fc955c1d32fdd0b1ef19d1db066325935463eb2f5cd36064f0eb2"
+    },
+    {
+      "path": "lib/toml-config.ps1",
+      "sourceSha256": "552443a602bd3f97deb26ca6ce38a57f62b872e43edc153c3a03d763508c514c"
+    },
+    {
+      "path": "lib/msix-safe-install.ps1",
+      "sourceSha256": "4bf80af077c411203632dbe5d42522b0022f35e166036ee04b75bc98be1dbdb0"
+    },
+    {
+      "path": "lib/msix-payload.ps1",
+      "sourceSha256": "ed88f92ae42c4e60195391a5191a770929223fbbb30d13bfba54f78f43619fe4"
+    },
+    {
+      "path": "lib/asar-integrity.ps1",
+      "sourceSha256": "a30e007c57af782010fc1d4b2b679a7e44de4095bdf32c19ace5758c2eae624b"
+    },
+    {
+      "path": "lib/appx-launch.ps1",
+      "sourceSha256": "2e3ca69f2d5b09008452a22a2397f49a7d6e5a01796589d8dc674d697ced2962"
+    },
+    {
+      "path": "repatch-model-experience-recoverable.ps1",
+      "sourceSha256": "fa7b60570df88b3f8e3c37401254bc43328adfbb679fd71b1c753bad6132674e"
+    }
+  ],
+  "extractedPatchers": {
+    "fastPatcherPath": "fast.cjs",
+    "fastUiPatcherPath": "fastUi.cjs",
+    "customModelsPatcherPath": "customModels.cjs",
+    "powerSliderPatcherPath": "powerSlider.cjs",
+    "ultraSliderPatcherPath": "ultraSlider.cjs",
+    "localePatcherPath": "locale.cjs",
+    "pluginsPatcherPath": "plugins.cjs",
+    "goalPatcherPath": "goal.cjs",
+    "computerUsePatcherPath": "computerUse.cjs",
+    "browserUsePatcherPath": "browserUse.cjs",
+    "bundledMarketplaceCopyPatcherPath": "bundledMarketplaceCopy.cjs",
+    "nodeReplTrustedPathsPatcherPath": "nodeReplTrustedPaths.cjs",
+    "computerUseSurfacePatcherPath": "computerUseSurface.cjs"
+  }
+}

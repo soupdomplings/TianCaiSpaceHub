@@ -10,6 +10,7 @@ mod codex;
 mod codex_access;
 mod codex_app_config;
 mod codex_app_enhanced;
+mod codex_repair_center;
 mod codex_session_history;
 mod codex_startup_repair;
 mod config;

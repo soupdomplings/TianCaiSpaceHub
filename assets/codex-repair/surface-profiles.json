@@ -1,0 +1,25 @@
+[
+  {
+    "Name": "surface",
+    "RelativePath": "scripts\\launch.mjs",
+    "Marker": "CUA_SURFACE_LOCK_PATCH",
+    "RelatedText": "CUA_REPL_ENABLED_SURFACES",
+    "UseRegex": true,
+    "OriginalSha256": "A50B66879F7B72E45AB6FBAAD77EFF14A87680A946135F410C121B9B166A2597",
+    "PatchedSha256": "4312E22A1BD77D26D02AECF3A466D256C908567D98EEA8EC93B0B45B39419175",
+    "Pattern": "(?ms)const surfaces = new Set\\(\\s*\\(process\\.env\\.CUA_REPL_ENABLED_SURFACES \\?\\? \"browser,computer\"\\)\\.split\\(\",\"\\)\\.map\\(\\(surface\\) => surface\\.trim\\(\\)\\)\\.filter\\(Boolean\\)\\s*\\);",
+    "Anchor": "const surfaces = new Set(\n    (process.env.CUA_REPL_ENABLED_SURFACES ?? \"browser,computer\").split(\",\").map((surface) => surface.trim()).filter(Boolean)\n  );",
+    "Replacement": "const surfaces = new Set([\n    ...(process.env.CUA_REPL_ENABLED_SURFACES ?? \"browser,computer\").split(\",\").map((surface) => surface.trim()).filter(Boolean),\n    // CUA_SURFACE_LOCK_PATCH: the Desktop plugin reconcile only pushes the \"computer\" surface when\n    // platform is darwin, so every Desktop start rewrites the materialized .mcp.json env back to\n    // CUA_REPL_ENABLED_SURFACES=browser and the native surface is dropped. Force it here, because\n    // .mcp.json is regenerated on every launch.\n    \"computer\"\n  ]);"
+  },
+  {
+    "Name": "description",
+    "RelativePath": "resources\\computer-description.md",
+    "Marker": "CUA_WINDOWS_DESCRIPTION_PATCH",
+    "RelatedText": "cua.getApp",
+    "UseRegex": false,
+    "OriginalSha256": "46BD5B39A31EE241D089EE2A091CE014652D4FEFA9A11CB58C3E8DF308EC4514",
+    "PatchedSha256": "C72E08A0C82D993953880FD0D34199AA3EBDA07B6EB74F4BA3E1102CAEFB9291",
+    "Anchor": "If the user specifies an app to use, get the app by name, bundle ID, or path:\n\n```javascript\nlet app = await cua.getApp(\"Example App\");\n```",
+    "Replacement": "If the user specifies an app to use, first check which native surface the CUA runtime exposes:\n\n```javascript\ncua.computer.target;\n```\n\nOn macOS (`\"mac\"`) get the app by name, bundle ID, or path:\n\n```javascript\nlet app = await cua.getApp(\"Example App\");\n```\n\nOn Windows (`\"windows\"`) `cua.getApp` and `cua.listApps` are unavailable and throw `Native app bindings are unavailable for windows.` Windows exposes windows rather than apps, so list them and select one instead:\n\n```javascript\nlet windows = await cua.computer.list_windows();\nlet window = windows.find((entry) => entry.title?.includes(\"Notepad\"));\nawait cua.computer.activate_window({ window: { app: window.app, id: window.id } });\nlet state = await cua.computer.get_window_state({\n  window: { app: window.app, id: window.id },\n  include_screenshot: true,\n  include_text: true\n});\n```\n\nThe Windows helper methods are `list_apps`, `list_windows`, `get_window`, `activate_window`, `get_window_state`, `launch_app`, `click`, `scroll`, `drag`, `press_key`, `type_text`, `set_value`, `perform_secondary_action`, `start_audio_recording`, and `stop_audio_recording`. Pass the complete `{ app, id }` object returned by `list_windows()` or `list_apps()` to every window-scoped call; `{ id }` alone is rejected with `window.app must be a non-empty string and window.id must be an integer >= 0`. `get_window_state` returns `{ accessibility, screenshots, window }` on Windows, not the macOS `{ text, screenshot }` shape. The first call that targets an app raises an approval request, so expect one confirmation per app per session.\n\nCUA_WINDOWS_DESCRIPTION_PATCH"
+  }
+]

@@ -42,6 +42,7 @@ pub struct RepairOutcome {
     pub message: String,
     pub backup: Option<PathBuf>,
     pub applied: bool,
+    pub needs_repair: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -79,7 +80,7 @@ fn runtime() -> Result<tokio::runtime::Runtime> {
         .build()?)
 }
 
-fn system_output(program: &str, args: &[&str]) -> Result<Vec<u8>> {
+pub(crate) fn system_output(program: &str, args: &[&str]) -> Result<Vec<u8>> {
     runtime()?.block_on(async {
         let mut command = Command::new(program);
         command.args(args).kill_on_drop(true);
@@ -171,7 +172,7 @@ fn blocks_repair(pid: u32, name: &str) -> bool {
         )
 }
 
-fn require_stopped() -> Result<()> {
+pub(crate) fn require_stopped() -> Result<()> {
     let processes = blocking_processes()?;
     ensure!(
         processes.is_empty(),
@@ -185,7 +186,7 @@ fn require_stopped() -> Result<()> {
     Ok(())
 }
 
-fn desktop_env(name: &str) -> Result<Option<String>> {
+pub(crate) fn desktop_env(name: &str) -> Result<Option<String>> {
     #[cfg(windows)]
     {
         use winreg::{
@@ -263,13 +264,17 @@ fn env_path(name: &str) -> Result<Option<PathBuf>> {
     Ok(values.into_iter().next())
 }
 
-fn locations() -> Result<(PathBuf, PathBuf)> {
+pub(crate) fn user_directory() -> Result<PathBuf> {
     let home = env_path("CODEX_HOME")?.unwrap_or_else(crate::codex_app_config::default_codex_home);
     ensure!(
         home.is_dir(),
         "尚未找到 Codex 用户目录。请确认已安装并至少打开过 Codex。"
     );
-    let home = home.canonicalize()?;
+    home.canonicalize().map_err(Into::into)
+}
+
+pub(crate) fn locations() -> Result<(PathBuf, PathBuf)> {
+    let home = user_directory()?;
     let config = home.join("config.toml");
     let configured_sqlite = if config.is_file() {
         let raw = fs::read_to_string(config)?;
@@ -303,7 +308,7 @@ fn locations() -> Result<(PathBuf, PathBuf)> {
     Ok((home, directory.canonicalize()?.join(DB)))
 }
 
-fn locate_cli() -> Result<PathBuf> {
+pub(crate) fn locate_cli() -> Result<PathBuf> {
     let mut candidates = Vec::new();
     #[cfg(windows)]
     {
@@ -363,14 +368,10 @@ fn locate_cli() -> Result<PathBuf> {
         candidates.len() == 1,
         "检测到多份 Codex/ChatGPT 内置程序，无法确认当前使用哪一份；未修改文件。请导出连接诊断进一步确认。"
     );
-    let cli = candidates.remove(0);
-    if let Some(override_path) = env_path("CODEX_CLI_PATH")? {
-        ensure!(
-            override_path.canonicalize().ok().as_ref() == Some(&cli),
-            "CODEX_CLI_PATH 指向了其他程序或失效路径，可能导致组织设置加载失败。本次没有改全局环境变量或状态库，请导出连接诊断进一步确认。"
-        );
-    }
-    Ok(cli)
+    // Locate the installed program independently of a stale CODEX_CLI_PATH.
+    // The repair centre diagnoses and repairs that override separately; it must
+    // not prevent a healthy installed binary or database from being inspected.
+    Ok(candidates.remove(0))
 }
 
 fn family(source: &Path) -> Vec<PathBuf> {
@@ -844,6 +845,39 @@ fn promote(
     Ok(())
 }
 
+/// Inspect a physical private copy. Opening the repair centre must never apply a
+/// migration, start app-server, checkpoint a live database, or remove history.
+pub(crate) fn check() -> Result<RepairOutcome> {
+    let _access = crate::codex_access::operation()?;
+    let (_, source) = locations()?;
+    let mut message = String::new();
+    let mut needs_repair = false;
+    if source.is_file() {
+        let before = fingerprint(&source)?;
+        let temporary = tempfile::tempdir()?;
+        copy_family(&source, &temporary.path().join("inspect"))?;
+        ensure!(
+            fingerprint(&source)? == before,
+            "检查期间状态库正在变化，请退出 ChatGPT/Codex 后重新检查。"
+        );
+        let state = inspect(&temporary.path().join("inspect").join(DB))?;
+        needs_repair = state.conflict.is_some();
+        message.push_str(if state.conflict.is_some() {
+            "发现已支持的状态库迁移冲突。点击“修复所选问题”后，会先备份并用当前内置程序验证副本；通过后才修复。"
+        } else {
+            "未发现已知的状态库迁移冲突，无需执行数据库修复。这不能排除程序路径、配置或其他启动问题。"
+        });
+    } else {
+        message.push_str("尚无本工具支持的状态库，没有需要修改的文件。");
+    }
+    Ok(RepairOutcome {
+        message,
+        backup: None,
+        applied: false,
+        needs_repair,
+    })
+}
+
 pub fn run(mut progress: impl FnMut(&str)) -> Result<RepairOutcome> {
     let _access = crate::codex_access::repair()?;
     require_stopped()?;
@@ -857,6 +891,7 @@ pub fn run(mut progress: impl FnMut(&str)) -> Result<RepairOutcome> {
                     .into(),
             backup: None,
             applied: false,
+            needs_repair: false,
         });
     }
     let lock = OpenOptions::new()
@@ -876,7 +911,7 @@ pub fn run(mut progress: impl FnMut(&str)) -> Result<RepairOutcome> {
     );
     let state = inspect(&work.path().join("inspect").join(DB))?;
     let Some(conflict) = state.conflict else {
-        return Ok(RepairOutcome { message:"未发现已知的状态库迁移冲突，没有修改原文件。若仍然无法加载组织设置，请导出连接诊断包进一步检查。".into(), backup:None, applied:false});
+        return Ok(RepairOutcome { message:"未发现已知的状态库迁移冲突，没有修改数据库。该结果只针对数据库，不代表组织设置错误已解决。".into(), backup:None, applied:false, needs_repair:false});
     };
     let parent = source.parent().unwrap().join(BACKUPS);
     if !parent.exists() {
@@ -909,6 +944,7 @@ pub fn run(mut progress: impl FnMut(&str)) -> Result<RepairOutcome> {
             .into(),
             backup: Some(backup),
             applied,
+            needs_repair: false,
         }),
         Err(error) => bail!("{}\n备份目录：{}", error, backup.display()),
     }
