@@ -1,3 +1,11 @@
+TianCaiSpaceHub v0.4.30-5 最新 main 两平台打包已启动（2026-10-20）
+
+用户后续要求打包，已对 `main` 的 `645f6fd` 手动触发 Windows 和 macOS universal Actions，均已确认 job 开始并停止等待。运行链接及边界见 [本轮打包](docs/releases/v0.4.30-5.md#2026-10-20-最新-main-两平台-actions-打包已启动)。仅生成 Actions artifacts，构建结果与实机待确认；本次没有新建或移动标签、覆盖现有 Release。
+
+---
+
+此前源码提交阶段：
+
 TianCaiSpaceHub v0.4.30-5 源码提交：增强启动与旧版模型控制兼容（2026-10-20）
 
 汇总提交此前本地测试阶段的启动超时保护、窗口握手有限重试、Fast/Ultra 可选降级及旧版布尔型 Fast 兼容，保留真实基础配置检查和原认证 requirements。源码与最后一次已通过的 Windows GUI check/build 完全一致，本次不重打包。
