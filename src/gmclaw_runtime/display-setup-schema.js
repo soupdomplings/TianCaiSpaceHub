@@ -20,8 +20,11 @@ function (view, ...values) {
       && isWritableRef(scenarios) && Array.isArray(scenarios.value) && isSet(opening) && isSet(deleting);
   }
   if (view === 'panel') {
-    const [messages, streaming, confirmation, welcome, older, scroll, loadingOlder, modelsLoaded, taskId, sessionId, cleanup] = values;
-    return values.length === 11 && [messages, streaming, confirmation, welcome, older, loadingOlder, modelsLoaded, taskId, sessionId].every(isRef)
+    const [messages, streaming, confirmation, welcome, older, scroll, loadingOlder, modelsLoaded, taskId, sessionId, cleanup, runState, hasActiveRun, reconnecting] = values;
+    const workFields = [runState, hasActiveRun, reconnecting].every((v) => v === null)
+      || (isRef(runState) && (runState.value === null || (typeof runState.value === 'object' && !Array.isArray(runState.value)))
+        && [hasActiveRun, reconnecting].every((v) => isRef(v) && typeof v.value === 'boolean'));
+    return values.length === 14 && workFields && [messages, streaming, confirmation, welcome, older, loadingOlder, modelsLoaded, taskId, sessionId].every(isRef)
       && Array.isArray(messages.value)
       && [messages, welcome, older].every(isWritableRef)
       && [streaming, welcome, older, loadingOlder, modelsLoaded].every((value) => typeof value.value === 'boolean')

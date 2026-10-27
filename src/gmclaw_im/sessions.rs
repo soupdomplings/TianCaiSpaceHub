@@ -213,7 +213,7 @@ async fn desktop_project_catalog(
 
 fn unavailable_defaults(notice: impl Into<String>) -> ThreadCreateDefaults {
     ThreadCreateDefaults {
-        remote_name: Some("天工 Claw".into()),
+        remote_name: Some("天工 Work".into()),
         capabilities: ThreadCreateCapabilities {
             reasoning: false,
             permissions: false,
@@ -295,7 +295,7 @@ pub(crate) async fn defaults(
         return unavailable_defaults("读取期间天工连接或默认目录已变化，请重新打开会话设置。");
     }
     ThreadCreateDefaults {
-        remote_name: Some("天工 Claw".into()),
+        remote_name: Some("天工 Work".into()),
         cwd: Some(default),
         model: config.model_id.or(active),
         projects,

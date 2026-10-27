@@ -28,7 +28,7 @@ const MAX_HTTP_BYTES: usize = 128 * 1024;
 const MAX_SOCKET_BYTES: usize = 512 * 1024;
 const GROUP: &str = "tiancaispacehub-gmclaw-display";
 const ENABLE_HINT: &str =
-    "天工桌面消息同步尚未启用，请正常退出天工后使用 Hub 的启动天工 Claw 按钮打开一次";
+    "天工桌面消息同步尚未启用，请正常退出天工后使用 Hub 的启动天工 Work 按钮打开一次";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum DisplayRefresh {
@@ -386,7 +386,20 @@ impl Cdp {
                         })
                 })
                 .collect();
-            if let Some(arguments) = arguments {
+            if let Some(mut arguments) = arguments {
+                if matches!(view, SetupView::Panel) {
+                    for name in ["runState", "hasActiveRun", "isReconnecting"] {
+                        let value = values
+                            .iter()
+                            .find(|v| v.get("name").and_then(Value::as_str) == Some(name))
+                            .and_then(|v| v.get("value"));
+                        arguments.push(match value.and_then(object_id) {
+                            Some(id) => json!({"objectId": id}),
+                            None if value.is_none() => json!({"value": null}),
+                            _ => json!({"value": "incompatible"}),
+                        });
+                    }
+                }
                 let mut schema_arguments = vec![json!({"value": view.schema_name()})];
                 schema_arguments.extend(arguments.iter().cloned());
                 let schema = self
@@ -507,7 +520,7 @@ async fn renderer_arguments(
     } else {
         None
     };
-    let mut arguments: Vec<Value> = (0..11)
+    let mut arguments: Vec<Value> = (0..14)
         .map(|index| {
             panel_refs
                 .as_ref()
@@ -667,10 +680,25 @@ async fn target(executable: &Path, desktop_pids: &[u32]) -> Result<Url> {
 }
 
 fn same_file_url(actual: &str, expected: &Path) -> bool {
+    // WHATWG file URL parsing can discard a remote authority before a Windows
+    // drive path. Check the original authority before that normalization.
+    let Some((scheme, rest)) = actual.split_once("://") else {
+        return false;
+    };
+    let authority = rest.split('/').next().unwrap_or("");
+    if !scheme.eq_ignore_ascii_case("file")
+        || (!authority.is_empty() && !authority.eq_ignore_ascii_case("localhost"))
+    {
+        return false;
+    }
     let Ok(url) = Url::parse(actual) else {
         return false;
     };
-    if url.scheme() != "file" || url.query().is_some() || url.fragment().is_some() {
+    if url.scheme() != "file"
+        || url.host_str().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
         return false;
     }
     let Ok(actual) = url.to_file_path() else {
@@ -730,7 +758,10 @@ mod path_tests {
             "file://remote/D:/Program%20Files/tiangong-desktop/resources/app.asar/out/renderer/index.html",
             "https://example.invalid/out/renderer/index.html",
         ] {
-            assert!(!same_file_url(page, expected));
+            assert!(
+                !same_file_url(page, expected),
+                "unexpected page match: {page}"
+            );
         }
     }
 }
@@ -851,7 +882,7 @@ fn installed_renderer(executable: &Path) -> Result<PathBuf> {
     let package = read_entry(&mut file, &["package.json"], 64 * 1024)?;
     let package: Value = serde_json::from_slice(&package)
         .map_err(|_| anyhow::anyhow!("天工桌面应用身份无法核验"))?;
-    ensure!(is_tiangong_package(&package), "桌面应用身份不属于天工 Claw");
+    ensure!(is_tiangong_package(&package), "桌面应用身份不属于天工");
     let html = read_entry(&mut file, &["out", "renderer", "index.html"], 256 * 1024)?;
     let html =
         std::str::from_utf8(&html).map_err(|_| anyhow::anyhow!("天工桌面视图入口格式无法核验"))?;
@@ -919,6 +950,9 @@ fn is_tiangong_package(package: &Value) -> bool {
             normalized.as_str(),
             "tiangongdesktop"
                 | "tiangongclaw"
+                | "tiangongwork"
+                | "天工work"
+                | "女娲天工work"
                 | "tiangong"
                 | "gmclaw"
                 | "gmclawdesktop"

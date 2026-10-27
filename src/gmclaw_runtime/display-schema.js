@@ -1,4 +1,4 @@
-function (messages, streaming, confirmation, welcome, older, scroll, loadingOlder, modelsLoaded, localTaskIdRef, sessionIdRef, nativeCleanup, instances, scenarios, openingTasks, deletingTaskIds, props) {
+function (messages, streaming, confirmation, welcome, older, scroll, loadingOlder, modelsLoaded, localTaskIdRef, sessionIdRef, nativeCleanup, runState, hasActiveRun, reconnecting, instances, scenarios, openingTasks, deletingTaskIds, props) {
   const isRef = (value) => value && value.__v_isRef === true;
   const isMutableObject = (value) => value !== null && typeof value === 'object' && value.__v_isReadonly !== true && !Object.isFrozen(value);
   const canAssign = (target, key, requireExisting = false) => {
@@ -26,9 +26,12 @@ function (messages, streaming, confirmation, welcome, older, scroll, loadingOlde
   const isBooleanRef = (value) => isRef(value) && typeof value.value === 'boolean';
   const isNullableStringRef = (value) => isRef(value) && (value.value === null || typeof value.value === 'string');
   const isConfirmationRef = (value) => isRef(value) && (value.value === null || (typeof value.value === 'object' && !Array.isArray(value.value)));
+  const workFields = () => [runState, hasActiveRun, reconnecting].every((v) => v === null)
+    || (isRef(runState) && (runState.value === null || (typeof runState.value === 'object' && !Array.isArray(runState.value)))
+      && [hasActiveRun, reconnecting].every(isBooleanRef));
   const hasPanelProps = (value) => value && typeof value.taskId === 'string' && typeof value.conversationSessionId === 'string' && typeof value.isActive === 'boolean';
   if (!isRef(instances) || !Array.isArray(instances.value) || !isWritableRef(scenarios) || !Array.isArray(scenarios.value) || !isSet(openingTasks) || !isSet(deletingTaskIds)) return 'app_fields';
-  if (props && (!hasPanelProps(props) || !isRef(messages) || !Array.isArray(messages.value) || ![messages, welcome, older].every(isWritableRef) || ![streaming, welcome, older, loadingOlder, modelsLoaded].every(isBooleanRef) || !isConfirmationRef(confirmation) || ![localTaskIdRef, sessionIdRef].every(isNullableStringRef) || typeof scroll !== 'function' || (nativeCleanup !== null && typeof nativeCleanup !== 'function'))) return 'panel_fields';
+  if (props && (!workFields() || !hasPanelProps(props) || !isRef(messages) || !Array.isArray(messages.value) || ![messages, welcome, older].every(isWritableRef) || ![streaming, welcome, older, loadingOlder, modelsLoaded].every(isBooleanRef) || !isConfirmationRef(confirmation) || ![localTaskIdRef, sessionIdRef].every(isNullableStringRef) || typeof scroll !== 'function' || (nativeCleanup !== null && typeof nativeCleanup !== 'function'))) return 'panel_fields';
   if (props) {
     const bound = instances.value.filter((instance) => instance?.taskId === props.taskId);
     if (bound.length !== 1 || bound[0].sessionId !== props.conversationSessionId) return 'instance_identity';

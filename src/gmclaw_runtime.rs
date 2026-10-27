@@ -1132,7 +1132,7 @@ where
     }
     let executable = executable
         .or(installation.executable)
-        .context("未找到天工 Claw 安装，请先在 Hub 所在电脑安装天工 Claw 后重试 /tg")?;
+        .context("未找到天工 Work 安装，请先在 Hub 所在电脑安装天工 Work 后重试 /tg")?;
     let executable = resolve_executable(&executable)
         .context("天工桌面安装不完整或已有程序路径无效，请检查安装后重试 /tg")?;
     // Explicit startup enables the local display adapter once. An existing

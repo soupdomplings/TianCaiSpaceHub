@@ -1072,7 +1072,16 @@ async fn handle_client_chat_completions(
             response
         }
         Ok(response) if stream => {
-            let body = workbuddy::responses_sse_to_chat(response.into_body(), model);
+            let body = response.into_body();
+            let body = match gmclaw_replay {
+                Some(replay) => replay.capture_stream(
+                    body,
+                    super::gmclaw_stream::Protocol::Responses,
+                    provider.name.clone(),
+                ),
+                None => body,
+            };
+            let body = workbuddy::responses_sse_to_chat(body, model);
             let mut converted = Response::new(body);
             *converted.status_mut() = axum::http::StatusCode::OK;
             converted.headers_mut().insert(

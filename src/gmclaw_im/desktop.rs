@@ -224,7 +224,13 @@ pub(super) async fn register(
         },
     });
     let task = client
-        .create_task(&session.project_path, &session.title, &session.id, &task_id)
+        .create_task(
+            &session.project_path,
+            &session.title,
+            &session.id,
+            &task_id,
+            model,
+        )
         .await?;
     let project = project_for(&task, &session.project_path);
     let metadata = DesktopSessionMetadata {
@@ -282,6 +288,36 @@ fn safe_identity(value: &str) -> bool {
         && value != ".."
 }
 
+fn recorded_model_id(
+    task: &DesktopTask,
+    link: Option<&SessionLink>,
+    metadata: Option<&DesktopSessionMetadata>,
+    catalog: &[(String, String, bool)],
+) -> Result<Option<String>> {
+    let id = if let Some(id) = task.model_id.as_ref().filter(|id| !id.trim().is_empty()) {
+        id.clone()
+    } else if let Some(link) = link {
+        link.model_id.clone().context("原会话没有模型记录")?
+    } else if let Some(metadata) = metadata.filter(|metadata| !metadata.model_name.is_empty()) {
+        let matches: Vec<_> = catalog
+            .iter()
+            .filter(|row| row.1 == metadata.model_name)
+            .collect();
+        ensure!(
+            matches.len() == 1,
+            "历史模型名称无法唯一匹配天工配置，请在天工确认对应模型后重新选择会话；不会替换为默认模型"
+        );
+        matches[0].0.clone()
+    } else {
+        return Ok(None);
+    };
+    ensure!(
+        catalog.iter().any(|row| row.0 == id),
+        "原会话绑定模型已不可用"
+    );
+    Ok(Some(id))
+}
+
 pub(super) async fn restore(
     state: &SharedState,
     config: &GmClawBridgeConfig,
@@ -324,37 +360,25 @@ pub(super) async fn restore(
         Vec::new()
     };
     let catalog = models().await?;
-    let model_id = if let Some(link) = &link {
-        link.model_id.clone().context("原会话没有模型记录")?
-    } else if let Some(metadata) = metadata
-        .as_ref()
-        .filter(|metadata| !metadata.model_name.is_empty())
-    {
-        let matches: Vec<_> = catalog
-            .iter()
-            .filter(|row| row.1 == metadata.model_name)
-            .collect();
-        ensure!(
-            matches.len() == 1,
-            "历史模型名称无法唯一匹配天工配置，请在天工确认对应模型后重新选择会话；不会替换为默认模型"
-        );
-        matches[0].0.clone()
-    } else {
-        ensure!(
-            client
-                .messages(&task.task_id, None)
-                .await?
-                .messages
-                .is_empty(),
-            "此非空历史会话缺少可确认的模型记录，未替换为默认模型；请在天工核对"
-        );
-        catalog
-            .iter()
-            .find(|row| row.2)
-            .context("此空会话没有模型，请先在天工设置默认模型")?
-            .0
-            .clone()
-    };
+    let model_id =
+        if let Some(id) = recorded_model_id(&task, link.as_ref(), metadata.as_ref(), &catalog)? {
+            id
+        } else {
+            ensure!(
+                client
+                    .messages(&task.task_id, None)
+                    .await?
+                    .messages
+                    .is_empty(),
+                "此非空历史会话缺少可确认的模型记录，未替换为默认模型；请在天工核对"
+            );
+            catalog
+                .iter()
+                .find(|row| row.2)
+                .context("此空会话没有模型，请先在天工设置默认模型")?
+                .0
+                .clone()
+        };
     let model_name = catalog
         .iter()
         .find(|row| row.0 == model_id)
@@ -404,6 +428,9 @@ pub(super) async fn restore(
                 .is_ok_and(|metadata| metadata.is_dir()),
         "原项目目录不可用，未恢复会话，请恢复目录或新建会话"
     );
+    if task.model_id.as_deref() == Some("") {
+        client.bind_task_model(&task, &model_id).await?;
+    }
     let restored = Session {
         id: task.session_id,
         title: task.title,
@@ -495,6 +522,13 @@ pub(super) async fn validate_live(
         task.session_id == session.id,
         "天工桌面任务已更换会话，请重新选择"
     );
+    ensure!(
+        task.model_id
+            .as_deref()
+            .filter(|id| !id.is_empty())
+            .is_none_or(|id| session.model_id.as_deref() == Some(id)),
+        "天工窗口已更换此会话的模型，请重新恢复此会话以同步选择；本次未提交任务"
+    );
     let mut metadata = client
         .get_session_metadata(&session.id)
         .await?
@@ -514,6 +548,14 @@ pub(super) async fn validate_live(
         metadata.user_id == context.user_id && metadata.project_id == context.project.id,
         "天工会话记忆身份已变化，请退出当前会话并重新选择"
     );
+    if task.model_id.as_deref() == Some("") {
+        client
+            .bind_task_model(
+                &task,
+                session.model_id.as_deref().context("此会话缺少模型选择")?,
+            )
+            .await?;
+    }
     Ok(())
 }
 
@@ -525,6 +567,7 @@ async fn checked_idle(
     client: &DesktopClient,
     metadata: DesktopSessionMetadata,
 ) -> Result<DesktopSessionMetadata> {
+    client.ensure_no_active_run(&metadata.session_id).await?;
     let events = client.get_session_events(&metadata.session_id).await?;
     let stale_processing = idle_evidence(&metadata, &events)?;
     if stale_processing {
@@ -541,8 +584,10 @@ async fn checked_idle(
             latest == metadata && latest_events == events,
             "天工会话状态正在变化，请稍后重新选择；本次未绑定或提交任务"
         );
+        client.ensure_no_active_run(&metadata.session_id).await?;
         return Ok(latest);
     }
+    client.ensure_no_active_run(&metadata.session_id).await?;
     Ok(metadata)
 }
 
@@ -635,6 +680,62 @@ fn sqlite_timestamp(value: &str) -> bool {
 #[cfg(test)]
 mod recovery_tests {
     use super::*;
+
+    #[test]
+    fn work_native_model_wins_and_unavailable_models_never_fall_back() {
+        let mut task: DesktopTask = serde_json::from_value(json!({
+            "task_id":"task", "session_id":"session", "scenario_id":"project", "scenario_name":"fixture",
+            "work_dir":"", "title":"fixture", "created_at":"", "updated_at":""
+        })).unwrap();
+        let link: SessionLink = serde_json::from_value(json!({
+            "session_id":"session", "title":"fixture", "model_id":"im-model", "config_fingerprint":"fixture",
+            "pending":false, "uncertain":false, "context":{
+                "task_id":"task", "user_id":"local", "model_name":"IM Model", "max_steps":10,
+                "project":{"id":"project","name":"fixture","path":""}
+            }
+        })).unwrap();
+        let metadata = DesktopSessionMetadata {
+            model_name: "History Model".into(),
+            ..Default::default()
+        };
+        let mut catalog = vec![
+            ("default".into(), "Default".into(), true),
+            ("desktop-model".into(), "Desktop Model".into(), false),
+            ("im-model".into(), "IM Model".into(), false),
+            ("history".into(), "History Model".into(), false),
+        ];
+        task.model_id = Some("desktop-model".into());
+        assert_eq!(
+            recorded_model_id(&task, Some(&link), Some(&metadata), &catalog)
+                .unwrap()
+                .as_deref(),
+            Some("desktop-model")
+        );
+        task.model_id = Some("removed".into());
+        assert!(recorded_model_id(&task, Some(&link), Some(&metadata), &catalog).is_err());
+        for unbound in [None, Some(String::new())] {
+            task.model_id = unbound;
+            assert_eq!(
+                recorded_model_id(&task, Some(&link), Some(&metadata), &catalog)
+                    .unwrap()
+                    .as_deref(),
+                Some("im-model")
+            );
+            assert_eq!(
+                recorded_model_id(&task, None, Some(&metadata), &catalog)
+                    .unwrap()
+                    .as_deref(),
+                Some("history")
+            );
+            assert!(
+                recorded_model_id(&task, None, None, &catalog)
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        catalog.push(("duplicate".into(), "History Model".into(), false));
+        assert!(recorded_model_id(&task, None, Some(&metadata), &catalog).is_err());
+    }
 
     fn metadata(status: &str, message_count: u64) -> DesktopSessionMetadata {
         DesktopSessionMetadata {

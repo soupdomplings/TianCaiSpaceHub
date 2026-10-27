@@ -3202,8 +3202,8 @@ impl GuiText {
 
     pub(super) fn ai_gw_scope_gmclaw(self) -> &'static str {
         match self.locale {
-            GuiLocale::ZhCn => "天工 Claw 专用",
-            GuiLocale::EnUs => "GMClaw only",
+            GuiLocale::ZhCn => "天工 Work 专用",
+            GuiLocale::EnUs => "TianGong Work only",
         }
     }
 
@@ -3217,10 +3217,10 @@ impl GuiText {
     pub(super) fn ai_gw_scope_workbuddy_help(self) -> &'static str {
         match self.locale {
             GuiLocale::ZhCn => {
-                "适用接入点：WorkBuddy 专用。仅对应的 WorkBuddy 模型条目使用此渠道，Codex 和天工 Claw 不会路由到这里。专用名称已锁定；条目身份请在 WorkBuddy 接入页管理。"
+                "适用接入点：WorkBuddy 专用。仅对应的 WorkBuddy 模型条目使用此渠道，Codex 和天工 Work 不会路由到这里。专用名称已锁定；条目身份请在 WorkBuddy 接入页管理。"
             }
             GuiLocale::EnUs => {
-                "Client scope: WorkBuddy only. Used by its matching WorkBuddy model entry; Codex and GMClaw do not route here. The dedicated name is locked; manage entry identities on the WorkBuddy tab."
+                "Client scope: WorkBuddy only. Used by its matching WorkBuddy model entry; Codex and TianGong Work do not route here. The dedicated name is locked; manage entry identities on the WorkBuddy tab."
             }
         }
     }
@@ -3228,10 +3228,10 @@ impl GuiText {
     pub(super) fn ai_gw_scope_gmclaw_help(self) -> &'static str {
         match self.locale {
             GuiLocale::ZhCn => {
-                "适用接入点：天工 Claw 专用。仅对应的天工 Claw 模型条目使用此渠道，Codex 和 WorkBuddy 不会路由到这里。专用名称已锁定；条目身份请在天工 Claw 接入页管理。"
+                "适用接入点：天工 Work 专用。仅对应的天工 Work 模型条目使用此渠道，Codex 和 WorkBuddy 不会路由到这里。专用名称已锁定；条目身份请在天工 Work 接入页管理。"
             }
             GuiLocale::EnUs => {
-                "Client scope: GMClaw only. Used by its matching GMClaw model entry; Codex and WorkBuddy do not route here. The dedicated name is locked; manage entry identities on the GMClaw tab."
+                "Client scope: TianGong Work only. Used by its matching TianGong Work model entry; Codex and WorkBuddy do not route here. The dedicated name is locked; manage entry identities on the TianGong Work tab."
             }
         }
     }
@@ -3239,10 +3239,10 @@ impl GuiText {
     pub(super) fn ai_gw_scope_codex_help(self) -> &'static str {
         match self.locale {
             GuiLocale::ZhCn => {
-                "适用接入点：Codex。也可在 WorkBuddy / 天工 Claw 接入页选为来源渠道，生成对应的专用渠道后使用。"
+                "适用接入点：Codex。也可在 WorkBuddy / 天工 Work 接入页选为来源渠道，生成对应的专用渠道后使用。"
             }
             GuiLocale::EnUs => {
-                "Client scope: Codex. You may also select it as a source on the WorkBuddy or GMClaw tab to create a dedicated channel for that client."
+                "Client scope: Codex. You may also select it as a source on the WorkBuddy or TianGong Work tab to create a dedicated channel for that client."
             }
         }
     }

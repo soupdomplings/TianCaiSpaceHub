@@ -335,7 +335,7 @@ pub(crate) fn turn_delivery_allowed(
     sender_allowed(config, message) && config.gmclaw_bridge.fingerprint() == fingerprint
 }
 
-const HELP: &str = "天工 Claw 指令：\n/tg — 切到天工，保留当前会话\n/gpt — 切到 ChatGPT（Codex）\n/wb — WorkBuddy（暂不支持，不切换）\n/q — 退出当前会话并选择新建或恢复\n/s — 请求停止（当前天工接口不支持，请在天工桌面停止）\n/tg new — 新建天工会话\n/tg status — 查看当前状态\n工具审批：点击当前审批卡片的批准/拒绝；微信回复 /1 批准、/2 拒绝\n/tg approve 确认码、/tg reject 确认码 — 兼容旧审批及备用操作\n兼容 /gmclaw；支持文字和工具审批，附件请在天工桌面使用。";
+const HELP: &str = "天工 Work 指令：\n/tg — 切到天工，保留当前会话\n/gpt — 切到 ChatGPT（Codex）\n/wb — WorkBuddy（暂不支持，不切换）\n/q — 退出当前会话并选择新建或恢复\n/s — 请求停止（当前天工接口不支持，请在天工桌面停止）\n/tg new — 新建天工会话\n/tg status — 查看当前状态\n工具审批：点击当前审批卡片的批准/拒绝；微信回复 /1 批准、/2 拒绝\n/tg approve 确认码、/tg reject 确认码 — 兼容旧审批及备用操作\n兼容 /gmclaw；支持文字和工具审批，附件请在天工桌面使用。";
 const STOP_UNSUPPORTED: &str = "当前天工 Harness 没有独立停止接口，本次未停止任务。请到天工桌面停止并确认结果；Hub 不会将断开连接视为已取消。";
 
 async fn binding_for(state: &SharedState, message: &InboundMessage) -> Option<Arc<SenderBinding>> {
@@ -557,7 +557,7 @@ pub(crate) async fn handle_inbound(
         return Ok(true);
     }
     if command == Some("status") && existing.is_none() {
-        reply(outbound, message, "当前未选择天工 Claw；发送 /tg 进入。")?;
+        reply(outbound, message, "当前未选择天工 Work；发送 /tg 进入。")?;
         return Ok(true);
     }
     if selected && text.eq_ignore_ascii_case("/s") && !callback {
@@ -633,7 +633,7 @@ pub(crate) async fn handle_inbound(
         } else if sessions.current.is_some() {
             "当前文字交给天工；/q 退出当前会话，/gpt 返回 Codex。"
         } else {
-            "当前执行端：天工 Claw。请使用当前会话选择或新建界面；/q 重新打开。"
+            "当前执行端：天工 Work。请使用当前会话选择或新建界面；/q 重新打开。"
         };
         reply(
             outbound,
@@ -750,7 +750,7 @@ pub(crate) async fn handle_inbound(
                 outbound,
                 message,
                 format!(
-                    "{}\n已切到天工 Claw，保留当前会话。\n项目目录：{}\n/q 退出并选择会话。",
+                    "{}\n已切到天工 Work，保留当前会话。\n项目目录：{}\n/q 退出并选择会话。",
                     status.detail, session.project_path
                 ),
             )?;
@@ -925,6 +925,7 @@ pub(crate) async fn handle_inbound(
         };
         decision_index = Some(index);
         confirmation = Some(GmClawConfirmationDecision {
+            run: pending.confirmation.run.clone(),
             action: if index == 1 {
                 GmClawConfirmationAction::Approve
             } else {
@@ -1403,6 +1404,7 @@ mod tests {
             },
             created_at: Instant::now(),
             confirmation: GmClawPendingConfirmation {
+                run: None,
                 prompt: "fixture confirmation".into(),
                 pending_calls: vec![crate::gmclaw_executor::GmClawPendingCall {
                     call_id: "fixture-call".into(),
@@ -1628,6 +1630,7 @@ mod tests {
             },
             created_at: Instant::now(),
             confirmation: GmClawPendingConfirmation {
+                run: None,
                 prompt: String::new(),
                 pending_calls: vec![],
             },
@@ -1689,6 +1692,7 @@ mod tests {
             },
             created_at: Instant::now(),
             confirmation: GmClawPendingConfirmation {
+                run: None,
                 prompt: String::new(),
                 pending_calls: vec![],
             },
@@ -1720,6 +1724,7 @@ mod tests {
             arguments: serde_json::json!({"command":"example"}),
         };
         let mut pending = GmClawPendingConfirmation {
+            run: None,
             prompt: String::new(),
             pending_calls: vec![call.clone()],
         };
@@ -1780,6 +1785,7 @@ mod tests {
     #[test]
     fn oversized_approval_is_rejected_without_truncating_arguments() {
         let pending = GmClawPendingConfirmation {
+            run: None,
             prompt: String::new(),
             pending_calls: vec![crate::gmclaw_executor::GmClawPendingCall {
                 call_id: "large".into(),

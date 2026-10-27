@@ -442,7 +442,7 @@ async fn gmclaw_config(
             .into_response(),
         Err(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": "无法读取天工 Claw 配置 / Cannot read GMClaw configuration"})),
+            Json(json!({"error": "无法读取天工 Work 配置 / Cannot read GMClaw configuration"})),
         )
             .into_response(),
     }
@@ -542,7 +542,7 @@ async fn mutate_gmclaw_config(
         }
         Err(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": "天工 Claw 配置操作失败，请刷新状态 / GMClaw configuration operation failed; refresh its status"})),
+            Json(json!({"error": "天工 Work 配置操作失败，请刷新状态 / GMClaw configuration operation failed; refresh its status"})),
         ).into_response(),
     }
 }

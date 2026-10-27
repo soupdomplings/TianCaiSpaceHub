@@ -664,7 +664,7 @@ async fn handle_inbound(
         use crate::im::executor_commands::{ExecutorCommand, ExecutorTarget, parse_command};
         let notice = match parse_command(&message.text, false) {
             ExecutorCommand::Switch(ExecutorTarget::WorkBuddy) => Some(
-                "WorkBuddy 桌面任务接入暂不支持，/wb 已保留，当前执行端未切换。可用 /tg 切到天工 Claw，或 /gpt 切到 ChatGPT（Codex）。",
+                "WorkBuddy 桌面任务接入暂不支持，/wb 已保留，当前执行端未切换。可用 /tg 切到天工 Work，或 /gpt 切到 ChatGPT（Codex）。",
             ),
             ExecutorCommand::InvalidArguments { command, .. }
                 if ["/tg", "/gmclaw", "/gpt", "/wb"]

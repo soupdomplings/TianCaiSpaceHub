@@ -1212,7 +1212,7 @@ fn build_ui(
     notebook.add_page(
         &gmclaw_tab.page,
         match text.locale {
-            GuiLocale::ZhCn => "天工Claw 接入",
+            GuiLocale::ZhCn => "天工 Work 接入",
             GuiLocale::EnUs => "GMClaw Integration",
         },
         false,

@@ -1,7 +1,7 @@
-TianCaiSpaceHub v0.4.30-7 本地测试：补齐组织设置错误的程序路径修复（2026-10-20）
+TianCaiSpaceHub v0.4.30-8：天工 Work 适配与接入页面统一（2026-10-27）
 
-“检查与修复 → 无法加载组织设置 / 启动失败”现在分别检查程序路径与状态库。即使未发现迁移冲突，也能按实际安装位置重新绑定 CODEX_CLI_PATH，不再因数据库正常而禁用路径修复。
+适配天工 Work 的任务收尾、主任务审批、IM/桌面模型绑定、默认流式上下文和后台运行/重连保护，兼容旧协议。Hub 不再设置天工默认模型，保存保留原状态。
 
-Windows 更新当前用户环境，macOS 更新当前登录会话；先备份原值，再核对来源和后续变化，支持在修复记录中恢复。路径和数据库修复分别反馈、分别备份，Hub 保持运行，只要求退出 ChatGPT/Codex。原 13 类修复中心、增强启动 v24、Commands 模式和会话保护保留。
+WorkBuddy、天工 Work 统一管理模型、渠道名称和主要按钮，隐藏内部地址/Key/路径等展示；思考强度并入 WorkBuddy 连接卡片。两页与 Dumpling-MCP 共用只读/编辑底色，原路由、凭据和备份行为保留。
 
-本轮版本递增到 v0.4.30-7 / Windows 数字文件版本 0.4.30.7，源码已推送到 main（3b96fa6）。Windows x64 和 macOS universal Actions 均已确认开始，本轮生成 Actions artifacts，包结果和实机待确认，未创建标签或发布 Release。本地包、隔离测试、构建及运行链接见 [v7 交付](docs/releases/v0.4.30-7.md)，详细范围和回滚见 [启动修复](docs/customizations/codex-startup-repair.md)；[v6 测试包](docs/releases/v0.4.30-6.md) 保持原身份。
+版本递增至 v0.4.30-8 / Windows 0.4.30.8。Windows 本地测试包已交付，用户初步反馈“暂时没问题”并授权发布；162 个不同 Rust 聚焦用例、20 个桌面同步 JS 用例、4 个实际函数离线用例、Windows GUI 编译及 MSI 静态核验通过。Windows x64、macOS universal 的分发包由 GitHub Actions 生成并上传本 Release，本地 debug MSI 不作为正式分发包；构建开始不等于产物完成，macOS 实机及完整边界仍待验收。源码身份、兼容/回滚和各阶段状态见 [v8 交付](https://github.com/soupdomplings/TianCaiSpaceHub/blob/main/docs/releases/v0.4.30-8.md)。

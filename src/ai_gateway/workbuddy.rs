@@ -506,6 +506,14 @@ pub async fn proxy_chat_completion(
         } else {
             Body::from_stream(bytes)
         };
+        let body = match gmclaw_replay {
+            Some(replay) => replay.capture_stream(
+                body,
+                super::gmclaw_stream::Protocol::Chat,
+                provider.name.clone(),
+            ),
+            None => body,
+        };
         let mut response = Response::new(body);
         *response.status_mut() = StatusCode::OK;
         response.headers_mut().insert(
@@ -928,7 +936,7 @@ type InputStream = Pin<Box<dyn Stream<Item = Result<Bytes, io::Error>> + Send>>;
 
 struct ChatSseState {
     request_model: String,
-    buffer: String,
+    buffer: Vec<u8>,
     queue: std::collections::VecDeque<Bytes>,
     response_id: String,
     model: String,
@@ -944,7 +952,7 @@ impl ChatSseState {
     fn new(request_model: String) -> Self {
         Self {
             request_model,
-            buffer: String::new(),
+            buffer: Vec::new(),
             queue: std::collections::VecDeque::new(),
             response_id: "chatcmpl_workbuddy".to_string(),
             model: String::new(),
@@ -967,14 +975,14 @@ impl ChatSseState {
             }
             match input.next().await {
                 Some(Ok(chunk)) => {
-                    self.buffer.push_str(&String::from_utf8_lossy(&chunk));
+                    self.buffer.extend_from_slice(&chunk);
                     self.process_lines();
                 }
                 Some(Err(error)) => return Some(Err(error)),
                 None => {
                     if !self.buffer.is_empty() {
                         let line = std::mem::take(&mut self.buffer);
-                        self.process_line(line.trim_end_matches('\r'));
+                        self.process_line(String::from_utf8_lossy(&line).trim_end_matches('\r'));
                     }
                     self.finish_stream();
                 }
@@ -983,10 +991,22 @@ impl ChatSseState {
     }
 
     fn process_lines(&mut self) {
-        while let Some(position) = self.buffer.find('\n') {
-            let line = self.buffer[..position].trim_end_matches('\r').to_string();
-            self.buffer = self.buffer[position + 1..].to_string();
+        // Decode complete lines so a UTF-8 code point split between network
+        // chunks keeps its original bytes.
+        let mut consumed = 0;
+        while let Some(position) = self.buffer[consumed..]
+            .iter()
+            .position(|byte| *byte == b'\n')
+        {
+            let end = consumed + position;
+            let line = String::from_utf8_lossy(&self.buffer[consumed..end])
+                .trim_end_matches('\r')
+                .to_owned();
+            consumed = end + 1;
             self.process_line(&line);
+        }
+        if consumed != 0 {
+            self.buffer.drain(..consumed);
         }
     }
 
@@ -1063,12 +1083,12 @@ impl ChatSseState {
                     self.tools.insert(key.clone(), index);
                     let chunk = self.chunk(json!({
                         "index": 0,
-                        "delta": {"tool_calls": [{"index": index, "id": key, "type": "function", "function": {"name": item.get("name").and_then(Value::as_str).unwrap_or("")}}]},
+                        "delta": {"tool_calls": [{"index": index, "id": item.get("call_id").and_then(Value::as_str).unwrap_or(&key), "type": "function", "function": {"name": item.get("name").and_then(Value::as_str).unwrap_or("")}}]},
                     }));
                     self.emit(chunk);
                 }
             }
-            "response.function_call_arguments.delta" => {
+            "response.function_call_arguments.delta" | "response.custom_tool_call_input.delta" => {
                 let key = value
                     .get("item_id")
                     .or_else(|| value.get("call_id"))
@@ -1155,6 +1175,55 @@ impl ChatSseState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn responses_stream_preserves_split_utf8_and_tool_call_identity() {
+        let wire = [
+            json!({"type":"response.output_text.delta","delta":"你好，天工 Work"}),
+            json!({"type":"response.reasoning_summary_text.delta","delta":"中文思考"}),
+            json!({"type":"response.output_item.added","item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"lookup"}}),
+            json!({"type":"response.function_call_arguments.delta","item_id":"fc_1","delta":"{\"query\":\"中文\"}"}),
+            json!({"type":"response.completed","response":{"status":"completed"}}),
+        ].iter().map(|event| format!("data: {event}\r\n\r\n")).collect::<String>();
+        let chunks = wire
+            .as_bytes()
+            .chunks(1)
+            .map(|chunk| Ok::<_, io::Error>(Bytes::copy_from_slice(chunk)))
+            .collect::<Vec<_>>();
+        let body = responses_sse_to_chat(
+            Body::from_stream(futures_util::stream::iter(chunks)),
+            "fixture".into(),
+        );
+        let bytes = axum::body::to_bytes(body, 1024 * 1024).await.unwrap();
+        let text = std::str::from_utf8(&bytes).unwrap();
+        let frames: Vec<Value> = text
+            .lines()
+            .filter_map(|line| line.strip_prefix("data: "))
+            .filter(|line| *line != "[DONE]")
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(
+            frames[1]["choices"][0]["delta"]["content"],
+            "你好，天工 Work"
+        );
+        assert_eq!(
+            frames[2]["choices"][0]["delta"]["reasoning_content"],
+            "中文思考"
+        );
+        assert_eq!(
+            frames[3]["choices"][0]["delta"]["tool_calls"][0]["id"],
+            "call_1"
+        );
+        assert_eq!(
+            frames[4]["choices"][0]["delta"]["tool_calls"][0]["index"],
+            0
+        );
+        assert_eq!(
+            frames[4]["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"],
+            "{\"query\":\"中文\"}"
+        );
+        assert_eq!(text.matches("[DONE]").count(), 1);
+    }
 
     #[test]
     fn openai_responses_wire_preserves_standalone_cache_prefix_shape() {

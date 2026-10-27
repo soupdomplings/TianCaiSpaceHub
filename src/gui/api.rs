@@ -476,13 +476,6 @@ impl ApiClient {
         self.get_with_timeout(&path, GUI_CONFIG_TIMEOUT)
     }
 
-    pub(super) fn activate_gmclaw_config(
-        &self,
-        request: &crate::gmclaw_config::GmClawEntryRequest,
-    ) -> Result<crate::gmclaw_config::GmClawConfigStatus, String> {
-        self.post_json_with_timeout("/api/gmclaw/config/activate", request, GUI_CONFIG_TIMEOUT)
-    }
-
     pub(super) fn delete_gmclaw_config(
         &self,
         request: &crate::gmclaw_config::GmClawEntryRequest,

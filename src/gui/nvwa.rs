@@ -22,7 +22,9 @@ use super::{
     daemon::{app_support_config_path, daemon_config_path},
     text::{GuiLocale, GuiText},
     theme,
-    widgets::{apply_textctrl_theme, text_field_row},
+    widgets::{
+        apply_textctrl_theme, connection_field_theme, connection_text_field_row as text_field_row,
+    },
 };
 
 #[derive(Default)]
@@ -305,7 +307,7 @@ fn client_title(kind: &str) -> &'static str {
     match kind {
         "codex" => "ChatGPT(Codex)",
         "workbuddy" => "WorkBuddy",
-        "tiangong" => "天工Claw",
+        "tiangong" => "天工 Work",
         _ => "Dumpling-MCP",
     }
 }
@@ -633,6 +635,7 @@ fn choice_row<W: WxWidget>(
         field.append(value);
     }
     field.set_selection(0);
+    connection_field_theme(&field, true);
     grid.add(&field, 1, SizerFlag::Expand, 0);
     field
 }
@@ -956,7 +959,7 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> NvwaTab {
             14,
         );
         let selector = Choice::builder(&page).build();
-        for title in ["ChatGPT(Codex)", "WorkBuddy", "天工Claw"] {
+        for title in ["ChatGPT(Codex)", "WorkBuddy", "天工 Work"] {
             selector.append(title);
         }
         selector.set_selection(0);
@@ -1775,7 +1778,7 @@ fn configuration_help(text: GuiText) -> &'static str {
             "认证服务连接：在认证服务管理添加应用服务，获取ClientID和ClientSecret。填写这两个值，ClientSecret 在页面直接显示。默认勾选共享应用，填写要代表的账号；应用为该账号申请连接，不验证个人密码。没有应用管理权限时，请向管理员获取应用资料。\n\n",
             "3. 浏览器授权（可选）\n取消共享应用勾选后，用同一组 ClientID/ClientSecret，在打开的产品页面完成个人登录和授权。应用还须允许 Hub 的本机回调地址。高级“限定授权账号”可留空，填写时须与实际授权账号一致。旧浏览器环境保持此方式。\n\n",
             "4. 登录后确认账号与租户\n先保存环境，再点击“登录 / 授权”。成功后显示服务实际返回的账号和租户；__default_tenant__ 表示默认租户。高级指定租户通常可留空。登录未成功时，先处理登录提示，再检测 MCP。\n\n",
-            "5. 检测并接入\n“检测 MCP”读取可用工具清单。下拉选择 ChatGPT(Codex)、WorkBuddy 或天工Claw，三个客户端共用下方按钮和一处反馈，操作只针对当前选项。首次接入点击“预览接入”，确认环境与保存位置后点“是”添加；已接入可直接“检测本机桥”，也可先“检查”现有配置。保存后刷新客户端或重开会话，并按客户端提示确认使用；天工先检测这条连接，再开始下一轮对话。工具是否能执行，在客户端中确认。\n\n",
+            "5. 检测并接入\n“检测 MCP”读取可用工具清单。下拉选择 ChatGPT(Codex)、WorkBuddy 或天工 Work，三个客户端共用下方按钮和一处反馈，操作只针对当前选项。首次接入点击“预览接入”，确认环境与保存位置后点“是”添加；已接入可直接“检测本机桥”，也可先“检查”现有配置。保存后刷新客户端或重开会话，并按客户端提示确认使用；天工先检测这条连接，再开始下一轮对话。工具是否能执行，在客户端中确认。\n\n",
             "共享应用勾选切换会保留 ClientID、ClientSecret 和保存密钥选项，取消当前登录并暂时停用旧连接；保存后重新登录，认证目标和真实身份一致时恢复原连接。主认证下拉切换会清空旧方式的输入。\n",
             "“保存应用密钥”在新环境默认关闭；勾选后点击“保存环境”就保存 ClientSecret，无需先登录成功。已保存环境会恢复勾选，并在选择、刷新或重新打开时将 ClientSecret 明文显示在输入框中；填写新值并保存可替换。环境设置改变时需要重新填写。取消勾选并保存环境会删除保存的应用密钥。密钥仍由系统保护存储，不写入普通配置。\n",
             "“记住密码”仍只在登录成功后保存密码，之后选择、刷新或重新打开环境会明文回显。登录成功后保留本次输入的密码或 ClientSecret；未勾选保存的值只保留在本次页面中。HTTP 401 表示服务拒绝了该步请求；请按提示中的失败步骤核对，保存密钥不代表登录成功。\n\n",
@@ -3013,6 +3016,33 @@ fn update_controls(tab: &NvwaTab) {
     );
     tab.client.path.set_editable(kind != "tiangong");
     tab.client.path.enable(!busy && kind != "tiangong");
+    for choice in [
+        &tab.profile,
+        &tab.mode,
+        &tab.signature,
+        &tab.client.selector,
+    ] {
+        connection_field_theme(choice, choice.is_enabled());
+    }
+    for input in [
+        &tab.name,
+        &tab.product,
+        &tab.certification,
+        &tab.mcp,
+        &tab.browser_username,
+        &tab.username,
+        &tab.password,
+        &tab.client_id,
+        &tab.client_secret,
+        &tab.tenant,
+        &tab.unit,
+        &tab.auth_header,
+        &tab.factor_code,
+        &tab.client.path,
+        &tab.tools,
+    ] {
+        connection_field_theme(input, input.is_editable() && input.is_enabled());
+    }
     update_secret_status(tab);
     tab.page.layout();
     tab.page.fit_inside();

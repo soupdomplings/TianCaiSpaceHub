@@ -36,6 +36,7 @@ const METADATA_VERSION: u32 = 2;
 pub struct GmClawSaveRequest {
     /// None/empty creates a new independent entry; legacy must be explicit.
     pub entry_id: Option<String>,
+    /// Legacy API compatibility. The current GUI always preserves the default.
     pub make_active: bool,
     pub source_provider: String,
     pub model: String,
@@ -50,7 +51,7 @@ impl Default for GmClawSaveRequest {
     fn default() -> Self {
         Self {
             entry_id: None,
-            make_active: true,
+            make_active: false,
             source_provider: String::new(),
             model: String::new(),
             max_tokens: 8192,
@@ -218,7 +219,7 @@ fn entry_id_from_model_id(model: &str) -> Option<&str> {
 fn validate_entry_id(entry_id: &str) -> Result<()> {
     ensure!(
         is_valid_gmclaw_entry_id(entry_id),
-        "天工 Claw 条目身份无效，请刷新后重试"
+        "天工 Work 条目身份无效，请刷新后重试"
     );
     Ok(())
 }
@@ -259,7 +260,7 @@ fn fingerprint(value: &impl Serialize) -> Result<String> {
 
 fn canonical_identity(path: &Path) -> Result<String> {
     Ok(fs::canonicalize(path)
-        .context("无法定位天工 Claw 数据库")?
+        .context("无法定位天工 Work 数据库")?
         .to_string_lossy()
         .into_owned())
 }
@@ -267,7 +268,7 @@ fn canonical_identity(path: &Path) -> Result<String> {
 fn open_existing(path: &Path, writable: bool) -> Result<Connection> {
     ensure!(
         path.is_file(),
-        "未找到天工 Claw 数据库，请先安装并打开天工 Claw，或设置 GMCLAW_CONFIG_PATH"
+        "未找到天工 Work 数据库，请先安装并打开天工 Work，或设置 GMCLAW_CONFIG_PATH"
     );
     let flags = if writable {
         OpenFlags::SQLITE_OPEN_READ_WRITE
@@ -275,7 +276,7 @@ fn open_existing(path: &Path, writable: bool) -> Result<Connection> {
         OpenFlags::SQLITE_OPEN_READ_ONLY
     };
     let connection = Connection::open_with_flags(path, flags)
-        .context("无法打开天工 Claw 数据库，请确认文件可访问且未被独占锁定")?;
+        .context("无法打开天工 Work 数据库，请确认文件可访问且未被独占锁定")?;
     connection.busy_timeout(Duration::from_secs(3))?;
     if writable {
         connection.pragma_update(None, "foreign_keys", true)?;
@@ -312,14 +313,14 @@ fn schema_columns(connection: &Connection) -> Result<Vec<String>> {
             fields
                 .iter()
                 .any(|(column, ty, _)| column == name && ty.eq_ignore_ascii_case(kind)),
-            "天工 Claw 数据库结构不兼容：缺少或改变字段 {name}；未修改数据库"
+            "天工 Work 数据库结构不兼容：缺少或改变字段 {name}；未修改数据库"
         );
     }
     ensure!(
         fields
             .iter()
             .any(|(name, _, primary)| name == "model_id" && *primary == 1),
-        "天工 Claw model_id 主键结构不兼容；未修改数据库"
+        "天工 Work model_id 主键结构不兼容；未修改数据库"
     );
     Ok(fields.into_iter().map(|(name, _, _)| name).collect())
 }
@@ -349,7 +350,7 @@ fn snapshot(connection: &Connection, columns: &[String]) -> Result<ManagedSnapsh
                 ValueRef::Real(value) => StoredValue::Real(value),
                 ValueRef::Text(value) => StoredValue::Text(
                     std::str::from_utf8(value)
-                        .context("天工 Claw 配置含无效文本")?
+                        .context("天工 Work 配置含无效文本")?
                         .to_owned(),
                 ),
                 ValueRef::Blob(value) => StoredValue::Blob(value.to_vec()),
@@ -367,7 +368,7 @@ fn snapshot(connection: &Connection, columns: &[String]) -> Result<ManagedSnapsh
         .collect::<rusqlite::Result<Vec<String>>>()?;
     ensure!(
         active_ids.len() <= 1,
-        "天工 Claw 数据库存在多个默认模型，请先在天工 Claw 中修复"
+        "天工 Work 数据库存在多个默认模型，请先在天工 Work 中修复"
     );
     Ok(ManagedSnapshot {
         rows: managed,
@@ -403,11 +404,11 @@ fn row_extra(row: Option<&ModelRow>) -> Result<serde_json::Map<String, serde_jso
         .unwrap_or("{}");
     let value: serde_json::Value =
         serde_json::from_str(if raw.trim().is_empty() { "{}" } else { raw })
-            .context("天工 Claw 专用模型 extra_params 格式无效，请先修复后重试")?;
+            .context("天工 Work 专用模型 extra_params 格式无效，请先修复后重试")?;
     value
         .as_object()
         .cloned()
-        .ok_or_else(|| anyhow!("天工 Claw 专用模型 extra_params 必须为 JSON 对象"))
+        .ok_or_else(|| anyhow!("天工 Work 专用模型 extra_params 必须为 JSON 对象"))
 }
 
 fn context_window(row: &ModelRow) -> u32 {
@@ -428,17 +429,17 @@ fn read_metadata(path: &Path) -> Result<(Option<Vec<u8>>, Option<Metadata>)> {
     let bytes = match fs::read(metadata_path(path)) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok((None, None)),
-        Err(error) => return Err(error).context("无法读取天工 Claw 接入备份"),
+        Err(error) => return Err(error).context("无法读取天工 Work 接入备份"),
     };
     let mut metadata: Metadata = serde_json::from_slice(&bytes)
-        .context("天工 Claw 接入备份格式无效，已停止操作以保留恢复信息")?;
+        .context("天工 Work 接入备份格式无效，已停止操作以保留恢复信息")?;
     ensure!(
         matches!(metadata.version, 1 | METADATA_VERSION),
-        "天工 Claw 接入备份版本不支持"
+        "天工 Work 接入备份版本不支持"
     );
     ensure!(
         metadata.database_path == canonical_identity(path)?,
-        "天工 Claw 接入备份属于其他数据库，已停止操作"
+        "天工 Work 接入备份属于其他数据库，已停止操作"
     );
     if metadata.version == 1 {
         metadata.entries.insert(
@@ -458,13 +459,13 @@ fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
         .filter(|path| !path.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
     let mut temporary =
-        tempfile::NamedTempFile::new_in(parent).context("无法创建天工 Claw 备份临时文件")?;
+        tempfile::NamedTempFile::new_in(parent).context("无法创建天工 Work 备份临时文件")?;
     temporary.write_all(contents)?;
     temporary.as_file().sync_all()?;
     temporary
         .persist(path)
         .map_err(|error| error.error)
-        .context("无法原子保存天工 Claw 接入备份")?;
+        .context("无法原子保存天工 Work 接入备份")?;
     Ok(())
 }
 
@@ -476,7 +477,7 @@ fn restore_metadata(path: &Path, previous: Option<&[u8]>) -> Result<()> {
         match fs::remove_file(&path) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(error).context("无法撤销未完成的天工 Claw 备份"),
+            Err(error) => Err(error).context("无法撤销未完成的天工 Work 备份"),
         }
     }
 }
@@ -568,7 +569,7 @@ fn status_from_snapshot(
                     .entries
                     .iter()
                     .position(|entry| entry.entry_id == entry_id)
-                    .ok_or_else(|| anyhow!("所选天工 Claw 条目已不存在，请刷新后重试"))?,
+                    .ok_or_else(|| anyhow!("所选天工 Work 条目已不存在，请刷新后重试"))?,
             )
         }
         None => status
@@ -684,7 +685,7 @@ fn load_at(path: &Path, config: &AppConfig, selected: Option<&str>) -> Result<Gm
     let mut status = empty_status(path);
     if !status.exists {
         status.error = Some(
-            "未找到天工 Claw 数据库，请先安装并打开天工 Claw，或设置 GMCLAW_CONFIG_PATH".into(),
+            "未找到天工 Work 数据库，请先安装并打开天工 Work，或设置 GMCLAW_CONFIG_PATH".into(),
         );
         return Ok(status);
     }
@@ -718,7 +719,7 @@ fn ui_revision(snapshot: &ManagedSnapshot, config: &AppConfig) -> Result<String>
             providers
                 .insert(provider.name.to_ascii_lowercase(), provider)
                 .is_none(),
-            "Hub 中存在重复天工 Claw 专用渠道，请先修复配置"
+            "Hub 中存在重复天工 Work 专用渠道，请先修复配置"
         );
     }
     // Entire managed set plus active selection; unrelated channels and provider
@@ -732,13 +733,13 @@ fn ui_revision(snapshot: &ManagedSnapshot, config: &AppConfig) -> Result<String>
 fn check_revision(expected: &str, current: &ManagedSnapshot, config: &AppConfig) -> Result<()> {
     ensure!(
         !expected.is_empty() && expected == ui_revision(current, config)?,
-        "天工 Claw 模型配置或 Hub 专用渠道已变化，请刷新后重试"
+        "天工 Work 模型配置或 Hub 专用渠道已变化，请刷新后重试"
     );
     Ok(())
 }
 
 fn provider_position(config: &AppConfig, entry_id: &str) -> Result<Option<usize>> {
-    let name = gmclaw_provider_name(entry_id).ok_or_else(|| anyhow!("天工 Claw 条目身份无效"))?;
+    let name = gmclaw_provider_name(entry_id).ok_or_else(|| anyhow!("天工 Work 条目身份无效"))?;
     let positions = config
         .ai_gateway
         .providers
@@ -749,7 +750,7 @@ fn provider_position(config: &AppConfig, entry_id: &str) -> Result<Option<usize>
         .collect::<Vec<_>>();
     ensure!(
         positions.len() <= 1,
-        "Hub 中存在重复天工 Claw 专用渠道，请先修复配置"
+        "Hub 中存在重复天工 Work 专用渠道，请先修复配置"
     );
     Ok(positions.first().copied())
 }
@@ -787,14 +788,14 @@ fn local_url(config: &AppConfig, entry_id: &str) -> Result<String> {
     let address: SocketAddr = config
         .bind
         .parse()
-        .context("Hub 监听地址无效，无法生成天工 Claw 本机地址")?;
+        .context("Hub 监听地址无效，无法生成天工 Work 本机地址")?;
     ensure!(
         address.port() != 0,
-        "Hub 必须使用固定本机端口才能接入天工 Claw"
+        "Hub 必须使用固定本机端口才能接入天工 Work"
     );
     ensure!(
         address.ip().is_loopback() || address.ip().is_unspecified(),
-        "Hub 当前仅监听指定网络地址，请改为本机或通配监听地址后接入天工 Claw"
+        "Hub 当前仅监听指定网络地址，请改为本机或通配监听地址后接入天工 Work"
     );
     let host = if address.is_ipv6() {
         "[::1]"
@@ -809,7 +810,7 @@ fn local_url(config: &AppConfig, entry_id: &str) -> Result<String> {
 }
 fn validate_source(provider: &ProviderConfig, config: &AppConfig) -> Result<()> {
     if provider.provider_type == ProviderType::ChatGptResponses {
-        bail!("天工 Claw 账号登录渠道暂未开放，请选择普通 API 渠道");
+        bail!("天工 Work 账号登录渠道暂未开放，请选择普通 API 渠道");
     }
     let url = url::Url::parse(provider.base_url.trim())
         .map_err(|_| anyhow!("所选来源渠道的上游地址无效，请先修正渠道配置"))?;
@@ -852,7 +853,7 @@ fn save_at(
         "temperature 必须为 0 到 2 之间的数值"
     );
     let model = request.model.trim();
-    ensure!(!model.is_empty(), "请选择天工 Claw 使用的模型");
+    ensure!(!model.is_empty(), "请选择天工 Work 使用的模型");
     let source = config
         .ai_gateway
         .providers
@@ -886,14 +887,14 @@ fn save_at(
     let columns = schema_columns(&connection)?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
-        .context("天工 Claw 数据库正在写入，请稍后重试")?;
+        .context("天工 Work 数据库正在写入，请稍后重试")?;
     let before = snapshot(&transaction, &columns)?;
     check_revision(&request.revision, &before, config)?;
     let (previous_bytes, previous) = read_metadata(path)?;
     let entry_id = if let Some(entry_id) = requested_id {
         ensure!(
             before.rows.contains_key(entry_id),
-            "所选天工 Claw 条目已不存在，请刷新后重试"
+            "所选天工 Work 条目已不存在，请刷新后重试"
         );
         entry_id.to_owned()
     } else {
@@ -956,7 +957,7 @@ fn save_at(
                 i64::from(active)
             ],
         )
-        .context("无法保存天工 Claw 模型；数据库结构可能已变化")?;
+        .context("无法保存天工 Work 模型；数据库结构可能已变化")?;
     let after = snapshot(&transaction, &columns)?;
     let backup = Backup {
         entry_id: entry_id.clone(),
@@ -1104,13 +1105,13 @@ fn mutate_entry_at(
     let columns = schema_columns(&connection)?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
-        .context("天工 Claw 数据库正在写入，请稍后重试")?;
+        .context("天工 Work 数据库正在写入，请稍后重试")?;
     let before = snapshot(&transaction, &columns)?;
     check_revision(&request.revision, &before, config)?;
     let row = before
         .rows
         .get(entry_id)
-        .ok_or_else(|| anyhow!("所选天工 Claw 条目已不存在，请刷新后重试"))?;
+        .ok_or_else(|| anyhow!("所选天工 Work 条目已不存在，请刷新后重试"))?;
     let (previous_bytes, previous) = read_metadata(path)?;
     let position = provider_position(config, entry_id)?;
     let provider = position.map(|index| config.ai_gateway.providers[index].clone());
@@ -1187,9 +1188,9 @@ fn persist_changes(
         let recovery = restore_metadata(path, previous_bytes);
         transaction
             .rollback()
-            .context("Hub 保存失败且天工 Claw 事务回滚失败，请重新读取两端配置")?;
-        recovery.context("Hub 保存失败；天工 Claw 已回滚，但备份文件恢复失败")?;
-        return Err(error).context("Hub 渠道保存失败，天工 Claw 配置已撤销");
+            .context("Hub 保存失败且天工 Work 事务回滚失败，请重新读取两端配置")?;
+        recovery.context("Hub 保存失败；天工 Work 已回滚，但备份文件恢复失败")?;
+        return Err(error).context("Hub 渠道保存失败，天工 Work 配置已撤销");
     }
     if transaction.commit().is_err() {
         let mut rollback = config.clone();
@@ -1198,9 +1199,9 @@ fn persist_changes(
         let metadata_recovered = restore_metadata(path, previous_bytes).is_ok();
         *config = if hub_recovered { rollback } else { next_config };
         if !hub_recovered || !metadata_recovered {
-            bail!("天工 Claw 数据库提交失败，Hub 或备份自动恢复未完成，请刷新并检查两端配置");
+            bail!("天工 Work 数据库提交失败，Hub 或备份自动恢复未完成，请刷新并检查两端配置");
         }
-        bail!("天工 Claw 数据库提交失败，Hub 配置与备份已恢复，请重试");
+        bail!("天工 Work 数据库提交失败，Hub 配置与备份已恢复，请重试");
     }
     *config = next_config;
     Ok(result)
@@ -1224,28 +1225,28 @@ fn restore_at(
     let columns = schema_columns(&connection)?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
-        .context("天工 Claw 数据库正在写入，请稍后重试")?;
+        .context("天工 Work 数据库正在写入，请稍后重试")?;
     let current = snapshot(&transaction, &columns)?;
     check_revision(revision, &current, config)?;
     let (previous_bytes, metadata) = read_metadata(path)?;
-    let metadata = metadata.ok_or_else(|| anyhow!("没有可还原的天工 Claw 接入备份"))?;
+    let metadata = metadata.ok_or_else(|| anyhow!("没有可还原的天工 Work 接入备份"))?;
     let backup = metadata
         .backup
         .as_ref()
-        .ok_or_else(|| anyhow!("没有可还原的天工 Claw 接入备份"))?;
+        .ok_or_else(|| anyhow!("没有可还原的天工 Work 接入备份"))?;
     let entry_id = &backup.entry_id;
     validate_entry_id(entry_id)?;
     let target = current.entry(entry_id);
     // This remains the metadata v1 database-only target hash, not a UI token.
     ensure!(
         backup.after_revision == fingerprint(&target)?,
-        "天工 Claw 目标模型或默认模型已被后续修改，已停止还原以保留这些改动"
+        "天工 Work 目标模型或默认模型已被后续修改，已停止还原以保留这些改动"
     );
     let position = provider_position(config, entry_id)?;
     let provider = position.map(|index| config.ai_gateway.providers[index].clone());
     ensure!(
         backup.after_provider_fingerprint == fingerprint(&provider)?,
-        "Hub 天工 Claw 目标渠道已被后续修改，已停止还原以保留这些改动"
+        "Hub 天工 Work 目标渠道已被后续修改，已停止还原以保留这些改动"
     );
     let target_model_id = model_id(entry_id);
     if let Some(row) = &backup.before.row {
@@ -1289,7 +1290,7 @@ fn restore_at(
                     &format!("UPDATE model_configs SET {assignments} WHERE model_id=?"),
                     params_from_iter(values),
                 )
-                .context("无法还原天工 Claw 目标模型")?;
+                .context("无法还原天工 Work 目标模型")?;
         } else {
             // Undo deletion using the complete typed row, including timestamps
             // and unknown columns; never recreate the database or its schema.
@@ -1304,7 +1305,7 @@ fn restore_at(
                     &format!("INSERT INTO model_configs ({names}) VALUES ({placeholders})"),
                     params_from_iter(row.values().map(StoredValue::sql_value)),
                 )
-                .context("无法恢复已删除的天工 Claw 模型")?;
+                .context("无法恢复已删除的天工 Work 模型")?;
         }
     } else {
         transaction.execute(
@@ -1318,7 +1319,7 @@ fn restore_at(
                 "UPDATE model_configs SET is_active=1 WHERE model_id=?1",
                 [id]
             )? == 1,
-            "之前的天工 Claw 默认模型已删除，不能安全还原"
+            "之前的天工 Work 默认模型已删除，不能安全还原"
         );
     }
     let after = snapshot(&transaction, &columns)?;
@@ -1416,6 +1417,8 @@ mod tests {
     fn request(path: &Path, config: &AppConfig, entry_id: Option<&str>) -> GmClawSaveRequest {
         GmClawSaveRequest {
             entry_id: entry_id.map(str::to_owned),
+            // Keep coverage of the explicitly requested legacy activation API.
+            make_active: true,
             source_provider: "source".into(),
             model: "alias".into(),
             revision: load_at(path, config, None).unwrap().revision,
@@ -1433,6 +1436,44 @@ mod tests {
     fn read_snapshot(path: &Path) -> ManagedSnapshot {
         let connection = Connection::open(path).unwrap();
         snapshot(&connection, &schema_columns(&connection).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn omitted_default_selection_preserves_native_default_through_save_and_restore() {
+        for has_default in [true, false] {
+            let (_directory, path, hub_path, mut config) = fixture();
+            if !has_default {
+                Connection::open(&path)
+                    .unwrap()
+                    .execute("UPDATE model_configs SET is_active=0", [])
+                    .unwrap();
+            }
+            let active = has_default.then(|| "existing".to_owned());
+            let mut request: GmClawSaveRequest = serde_json::from_value(serde_json::json!({
+                "sourceProvider": "source",
+                "model": "alias",
+                "revision": load_at(&path, &config, None).unwrap().revision,
+            }))
+            .unwrap();
+            assert!(!request.make_active);
+            let saved = save_at(&path, &request, &mut config, &hub_path).unwrap();
+            assert_eq!(saved.active_model_id, active);
+            assert!(!saved.active);
+
+            request.entry_id = saved.selected_entry_id;
+            request.revision = saved.revision;
+            request.max_tokens = 4096;
+            let updated = save_at(&path, &request, &mut config, &hub_path).unwrap();
+            assert_eq!(updated.active_model_id, active);
+            assert!(!updated.active);
+            assert_eq!(updated.model.as_ref().unwrap().max_tokens, 4096);
+
+            let restored = restore_at(&path, &updated.revision, &mut config, &hub_path).unwrap();
+            assert_eq!(restored.active_model_id, active);
+            let status = load_at(&path, &config, request.entry_id.as_deref()).unwrap();
+            assert_eq!(status.model.as_ref().unwrap().max_tokens, 8192);
+            assert!(!status.active);
+        }
     }
 
     #[test]
@@ -2177,7 +2218,7 @@ mod tests {
             "temperature":0.7, "revision":"old-page"
         }))
         .unwrap();
-        assert!(old.entry_id.is_none() && old.make_active);
+        assert!(old.entry_id.is_none() && !old.make_active);
         assert_eq!(old.parameters, GmClawParameters::default());
     }
 }

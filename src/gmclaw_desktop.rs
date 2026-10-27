@@ -1,4 +1,4 @@
-//! Official GMClaw 1.1.1 desktop task storage API.
+//! Official TianGong desktop task storage API, including Work model bindings.
 //!
 //! This client only uses the authenticated local DataServer. It does not access
 //! the desktop database, execute models, refresh the renderer, or retry writes.
@@ -34,6 +34,7 @@ pub(crate) struct DesktopClient {
     http: Client,
     mcp_http: Client,
     base_url: Url,
+    harness_url: Url,
     authorization: HeaderValue,
 }
 
@@ -48,6 +49,8 @@ pub(crate) struct DesktopTask {
     pub created_at: String,
     pub updated_at: String,
     pub completed_at: Option<String>,
+    #[serde(default)]
+    pub model_id: Option<String>,
 }
 
 /// Directory metadata also exists for desktop projects that have no tasks.
@@ -174,6 +177,8 @@ struct TaskRow {
     updated_at: String,
     #[serde(default)]
     completed_at: Option<String>,
+    #[serde(default)]
+    model_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -234,8 +239,55 @@ impl DesktopClient {
             mcp_http,
             base_url: Url::parse(DATA_ENDPOINT)
                 .map_err(|_| anyhow::anyhow!("天工桌面本地地址无效"))?,
+            harness_url: harness,
             authorization,
         })
+    }
+
+    /// Work keeps executing after the renderer sees OVER or disconnects.
+    /// A legacy 404 keeps the existing persisted-history check; other failures
+    /// cannot be used as evidence that the session is idle.
+    pub(crate) async fn ensure_no_active_run(&self, session_id: &str) -> Result<()> {
+        validate_id(session_id)?;
+        let mut harness = self.clone();
+        harness.base_url = self.harness_url.clone();
+        harness.base_url.set_path("/");
+        let value = harness
+            .request_json(
+                Method::GET,
+                &["v2", "chat", "runs"],
+                Some(&[
+                    ("session_id", session_id.to_owned()),
+                    ("active_only", "true".to_owned()),
+                ]),
+                None,
+                MAX_SESSION_EVENTS_BYTES,
+                true,
+            )
+            .await?;
+        let Some(value) = value else {
+            return Ok(());
+        };
+        let runs = value
+            .get("runs")
+            .and_then(Value::as_array)
+            .ok_or_else(|| anyhow::anyhow!("天工后台任务状态无法确认，未恢复或提交任务"))?;
+        ensure!(
+            runs.len() <= 100
+                && runs.iter().all(|run| {
+                    run["session_id"].as_str() == Some(session_id)
+                        && run["run_id"].as_str().is_some_and(|id| !id.is_empty())
+                }),
+            "天工后台任务身份无法确认，未恢复或提交任务"
+        );
+        ensure!(
+            runs.iter().all(|run| matches!(
+                run["status"].as_str(),
+                Some("completed" | "stopped" | "failed" | "interrupted")
+            )),
+            "天工后台仍在运行、收尾或等待审批，请先在天工完成后再恢复会话"
+        );
+        Ok(())
     }
 
     /// Read only one connection. The returned value can contain local secrets;
@@ -425,9 +477,12 @@ impl DesktopClient {
         title: &str,
         session_id: &str,
         task_id: &str,
+        model_id: &str,
     ) -> Result<DesktopTask> {
         validate_id(session_id)?;
         validate_id(task_id)?;
+        validate_text(model_id, 256, "天工任务模型标识无效")?;
+        ensure!(!model_id.trim().is_empty(), "天工任务必须选择模型");
         validate_text(title, 512, "天工桌面会话标题无效")?;
         ensure!(
             !work_dir.is_empty()
@@ -490,6 +545,7 @@ impl DesktopClient {
                         "session_id": session_id,
                         "scenario_id": scenario.scenario_id,
                         "title": title,
+                        "model_id": model_id,
                     })),
                     MAX_METADATA_BYTES,
                 )
@@ -497,7 +553,8 @@ impl DesktopClient {
             ensure!(
                 row.task_id == task_id
                     && row.session_id == session_id
-                    && row.scenario_id == scenario.scenario_id,
+                    && row.scenario_id == scenario.scenario_id
+                    && row.model_id.as_deref().is_none_or(|id| id == model_id),
                 "天工桌面返回的任务身份不匹配；请核对创建结果"
             );
             Ok(task_from_row(&scenario, row))
@@ -505,6 +562,41 @@ impl DesktopClient {
         tokio::time::timeout(OPERATION_TIMEOUT, operation)
             .await
             .map_err(|_| anyhow::anyhow!("天工桌面创建等待超时；请核对结果，不会自动重试"))?
+    }
+
+    /// Fill an unbound Work task without replacing an explicit desktop choice.
+    /// A missing field denotes the legacy API, where no write is attempted.
+    pub(crate) async fn bind_task_model(&self, task: &DesktopTask, model_id: &str) -> Result<()> {
+        let current = self
+            .task(&task.task_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("天工任务已移除"))?;
+        ensure!(
+            current.session_id == task.session_id && current.model_id == task.model_id,
+            "天工任务模型已变化，请重新选择会话"
+        );
+        if current.model_id.as_deref() != Some("") {
+            return Ok(());
+        }
+        validate_text(model_id, 256, "天工任务模型标识无效")?;
+        ensure!(!model_id.is_empty(), "天工任务必须选择模型");
+        let _: Value = self
+            .required_json(
+                Method::PUT,
+                &["data", "tasks", &task.task_id],
+                Some(json!({"model_id": model_id})),
+                MAX_METADATA_BYTES,
+            )
+            .await?;
+        let saved = self
+            .task(&task.task_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("天工任务模型更新后无法确认"))?;
+        ensure!(
+            saved.session_id == task.session_id && saved.model_id.as_deref() == Some(model_id),
+            "无法确认天工任务模型保存结果，请到天工核对，不会自动重试"
+        );
+        Ok(())
     }
 
     pub(crate) async fn create_session_metadata(
@@ -939,6 +1031,7 @@ fn task_from_row(scenario: &Scenario, row: TaskRow) -> DesktopTask {
         created_at: row.created_at,
         updated_at: row.updated_at,
         completed_at: row.completed_at,
+        model_id: row.model_id,
     }
 }
 
@@ -1024,6 +1117,185 @@ fn metadata_update_body(changes: &Value) -> Result<Map<String, Value>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn work_background_run_guard_uses_capabilities_and_rejects_uncertain_state() {
+        use axum::{
+            Json, Router,
+            extract::{Query, State},
+            http::StatusCode,
+            response::IntoResponse,
+            routing::get,
+        };
+        use std::sync::{Arc, Mutex};
+        let fixture = Arc::new(Mutex::new((200u16, json!({"runs":[]}))));
+        async fn list(
+            State(f): State<Arc<Mutex<(u16, Value)>>>,
+            Query(query): Query<std::collections::HashMap<String, String>>,
+        ) -> axum::response::Response {
+            assert_eq!(query.get("session_id").map(String::as_str), Some("session"));
+            assert_eq!(query.get("active_only").map(String::as_str), Some("true"));
+            let (code, value) = f.lock().unwrap().clone();
+            (StatusCode::from_u16(code).unwrap(), Json(value)).into_response()
+        }
+        let app = Router::new()
+            .route("/v2/chat/runs", get(list))
+            .with_state(fixture.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut client = DesktopClient::with_authorization(
+            "http://127.0.0.1:7861",
+            HeaderValue::from_static("Bearer fixture"),
+        )
+        .unwrap();
+        client.harness_url =
+            Url::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        for (code, body, allowed) in [
+            (404, json!({"detail":"Not Found"}), true),
+            (200, json!({"runs":[]}), true),
+            (
+                200,
+                json!({"runs":[{"run_id":"run","session_id":"session","status":"completed"}]}),
+                true,
+            ),
+            (
+                200,
+                json!({"runs":[{"run_id":"run","session_id":"session","status":"running","phase":"finalizing"}]}),
+                false,
+            ),
+            (
+                200,
+                json!({"runs":[{"run_id":"run","session_id":"session","status":"waiting_confirmation"}]}),
+                false,
+            ),
+            (
+                200,
+                json!({"runs":[{"run_id":"run","session_id":"session","status":"unknown"}]}),
+                false,
+            ),
+            (
+                200,
+                json!({"runs":[{"run_id":"run","session_id":"different","status":"completed"}]}),
+                false,
+            ),
+            (200, json!({"unknown":[]}), false),
+            (403, json!({"error":"unauthorized"}), false),
+        ] {
+            *fixture.lock().unwrap() = (code, body);
+            assert_eq!(
+                client.ensure_no_active_run("session").await.is_ok(),
+                allowed
+            );
+        }
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn work_task_model_binding_preserves_options_and_legacy_tasks() {
+        use axum::{
+            Json, Router,
+            extract::State,
+            routing::{get, post, put},
+        };
+        use std::sync::{Arc, Mutex};
+        #[derive(Clone)]
+        struct Fixture {
+            task: Arc<Mutex<Option<Value>>>,
+            writes: Arc<Mutex<Vec<Value>>>,
+        }
+        fn folder() -> &'static str {
+            if cfg!(windows) {
+                "D:/fixture/project"
+            } else {
+                "/fixture/project"
+            }
+        }
+        async fn list(State(f): State<Fixture>) -> Json<Value> {
+            Json(
+                json!({"scenarios":[{"scenario_id":"project","name":"fixture","work_dir":folder(),
+                "tasks": f.task.lock().unwrap().clone().into_iter().collect::<Vec<_>>() }]}),
+            )
+        }
+        async fn create(State(f): State<Fixture>, Json(body): Json<Value>) -> Json<Value> {
+            f.writes.lock().unwrap().push(body.clone());
+            let mut task = body;
+            task["model_options"] = json!({"reasoning_effort":"high","custom":"preserved"});
+            *f.task.lock().unwrap() = Some(task.clone());
+            Json(task)
+        }
+        async fn update(State(f): State<Fixture>, Json(body): Json<Value>) -> Json<Value> {
+            f.writes.lock().unwrap().push(body.clone());
+            let mut state = f.task.lock().unwrap();
+            let task = state.as_mut().unwrap().as_object_mut().unwrap();
+            task.extend(body.as_object().unwrap().clone());
+            Json(json!({"status":"updated"}))
+        }
+        let fixture = Fixture {
+            task: Default::default(),
+            writes: Default::default(),
+        };
+        let app = Router::new()
+            .route("/data/scenarios", get(list))
+            .route("/data/tasks", post(create))
+            .route("/data/tasks/{id}", put(update))
+            .with_state(fixture.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut client = DesktopClient::with_authorization(
+            "http://127.0.0.1:7861",
+            HeaderValue::from_static("Bearer fixture"),
+        )
+        .unwrap();
+        client.base_url =
+            Url::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let task = client
+            .create_task(folder(), "fixture", "session", "task", "selected-model")
+            .await
+            .unwrap();
+        assert_eq!(task.model_id.as_deref(), Some("selected-model"));
+        assert_eq!(
+            fixture.writes.lock().unwrap()[0]["model_id"],
+            "selected-model"
+        );
+        assert!(
+            !fixture.writes.lock().unwrap()[0]
+                .as_object()
+                .unwrap()
+                .contains_key("model_options")
+        );
+        for model in [Some("desktop-model"), None] {
+            {
+                let mut state = fixture.task.lock().unwrap();
+                let object = state.as_mut().unwrap().as_object_mut().unwrap();
+                object.remove("model_id");
+                if let Some(model) = model {
+                    object.insert("model_id".into(), json!(model));
+                }
+            }
+            let task = client.task("task").await.unwrap().unwrap();
+            assert_eq!(task.model_id.as_deref(), model);
+            client.bind_task_model(&task, "im-model").await.unwrap();
+            assert_eq!(fixture.writes.lock().unwrap().len(), 1);
+        }
+        fixture.task.lock().unwrap().as_mut().unwrap()["model_id"] = json!("");
+        let unbound = client.task("task").await.unwrap().unwrap();
+        client.bind_task_model(&unbound, "im-model").await.unwrap();
+        assert_eq!(
+            fixture.writes.lock().unwrap().last().unwrap(),
+            &json!({"model_id":"im-model"})
+        );
+        assert_eq!(
+            fixture.task.lock().unwrap().as_ref().unwrap()["model_options"]["custom"],
+            "preserved"
+        );
+
+        // A desktop selection after the caller's read must win, without a PUT.
+        fixture.task.lock().unwrap().as_mut().unwrap()["model_id"] = json!("desktop-model");
+        assert!(client.bind_task_model(&unbound, "im-model").await.is_err());
+        assert_eq!(fixture.writes.lock().unwrap().len(), 2);
+        server.abort();
+    }
 
     #[test]
     fn project_catalog_keeps_manual_projects_without_any_task_metadata() {

@@ -1,18 +1,14 @@
 # WorkBuddy 多模型接入
 
-维护日期：2026-10-08。当前开发版本 `0.4.30-5` 新增独立 [NVWA MCP 接入](customizations/nvwa-mcp.md)，关联 TC-014；Windows locked GUI 编译核对已通过，最终整合复核另记，macOS 本版原生构建和实机行为待验收，未发布。已有模型管理关联 TC-002、TC-003、TC-004、TC-007、TC-013；历史构建、产物和签名保持 [v0.4.30-4](releases/v0.4.30-4.md)、[v0.4.30-3](releases/v0.4.30-3.md)、[v0.4.30-2](releases/v0.4.30-2.md) 各自归属。
+维护日期：2026-10-22。当前开发 `v0.4.30-8`；本轮统一 WorkBuddy 与天工 Work 接入页的字段、按钮、说明和只读/编辑底色，未变更模型文件格式或路由。关联 TC-002、TC-004、TC-007、TC-013、TC-014。隔离验证、本地测试包及未发布状态见 [v8 交付](releases/v0.4.30-8.md)，两平台实机待用户验收。历史产物保持原身份。
 
 TianCaiSpaceHub 在 WorkBuddy 页签逐条管理多个模型。每条可以选择自己的来源渠道、模型、协议和思考强度；WorkBuddy 调用本机 Chat Completions 地址，Hub 经该条目的专用渠道转发。同名模型可绑定不同来源，保存一个条目不再以单元素数组覆盖其他模型。
 
-## NVWA MCP 独立接入（0.4.30-5）
+## Dumpling-MCP 独立接入
 
-“NVWA MCP”页签支持本人密码、浏览器个人授权和显式应用代表用户，核验真实身份/租户后，为 WorkBuddy 写入一个 Hub 受管的本机 HTTP MCP 条目。它与本页 `models.json` 多模型/专用渠道独立，使用 `mcp.json` 的 `mcpServers`，仅改受管 `nvwa-<profileId哈希前16位>`，保留其他条目和审批文件，不修改 `mcp-approvals.json` 绕过信任。
+通过“Dumpling-MCP”页签完成远端认证后，下拉选择 WorkBuddy，预览并确认写入 Hub 受管的本机 HTTP MCP。当前三端使用保存的环境名；旧 hash 名只按归属和显式确认迁移。它与本页 `models.json` 模型条目独立，使用 `mcp.json`，保留其他连接和原审批设置。
 
-MCP 路径优先 `WORKBUDDY_CONFIG_DIR` 或 `CODEBUDDY_CONFIG_DIR`，否则为用户 `.workbuddy[-实例号]/mcp.json`；`WORKBUDDY_CONFIG_PATH` 仍只管理模型，不改为 MCP 路径。品牌/专享版可在 NVWA 页显式指定绝对 `mcp.json` 路径，先预览、核对指纹和系统保护的定向备份，再确认接入/移除/恢复。同名未受管或被用户修改的目标拒绝覆盖。
-
-WorkBuddy 配置只含默认 `127.0.0.1:3849` 桥地址和该端本地连接凭据，远端密码、应用密钥、token 由 Hub 系统保护存储持有。Hub 需运行；原生 refresh/重启、信任和已有会话何时热加载由 WorkBuddy 决定，外部写盘不保证即时生效。文件可配置不证明应用安装、已加载或真实 MCP 连接；Hub 检测也不代替客户端调用证据。认证及工具失效不套用下文模型 `502/503` 重试，已发送工具不自动重放。
-
-每端预览、凭据、退出、删除与回滚见 [TC-014 完整专题](customizations/nvwa-mcp.md)。本轮没有启动 WorkBuddy、测试真实认证/MCP/模型或读取用户配置，待用户验收。
+MCP 路径优先 `WORKBUDDY_CONFIG_DIR` / `CODEBUDDY_CONFIG_DIR`，否则为用户 `.workbuddy[-实例号]/mcp.json`；`WORKBUDDY_CONFIG_PATH` 仍只管理模型。客户端只保存本机桥与本地凭据，远端密码/密钥由 Hub 系统保护。认证方式、预览、备份、移除/恢复及按需续认证见 [TC-014 完整专题](customizations/nvwa-mcp.md)。Hub 需运行，原生刷新/信任和真实工具调用待用户验收。
 
 ## 外部消息执行端边界
 
@@ -37,23 +33,19 @@ WorkBuddy 配置只含默认 `127.0.0.1:3849` 桥地址和该端本地连接凭�
 
 ## 推荐配置
 
-1. 先打开“大模型接入”页签，保存至少一个 provider，并在该 provider 中填写上游 Base URL、API Key 和模型列表。
-2. 打开“WorkBuddy 接入”页签，刷新渠道与模型配置。选择已有管理条目，或进入新增模式；页面只列 Hub 管理条目，用户自己添加的其他模型保留，不自动接管数组首项。
-3. 在“上游提供商（来自 AI Gateway）”中选择刚才保存的 provider。
-4. 在模型下拉框中选择该 provider 已配置的模型或模型别名。URL、凭据配置状态和模型列表会随 provider 自动带出；协议默认按 provider 自动选择，特殊兼容服务仍可手动调整。
-5. 使用自动生成的条目地址和本机 Key（示例使用默认端口）：
+1. 在“大模型接入”保存并启用渠道，填写厂商地址、凭据和模型列表。
+2. 打开“WorkBuddy 接入”并“刷新”，在“管理模型”选择已有项或“新增模型”。这里只列 Hub 管理项，其他自建模型保留。
+3. 选择“大模型接入渠道”和“模型”。“接口类型”跟随渠道，特殊兼容服务可调整；“思考强度”已放入同一连接卡片。
+4. 点击“保存模型”，在 WorkBuddy 中重新加载配置并选择该模型。地址、本机 Key、上游 URL/Key、内部渠道和配置路径不显示，也无需在此填写。
+5. “删除所选模型”只删除当前项及其专用渠道；“撤销上次操作”撤销最近保存/删除，保留其他条目和后改保护。启动按钮和刷新不保存模型。
 
-   ```text
-   http://127.0.0.1:3847/ai-gateway/workbuddy/<entryId>/v1
-   ```
+只读或停用字段灰底，可编辑项在浅色主题白底，深色主题用对应卡片色；与天工 Work、Dumpling-MCP 使用同一规则。两接入页按钮统一为“启动… / 刷新 / 撤销上次操作 / 保存模型 / 删除所选模型”。
 
-   WorkBuddy 在该地址后追加 `/chat/completions`。地址随 Hub 当前固定监听端口生成，IPv6 回环用 `[::1]`。默认 Key 为 `workbuddy-local`，只用于客户端非空字段兼容，当前端点不校验它，不是上游凭据。旧条目 `entryId=legacy` 保留 `/ai-gateway/v1` 地址及 `workbuddy` 渠道。
-6. 思考强度改为下拉选择，随 provider、模型（含别名实际指向）和协议自动刷新。Claude 统一提供 `low, medium, high, xhigh, max` 五档，不为旧版 Claude 单独分档；OpenAI 等其他模型默认提供 `low, medium, high, xhigh`。GLM 的 Anthropic 兼容配置沿用适配器的 `high, max` 两档。默认值初始为 `high`，切换时保留仍然适用的选择，不适用则回退为 `high`。请求未携带强度时，Hub 补充保存的默认值；Claude 原生请求转换为 `thinking.type=adaptive` 和 `output_config.effort`。
-7. OpenAI 协议的固定缓存键由 provider 自动生成 `workbuddy:<provider>`，无需手填。Anthropic 原生协议显示“不需要（使用原生缓存）”，保存时省略 `cacheKey`，由 Hub 自动添加 `cache_control` 标记。Claude 经 OpenAI 兼容协议接入时，缓存仍按所选协议处理。
-8. 保存当前条目。新增时生成 UUID 条目 ID、WorkBuddy 模型 ID `tiancaispacehub-<entryId>`、专用渠道 `workbuddy:<entryId>` 和对应地址；编辑沿用身份并保留其他条目、未知字段与未在页面编辑的能力选项。新保存条目的上游 Key 写入 Hub 专用渠道，在 `models.json` 及状态响应中清空；同目录的撤销备份仍可能包含渠道凭据，详见下文。来源渠道的导入元数据不复制到专用渠道。
-9. 删除只移除选中模型及其渠道；“还原备份”撤销最近一次成功保存或删除，恢复前另存 `models.json.before-restore.bak`，成功后消耗该次操作记录。新备份定点还原，不覆盖其他条目的后续修改；损坏文件及旧备份的限制见下文。
+思考强度随模型（含别名）和协议更新。Claude 提供 `low/medium/high/xhigh/max`，其他常见模型为 `low/medium/high/xhigh`；GLM Anthropic 沿用 `high/max`。初始 `high`，切换保留仍适用的档位，否则回退 `high`。请求未指定强度时使用此值。缓存仍自动管理，移除独立展示不改变缓存策略；OpenAI 默认键为 `workbuddy:<provider>`，Anthropic 省略该键并使用原生标记。
 
-按 WorkBuddy 自身方式重新加载配置后，在客户端选择所需模型。`v0.4.30-2` 开发与发布时未定位到 WorkBuddy 安装资源；之后按用户给出的目录只读确认 WorkBuddy 5.6.2 程序资源，本次仍未运行客户端。客户端对 UUID ID、多条同名模型和独立 URL 的识别待用户验收，不声称已验证其默认模型机制。Hub 为 `id/name/providerModel` 建立到来源实际模型的映射，避免向厂商发送 UUID；来源选择为别名时先解析真实目标。请求使用别名、条目 ID 或真实模型名时，默认思考和缓存参数均按该条目的专用渠道解析，不从另一个同名条目读取。
+后台继续生成 UUID、`tiancaispacehub-<entryId>` 模型、`workbuddy:<entryId>` 渠道和 `/ai-gateway/workbuddy/<entryId>/v1` 地址，旧 `legacy` 保留。客户端只持本机兼容 Key，真实上游凭据由 Hub 转发。保存保留其他模型、未知字段和未展示的能力选项；通过别名/ID/实际模型调用仍精确路由到该条目，不把 UUID 发往厂商。厂商地址/密钥及来源调整需在“大模型接入”管理后重新保存对应条目。
+
+本轮 UI 精简不迁移配置；原备份、独立渠道与定向撤销规则保留。真实客户端重新加载、同名多模型和两平台使用仍由用户测试，不宣称已验证默认模型机制。
 
 ## 协议规则
 

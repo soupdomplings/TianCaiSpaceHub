@@ -1,8 +1,12 @@
 # TianCaiSpaceHub 文档总入口
 
+2026-10-27 `v0.4.30-8` 发布准备：用户对本地测试包初步反馈“暂时没问题”，并授权发布 GitHub、启动 Windows/macOS Actions。本轮产品源码与此前测试包一致，正在提交、创建完整版本标签和 Release；实际推送、运行及产物状态统一见 [v8 交付](releases/v0.4.30-8.md)。macOS 原生构建和完整实机验收不由该反馈推定完成。
+
+2026-10-22 本地测试阶段 `v0.4.30-8`：已实现天工 Work 主运行收尾/审批、任务模型绑定、默认流式上下文与后台运行/重连保护；WorkBuddy、天工 Work 的页面字段、说明及按钮统一，思考强度并入连接卡片，三页只读/编辑底色统一。Hub 不再提供天工默认模型设置，原配置、渠道及 `/tg` 保留。Windows 编译、162 个不同 Rust 聚焦用例及本地 MSI 静态核验已通过；当时源码未推送、未发布，详见 [v8 交付](releases/v0.4.30-8.md)、[Work 适配](customizations/tiangong-work-compatibility-assessment.md)。
+
 2026-10-20 当前交付：`v0.4.30-7` 的分类修复中心、增强启动 v24 和程序路径修复已提交并推送到 GitHub 唯一 `main`（`3b96fa6`）；Windows x64、macOS universal Actions 均已确认 job 开始，按用户要求停止等待完成。运行链接、源码身份和打包边界见 [v7 两平台打包](releases/v0.4.30-7.md#2026-10-20-源码已推送与两平台-actions-已开始)。启动修复分别报告 `CODEX_CLI_PATH` 与状态库，无迁移冲突仍可修路径，Hub 保持运行；使用与恢复见 [启动修复](customizations/codex-startup-repair.md)、[修复中心](customizations/codex-repair-center.md)。本轮仅生成 Actions artifacts，包结果和两平台实机待确认；[v6 测试包](releases/v0.4.30-6.md) 与 v7 本地包保留原身份，不当作正式发布结果。
 
-以下 v5 及更早阶段的状态按当时事实保留，不代替 v7 交付。
+以下 v7 及更早阶段的状态按当时事实保留，不代替 v8 本地测试交付。
 
 2026-10-20 最新交付：按用户要求，组织设置修复按钮、原生迁移保护及 Commands 对话模式修复已提交到 GitHub 唯一 `main`（`500574c`），版本仍 `0.4.30-5`。Windows x64 与 macOS universal Actions 均已确认 job 开始，按既有要求停止等待；运行链接和准确源码身份见 [本轮打包](releases/v0.4.30-5.md#2026-10-20-启动修复源码提交与两平台打包已启动)。Hub 内置按钮保持 Hub 打开，仅要求关闭 ChatGPT/Codex，自动定位、备份和验证已知冲突，无需解压、终端或 Python；用法与恢复见 [启动修复](customizations/codex-startup-repair.md)。本轮只生成 Actions artifacts，构建结果/正式新包及实机尚待确认；此前本地包、独立脚本和未推送记录保留当时身份，不代表已发布或验收。
 
@@ -50,7 +54,7 @@
 
 当前追加修复（2026-10-10）：唯一 `main` 已完善 [NVWA 按需自动续认证](customizations/nvwa-mcp.md#有效期恢复与重新认证)，password/application 仅复用此前显式保存的凭据，统一真实 HTTP 401 失效处理、已发送请求不重放，并对同代次自动认证失败设置 60 秒重试间隔。此次已实现、未发布，完整版本保持 `0.4.30-5`，既有 v5 标签、Release 和历史包不变，不触发新发布构建；最终 Windows locked GUI build 32.62 秒、38 条既有警告通过，独立新 debug EXE 静态身份/复制哈希核对通过、未运行，见 [专题验证](customizations/nvwa-mcp.md#维护定位与验证)。macOS 平台中立逻辑仅静态审阅通过，未原生编译或实机测试，真实续认证及失败边界待用户验收。下方 v5 发布状态与有限用户反馈属于此前发布阶段，不覆盖此次追加修复。
 
-维护日期：2026-10-10。当前开发基线统一为 `v0.4.30-5`、唯一 `main`，上游仍 CodexHub `v0.4.30`。[Dumpling-MCP / NVWA MCP（TC-014）](customizations/nvwa-mcp.md) 页签改名并使用透明线条品牌图标，帮助菜单勾选“显示 Dumpling-MCP”后显示，默认隐藏并保存偏好。Codex 连接使用环境名称（如 `MCP196`），更新接入兼容旧哈希名称；按钮有悬浮说明，工具清单展示服务返回的中文简介、说明和原代码。应用密钥立即保护保存、两类期限、认证/默认租户与每端隔离继续保留。用户已反馈通过 Hub 接入 Codex MCP，仅覆盖该次接入；本轮名称迁移、页签与工具展示待验收。构建、独立 EXE 身份及此前产物归属见 [v0.4.30-5 交付](releases/v0.4.30-5.md)，用户已反馈 Windows 本机测试版可交付；完整标签/非草稿 Pre-release 已创建，两平台 Actions 已启动、尚未确认完成，按用户要求停止等待，后续包自动上传。
+2026-10-10 历史交付记录：当时开发基线统一为 `v0.4.30-5`、唯一 `main`，上游仍 CodexHub `v0.4.30`。[Dumpling-MCP / NVWA MCP（TC-014）](customizations/nvwa-mcp.md) 页签改名并使用透明线条品牌图标，帮助菜单勾选“显示 Dumpling-MCP”后显示，默认隐藏并保存偏好。Codex 连接使用环境名称（如 `MCP196`），更新接入兼容旧哈希名称；按钮有悬浮说明，工具清单展示服务返回的中文简介、说明和原代码。应用密钥立即保护保存、两类期限、认证/默认租户与每端隔离继续保留。用户已反馈通过 Hub 接入 Codex MCP，仅覆盖该次接入；本轮名称迁移、页签与工具展示待验收。构建、独立 EXE 身份及此前产物归属见 [v0.4.30-5 交付](releases/v0.4.30-5.md)，用户已反馈 Windows 本机测试版可交付；完整标签/非草稿 Pre-release 已创建，两平台 Actions 已启动、尚未确认完成，按用户要求停止等待，后续包自动上传。
 
 同轮修正 [Windows 关机放行与安装成功入口](customizations/desktop-and-packaging.md)：普通 × 仍隐藏，系统结束会话不再 veto；MSI 完整交互安装成功页提供“打开 TianCaiSpaceHub”和“完成”。安装包生成/安装与关机实机行为待用户验收，发布包只由 GitHub Actions 生成。
 
@@ -66,14 +70,15 @@
 | 查看每次二开开发变更 | [二开变更记录](customizations/CHANGELOG.md) |
 | 开发时知道必须更新哪些文档 | [文档规划与维护规范](development/documentation.md) |
 | 登录 NVWA、检测 MCP、分别接入三客户端 | [NVWA MCP](customizations/nvwa-mcp.md)、[资料索引](nvwa/README.md) |
-| 查看当前 v5 基线、编译与用户待验收内容 | [v0.4.30-5 发布交付](releases/v0.4.30-5.md) |
+| 查看 v8 本地测试包、适配范围和验收边界 | [v0.4.30-8](releases/v0.4.30-8.md) |
+| 追溯 v5 基线、编译与当轮验收边界 | [v0.4.30-5 发布交付](releases/v0.4.30-5.md) |
 | 配置 WorkBuddy 模型、启动桌面及了解 `/wb` 边界 | [WorkBuddy 使用说明](workbuddy.md) |
 | 区分普通渠道与 WorkBuddy/天工专用渠道 | [接入点用途与隔离](customizations/client-channel-scope.md) |
-| 获取当前 GitHub 交付、两平台安装包与验收边界 | [v0.4.30-4 发布交付](releases/v0.4.30-4.md) |
+| 追溯 v4 GitHub 交付、两平台包与验收边界 | [v0.4.30-4 发布交付](releases/v0.4.30-4.md) |
 | 查看此前已发布包及原版本身份 | [v0.4.30-3 发布交付](releases/v0.4.30-3.md) |
-| 管理天工 Claw 多模型、参数、备份及上游流式兼容 | [天工 Claw 模型接入](customizations/gmclaw.md) |
+| 管理天工 Work 多模型、参数、备份及上游流式兼容 | [天工 Work 模型接入](customizations/gmclaw.md) |
 | 启停 Hub/天工、选择完整项目目录、回复状态、会话同步与审批 | [天工外部消息执行端](customizations/gmclaw-im.md) |
-| 区分天工模型配置、本地模型连接、IM 授权与上游流式 | [天工 Claw 模型接入](customizations/gmclaw.md)、[请求日志](ai-gateway-request-log-detail-patch.zh-CN.md) |
+| 区分天工模型配置、本地模型连接、IM 授权与上游流式 | [天工 Work 模型接入](customizations/gmclaw.md)、[请求日志](ai-gateway-request-log-detail-patch.zh-CN.md) |
 | 设置自定义模型与能力继承 | [动态 Codex 可见模型](dynamic-codex-models.zh-CN.md) |
 | 检查 Windows/macOS「无法加载组织设置」与状态库迁移冲突 | [Hub 内置修复按钮与独立工具](customizations/codex-startup-repair.md) |
 | 按问题检查与修复模型选项、插件、浏览器、电脑操控及启动 | [检查与修复中心](customizations/codex-repair-center.md)；[开发前评估](customizations/codex-repair-integration-assessment.md) |
@@ -94,11 +99,11 @@
 
 | 文档 | 用途与状态 |
 | --- | --- |
-| [Dumpling-MCP / NVWA MCP](customizations/nvwa-mcp.md) | TC-014 / v0.4.30-5：保存/登录后明文保留密码与 ClientSecret，加载/刷新/重启后专用受保护接口回填当前环境已保存值，绑定完整 profile 且保留当前非空输入；普通配置/状态不返秘密。同范围/真实身份恢复接入、保护快照 v2、三端环境名、定向配置保护、工具说明和按需续认证保留。本轮验证/构建见 v5 交付，三端及 macOS 实机待用户验收；此前包保持原身份 |
+| [Dumpling-MCP / NVWA MCP](customizations/nvwa-mcp.md) | TC-014 / v0.4.30-8：与两客户端页统一只读灰底和可编辑底色，天工显示名改为 Work。已保存凭据明文回显、同范围/真实身份恢复接入、保护快照 v2、三端环境名、定向配置、工具说明及按需续认证保留。v8 编译和本地包见当前交付，认证历史验证仍归属 v5；三端及 macOS 实机待用户验收 |
 | [WorkBuddy](workbuddy.md) | 模型多条目接入已预发布；v0.4.30-3：接入页提供显式启动桌面按钮，用户本次反馈该按钮可启动，仅覆盖该次本机操作；其他机器及 macOS 待验收。`/wb` 仍提示不可用，外部任务执行尚未接通 |
 | [接入点用途与隔离](customizations/client-channel-scope.md) | 普通/专用渠道标识、各接入点及同模型条目的精确路由、模型未配置中文指引、保留名称与回滚注意项 |
-| [天工 Claw 模型](customizations/gmclaw.md) | 多条目与独立路由、保存/删除/默认切换恢复、厂商参数及上游流式聚合已预发布；v0.4.30-3：概览按当前专用模型请求、配置 URL 和桌面进程区分等待/已连接，与上游成功和 IM 授权独立。旧单模型保存无需重启已有有限反馈；新增行为待用户验收 |
-| [天工外部消息执行端](customizations/gmclaw-im.md) | v0.4.30-3：Windows 监听/启动禁止句柄继承，退出只结束自有后台，旧继承实例需一次正常迁移；目录候选含无任务的原生项目并完整分页，飞书/有效企微回调显示临时准备状态并终态收尾、微信直接文字；启用后每 5 秒后台恢复同用户官方天工运行授权，不自行启动或重放；复用原平台会话交互，创建真实任务、保存消息及恢复全部场景任务。原记忆、精确模型、认领及运行/审批/未知保护保留，原生步数 `1..1000` 透传。`/gpt` 释放认领但保留会话，`/tg` 返回重新认领；`/s` 不伪造取消。本轮修复图标注册导致的安装误判，移除每轮固定等待回复，并加入局部消息同步；v0.4.30-4 标签源码取消固定版本/资源门槛，改核对已安装天工身份、renderer HTML 脚本入口及运行时字段能力；首次从 Hub 启动启用本机通道，普通手动实例仍可 IM 但无通道不能即时刷新。用户已有限反馈自动重连、飞书历史对话及 `fe48829e…` 桌面消息更新；用户已确认 `71c3043d…` 审批测试通过，仅属于该次操作，其他平台、失败回退和身份隔离待验收；本轮修复端口释放、补齐含无任务项目的目录候选，并新增按平台能力收尾的临时回复状态，这些新增行为待验收，不新增永久或单工具授权。原 `/gmclaw` 首版已预发布，本轮状态见品牌专题，开发方未执行测试 |
+| [天工 Work 模型](customizations/gmclaw.md) | v8 移除默认控件，统一管理模型/渠道和按钮；新旧模型与独立路由保留，流式补全推理/工具状态；适配和本地包见 v8，实机待验收 |
+| [天工 Work 外部消息](customizations/gmclaw-im.md) | v8 主 run 收尾/审批、原生任务模型绑定、后台任务与重连/队列保护；旧授权、会话、目录、平台交互和持久关联保留；隔离验证通过，真实 IM/桌面链路待用户验收 |
 | [请求日志详情](ai-gateway-request-log-detail-patch.zh-CN.md) | v0.4.30-3：保留 `stream` 的客户端语义，新增可空 `upstreamStream` 记录实际最终上游请求；天工非流式客户端与上游流式聚合分别展示，旧日志上游模式未知 |
 | [OpenAI Chat Completions](openai-chat-completions.md) | 通用兼容渠道与按渠道关闭推理；已实现 |
 | [动态模型](dynamic-codex-models.zh-CN.md) | 手填、远端获取、路由补齐和能力继承；v5 普通/ChatGPT 厂商空列表保存先自动获取，成功继续保存、失败留窗，客户端未配置模型中文指引；本轮状态见 v5 交付，实机待用户验收 |

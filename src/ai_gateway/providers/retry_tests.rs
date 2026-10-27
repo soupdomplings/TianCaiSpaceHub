@@ -414,7 +414,7 @@ async fn upstream_reply(
     let body: Value = serde_json::from_slice(&body).unwrap();
     if body["stream"] == true {
         let sse = if uri.path() == "/v1/chat/completions" {
-            "data: {\"choices\":[{\"delta\":{\"content\":\"retry-recovered\"},\"index\":0}]}\n\ndata: [DONE]\n\n".to_string()
+            "data: {\"choices\":[{\"delta\":{\"content\":\"retry-recovered\"},\"index\":0,\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n".to_string()
         } else if uri.path() == "/v1/messages" {
             [
                 json!({"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","model":"test-model","content":[],"usage":{"input_tokens":1,"output_tokens":0}}}),
@@ -425,7 +425,11 @@ async fn upstream_reply(
                 json!({"type":"message_stop"}),
             ].iter().map(|event| format!("event: {}\ndata: {event}\n\n", event["type"].as_str().unwrap())).collect()
         } else {
-            "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"retry-recovered\"}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_test\",\"status\":\"completed\",\"output\":[]}}\n\n".to_string()
+            [
+                json!({"type":"response.output_text.delta","delta":"retry-recovered"}),
+                json!({"type":"response.completed","response":{"id":"resp_test","status":"completed",
+                    "output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"retry-recovered"}]}]}}),
+            ].iter().map(|event| format!("event: {}\ndata: {event}\n\n", event["type"].as_str().unwrap())).collect()
         };
         return ([("content-type", "text/event-stream")], sse).into_response();
     }
@@ -501,7 +505,11 @@ async fn assert_client_recovers(client_name: &str, provider_type: ProviderType) 
         .expect("client must recover from HTTP 502/503");
         assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
-        assert!(String::from_utf8_lossy(&body).contains("retry-recovered"));
+        assert!(
+            String::from_utf8_lossy(&body).contains("retry-recovered"),
+            "{client_name} {provider_type:?} stream={stream}: {}",
+            String::from_utf8_lossy(&body)
+        );
         let requests = upstream.requests();
         assert_eq!(requests.len(), 3);
         assert_eq!(requests[0], requests[1]);

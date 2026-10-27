@@ -2367,7 +2367,7 @@ dependencies = [
 
 [[package]]
 name = "tiancaispacehub"
-version = "0.4.30-7"
+version = "0.4.30-8"
 dependencies = [
  "aes",
  "anyhow",

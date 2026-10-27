@@ -10,11 +10,17 @@ use std::{
     time::{Duration, Instant},
 };
 
+use axum::body::Body;
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
-use super::{config::ProviderConfig, workbuddy};
+use super::{
+    config::ProviderConfig,
+    gmclaw_stream::{Decoder, Protocol},
+    workbuddy,
+};
 
 const MAX_ENTRIES: usize = 128;
 const MAX_BYTES: usize = 16 * 1024 * 1024;
@@ -35,11 +41,7 @@ pub struct ReplayContext {
 
 impl ReplayContext {
     pub fn new(raw: &Value, provider: &ProviderConfig, upstream_model: &str) -> Self {
-        let seed = if raw.get("stream").and_then(Value::as_bool) == Some(true) {
-            None
-        } else {
-            provider_seed(provider, upstream_model)
-        };
+        let seed = provider_seed(provider, upstream_model);
         let history = seed.clone().and_then(|mut hash| {
             for message in raw.get("messages")?.as_array()? {
                 hash_message(&mut hash, message)?;
@@ -133,6 +135,37 @@ impl ReplayContext {
         self.remember(chat_response, Some(output));
     }
 
+    /// Observe the original byte stream without buffering delivery or retrying.
+    /// Only a validated protocol terminal can enter the bounded replay cache.
+    pub(super) fn capture_stream(self, body: Body, protocol: Protocol, provider: String) -> Body {
+        let input = body.into_data_stream().boxed();
+        let capture = StreamCapture {
+            context: self,
+            decoder: Some(Decoder::new(protocol, true)),
+            protocol,
+            provider,
+        };
+        Body::from_stream(futures_util::stream::unfold(
+            (input, capture),
+            |(mut input, mut capture)| async move {
+                match input.next().await {
+                    Some(Ok(bytes)) => {
+                        capture.observe(&bytes);
+                        Some((Ok::<_, axum::Error>(bytes), (input, capture)))
+                    }
+                    Some(Err(error)) => {
+                        capture.decoder = None;
+                        Some((Err(error), (input, capture)))
+                    }
+                    None => {
+                        capture.finish();
+                        None
+                    }
+                }
+            },
+        ))
+    }
+
     fn remember(&self, chat_response: &Value, output: Option<&Vec<Value>>) {
         let Some(history) = &self.history else {
             return;
@@ -200,6 +233,49 @@ impl ReplayContext {
 
     fn lookup(&self, key: &ReplayKey) -> Option<ReplayData> {
         self.cache.lock().ok()?.get(key, Instant::now())
+    }
+}
+
+struct StreamCapture {
+    context: ReplayContext,
+    decoder: Option<Decoder>,
+    protocol: Protocol,
+    provider: String,
+}
+
+impl StreamCapture {
+    fn remember(&self, value: Value) {
+        match self.protocol {
+            Protocol::Chat => self.context.remember_chat(&value),
+            Protocol::Responses => {
+                let chat = workbuddy::responses_to_chat(&value, "");
+                self.context.remember_responses(&value, &chat);
+            }
+        }
+    }
+
+    fn observe(&mut self, bytes: &[u8]) {
+        let Some(decoder) = &mut self.decoder else {
+            return;
+        };
+        match decoder.push(bytes, &self.provider) {
+            Ok(Some(value)) => {
+                self.decoder = None;
+                self.remember(value);
+            }
+            Ok(None) => {}
+            // Unsupported/oversized state disables only replay capture. The
+            // original stream and its error reporting continue unchanged.
+            Err(_) => self.decoder = None,
+        }
+    }
+
+    fn finish(&mut self) {
+        if let Some(decoder) = self.decoder.take()
+            && let Ok(value) = decoder.finish(&self.provider)
+        {
+            self.remember(value);
+        }
     }
 }
 
@@ -521,7 +597,7 @@ mod tests {
     }
 
     #[test]
-    fn no_match_and_streaming_never_invent_private_state() {
+    fn absent_state_is_not_invented_and_stream_requests_can_replay() {
         let cache = Arc::new(Mutex::new(ReplayCache::default()));
         let provider = provider();
         let mut request = json!({"model":"visible","messages":[assistant("{}")]});
@@ -538,8 +614,107 @@ mod tests {
         }
         let streaming = json!({"model":"visible","stream":true,"messages":[]});
         let mut saved = assistant("{}");
-        saved["reasoning_content"] = json!("do not cache a stream");
+        saved["reasoning_content"] = json!("verified stream state");
         context(&streaming, &provider, &cache).remember_chat(&completion(saved));
+        assert_eq!(cache.lock().unwrap().entries.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn streaming_tool_state_is_replayed_without_changing_delivery() {
+        use axum::body::to_bytes;
+        for protocol in [Protocol::Chat, Protocol::Responses] {
+            let cache = Arc::new(Mutex::new(ReplayCache::default()));
+            let provider = provider();
+            let first = json!({"model":"visible","stream":true,"messages":[{"role":"user","content":"lookup"}]});
+            let response = json!({"status":"completed","output":[
+                {"type":"reasoning","id":"r1","summary":[],"encrypted_content":"opaque"},
+                {"type":"function_call","id":"fc_1","call_id":"call_same","name":"lookup","arguments":"{}","status":"completed"}
+            ]});
+            let mut message =
+                workbuddy::responses_to_chat(&response, "visible")["choices"][0]["message"].clone();
+            let wire = match protocol {
+                Protocol::Chat => {
+                    let mut delta = message.clone();
+                    delta["reasoning_content"] = json!("tool thought");
+                    delta["tool_calls"][0]["index"] = json!(0);
+                    format!(
+                        "data: {}\n\ndata: {}\n\ndata: [DONE]\n\n",
+                        json!({"id":"chat1","choices":[{"index":0,"delta":delta,"finish_reason":null}]}),
+                        json!({"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]})
+                    )
+                }
+                Protocol::Responses => format!(
+                    "data: {}\n\ndata: {}\n\ndata: {}\n\n",
+                    json!({"type":"response.output_item.added","output_index":1,"item":{
+                        "type":"function_call","id":"fc_1","call_id":"call_same","name":"lookup","arguments":"","status":"in_progress"
+                    }}),
+                    json!({"type":"response.function_call_arguments.delta","output_index":1,"item_id":"fc_1","delta":"{}"}),
+                    json!({"type":"response.completed","response":response})
+                ),
+            };
+            let chunks = wire
+                .as_bytes()
+                .chunks(3)
+                .map(|chunk| Ok::<_, io::Error>(axum::body::Bytes::copy_from_slice(chunk)))
+                .collect::<Vec<_>>();
+            let body = context(&first, &provider, &cache).capture_stream(
+                Body::from_stream(futures_util::stream::iter(chunks)),
+                protocol,
+                provider.name.clone(),
+            );
+            let body = match protocol {
+                Protocol::Chat => body,
+                Protocol::Responses => workbuddy::responses_sse_to_chat(body, "visible".into()),
+            };
+            let delivered = to_bytes(body, 1024 * 1024).await.unwrap();
+            match protocol {
+                Protocol::Chat => assert_eq!(delivered.as_ref(), wire.as_bytes()),
+                Protocol::Responses => {
+                    assert!(String::from_utf8_lossy(&delivered).contains("\"id\":\"call_same\""))
+                }
+            }
+            message.as_object_mut().unwrap().remove("reasoning_content");
+            let mut next = json!({"model":"visible","stream":true,"messages":[first["messages"][0],message,{"role":"tool","tool_call_id":"call_same","content":"result"}]});
+            let replay = context(&next, &provider, &cache);
+            match protocol {
+                Protocol::Chat => {
+                    replay.restore_chat(&mut next);
+                    assert_eq!(next["messages"][1]["reasoning_content"], "tool thought");
+                }
+                Protocol::Responses => assert_eq!(
+                    replay.to_responses(&next, true).unwrap()["input"][1]["encrypted_content"],
+                    "opaque"
+                ),
+            }
+        }
+    }
+    #[tokio::test]
+    async fn disconnected_stream_cannot_create_replay_state() {
+        use axum::body::{Bytes, to_bytes};
+        let cache = Arc::new(Mutex::new(ReplayCache::default()));
+        let provider = provider();
+        let first =
+            json!({"model":"visible","stream":true,"messages":[{"role":"user","content":"hello"}]});
+        let partial = format!(
+            "data: {}\n\n",
+            json!({"choices":[{"index":0,"delta":{"role":"assistant","content":"partial","reasoning_content":"incomplete"},"finish_reason":null}]})
+        );
+        let body = Body::from_stream(futures_util::stream::iter([
+            Ok(Bytes::from(partial)),
+            Err(io::Error::other("synthetic disconnect")),
+        ]));
+        assert!(
+            to_bytes(
+                context(&first, &provider, &cache).capture_stream(
+                    body,
+                    Protocol::Chat,
+                    provider.name.clone()
+                ),
+                1024 * 1024
+            )
+            .await
+            .is_err()
+        );
         assert!(cache.lock().unwrap().entries.is_empty());
     }
 

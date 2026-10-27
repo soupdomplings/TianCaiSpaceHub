@@ -13,9 +13,7 @@ use std::{
 use wxdragon::prelude::*;
 
 use crate::{
-    ai_gateway::config::{
-        ProviderConfig, ProviderType, provider_display_base_url, workbuddy_provider_name,
-    },
+    ai_gateway::config::{ProviderConfig, ProviderType, provider_display_base_url},
     config::AppConfig,
     workbuddy_config::{
         self, WorkBuddyConfigStatus, WorkBuddyEntryRequest, WorkBuddyModelConfig,
@@ -28,7 +26,7 @@ use super::{
     show_error, show_info,
     text::{GuiLocale, GuiText},
     theme,
-    widgets::{card_section, text_field_row},
+    widgets::{card_section, connection_choice_row, connection_field_theme},
 };
 
 #[derive(Clone, Debug)]
@@ -49,19 +47,10 @@ type WorkBuddyProviderOptions = Rc<RefCell<Vec<WorkBuddyProviderOption>>>;
 pub(super) struct WorkBuddyTab {
     pub(super) page: ScrolledWindow,
     entry: Choice,
-    dedicated_channel: TextCtrl,
-    path_hint: StaticText,
-    local_url: TextCtrl,
-    local_api_key: TextCtrl,
     provider: Choice,
-    upstream_url: TextCtrl,
-    upstream_api_key: TextCtrl,
     model: ComboBox,
     protocol: Choice,
     default_effort: Choice,
-    supported_efforts: TextCtrl,
-    cache_key: TextCtrl,
-    cache_hint: StaticText,
     text: GuiText,
     save_button: Button,
     delete_button: Button,
@@ -104,271 +93,113 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> WorkBuddyTab {
         .with_style(ScrolledWindowStyle::VScroll)
         .build();
     page.set_background_color(theme::theme().bg_card_alt);
-
-    let existing = WorkBuddyModelConfig::default();
     let root = BoxSizer::builder(Orientation::Vertical).build();
-
-    let (connection_box, connection_section) = card_section(&page, text.workbuddy_connection());
-    let hint = StaticText::builder(&connection_box)
-        .with_label(tr(text,
-            "每个模型独立选择来源渠道、协议与思考设置，保存后在 WorkBuddy 中选择使用。同一模型可通过不同渠道重复添加。这里的选择只决定编辑对象，不改变 WorkBuddy 默认模型。\n飞书、微信、企业微信中的 /wb 目前仅保留入口，尚不支持 WorkBuddy 桌面任务接入，不会改变当前执行端。",
-            "Each model has its own source, protocol, and reasoning settings. Select it in WorkBuddy after saving. You can add the same model through multiple sources. This selector chooses what to edit; it does not change WorkBuddy's default model.\nIn Feishu, WeChat, and WeCom, /wb is reserved. WorkBuddy desktop task integration is unavailable and the selected executor stays unchanged."))
+    let (section, section_sizer) =
+        card_section(&page, tr(text, "WorkBuddy 接入", "WorkBuddy connection"));
+    let hint = StaticText::builder(&section)
+        .with_label(tr(
+            text,
+            "选择大模型接入渠道和模型，保存后在 WorkBuddy 中选择使用。",
+            "Choose a model channel and model, save, then select the model in WorkBuddy.",
+        ))
         .build();
     hint.set_foreground_color(theme::theme().ink_muted);
-    hint.wrap(920);
-    connection_section.add(
-        &hint,
-        0,
-        SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Top,
-        8,
-    );
-
+    section_sizer.add(&hint, 0, SizerFlag::Expand | SizerFlag::All, 10);
     let grid = FlexGridSizer::builder(0, 2)
         .with_vgap(10)
         .with_hgap(14)
         .build();
     grid.add_growable_col(1, 1);
-    let entry_label = StaticText::builder(&connection_box)
-        .with_label(tr(text, "管理模型", "Managed model"))
-        .build();
-    entry_label.set_foreground_color(theme::theme().ink_secondary);
-    grid.add(&entry_label, 0, SizerFlag::AlignCenterVertical, 0);
-    let entry = Choice::builder(&connection_box)
-        .with_choices(vec![tr(text, "新增模型", "Add a model").to_string()])
-        .with_size(Size::new(420, -1))
-        .build();
+    let entry = connection_choice_row(
+        &section,
+        &grid,
+        tr(text, "管理模型", "Managed model"),
+        &[tr(text, "新增模型", "Add a model")],
+    );
     entry.set_selection(0);
-    grid.add(&entry, 1, SizerFlag::Expand, 0);
-    let dedicated_channel = text_field_row(
-        &connection_box,
+    let provider = connection_choice_row(
+        &section,
         &grid,
-        tr(text, "WorkBuddy 专属渠道", "WorkBuddy dedicated channel"),
-        tr(text, "保存后自动生成", "Generated when saved"),
+        tr(text, "大模型接入渠道", "Model channel"),
+        &[],
     );
-    dedicated_channel.set_editable(false);
-    let local_url = text_field_row(
-        &connection_box,
-        &grid,
-        text.workbuddy_local_url(),
-        tr(text, "保存后自动生成", "Generated when saved"),
-    );
-    local_url.set_editable(false);
-    local_url.set_tooltip(text.workbuddy_local_url_help());
-    let local_api_key = text_field_row(
-        &connection_box,
-        &grid,
-        text.workbuddy_local_api_key(),
-        workbuddy_config::DEFAULT_WORKBUDDY_API_KEY,
-    );
-    local_api_key.set_editable(false);
-    local_api_key.set_tooltip(text.workbuddy_local_api_key_help());
-    let provider_label = StaticText::builder(&connection_box)
-        .with_label(text.workbuddy_provider())
+    let label = StaticText::builder(&section)
+        .with_label(tr(text, "模型", "Model"))
         .build();
-    provider_label.set_foreground_color(theme::theme().ink_secondary);
-    grid.add(
-        &provider_label,
-        0,
-        SizerFlag::AlignCenterVertical | SizerFlag::Right,
-        0,
-    );
-    let provider = Choice::builder(&connection_box)
-        .with_size(Size::new(420, -1))
-        .build();
-    provider.set_tooltip(text.workbuddy_provider_help());
-    grid.add(&provider, 1, SizerFlag::Expand, 0);
-    let upstream_url = text_field_row(
-        &connection_box,
-        &grid,
-        text.workbuddy_upstream_url(),
-        &existing.upstream_url,
-    );
-    upstream_url.set_editable(false);
-    upstream_url.set_tooltip(text.workbuddy_upstream_url_help());
-    let upstream_api_key = text_field_row(
-        &connection_box,
-        &grid,
-        text.workbuddy_upstream_api_key(),
-        "",
-    );
-    upstream_api_key.set_editable(false);
-    upstream_api_key.set_tooltip(tr(text,
-        "沿用来源渠道的凭据；此页不显示或保存真实 Key，账号渠道沿用登录凭据。",
-        "Uses the source channel's credentials. This page does not display or submit API keys; account channels keep their signed-in credentials."));
-    let model_label = StaticText::builder(&connection_box)
-        .with_label(text.workbuddy_model())
-        .build();
-    model_label.set_foreground_color(theme::theme().ink_secondary);
-    grid.add(
-        &model_label,
-        0,
-        SizerFlag::AlignCenterVertical | SizerFlag::Right,
-        0,
-    );
-    let model = ComboBox::builder(&connection_box)
-        .with_value(&existing.provider_model)
+    label.set_foreground_color(theme::theme().ink_secondary);
+    grid.add(&label, 0, SizerFlag::AlignCenterVertical, 0);
+    let model = ComboBox::builder(&section)
         .with_style(ComboBoxStyle::ReadOnly)
         .with_size(Size::new(420, -1))
         .build();
-    model.set_background_color(theme::theme().bg_muted);
-    model.set_foreground_color(theme::theme().ink_primary);
-    model.set_tooltip(text.workbuddy_model_help());
     model.set_min_size(Size::new(420, 30));
+    connection_field_theme(&model, true);
     grid.add(&model, 1, SizerFlag::Expand, 0);
-
-    let protocol_label = StaticText::builder(&connection_box)
-        .with_label(text.workbuddy_protocol())
-        .build();
-    protocol_label.set_foreground_color(theme::theme().ink_secondary);
-    grid.add(
-        &protocol_label,
-        0,
-        SizerFlag::AlignCenterVertical | SizerFlag::Right,
-        0,
-    );
-    let protocol = Choice::builder(&connection_box)
-        .with_choices(vec![
-            "openai-responses".to_string(),
-            "openai-chat".to_string(),
-            "anthropic-messages".to_string(),
-        ])
-        .with_size(Size::new(420, -1))
-        .build();
-    protocol.set_selection(protocol_index(&existing.upstream_protocol));
-    grid.add(&protocol, 1, SizerFlag::Expand, 0);
-
-    connection_section.add_sizer(
+    let protocol = connection_choice_row(
+        &section,
         &grid,
-        0,
-        SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Top | SizerFlag::Bottom,
-        10,
+        tr(text, "接口类型", "API type"),
+        &["openai-responses", "openai-chat", "anthropic-messages"],
     );
-    root.add(
-        &connection_box,
-        0,
-        SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Top,
-        10,
+    protocol.set_selection(0);
+    let default_effort = connection_choice_row(
+        &section,
+        &grid,
+        tr(text, "思考强度", "Reasoning effort"),
+        &[],
     );
-
-    let (reasoning_box, reasoning_section) = card_section(&page, text.workbuddy_reasoning());
-    let reasoning_grid = FlexGridSizer::builder(0, 2)
-        .with_vgap(10)
-        .with_hgap(14)
-        .build();
-    reasoning_grid.add_growable_col(1, 1);
-    let effort_label = StaticText::builder(&reasoning_box)
-        .with_label(text.workbuddy_default_effort())
-        .build();
-    effort_label.set_foreground_color(theme::theme().ink_secondary);
-    reasoning_grid.add(&effort_label, 0, SizerFlag::AlignCenterVertical, 0);
-    let default_effort = Choice::builder(&reasoning_box)
-        .with_size(Size::new(420, -1))
-        .build();
-    reasoning_grid.add(&default_effort, 1, SizerFlag::Expand, 0);
-    let supported_efforts = text_field_row(
-        &reasoning_box,
-        &reasoning_grid,
-        text.workbuddy_supported_efforts(),
-        &existing.reasoning.supported_efforts.join(", "),
-    );
-    supported_efforts.set_editable(false);
-    supported_efforts.set_tooltip(text.workbuddy_efforts_help());
-    let cache_key = text_field_row(
-        &reasoning_box,
-        &reasoning_grid,
-        text.workbuddy_cache_key(),
-        &workbuddy_config::default_cache_key_for_provider(&existing.upstream_provider),
-    );
-    cache_key.set_editable(false);
-    cache_key.set_tooltip(text.workbuddy_cache_key_help());
-    reasoning_section.add_sizer(
-        &reasoning_grid,
-        0,
-        SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Top | SizerFlag::Bottom,
-        10,
-    );
-    let cache_hint = StaticText::builder(&reasoning_box).with_label("").build();
-    cache_hint.set_foreground_color(theme::theme().ink_muted);
-    reasoning_section.add(&cache_hint, 0, SizerFlag::Expand | SizerFlag::All, 10);
-    root.add(
-        &reasoning_box,
-        0,
-        SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Top,
-        10,
-    );
-
-    let actions = BoxSizer::builder(Orientation::Horizontal).build();
+    default_effort.set_tooltip(tr(
+        text,
+        "未指定思考强度的请求使用此设置。",
+        "Used when a request does not specify a reasoning effort.",
+    ));
+    section_sizer.add_sizer(&grid, 0, SizerFlag::Expand | SizerFlag::All, 10);
+    root.add(&section, 0, SizerFlag::Expand | SizerFlag::All, 10);
     let status = StaticText::builder(&page).with_label("").build();
     status.set_foreground_color(theme::theme().ink_muted);
     root.add(
         &status,
         0,
-        SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Top,
-        10,
+        SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right,
+        20,
     );
-    let reload_button = Button::builder(&page)
-        .with_label(text.workbuddy_reload())
-        .build();
+    let actions = BoxSizer::builder(Orientation::Horizontal).build();
     let start_button = Button::builder(&page)
         .with_label(tr(text, "启动 WorkBuddy", "Start WorkBuddy"))
+        .build();
+    let reload_button = Button::builder(&page)
+        .with_label(tr(text, "刷新", "Refresh"))
         .build();
     let restore_button = Button::builder(&page)
         .with_label(tr(text, "撤销上次操作", "Undo last operation"))
         .build();
     let save_button = Button::builder(&page)
-        .with_label(text.workbuddy_save())
+        .with_label(tr(text, "保存模型", "Save model"))
         .build();
     let delete_button = Button::builder(&page)
         .with_label(tr(text, "删除所选模型", "Delete selected model"))
         .build();
-    actions.add(&start_button, 0, SizerFlag::Right, 8);
-    actions.add(&reload_button, 0, SizerFlag::Right, 8);
-    actions.add(&restore_button, 0, SizerFlag::Right, 8);
-    actions.add(&save_button, 0, SizerFlag::Right, 8);
-    actions.add(&delete_button, 0, SizerFlag::Right, 0);
-    root.add_sizer(
-        &actions,
-        0,
-        SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Top | SizerFlag::Bottom,
-        10,
-    );
-
-    let path_hint = StaticText::builder(&page)
-        .with_label(tr(
-            text,
-            "正在读取 WorkBuddy 配置…",
-            "Loading WorkBuddy configuration…",
-        ))
-        .build();
-    path_hint.set_foreground_color(theme::theme().ink_muted);
-    root.add(
-        &path_hint,
-        0,
-        SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Bottom,
-        10,
-    );
-
+    for button in [
+        &start_button,
+        &reload_button,
+        &restore_button,
+        &save_button,
+        &delete_button,
+    ] {
+        actions.add(button, 0, SizerFlag::Right, 8);
+    }
+    root.add_sizer(&actions, 0, SizerFlag::All, 20);
     page.set_sizer(root, true);
     page.set_scroll_rate(0, 10);
     page.layout();
     page.fit_inside();
-
     let tab = WorkBuddyTab {
         page,
         entry,
-        dedicated_channel,
-        path_hint,
-        local_url,
-        local_api_key,
         provider,
-        upstream_url,
-        upstream_api_key,
         model,
         protocol,
         default_effort,
-        supported_efforts,
-        cache_key,
-        cache_hint,
         text,
         save_button,
         delete_button,
@@ -380,9 +211,7 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> WorkBuddyTab {
         provider_options: Rc::new(RefCell::new(Vec::new())),
         selection: Rc::new(RefCell::new(WorkBuddySelection::default())),
     };
-    apply_model(&tab, &existing);
-    tab.local_url
-        .set_value(tr(text, "保存后自动生成", "Generated when saved"));
+    apply_model(&tab, &WorkBuddyModelConfig::default());
     update_controls(&tab);
     tab
 }
@@ -439,8 +268,6 @@ pub(super) fn bind_actions(
         if let Some(index) = index.checked_sub(1) {
             apply_provider_option(&provider_tab, index as usize);
         } else {
-            provider_tab.upstream_url.set_value("");
-            provider_tab.upstream_api_key.set_value("");
             provider_tab.model.clear();
             refresh_model_settings(&provider_tab);
         }
@@ -718,8 +545,11 @@ fn apply_provider_options(tab: &WorkBuddyTab, model: &WorkBuddyModelConfig) {
                 .eq_ignore_ascii_case(model.upstream_provider.trim())
     });
     tab.provider.clear();
-    tab.provider
-        .append(tr(tab.text, "请选择来源渠道", "Select a source channel"));
+    tab.provider.append(tr(
+        tab.text,
+        "请选择大模型接入渠道",
+        "Select a source channel",
+    ));
     for option in tab.provider_options.borrow().iter() {
         tab.provider.append(&option.display_name);
     }
@@ -744,16 +574,10 @@ fn apply_provider_options(tab: &WorkBuddyTab, model: &WorkBuddyModelConfig) {
             tab.model.set_selection(0);
             tab.model.set_value(&model.provider_model);
         }
-        tab.upstream_api_key.set_value("");
     }
     // A manually selected protocol and effort belong to this entry, not its
     // source channel's current defaults or the previous entry in the form.
     apply_saved_model_settings(tab, model);
-    if !model.upstream_url.is_empty() {
-        // Existing entries use a saved source snapshot until explicitly saved
-        // again; show the endpoint returned for this entry by the daemon.
-        tab.upstream_url.set_value(&model.upstream_url);
-    }
 }
 
 fn apply_provider_option(tab: &WorkBuddyTab, index: usize) {
@@ -771,16 +595,6 @@ fn apply_provider_option_for_model(
     let current_model = preferred_model
         .map(str::to_string)
         .unwrap_or_else(|| tab.model.get_value());
-    tab.upstream_url.set_value(&option.upstream_url);
-    tab.upstream_api_key.set_value(if option.has_api_key {
-        tr(
-            tab.text,
-            "已配置（沿用来源凭据）",
-            "Configured (uses source credentials)",
-        )
-    } else {
-        tr(tab.text, "来源未填写 Key", "No key configured on source")
-    });
     tab.protocol
         .set_selection(protocol_index(&option.upstream_protocol));
     tab.model.clear();
@@ -852,27 +666,6 @@ fn apply_reasoning(tab: &WorkBuddyTab, reasoning: &WorkBuddyReasoningConfig) {
         .position(|effort| effort == &reasoning.default_effort)
         .unwrap_or(0);
     tab.default_effort.set_selection(index as u32);
-    tab.supported_efforts
-        .set_value(&reasoning.supported_efforts.join(", "));
-}
-
-fn apply_cache_settings(tab: &WorkBuddyTab, protocol: &str, provider: &str) {
-    let uses_key = workbuddy_config::uses_prompt_cache_key(protocol);
-    tab.cache_key.enable(uses_key);
-    let hint = if uses_key {
-        tab.cache_key
-            .set_value(&workbuddy_config::default_cache_key_for_provider(provider));
-        tab.text.workbuddy_cache_key_help()
-    } else {
-        tab.cache_key
-            .set_value(tab.text.workbuddy_cache_key_not_needed());
-        tab.text.workbuddy_anthropic_cache_help()
-    };
-    tab.cache_key.set_tooltip(hint);
-    tab.cache_hint.set_label(hint);
-    tab.cache_hint.wrap(920);
-    tab.page.layout();
-    tab.page.fit_inside();
 }
 
 fn refresh_model_settings(tab: &WorkBuddyTab) {
@@ -892,11 +685,6 @@ fn refresh_model_settings(tab: &WorkBuddyTab) {
             .unwrap_or_default(),
     );
     apply_reasoning(tab, &reasoning);
-    apply_cache_settings(
-        tab,
-        protocol,
-        provider.map(|p| p.name.as_str()).unwrap_or(""),
-    );
 }
 
 fn build_model(tab: &WorkBuddyTab) -> Result<WorkBuddyModelConfig, String> {
@@ -908,7 +696,6 @@ fn build_model(tab: &WorkBuddyTab) -> Result<WorkBuddyModelConfig, String> {
         .filter(|status| status.selected_entry_id.is_some())
         .map(|status| status.model.clone())
         .unwrap_or_default();
-    model.url = tab.local_url.get_value();
     model.api_key = workbuddy_config::DEFAULT_WORKBUDDY_API_KEY.to_string();
     // The daemon resolves the latest source credentials. Do not put a real key
     // in controls, WorkBuddy status, or a save payload.
@@ -922,7 +709,7 @@ fn build_model(tab: &WorkBuddyTab) -> Result<WorkBuddyModelConfig, String> {
         .ok_or_else(|| {
             tr(
                 tab.text,
-                "请先选择已启用的来源渠道。",
+                "请先选择已启用的大模型接入渠道。",
                 "Select an enabled source channel first.",
             )
             .to_string()
@@ -937,7 +724,7 @@ fn build_model(tab: &WorkBuddyTab) -> Result<WorkBuddyModelConfig, String> {
     {
         return Err(tr(
             tab.text,
-            "请选择来源渠道中的可用模型。",
+            "请选择大模型接入渠道中的可用模型。",
             "Select an available model from the source channel.",
         )
         .to_string());
@@ -1071,6 +858,15 @@ fn update_controls(tab: &WorkBuddyTab) {
                 .as_ref()
                 .is_some_and(|status| status.backup_exists),
     );
+    for choice in [
+        &tab.entry,
+        &tab.provider,
+        &tab.protocol,
+        &tab.default_effort,
+    ] {
+        connection_field_theme(choice, choice.is_enabled());
+    }
+    connection_field_theme(&tab.model, tab.model.is_enabled());
 }
 
 fn apply_status(tab: &WorkBuddyTab, mut status: WorkBuddyConfigStatus) {
@@ -1105,28 +901,12 @@ fn apply_status(tab: &WorkBuddyTab, mut status: WorkBuddyConfigStatus) {
     }
     apply_model(tab, &model);
     apply_provider_options(tab, &model);
-    tab.dedicated_channel.set_value(
-        &status
-            .selected_entry_id
-            .as_deref()
-            .and_then(workbuddy_provider_name)
-            .unwrap_or_else(|| tr(tab.text, "保存后自动生成", "Generated when saved").to_string()),
-    );
-    if status.selected_entry_id.is_none() {
-        tab.local_url
-            .set_value(tr(tab.text, "保存后自动生成", "Generated when saved"));
-    }
-    tab.path_hint.set_label(&format!(
-        "{}: {}",
-        tab.text.workbuddy_config_path(),
-        status.path
-    ));
     let message = if let Some(error) = &status.error {
         error.as_str()
     } else if status.selected_entry_id.is_none() {
         tr(
             tab.text,
-            "选择来源渠道和模型后保存，即可新增独立的 WorkBuddy 模型。",
+            "选择渠道和模型后保存。",
             "Choose a source channel and model, then save to add a separate WorkBuddy model.",
         )
     } else if selected
@@ -1135,13 +915,13 @@ fn apply_status(tab: &WorkBuddyTab, mut status: WorkBuddyConfigStatus) {
     {
         tr(
             tab.text,
-            "模型已接入 WorkBuddy；本页可编辑或删除当前条目。",
+            "模型已保存，可在 WorkBuddy 中选择使用。",
             "This model is connected to WorkBuddy. You can edit or delete this entry here.",
         )
     } else {
         tr(
             tab.text,
-            "当前条目接入信息不完整，请核对来源渠道和模型后保存。",
+            "当前条目接入信息不完整，请核对大模型接入渠道和模型后保存。",
             "This entry has incomplete connection settings. Review its source and model, then save.",
         )
     };
@@ -1157,11 +937,6 @@ fn apply_status(tab: &WorkBuddyTab, mut status: WorkBuddyConfigStatus) {
 }
 
 fn apply_model(tab: &WorkBuddyTab, model: &WorkBuddyModelConfig) {
-    tab.local_url.set_value(&model.url);
-    tab.local_api_key
-        .set_value(workbuddy_config::DEFAULT_WORKBUDDY_API_KEY);
-    tab.upstream_url.set_value(&model.upstream_url);
-    tab.upstream_api_key.set_value("");
     tab.model.set_value(&model.provider_model);
     apply_saved_model_settings(tab, model);
 }
@@ -1180,17 +955,6 @@ fn apply_saved_model_settings(tab: &WorkBuddyTab, model: &WorkBuddyModelConfig) 
         &model.reasoning.default_effort,
     );
     apply_reasoning(tab, &reasoning);
-    apply_cache_settings(tab, &model.upstream_protocol, &model.upstream_provider);
-    if workbuddy_config::uses_prompt_cache_key(&model.upstream_protocol)
-        && let Some(cache_key) = model
-            .extra
-            .get("cacheKey")
-            .or_else(|| model.extra.get("cache_key"))
-            .and_then(serde_json::Value::as_str)
-            .filter(|key| !key.trim().is_empty())
-    {
-        tab.cache_key.set_value(cache_key);
-    }
 }
 
 fn clean(value: &str) -> String {

@@ -213,12 +213,16 @@ pub(super) fn refresh(handles: &UiHandles, snapshot: Option<&DashboardSnapshot>,
     } else {
         let is_gmclaw = kind == OverviewKind::GmClaw;
         ui.model.title.set_label(if is_gmclaw {
-            tr(text, "天工 Claw · 模型接入", "GMClaw · Models")
+            tr(text, "天工 Work · 模型接入", "TianGong Work · Models")
         } else {
             tr(text, "WorkBuddy · 模型接入", "WorkBuddy · Models")
         });
         ui.bridge.title.set_label(if is_gmclaw {
-            tr(text, "天工 Claw · 外部消息", "GMClaw · External messages")
+            tr(
+                text,
+                "天工 Work · 外部消息",
+                "TianGong Work · External messages",
+            )
         } else {
             tr(
                 text,
@@ -276,7 +280,7 @@ pub(super) fn refresh(handles: &UiHandles, snapshot: Option<&DashboardSnapshot>,
                         tr(
                             text,
                             "天工已连接 Hub 本地模型服务。",
-                            "GMClaw has connected to the local Hub model service.",
+                            "TianGong Work has connected to the local Hub model service.",
                         )
                     ),
                     StateTone::Ok,
@@ -286,7 +290,7 @@ pub(super) fn refresh(handles: &UiHandles, snapshot: Option<&DashboardSnapshot>,
                     tr(
                         text,
                         "配置已保存；天工尚未启动。",
-                        "Settings saved; GMClaw is not running.",
+                        "Settings saved; TianGong Work is not running.",
                     )
                 } else if !model.current_local_route {
                     tr(
@@ -298,7 +302,7 @@ pub(super) fn refresh(handles: &UiHandles, snapshot: Option<&DashboardSnapshot>,
                     tr(
                         text,
                         "天工已启动；等待其连接 Hub 本地模型服务。",
-                        "GMClaw is running; waiting for its connection to the local Hub model service.",
+                        "TianGong Work is running; waiting for its connection to the local Hub model service.",
                     )
                 };
                 (
@@ -342,7 +346,7 @@ pub(super) fn refresh(handles: &UiHandles, snapshot: Option<&DashboardSnapshot>,
                     tr(
                         text,
                         "在 IM 中发送 /tg，Hub 会自动连接天工。",
-                        "Send /tg in IM to let Hub connect GMClaw automatically.",
+                        "Send /tg in IM to let Hub connect TianGong Work automatically.",
                     ),
                     StateTone::Muted,
                 );
@@ -389,12 +393,16 @@ pub(super) fn refresh(handles: &UiHandles, snapshot: Option<&DashboardSnapshot>,
                     row,
                     text.im_connected(),
                     if executor_connected {
-                        tr(text, "发送 /tg 切换到天工", "Send /tg to select GMClaw")
+                        tr(
+                            text,
+                            "发送 /tg 切换到天工",
+                            "Send /tg to select TianGong Work",
+                        )
                     } else {
                         tr(
                             text,
                             "天工执行端尚未连通",
-                            "GMClaw execution is not connected",
+                            "TianGong Work execution is not connected",
                         )
                     },
                     if executor_connected {

@@ -26,7 +26,7 @@ use super::{
     show_error, show_info,
     text::{GuiLocale, GuiText},
     theme,
-    widgets::{card_section, text_field_row},
+    widgets::{card_section, connection_field_theme, connection_text_field_row as text_field_row},
 };
 
 #[derive(Clone, Debug)]
@@ -51,19 +51,11 @@ struct SelectionState {
 #[derive(Clone)]
 pub(super) struct GmClawTab {
     pub(super) page: ScrolledWindow,
-    path: TextCtrl,
-    current_model: TextCtrl,
-    default_model: TextCtrl,
-    local_url: TextCtrl,
     entry: Choice,
-    make_active: CheckBox,
-    activate_button: Button,
     delete_button: Button,
     provider: Choice,
     model: ComboBox,
     source_protocol: TextCtrl,
-    compatibility: TextCtrl,
-    upstream_model: TextCtrl,
     max_tokens: TextCtrl,
     reasoning_effort: Choice,
     temperature_mode: Choice,
@@ -86,7 +78,6 @@ pub(super) enum GmClawActionResult {
     Refresh(Result<(Vec<GmClawProviderOption>, GmClawConfigStatus), String>),
     Save(Result<GmClawConfigStatus, String>),
     Restore(Result<GmClawConfigStatus, String>),
-    Activate(Result<GmClawConfigStatus, String>),
     Delete(Result<GmClawConfigStatus, String>),
 }
 
@@ -103,13 +94,15 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> GmClawTab {
         .build();
     page.set_background_color(theme::theme().bg_card_alt);
     let root = BoxSizer::builder(Orientation::Vertical).build();
-    let (section, section_sizer) =
-        card_section(&page, tr(text, "天工 Claw 接入", "GMClaw connection"));
+    let (section, section_sizer) = card_section(
+        &page,
+        tr(text, "天工 Work 接入", "TianGong Work connection"),
+    );
     let hint = StaticText::builder(&section)
         .with_label(tr(
             text,
-            "选择已在 Hub 启用的渠道和模型。保存后，天工 Claw 通过本机 Hub 使用所选模型，连接地址自动生成。",
-            "Choose an enabled Hub channel and model. After saving, GMClaw uses the selected model through the local Hub. The connection URL is generated automatically.",
+            "选择大模型接入渠道和模型，保存后在天工 Work 中选择使用。",
+            "Choose a model channel and model, save, then select the model in TianGong Work.",
         ))
         .build();
     hint.set_foreground_color(theme::theme().ink_muted);
@@ -120,15 +113,8 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> GmClawTab {
         .with_hgap(14)
         .build();
     grid.add_growable_col(1, 1);
-    let path = text_field_row(
-        &section,
-        &grid,
-        tr(text, "配置路径", "Configuration path"),
-        "",
-    );
-    path.set_editable(false);
     let entry_label = StaticText::builder(&section)
-        .with_label(tr(text, "配置条目", "Model entry"))
+        .with_label(tr(text, "管理模型", "Managed model"))
         .build();
     grid.add(&entry_label, 0, SizerFlag::AlignCenterVertical, 0);
     let entry = Choice::builder(&section)
@@ -137,29 +123,8 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> GmClawTab {
     entry.append(tr(text, "新增模型", "Add a model"));
     entry.set_selection(0);
     grid.add(&entry, 1, SizerFlag::Expand, 0);
-    let current_model = text_field_row(
-        &section,
-        &grid,
-        tr(text, "Hub 管理模型", "Hub managed model"),
-        tr(text, "正在读取…", "Loading…"),
-    );
-    current_model.set_editable(false);
-    let default_model = text_field_row(
-        &section,
-        &grid,
-        tr(text, "当前默认模型 ID", "Current default model ID"),
-        tr(text, "正在读取…", "Loading…"),
-    );
-    default_model.set_editable(false);
-    let local_url = text_field_row(
-        &section,
-        &grid,
-        tr(text, "连接地址", "Connection URL"),
-        tr(text, "保存时自动生成", "Generated when saved"),
-    );
-    local_url.set_editable(false);
     let provider_label = StaticText::builder(&section)
-        .with_label(tr(text, "Hub 来源渠道", "Hub source channel"))
+        .with_label(tr(text, "大模型接入渠道", "Model channel"))
         .build();
     provider_label.set_foreground_color(theme::theme().ink_secondary);
     grid.add(&provider_label, 0, SizerFlag::AlignCenterVertical, 0);
@@ -176,31 +141,13 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> GmClawTab {
         .with_style(ComboBoxStyle::ReadOnly)
         .with_size(Size::new(420, -1))
         .build();
-    model.set_background_color(theme::theme().bg_muted);
+    connection_field_theme(&model, true);
     model.set_foreground_color(theme::theme().ink_primary);
     model.set_min_size(Size::new(420, 30));
     grid.add(&model, 1, SizerFlag::Expand, 0);
-    let source_protocol =
-        text_field_row(&section, &grid, tr(text, "来源协议", "Source protocol"), "");
+    let source_protocol = text_field_row(&section, &grid, tr(text, "接口类型", "API type"), "");
     source_protocol.set_editable(false);
-    let compatibility = text_field_row(
-        &section,
-        &grid,
-        tr(text, "兼容 profile", "Compatibility profile"),
-        "",
-    );
-    compatibility.set_editable(false);
-    let upstream_model = text_field_row(
-        &section,
-        &grid,
-        tr(
-            text,
-            "实际模型（解析别名后）",
-            "Actual model (after alias resolution)",
-        ),
-        "",
-    );
-    upstream_model.set_editable(false);
+    connection_field_theme(&source_protocol, false);
     let max_tokens = text_field_row(
         &section,
         &grid,
@@ -215,7 +162,7 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> GmClawTab {
     let reasoning_effort = Choice::builder(&section)
         .with_size(Size::new(420, -1))
         .build();
-    reasoning_effort.append(tr(text, "自动（跟随上游）", "Automatic (upstream default)"));
+    reasoning_effort.append(tr(text, "自动", "Automatic"));
     reasoning_effort.set_selection(0);
     grid.add(&reasoning_effort, 1, SizerFlag::Expand, 0);
     let temperature_mode_label = StaticText::builder(&section)
@@ -247,15 +194,6 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> GmClawTab {
         "0.7",
     );
     section_sizer.add_sizer(&grid, 0, SizerFlag::Expand | SizerFlag::All, 10);
-    let make_active = CheckBox::builder(&section)
-        .with_label(tr(
-            text,
-            "保存后设为天工默认模型",
-            "Set as GMClaw default after saving",
-        ))
-        .build();
-    make_active.set_value(true);
-    section_sizer.add(&make_active, 0, SizerFlag::All, 10);
     let selection_hint = StaticText::builder(&section).with_label("").build();
     selection_hint.set_foreground_color(theme::theme().ink_muted);
     section_sizer.add(&selection_hint, 0, SizerFlag::Expand | SizerFlag::All, 10);
@@ -267,8 +205,8 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> GmClawTab {
     let status = StaticText::builder(&page)
         .with_label(tr(
             text,
-            "正在读取天工 Claw 配置…",
-            "Loading GMClaw configuration…",
+            "正在读取天工 Work 配置…",
+            "Loading TianGong Work configuration…",
         ))
         .build();
     status.set_foreground_color(theme::theme().ink_muted);
@@ -280,19 +218,16 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> GmClawTab {
     );
     let actions = BoxSizer::builder(Orientation::Horizontal).build();
     let start_button = Button::builder(&page)
-        .with_label(tr(text, "启动天工 Claw", "Start GMClaw"))
+        .with_label(tr(text, "启动天工 Work", "Start TianGong Work"))
         .build();
     let reload_button = Button::builder(&page)
         .with_label(tr(text, "刷新", "Refresh"))
         .build();
     let restore_button = Button::builder(&page)
-        .with_label(tr(text, "还原上次备份", "Restore latest backup"))
+        .with_label(tr(text, "撤销上次操作", "Undo last operation"))
         .build();
     let save_button = Button::builder(&page)
-        .with_label(tr(text, "保存接入配置", "Save connection"))
-        .build();
-    let activate_button = Button::builder(&page)
-        .with_label(tr(text, "设为默认", "Set as default"))
+        .with_label(tr(text, "保存模型", "Save model"))
         .build();
     let delete_button = Button::builder(&page)
         .with_label(tr(text, "删除所选模型", "Delete selected model"))
@@ -301,7 +236,6 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> GmClawTab {
     actions.add(&reload_button, 0, SizerFlag::Right, 8);
     actions.add(&restore_button, 0, SizerFlag::Right, 8);
     actions.add(&save_button, 0, SizerFlag::Right, 8);
-    actions.add(&activate_button, 0, SizerFlag::Right, 8);
     actions.add(&delete_button, 0, SizerFlag::Right, 0);
     root.add_sizer(&actions, 0, SizerFlag::All, 20);
     let display_status = StaticText::builder(&page)
@@ -322,8 +256,8 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> GmClawTab {
     let im_hint = StaticText::builder(&page)
         .with_label(tr(
             text,
-            "点击“启动天工 Claw”即可打开桌面并自动准备本地连接。要在天工窗口同步外部对话，首次请正常退出已经手动打开的天工，再通过此按钮打开一次。在已连接的飞书、微信或企业微信中发送 /tg 选择天工执行端，沿用会话卡片或菜单选择项目目录和模型。启用后自动重连，发送 /gpt 返回 ChatGPT（Codex）。",
-            "Click Start GMClaw to open the desktop and prepare its local connection. To sync external messages into the desktop window, first close an already manually opened GMClaw and launch it once with this button. Send /tg in connected Feishu, WeChat, or WeCom to select GMClaw, then use the existing session card or menu to choose a project directory and model. Enabled connections recover automatically. Send /gpt to return to ChatGPT (Codex).",
+            "IM 接入：在飞书、微信或企业微信发送 /tg。首次同步桌面对话，请退出天工后从此页启动。",
+            "Start TianGong Work here to enable desktop message sync. In connected Feishu, WeChat, or WeCom, send /tg and select a project and model. Send /gpt to return to ChatGPT (Codex).",
         ))
         .build();
     im_hint.set_foreground_color(theme::theme().ink_muted);
@@ -338,21 +272,16 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> GmClawTab {
     page.set_scroll_rate(0, 10);
     page.layout();
     page.fit_inside();
+    for choice in [&entry, &provider, &reasoning_effort, &temperature_mode] {
+        connection_field_theme(choice, true);
+    }
     let tab = GmClawTab {
         page,
-        path,
-        current_model,
-        default_model,
-        local_url,
         entry,
-        make_active,
-        activate_button,
         delete_button,
         provider,
         model,
         source_protocol,
-        compatibility,
-        upstream_model,
         max_tokens,
         reasoning_effort,
         temperature_mode,
@@ -390,7 +319,7 @@ pub(super) fn refresh_display(
                 tr(
                     text,
                     "尚未启用；启动天工或在聊天中发送 /tg 后准备同步",
-                    "Not enabled; start GMClaw or send /tg to prepare sync",
+                    "Not enabled; start TianGong Work or send /tg to prepare sync",
                 )
             } else {
                 bridge
@@ -431,8 +360,8 @@ pub(super) fn bind_actions(
             &start_tab,
             tr(
                 text,
-                "正在启动并连接天工 Claw…",
-                "Starting and connecting GMClaw…",
+                "正在启动并连接天工 Work…",
+                "Starting and connecting TianGong Work…",
             ),
         ) {
             return;
@@ -471,12 +400,12 @@ pub(super) fn bind_actions(
         apply_status(&entry_tab, text, status, true);
         update_controls(&entry_tab);
     });
-    for (button, deleting) in [(tab.activate_button, false), (tab.delete_button, true)] {
+    {
         let action_tab = tab.clone();
         let action_api = api.clone();
         let action_tx = gui_tx.clone();
         let action_frame = *frame;
-        button.on_click(move |_| {
+        tab.delete_button.on_click(move |_| {
             let Some(entry_id) = action_tab
                 .state
                 .borrow()
@@ -500,11 +429,7 @@ pub(super) fn bind_actions(
             let tx = action_tx.clone();
             thread::spawn(move || {
                 let request = GmClawEntryRequest { entry_id, revision };
-                let result = if deleting {
-                    GmClawActionResult::Delete(api.delete_gmclaw_config(&request))
-                } else {
-                    GmClawActionResult::Activate(api.activate_gmclaw_config(&request))
-                };
+                let result = GmClawActionResult::Delete(api.delete_gmclaw_config(&request));
                 let _ = tx.send(super::GuiMessage::GmClaw(result));
                 wxdragon::wake_up_idle();
             });
@@ -691,8 +616,8 @@ pub(super) fn apply_result(
                 frame,
                 tr(
                     text,
-                    "模型已保存，可直接在天工 Claw 中选择使用。请保持 Hub 运行。",
-                    "Model saved. Select it in GMClaw and keep Hub running.",
+                    "模型已保存，可直接在天工 Work 中选择使用。请保持 Hub 运行。",
+                    "Model saved. Select it in TianGong Work and keep Hub running.",
                 ),
             );
         }
@@ -702,12 +627,12 @@ pub(super) fn apply_result(
                 frame,
                 tr(
                     text,
-                    "上次操作已还原，可直接在天工 Claw 中选择模型。请保持 Hub 运行。",
-                    "Latest operation restored. Select a model in GMClaw and keep Hub running.",
+                    "上次操作已还原，可直接在天工 Work 中选择模型。请保持 Hub 运行。",
+                    "Latest operation restored. Select a model in TianGong Work and keep Hub running.",
                 ),
             );
         }
-        GmClawActionResult::Activate(Ok(status)) | GmClawActionResult::Delete(Ok(status)) => {
+        GmClawActionResult::Delete(Ok(status)) => {
             apply_status(tab, text, status, true);
         }
         GmClawActionResult::Refresh(Err(error)) => {
@@ -723,7 +648,6 @@ pub(super) fn apply_result(
         }
         GmClawActionResult::Save(Err(error))
         | GmClawActionResult::Restore(Err(error))
-        | GmClawActionResult::Activate(Err(error))
         | GmClawActionResult::Delete(Err(error)) => {
             tab.state.borrow_mut().fresh = false;
             tab.status.set_label(tr(
@@ -785,14 +709,9 @@ fn apply_status(
     tab.entry.append(tr(text, "新增模型", "Add a model"));
     for entry in &status.entries {
         tab.entry.append(&format!(
-            "{} · {}{} · {}",
+            "{} · {} · {}",
             entry.model.model_name,
             entry.source_provider.as_deref().unwrap_or("?"),
-            if entry.active {
-                tr(text, "（默认）", " (default)")
-            } else {
-                ""
-            },
             &entry.entry_id[..entry.entry_id.len().min(8)]
         ));
     }
@@ -804,8 +723,6 @@ fn apply_status(
     });
     tab.entry
         .set_selection(selected.map(|index| index as u32 + 1).unwrap_or(0));
-    tab.make_active
-        .set_value(status.selected_entry_id.is_none() || status.active);
     let saved_effort = status.parameters.reasoning_effort.clone();
     tab.temperature_mode
         .set_selection(match &status.parameters.temperature_mode {
@@ -813,29 +730,6 @@ fn apply_status(
             TemperatureMode::Omit => 1,
             TemperatureMode::Preserve => 2,
         });
-    tab.path.set_value(&status.path);
-    tab.current_model.set_value(
-        status
-            .model
-            .as_ref()
-            .map(|model| model.model_name.as_str())
-            .unwrap_or(tr(text, "未配置", "Not configured")),
-    );
-    tab.default_model.set_value(
-        status
-            .active_model_id
-            .as_deref()
-            .filter(|model| !model.is_empty())
-            .unwrap_or(tr(text, "未配置", "Not configured")),
-    );
-    tab.local_url.set_value(
-        status
-            .model
-            .as_ref()
-            .map(|model| model.local_url.as_str())
-            .filter(|url| !url.is_empty())
-            .unwrap_or(tr(text, "保存时自动生成", "Generated when saved")),
-    );
     if use_saved_selection {
         let mut state = tab.state.borrow_mut();
         state.preferred_provider = status.source_provider.clone();
@@ -866,26 +760,20 @@ fn apply_status(
     let status_text = if !status.exists {
         tr(
             text,
-            "未找到天工 Claw 配置。请先安装并打开天工 Claw 完成初始化，再回到这里刷新。",
-            "GMClaw configuration was not found. Install and open GMClaw to initialize it, then refresh here.",
+            "未找到天工 Work 配置。请先安装并打开天工 Work 完成初始化，再回到这里刷新。",
+            "TianGong Work configuration was not found. Install and open TianGong Work to initialize it, then refresh here.",
         )
     } else if !status.schema_supported {
         tr(
             text,
-            "当前天工 Claw 配置格式暂不支持，无法保存或还原。请确认安装版本与配置路径。",
-            "This GMClaw configuration format is not supported. Saving and restoring are unavailable. Check the installed version and configuration path.",
-        )
-    } else if status.configured && !status.active {
-        tr(
-            text,
-            "Hub 接入配置已保存；天工 Claw 当前默认使用其他模型。",
-            "The Hub connection is saved; GMClaw currently defaults to another model.",
+            "当前天工 Work 配置格式暂不支持，无法保存或还原。请确认安装版本与配置路径。",
+            "This TianGong Work configuration format is not supported. Saving and restoring are unavailable. Check the installed version and configuration path.",
         )
     } else if status.configured {
         tr(
             text,
-            "天工 Claw 已配置为通过 Hub 接入。",
-            "GMClaw is configured to connect through Hub.",
+            "天工 Work 已配置为通过 Hub 接入。",
+            "TianGong Work is configured to connect through Hub.",
         )
     } else {
         tr(
@@ -1004,12 +892,12 @@ fn update_selection_hint(tab: &GmClawTab, text: GuiText) {
             "{}: {name}",
             tr(
                 text,
-                "原渠道不存在或未启用，请明确选择来源渠道",
+                "原渠道不存在或未启用，请明确选择大模型接入渠道",
                 "The previous channel is missing or disabled; select a source channel"
             )
         )
     } else {
-        tr(text, "请选择来源渠道。", "Select a source channel.").to_string()
+        tr(text, "请选择大模型接入渠道。", "Select a source channel.").to_string()
     };
     drop(state);
     tab.selection_hint.set_label(&hint);
@@ -1087,7 +975,7 @@ fn apply_reasoning_choices(tab: &GmClawTab, text: GuiText, preferred: &str) {
     tab.reasoning_effort.clear();
     for effort in choices {
         tab.reasoning_effort.append(if *effort == "auto" {
-            tr(text, "自动（跟随上游）", "Automatic (upstream default)")
+            tr(text, "自动", "Automatic")
         } else {
             effort
         });
@@ -1123,26 +1011,9 @@ fn update_model_details(tab: &GmClawTab, text: GuiText) {
             ProviderType::AnthropicMessages => "Anthropic Messages",
         };
         tab.source_protocol.set_value(protocol);
-        tab.compatibility.set_value(
-            provider
-                .compatibility
-                .as_deref()
-                .map(str::trim)
-                .filter(|profile| !profile.is_empty())
-                .unwrap_or(tr(text, "默认（未设置）", "Default (not set)")),
-        );
-        tab.upstream_model.set_value(
-            resolved_model(&provider, &tab.model.get_value()).unwrap_or(tr(
-                text,
-                "请选择可用模型",
-                "Select an available model",
-            )),
-        );
     } else {
-        let placeholder = tr(text, "请选择来源渠道", "Select a source channel");
+        let placeholder = tr(text, "请选择大模型接入渠道", "Select a source channel");
         tab.source_protocol.set_value(placeholder);
-        tab.compatibility.set_value(placeholder);
-        tab.upstream_model.set_value(placeholder);
     }
     let preferred = selected_reasoning_effort(tab).unwrap_or_else(|| "auto".to_string());
     apply_reasoning_choices(tab, text, &preferred);
@@ -1160,24 +1031,24 @@ fn selected_temperature_mode(tab: &GmClawTab) -> TemperatureMode {
 fn update_parameter_hint(tab: &GmClawTab, text: GuiText) {
     let reasoning = tr(
         text,
-        "思考强度“自动”跟随上游默认，不强制 high；其他档位需上游模型支持。切换渠道或模型时保留有效选择，不适用的档位回到自动。",
-        "Automatic reasoning follows the upstream default without forcing high. Other levels require upstream model support. Switching channels or models keeps valid choices and resets incompatible levels to Automatic.",
+        "思考强度“自动”使用模型默认设置。",
+        "Automatic reasoning uses the model default.",
     );
     let temperature = match selected_temperature_mode(tab) {
         TemperatureMode::Auto => tr(
             text,
-            "“自动适配”按来源协议、兼容 profile 及实际模型自动保留或省略所填温度；具体参数支持以上游为准。",
-            "Automatic adaptation keeps or omits the entered temperature based on the source protocol, compatibility profile, and actual model. Parameter support depends on the upstream service.",
+            "温度“自动适配”按模型支持情况发送。",
+            "Automatic temperature follows model support.",
         ),
         TemperatureMode::Omit => tr(
             text,
-            "“不发送温度”不向上游发送温度参数；输入值仍保留，供切换策略后使用。",
-            "Omit temperature does not send the temperature parameter upstream. The entered value is retained for other policies.",
+            "不发送温度参数。",
+            "The temperature parameter is omitted.",
         ),
         TemperatureMode::Preserve => tr(
             text,
-            "“发送所填温度”始终发送输入值，适用于明确接受此参数的上游；不支持的模型可能拒绝请求。",
-            "Send entered temperature always sends the input value. Use it for upstream models that accept this parameter; unsupported models may reject the request.",
+            "请确认所选模型支持温度参数。",
+            "Confirm that the model supports temperature.",
         ),
     };
     tab.parameter_hint
@@ -1213,19 +1084,10 @@ fn update_controls(tab: &GmClawTab) {
     tab.reload_button.enable(!busy);
     tab.start_button.enable(!busy);
     tab.entry.enable(ready);
-    tab.make_active.enable(ready);
     let selected = state
         .status
         .as_ref()
         .is_some_and(|status| status.selected_entry_id.is_some());
-    tab.activate_button.enable(
-        ready
-            && selected
-            && state
-                .status
-                .as_ref()
-                .is_some_and(|status| status.configured && !status.active),
-    );
     tab.delete_button.enable(ready && selected);
     tab.save_button.enable(ready && has_model);
     tab.restore_button.enable(
@@ -1242,6 +1104,18 @@ fn update_controls(tab: &GmClawTab) {
         .enable(ready && selected_provider(tab).is_some());
     tab.temperature_mode.enable(ready);
     tab.temperature.enable(ready);
+    for choice in [
+        &tab.entry,
+        &tab.provider,
+        &tab.reasoning_effort,
+        &tab.temperature_mode,
+    ] {
+        connection_field_theme(choice, choice.is_enabled());
+    }
+    connection_field_theme(&tab.model, tab.model.is_enabled());
+    for field in [&tab.max_tokens, &tab.temperature] {
+        connection_field_theme(field, field.is_editable() && field.is_enabled());
+    }
 }
 
 fn current_revision(tab: &GmClawTab, text: GuiText) -> Result<String, String> {
@@ -1255,8 +1129,8 @@ fn current_revision(tab: &GmClawTab, text: GuiText) -> Result<String, String> {
         .ok_or_else(|| {
             tr(
                 text,
-                "请先刷新，读取可用的天工 Claw 配置。",
-                "Refresh to load a supported GMClaw configuration first.",
+                "请先刷新，读取可用的天工 Work 配置。",
+                "Refresh to load a supported TianGong Work configuration first.",
             )
             .to_string()
         })
@@ -1267,8 +1141,8 @@ fn build_request(tab: &GmClawTab, text: GuiText) -> Result<GmClawSaveRequest, St
     let provider = selected_provider(tab).ok_or_else(|| {
         tr(
             text,
-            "请选择已启用的 Hub 来源渠道。",
-            "Select an enabled Hub source channel.",
+            "请选择已启用的大模型接入渠道。",
+            "Select an enabled Model channel.",
         )
         .to_string()
     })?;
@@ -1322,7 +1196,7 @@ fn build_request(tab: &GmClawTab, text: GuiText) -> Result<GmClawSaveRequest, St
             .status
             .as_ref()
             .and_then(|status| status.selected_entry_id.clone()),
-        make_active: tab.make_active.is_checked(),
+        make_active: false,
         source_provider: provider.name,
         model,
         max_tokens,

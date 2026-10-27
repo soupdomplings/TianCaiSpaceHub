@@ -180,6 +180,42 @@ pub(super) fn apply_textctrl_theme(input: &TextCtrl) {
     input.set_foreground_color(t.ink_primary);
 }
 
+/// Connection pages distinguish display-only values from editable inputs.
+pub(super) fn connection_field_theme<W: WxWidget>(input: &W, editable: bool) {
+    let t = theme::theme();
+    input.set_background_color(if editable { t.bg_card } else { t.bg_muted });
+    input.set_foreground_color(t.ink_primary);
+}
+
+pub(super) fn connection_text_field_row<W: WxWidget>(
+    parent: &W,
+    sizer: &FlexGridSizer,
+    label: &str,
+    value: &str,
+) -> TextCtrl {
+    let input = text_field_row(parent, sizer, label, value);
+    connection_field_theme(&input, true);
+    input
+}
+
+pub(super) fn connection_choice_row<W: WxWidget>(
+    parent: &W,
+    sizer: &FlexGridSizer,
+    label: &str,
+    choices: &[&str],
+) -> Choice {
+    let label = StaticText::builder(parent).with_label(label).build();
+    label.set_foreground_color(theme::theme().ink_secondary);
+    sizer.add(&label, 0, SizerFlag::AlignCenterVertical, 0);
+    let input = Choice::builder(parent)
+        .with_size(Size::new(420, -1))
+        .with_choices(choices.iter().map(|value| (*value).to_owned()).collect())
+        .build();
+    connection_field_theme(&input, true);
+    sizer.add(&input, 1, SizerFlag::Expand, 0);
+    input
+}
+
 fn table_row_colour(row: usize) -> Colour {
     let t = theme::theme();
     if row % 2 == 0 {

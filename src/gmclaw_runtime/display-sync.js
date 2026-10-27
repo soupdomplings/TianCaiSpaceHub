@@ -1,4 +1,4 @@
-async function (messages, streaming, confirmation, welcome, older, scroll, loadingOlder, modelsLoaded, localTaskIdRef, sessionIdRef, nativeCleanup, instances, scenarios, openingTasks, deletingTaskIds, props, taskId, sessionId, hubRowIds) {
+async function (messages, streaming, confirmation, welcome, older, scroll, loadingOlder, modelsLoaded, localTaskIdRef, sessionIdRef, nativeCleanup, runState, hasActiveRun, reconnecting, instances, scenarios, openingTasks, deletingTaskIds, props, taskId, sessionId, hubRowIds) {
   // Requests run inside the verified renderer; only an outcome is returned.
   // Scope discovery may transiently receive primitive values in Hub memory.
   const isRef = (value) => value && value.__v_isRef === true;
@@ -27,6 +27,9 @@ async function (messages, streaming, confirmation, welcome, older, scroll, loadi
   const isBooleanRef = (value) => isRef(value) && typeof value.value === 'boolean';
   const isNullableStringRef = (value) => isRef(value) && (value.value === null || typeof value.value === 'string');
   const isConfirmationRef = (value) => isRef(value) && (value.value === null || (typeof value.value === 'object' && !Array.isArray(value.value)));
+  const workFields = () => [runState, hasActiveRun, reconnecting].every((v) => v === null)
+    || (isRef(runState) && (runState.value === null || (typeof runState.value === 'object' && !Array.isArray(runState.value)))
+      && [hasActiveRun, reconnecting].every(isBooleanRef));
   const hasPanelProps = (value) => value && typeof value.taskId === 'string' && typeof value.conversationSessionId === 'string' && typeof value.isActive === 'boolean';
   if (!isRef(instances) || !Array.isArray(instances.value) || !isWritableRef(scenarios) || !Array.isArray(scenarios.value)) return 'app_fields';
   const opening = isRef(openingTasks) ? openingTasks.value : openingTasks;
@@ -40,14 +43,18 @@ async function (messages, streaming, confirmation, welcome, older, scroll, loadi
   const bound = instanceArray.filter((instance) => instance.taskId === taskId);
   if (bound.length > 1 || bound.some((instance) => instance.sessionId !== sessionId)) return 'instance_identity';
   if (props && (props.taskId !== taskId || props.conversationSessionId !== sessionId)) return 'panel_identity';
-  if (props && (!hasPanelProps(props) || !isRef(messages) || !Array.isArray(messages.value) || ![messages, welcome, older].every(isWritableRef) || ![streaming, welcome, older, loadingOlder, modelsLoaded].every(isBooleanRef) || !isConfirmationRef(confirmation) || ![localTaskIdRef, sessionIdRef].every(isNullableStringRef) || typeof scroll !== 'function' || (nativeCleanup !== null && typeof nativeCleanup !== 'function'))) return 'panel_fields';
+  if (props && (!workFields() || !hasPanelProps(props) || !isRef(messages) || !Array.isArray(messages.value) || ![messages, welcome, older].every(isWritableRef) || ![streaming, welcome, older, loadingOlder, modelsLoaded].every(isBooleanRef) || !isConfirmationRef(confirmation) || ![localTaskIdRef, sessionIdRef].every(isNullableStringRef) || typeof scroll !== 'function' || (nativeCleanup !== null && typeof nativeCleanup !== 'function'))) return 'panel_fields';
   if (props && bound.length !== 1) return 'changed';
   const cacheFields = ['seedMessages', 'messageSummaries', 'hasOlderMessages'];
   const cacheSnapshot = props ? cacheFields.map((key) => bound[0][key]) : null;
   const cacheWritable = () => !props || (isMutableObject(bound[0]) && cacheFields.every((key) => canAssignCache(bound[0], key)));
   const refsWritable = () => isWritableRef(scenarios) && (!props || [messages, welcome, older].every(isWritableRef));
   if (!cacheWritable()) return 'app_fields';
-  const idle = () => !opening.has(taskId) && !deleting.has(taskId) && (!props || (streaming.value === false && confirmation.value === null && loadingOlder.value === false && modelsLoaded.value === true && nativeCleanup === null && localTaskIdRef.value === taskId && (sessionIdRef.value || props.conversationSessionId) === sessionId && !messages.value.some((m) => m.awaitingConfirm)));
+  const workIdle = () => runState === null || (workFields() && !hasActiveRun.value && !reconnecting.value
+    && (runState.value === null || (['completed', 'stopped', 'failed', 'interrupted'].includes(runState.value.status)
+      && runState.value.phase !== 'finalizing' && Array.isArray(runState.value.prompts)
+      && !runState.value.prompts.some((p) => p.status === 'queued'))));
+  const idle = () => !opening.has(taskId) && !deleting.has(taskId) && (!props || (workIdle() && streaming.value === false && confirmation.value === null && loadingOlder.value === false && modelsLoaded.value === true && nativeCleanup === null && localTaskIdRef.value === taskId && (sessionIdRef.value || props.conversationSessionId) === sessionId && !messages.value.some((m) => m.awaitingConfirm)));
   if (!idle()) return 'busy';
   const snapshot = props ? JSON.stringify(messages.value) : null;
   const scenarioSnapshot = JSON.stringify(scenarios.value);

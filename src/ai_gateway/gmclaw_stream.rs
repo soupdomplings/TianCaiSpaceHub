@@ -85,7 +85,7 @@ enum Mode {
     Sse,
 }
 
-struct Decoder {
+pub(super) struct Decoder {
     mode: Mode,
     sse_hint: bool,
     received: usize,
@@ -97,7 +97,7 @@ struct Decoder {
 }
 
 impl Decoder {
-    fn new(protocol: Protocol, sse_hint: bool) -> Self {
+    pub(super) fn new(protocol: Protocol, sse_hint: bool) -> Self {
         Self {
             mode: Mode::Unknown,
             sse_hint,
@@ -113,7 +113,11 @@ impl Decoder {
         }
     }
 
-    fn push(&mut self, bytes: &[u8], provider: &str) -> Result<Option<Value>, GatewayError> {
+    pub(super) fn push(
+        &mut self,
+        bytes: &[u8],
+        provider: &str,
+    ) -> Result<Option<Value>, GatewayError> {
         if bytes.len() > MAX_BODY_BYTES.saturating_sub(self.received) {
             return Err(failure(
                 provider,
@@ -189,7 +193,7 @@ impl Decoder {
         Ok(())
     }
 
-    fn finish(mut self, provider: &str) -> Result<Value, GatewayError> {
+    pub(super) fn finish(mut self, provider: &str) -> Result<Value, GatewayError> {
         if matches!(self.mode, Mode::Sse) {
             // An unterminated frame is a truncated stream, even if it contains valid JSON.
             if !self.pending.iter().all(u8::is_ascii_whitespace) || !self.event_data.is_empty() {
