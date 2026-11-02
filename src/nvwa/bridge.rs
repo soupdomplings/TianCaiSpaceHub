@@ -808,14 +808,23 @@ pub(crate) fn validate_initialize(reply: &Value) -> Result<String> {
     Ok(version.to_owned())
 }
 
+/// Credentials from the selected client's validated configuration. No Debug or
+/// serialization: this contains the client's local bearer.
+pub(crate) struct LocalBridge {
+    pub client: ClientKind,
+    pub endpoint: String,
+    pub credential: String,
+}
+
 pub(crate) async fn detect(
     service: &NvwaService,
     profile: &NvwaProfile,
-    client: Option<ClientKind>,
+    local: Option<LocalBridge>,
     allow_catalog_limit: bool,
 ) -> Result<Value> {
     let (generation, auth) = service.inner.runtime.auth(&profile.id).await?;
-    let mut transport = DetectionTransport::new(service, profile, client).await?;
+    let client = local.as_ref().map(|local| local.client);
+    let mut transport = DetectionTransport::new(local)?;
     let result = detect_catalog(
         service,
         profile,
@@ -853,20 +862,8 @@ struct DetectionTransport {
 }
 
 impl DetectionTransport {
-    async fn new(
-        service: &NvwaService,
-        profile: &NvwaProfile,
-        client: Option<ClientKind>,
-    ) -> Result<Self> {
-        let local = if let Some(client) = client {
-            let credential = service
-                .inner
-                .runtime
-                .existing_capability(&profile.id, client)
-                .await
-                .ok_or_else(|| {
-                    anyhow::anyhow!("Apply this client before checking its local bridge")
-                })?;
+    fn new(local: Option<LocalBridge>) -> Result<Self> {
+        let local = if let Some(local) = local {
             let http = reqwest::Client::builder()
                 .no_proxy()
                 .redirect(reqwest::redirect::Policy::none())
@@ -874,16 +871,7 @@ impl DetectionTransport {
                 .timeout(std::time::Duration::from_secs(300))
                 .build()
                 .map_err(|_| anyhow::anyhow!("Cannot prepare local MCP bridge detection"))?;
-            Some((
-                http,
-                format!(
-                    "{}/mcp/{}/{}",
-                    service.inner.management.base_url,
-                    profile.id,
-                    client.as_str()
-                ),
-                credential,
-            ))
+            Some((http, local.endpoint, local.credential))
         } else {
             None
         };

@@ -19,6 +19,9 @@ use crate::gmclaw_desktop::DesktopClient;
 use super::{config::ConfigStore, secrets::SecretStore, types::ClientKind};
 
 mod codex;
+mod connection;
+#[cfg(all(test, windows))]
+mod connection_tests;
 mod migration;
 mod tiangong;
 mod workbuddy;
@@ -48,6 +51,7 @@ pub(crate) struct AdapterTarget {
 #[serde(rename_all = "lowercase")]
 pub(crate) enum AdapterOperation {
     Apply,
+    Repair,
     Remove,
     Restore,
 }
@@ -69,6 +73,7 @@ pub(crate) struct AdapterStatus {
     pub configured: bool,
     pub owned: bool,
     pub modified: bool,
+    pub repairable: bool,
     pub enabled: Option<bool>,
     pub target_fingerprint: String,
     /// Static target settings only, used privately for native catalog updates.
@@ -115,6 +120,8 @@ struct ManagedEntry {
     server_name: String,
     target_path: Option<PathBuf>,
     fingerprint: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    semantic_fingerprint: Option<String>,
     backup_ref: String,
     #[serde(default)]
     pending: bool,
@@ -314,6 +321,15 @@ pub(crate) async fn inspect(ctx: &AdapterContext, target: &AdapterTarget) -> Res
     migration::inspect(ctx, target).await
 }
 
+pub(crate) async fn bridge_matches(
+    ctx: &AdapterContext,
+    target: &AdapterTarget,
+    endpoint: &str,
+    bearer: &str,
+) -> Result<bool> {
+    migration::bridge_matches(ctx, target, endpoint, bearer).await
+}
+
 /// Check all recorded explicit paths, not only the three default targets.
 /// Confirmed removals keep a missing-target tombstone solely for restore.
 pub(crate) async fn has_managed_profile(ctx: &AdapterContext, profile_id: &str) -> Result<bool> {
@@ -331,16 +347,28 @@ pub(crate) async fn preview(
     target: &AdapterTarget,
     operation: AdapterOperation,
 ) -> Result<AdapterPreview> {
-    if matches!(operation, AdapterOperation::Apply) {
+    if matches!(
+        operation,
+        AdapterOperation::Apply | AdapterOperation::Repair
+    ) {
         validate_client_server_name(target.client, &target.server_name)?;
     }
     let status = inspect(ctx, target).await?;
+    let operation = if matches!(operation, AdapterOperation::Apply) && status.repairable {
+        AdapterOperation::Repair
+    } else {
+        operation
+    };
     let can_apply = status.available
-        && !status.modified
         && match operation {
-            AdapterOperation::Apply => !status.name_conflict && (!status.present || status.owned),
-            AdapterOperation::Remove => status.owned,
-            AdapterOperation::Restore => status.owned && status.backup_ref.is_some(),
+            AdapterOperation::Apply => {
+                !status.modified && !status.name_conflict && (!status.present || status.owned)
+            }
+            AdapterOperation::Repair => status.repairable,
+            AdapterOperation::Remove => !status.modified && status.owned,
+            AdapterOperation::Restore => {
+                !status.modified && status.owned && status.backup_ref.is_some()
+            }
         };
     let mut warnings = client_warnings(target.client);
     if status.present && !status.owned {
@@ -348,16 +376,25 @@ pub(crate) async fn preview(
             "客户端已有同名连接，但不是由 Hub 添加的。请先确认它的用途，Hub 不会覆盖它。".into(),
         );
     }
-    if status.modified {
+    if matches!(operation, AdapterOperation::Repair) {
+        warnings.push("将先备份此连接，再修复 Hub 本机地址、接入凭据和启用状态；保留超时、工具选择及其他可兼容设置。改用命令启动或其他认证方式的字段会移除。".into());
+    } else if status.modified {
         warnings.push(
             "这条连接已被手动或其他程序修改。请先核对客户端中的设置，再回 Hub 重新检查。".into(),
         );
     }
-    if status.name_conflict && matches!(operation, AdapterOperation::Apply) {
+    if status.name_conflict
+        && matches!(
+            operation,
+            AdapterOperation::Apply | AdapterOperation::Repair
+        )
+    {
         warnings.push(status.detail.clone());
     }
-    if matches!(operation, AdapterOperation::Apply)
-        && let Some(previous) = &status.previous_server_name
+    if matches!(
+        operation,
+        AdapterOperation::Apply | AdapterOperation::Repair
+    ) && let Some(previous) = &status.previous_server_name
         && let Some(desired) = &status.desired_server_name
     {
         warnings.push(if status.present {
@@ -386,6 +423,7 @@ pub(crate) async fn apply(
     expected: &str,
     endpoint: &str,
     bearer: &str,
+    repair: bool,
 ) -> Result<AdapterOutcome> {
     let url = Url::parse(endpoint).map_err(|_| anyhow::anyhow!("NVWA 本地 MCP 地址无效"))?;
     ensure!(
@@ -415,7 +453,11 @@ pub(crate) async fn apply(
         ctx,
         target,
         expected,
-        AdapterOperation::Apply,
+        if repair {
+            AdapterOperation::Repair
+        } else {
+            AdapterOperation::Apply
+        },
         Some(desired),
         None,
     )
@@ -653,6 +695,10 @@ fn status(
                 .ok()
                 .as_deref()
                 != Some(entry.fingerprint.as_str())
+            && !entry.semantic_fingerprint.as_ref().is_some_and(|expected| {
+                connection::semantic_fingerprint(read.snapshot.as_ref(), target.client)
+                    .is_ok_and(|actual| &actual == expected)
+            })
     });
     let enabled = read
         .snapshot
@@ -671,7 +717,7 @@ fn status(
     let detail = if managed.is_some_and(|entry| entry.pending) {
         "上次修改的结果还未确认。请查看客户端中的这条连接，再回 Hub 重新检查；修改前的备份已保留。"
     } else if deleted {
-        "此前的接入记录仍在，但客户端中的连接已不存在。点击“预览接入”并确认，可重新添加连接。"
+        "此前的接入记录仍在，但客户端中的连接已不存在。点击“连接并检测”并确认，可重新添加连接并继续检测。"
     } else if modified {
         "这条连接与 Hub 上次保存的设置不同。请先核对客户端中的设置，Hub 会保留这些改动。"
     } else if present && !owned {
@@ -696,6 +742,7 @@ fn status(
         configured,
         owned,
         modified,
+        repairable: false,
         enabled,
         target_fingerprint: fingerprint(read.snapshot.as_ref(), false, target.client)?,
         entry_fingerprint: fingerprint(read.snapshot.as_ref(), true, target.client)?,
@@ -733,6 +780,7 @@ fn unavailable(target: &AdapterTarget, managed: Option<&ManagedEntry>) -> Adapte
         configured: false,
         owned: managed.is_some(),
         modified: false,
+        repairable: false,
         enabled: None,
         target_fingerprint: String::new(),
         entry_fingerprint: String::new(),
@@ -859,6 +907,7 @@ mod recovery_tests {
             server_name: target.server_name.clone(),
             target_path: None,
             fingerprint: fingerprint(Some(&snapshot), true, target.client).unwrap(),
+            semantic_fingerprint: None,
             backup_ref: "synthetic-backup-reference".into(),
             pending: false,
         };

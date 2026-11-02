@@ -331,15 +331,26 @@ fn restorable_backup(
 }
 
 fn previous_record_for_state(mut record: ManagedEntry, state: &FileState) -> ManagedEntry {
-    // Keep history and its exact ownership key, but align a deleted entry's
-    // recovery marker with the independently verified current before-image.
-    // Restore must leave it absent rather than reviving the former entry.
+    // Keep history and its exact ownership key, aligning an existing owner's
+    // recovery marker with the verified before-image. Keep removal tombstones:
+    // externally recreating a removed entry never re-establishes ownership.
     if state
         .slots
         .get(&record.server_name)
         .is_some_and(Option::is_none)
     {
         record.fingerprint = "missing".into();
+        record.semantic_fingerprint = None;
+    } else if record.fingerprint != "missing"
+        && let Some(Some(snapshot)) = state.slots.get(&record.server_name)
+    {
+        // A confirmed Repair backs up the actual edited settings, not a stale
+        // ownership hash. Restoring it must remain manageable afterwards.
+        if let Ok(hash) = fingerprint(Some(snapshot), true, state.client) {
+            record.fingerprint = hash;
+            record.semantic_fingerprint =
+                connection::semantic_fingerprint(Some(snapshot), state.client).ok();
+        }
     }
     record
 }
@@ -539,6 +550,15 @@ async fn plan(
         }
         .into();
     }
+    public.repairable = !pending
+        && !public.name_conflict
+        && public.present
+        && record
+            .as_ref()
+            .is_some_and(|record| !record.pending && record.fingerprint != "missing");
+    if public.modified && public.repairable {
+        public.detail = "连接设置有变化，可以备份并修复。点击“连接并检测”即可继续；超时、工具选择等其他设置会保留。".into();
+    }
     let fingerprints: BTreeMap<_, _> = names
         .iter()
         .map(|name| Ok((name.clone(), slot_fingerprint(&state, name)?)))
@@ -576,6 +596,42 @@ pub(super) async fn inspect(ctx: &AdapterContext, target: &AdapterTarget) -> Res
     }
     reconcile(ctx, target, &location, &root, &mut ledger).await?;
     Ok(plan(ctx, target, &location, &ledger).await?.public)
+}
+
+/// Read the selected client's actual settings under the same ownership scope.
+/// Never learn or restore a runtime grant from a credential found in a file.
+pub(super) async fn bridge_matches(
+    ctx: &AdapterContext,
+    target: &AdapterTarget,
+    endpoint: &str,
+    bearer: &str,
+) -> Result<bool> {
+    let location = super::location(target)?;
+    let root = metadata_root(ctx)?;
+    let _lock = ledger_lock(&root).await?;
+    let mut ledger = load_ledger(&root)?;
+    reconcile(ctx, target, &location, &root, &mut ledger).await?;
+    let current = plan(ctx, target, &location, &ledger).await?;
+    if !current.public.available
+        || !current.public.repairable
+        || current.public.name_conflict
+        || current.actual.server_name != target.server_name
+        || current
+            .record
+            .as_ref()
+            .is_none_or(|record| record.pending || record.fingerprint == "missing")
+    {
+        return Ok(false);
+    }
+    let Some(snapshot) = current
+        .state
+        .slots
+        .get(&current.actual.server_name)
+        .and_then(Option::as_ref)
+    else {
+        return Ok(false);
+    };
+    connection::matches(snapshot, &current.actual, endpoint, bearer)
 }
 
 async fn write_slots(
@@ -717,7 +773,10 @@ pub(super) async fn mutate(
     restore_ref: Option<&str>,
 ) -> Result<AdapterOutcome> {
     ensure!(!expected.is_empty(), "接入操作缺少目标指纹，请先预览");
-    if matches!(operation, AdapterOperation::Apply) {
+    if matches!(
+        operation,
+        AdapterOperation::Apply | AdapterOperation::Repair
+    ) {
         validate_server_name(&target.server_name)?;
     }
     let location = super::location(target)?;
@@ -731,7 +790,8 @@ pub(super) async fn mutate(
         "MCP 目标在预览后已变化，本次未覆盖"
     );
     ensure!(
-        !current.public.modified,
+        !current.public.modified
+            || matches!(operation, AdapterOperation::Repair) && current.public.repairable,
         "MCP 新旧连接存在冲突或外部修改，本次未覆盖"
     );
     ensure!(
@@ -748,7 +808,13 @@ pub(super) async fn mutate(
     let mut desired_slots = BTreeMap::new();
     let mut next_records = BTreeMap::new();
     match operation {
-        AdapterOperation::Apply => {
+        AdapterOperation::Apply | AdapterOperation::Repair => {
+            if matches!(operation, AdapterOperation::Repair) {
+                ensure!(
+                    current.public.repairable,
+                    "此连接无法直接修复：归属不明确、已被移除或上次操作尚未确认"
+                );
+            }
             ensure!(
                 !current.public.name_conflict,
                 "MCP 环境名称已被其他连接占用，本次未覆盖"
@@ -766,6 +832,19 @@ pub(super) async fn mutate(
                     desired_slots.insert(current.actual.server_name.clone(), None);
                 }
             }
+            let desired = match (
+                current
+                    .state
+                    .slots
+                    .get(&current.actual.server_name)
+                    .and_then(Option::as_ref),
+                desired,
+            ) {
+                (Some(snapshot), Some(desired)) => {
+                    Some(connection::merge(snapshot, &current.actual, &desired)?)
+                }
+                (_, desired) => desired,
+            };
             desired_slots.insert(target.server_name.clone(), desired);
         }
         AdapterOperation::Remove => {
@@ -852,7 +931,10 @@ pub(super) async fn mutate(
         }
     }
     if !matches!(operation, AdapterOperation::Restore) {
-        let actual_name = if matches!(operation, AdapterOperation::Apply) {
+        let actual_name = if matches!(
+            operation,
+            AdapterOperation::Apply | AdapterOperation::Repair
+        ) {
             &target.server_name
         } else {
             &current.actual.server_name
@@ -870,6 +952,10 @@ pub(super) async fn mutate(
                     true,
                     target.client,
                 )?,
+                semantic_fingerprint: Some(connection::semantic_fingerprint(
+                    desired_slots.get(actual_name).and_then(Option::as_ref),
+                    target.client,
+                )?),
                 backup_ref: reference.clone(),
                 pending: false,
             },
@@ -924,6 +1010,11 @@ pub(super) async fn mutate(
                 server_name: slot.server_name.clone(),
                 target_path: location.path.clone(),
                 fingerprint: slot.after_fingerprint.clone(),
+                semantic_fingerprint: backup
+                    .next_records
+                    .values()
+                    .find(|record| record.server_name == slot.server_name)
+                    .and_then(|record| record.semantic_fingerprint.clone()),
                 backup_ref: reference.clone(),
                 pending: true,
             },
@@ -1023,6 +1114,7 @@ mod tests {
             server_name: name.into(),
             target_path: None,
             fingerprint: fingerprint.into(),
+            semantic_fingerprint: None,
             backup_ref: "fixture-backup".into(),
             pending: false,
         }
@@ -1050,19 +1142,27 @@ mod tests {
     }
 
     #[test]
-    fn previous_record_keeps_fingerprint_for_present_or_unread_slots() {
+    fn previous_record_tracks_confirmed_edits_but_keeps_unread_or_removed_markers() {
         let original = record("nvwa-old", "historical-present-fingerprint");
         let changed = state(BTreeMap::from([(
             "nvwa-old".into(),
-            Some(Snapshot::Toml("different current contents".into())),
+            Some(Snapshot::Toml(
+                "[mcp_servers.nvwa-old]\nenabled=false\n".into(),
+            )),
         )]));
         assert_eq!(
             previous_record_for_state(original.clone(), &changed).fingerprint,
-            original.fingerprint
+            slot_fingerprint(&changed, "nvwa-old").unwrap()
         );
         assert_eq!(
             previous_record_for_state(original.clone(), &state(BTreeMap::new())).fingerprint,
             original.fingerprint
+        );
+        let normalized = previous_record_for_state(original, &changed);
+        assert!(normalized.semantic_fingerprint.is_some());
+        assert_eq!(
+            previous_record_for_state(record("nvwa-old", "missing"), &changed).fingerprint,
+            "missing"
         );
     }
 

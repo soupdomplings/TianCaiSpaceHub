@@ -51,11 +51,8 @@ struct ClientControls {
     selector: Choice,
     path: TextCtrl,
     status: StaticText,
-    inspect: Button,
     check: Button,
-    apply: Button,
-    remove: Button,
-    restore: Button,
+    manage: Button,
 }
 
 #[derive(Clone)]
@@ -94,13 +91,9 @@ pub(super) struct NvwaTab {
     status: StaticText,
     identity: StaticText,
     tools: TextCtrl,
-    reload: Button,
     save: Button,
-    delete: Button,
     login: Button,
     cancel: Button,
-    logout: Button,
-    detect: Button,
     send_factor: Button,
     help: Button,
     client: ClientControls,
@@ -127,26 +120,33 @@ enum Action {
     Save,
     Delete,
     Login,
-    Logout,
     Cancel,
     ResetAuthentication,
-    Detect,
     DetectClient(String),
+    PrepareClient {
+        client: String,
+        body: Value,
+    },
     SendFactor,
-    Inspect(String),
     Preview {
         client: String,
         operation: String,
         body: Value,
+        check_after: bool,
     },
-    Mutate(String),
+    Mutate {
+        client: String,
+        check_after: Option<Value>,
+    },
 }
 
 impl Action {
     fn client_kind(&self) -> Option<&str> {
         match self {
-            Self::DetectClient(kind) | Self::Inspect(kind) | Self::Mutate(kind) => Some(kind),
-            Self::Preview { client, .. } => Some(client),
+            Self::DetectClient(kind) => Some(kind),
+            Self::Preview { client, .. }
+            | Self::PrepareClient { client, .. }
+            | Self::Mutate { client, .. } => Some(client),
             _ => None,
         }
     }
@@ -182,7 +182,7 @@ fn display_message(text: GuiText, message: &str) -> String {
         "Authentication verified; existing client access retained"
         | "Authenticated; existing client access retained"
         | "Verified login; existing client connections retained" => (
-            "登录有效，已有客户端接入已保留。可以直接检测本机桥或继续使用，无需重新预览接入。",
+            "登录有效，已有客户端接入已保留。可以直接连接并检测或继续使用，无需重复接入。",
             "Sign-in verified and existing client connections retained. Check the local bridge or continue using them; reconnecting is unnecessary.",
         ),
         "NVWA profile changed; explicit login required" => (
@@ -227,7 +227,7 @@ fn display_message(text: GuiText, message: &str) -> String {
             "Waiting for sign-in; existing client access is temporarily suspended. Complete sign-in with the original account and tenant to restore the connections without reconnecting.",
         ),
         "Sign-in cancelled; existing client access suspended" => (
-            "已取消本次登录，已有客户端接入暂时停用。用原账号和租户登录成功后恢复连接，无需重新预览接入。",
+            "已取消本次登录，已有客户端接入暂时停用。用原账号和租户登录成功后恢复连接，无需重复接入。",
             "Sign-in was cancelled and existing access is suspended. Sign in with the same account and tenant to restore the connections without another preview.",
         ),
         "Waiting for login" => (
@@ -237,8 +237,8 @@ fn display_message(text: GuiText, message: &str) -> String {
         "Authenticated; client access must be explicitly applied"
         | "Verified login; explicitly apply each client to grant access to this identity"
         | "Verified login; connect each client once to use this identity" => (
-            "登录成功。此身份尚无客户端接入，请在下方选择客户端并“预览接入”一次；之后同身份重新登录无需重复接入。",
-            "Signed in. Connect each client once for this identity using Preview connection below; later sign-ins with the same identity do not require reconnecting.",
+            "登录成功。选择下方客户端，点击“连接并检测”即可。",
+            "Signed in. Choose a client below, then select Connect and check.",
         ),
         "Logged out; previous client access revoked" => (
             "已退出登录。客户端中的旧连接暂时不能使用；需要时重新登录并接入。",
@@ -278,16 +278,32 @@ fn display_message(text: GuiText, message: &str) -> String {
             "Change your password on the NVWA page, then sign in from Hub.",
         ),
         "Client authorization required" | "Apply this client before checking its local bridge" => (
-            "Hub 尚未取得此客户端的接入授权。请先“检查”配置；首次接入、退出登录、认证目标或真实身份变化、本机凭据无法恢复时，需要“预览接入”并确认一次。普通认证过期、取消登录或同身份重新登录不需要重复接入。",
-            "Hub has no access grant for this client. Inspect its settings first. Preview and confirm once after first setup, sign-out, authentication target or identity changes, or unrecoverable local credentials. Normal expiry, cancellation and same-identity sign-in do not require reconnecting.",
+            "此客户端需要接入。点击“连接并检测”会直接显示接入确认，保存后自动继续检测。",
+            "This client needs a connection. Connect and check opens setup and continues detection after you confirm.",
         ),
         "Client authorization invalid" => (
-            "此连接提交的本机接入凭据与 Hub 当前记录不匹配。请先“检查”配置并确认环境；首次接入、退出登录、认证目标或真实身份变化、本机凭据无法恢复后，再“预览接入”并确认更新。普通认证到期不应更换客户端连接。",
-            "This connection's local access key does not match Hub's current record. Inspect the settings and environment first; preview and confirm after first setup, sign-out, authentication target or identity changes, or unrecoverable local credentials. Normal authentication expiry should not change the client connection.",
+            "此连接的接入凭据需要更新。点击“连接并检测”，确认后自动继续检测。",
+            "This connection's access key needs updating. Select Connect and check; detection continues after confirmation.",
         ),
-        "此前的接入记录仍在，但客户端中的连接已不存在。点击“预览接入”并确认，可重新添加连接。" => {
+        "Client connection needs repair; use Connect or repair" => (
+            "客户端设置已变化。点击“连接并检测”，确认后会备份并修复这条连接，再自动检测。",
+            "Client settings changed. Select Connect and check to back up, repair and check this connection.",
+        ),
+        "连接设置有变化，可以备份并修复。点击“连接并检测”即可继续；超时、工具选择等其他设置会保留。" => {
             (
-                "此前的接入记录仍在，但客户端中的连接已不存在。点击“预览接入”并确认，可重新添加连接。",
+                "连接设置有变化，可以备份并修复。点击“连接并检测”即可继续；超时、工具选择等其他设置会保留。",
+                "Connection settings changed. Select Connect and check to back up and repair. Timeouts, tool selections and other compatible settings are preserved.",
+            )
+        }
+        "将先备份此连接，再修复 Hub 本机地址、接入凭据和启用状态；保留超时、工具选择及其他可兼容设置。改用命令启动或其他认证方式的字段会移除。" => {
+            (
+                "将先备份此连接，再修复 Hub 本机地址、接入凭据和启用状态；保留超时、工具选择及其他可兼容设置。改用命令启动或其他认证方式的字段会移除。",
+                "Back up this connection, repair its local Hub address, access key and enabled state, and keep timeouts, tool selections and other compatible settings. Conflicting command-launch and authentication fields are removed.",
+            )
+        }
+        "此前的接入记录仍在，但客户端中的连接已不存在。点击“连接并检测”并确认，可重新添加连接。" => {
+            (
+                "此前的接入记录仍在，但客户端中的连接已不存在。点击“连接并检测”并确认，可重新添加连接。",
                 "Hub retains the previous connection record, but the entry is missing from the client. Preview and confirm the connection to add it again.",
             )
         }
@@ -351,7 +367,7 @@ fn default_client_feedback(tab: &NvwaTab, kind: &str) -> String {
     {
         return tr(
             tab.text,
-            "之前的本机接入授权未能安全恢复。请重新登录，再“预览接入”并确认一次；这与普通认证到期不同。",
+            "之前的本机接入授权未能安全恢复。请重新登录，再“连接并检测”并确认一次；这与普通认证到期不同。",
             "The previous local access grant could not be safely restored. Sign in, then preview and confirm the connection once. This differs from normal authentication expiry.",
         )
         .to_string();
@@ -367,12 +383,12 @@ fn default_client_feedback(tab: &NvwaTab, kind: &str) -> String {
     ) {
         (Some("authenticated"), true) => tr(
             tab.text,
-            "Hub 已保留此客户端接入，可直接“检测本机桥”；“检查”可核对客户端现有设置，无需重复接入。",
-            "Hub retained this client's access. Check the local bridge directly, or inspect the existing client settings; reconnecting is unnecessary.",
+            "Hub 已保留此客户端接入，点击“连接并检测”会自动核对设置并检测连接。",
+            "Hub retained this client's access. Connect and check verifies its settings and connection automatically.",
         ),
         (Some("expired" | "personal_expired" | "identity_verification_pending"), true) => tr(
             tab.text,
-            "Hub 已保留此客户端接入，无需重复预览。检测本机桥时会核验或续认证；未保存自动登录资料时，请先用原身份重新登录。",
+            "Hub 已保留此客户端接入，无需重复预览。连接并检测时会核验或续认证；未保存自动登录资料时，请先用原身份重新登录。",
             "Hub retained this client's access; another preview is unnecessary. A bridge check verifies or renews authentication. If automatic sign-in credentials were not saved, sign in with the original identity first.",
         ),
         (Some("login_pending"), true) => tr(
@@ -382,13 +398,13 @@ fn default_client_feedback(tab: &NvwaTab, kind: &str) -> String {
         ),
         (Some("authenticated"), false) => tr(
             tab.text,
-            "此客户端尚未取得当前身份的接入授权。可先“检查”现有配置，再“预览接入”并确认一次。",
-            "This client has no access grant for the current identity. Inspect its settings, then preview and confirm the connection once.",
+            "点击“连接并检测”即可接入并检测；需要保存连接时会直接显示确认。",
+            "Select Connect and check to connect and check. Setup confirmation opens automatically when needed.",
         ),
         _ => tr(
             tab.text,
-            "尚未检查，请点击“检查”读取此客户端的连接设置。",
-            "Not inspected. Select Inspect to read this client's connection settings.",
+            "登录成功后，选择客户端并点击“连接并检测”即可。",
+            "Sign in, choose a client, then select Connect and check.",
         ),
     };
     message.to_string()
@@ -452,7 +468,7 @@ fn sync_runtime_profile(tab: &NvwaTab, response: &Value) {
     if selected_changed {
         let status = tab.state.borrow().clients.get(selected_kind).cloned();
         if let Some(status) = status {
-            render_client_status(tab, selected_kind, status, false, false);
+            render_client_status(tab, selected_kind, status, false);
         } else {
             set_client_feedback(
                 tab,
@@ -507,7 +523,7 @@ fn select_client(tab: &NvwaTab) {
         tab.client.status.set_label(&feedback);
         tab.client.status.wrap(920);
     } else if let Some(status) = status {
-        render_client_status(tab, kind, status, false, false);
+        render_client_status(tab, kind, status, false);
     } else {
         set_client_feedback(tab, kind, &default_client_feedback(tab, kind));
     }
@@ -655,6 +671,45 @@ mod detection_summary_tests {
     use super::*;
 
     #[test]
+    fn cancellation_stays_available_during_browser_wait_but_hides_after_current_profile_signs_in() {
+        let mut state = Selection {
+            selected_id: Some("current".into()),
+            ..Selection::default()
+        };
+        assert!(!login_in_progress(&state));
+        state.active_login = true;
+        assert!(login_in_progress(&state));
+        state.active_login = false;
+        state.login_attempt = Some("fixture-attempt".into());
+        assert!(login_in_progress(&state));
+        state.runtime_profiles = vec![json!({"profileId":"other","state":"authenticated"})];
+        assert!(login_in_progress(&state));
+        state
+            .runtime_profiles
+            .push(json!({"profileId":"current","state":"authenticated"}));
+        assert!(!login_in_progress(&state));
+    }
+
+    #[test]
+    fn connection_previews_allow_repair_without_switching_to_destructive_actions() {
+        for operation in ["apply", "repair", "remove", "restore", "unknown"] {
+            assert_eq!(
+                preview_operation_allowed("apply", operation),
+                matches!(operation, "apply" | "repair")
+            );
+            assert_eq!(
+                preview_operation_allowed("remove", operation),
+                operation == "remove"
+            );
+            assert_eq!(
+                preview_operation_allowed("restore", operation),
+                operation == "restore"
+            );
+        }
+        assert!(!preview_operation_allowed("unknown", "apply"));
+    }
+
+    #[test]
     fn abbreviated_examples_keep_the_exact_total_and_show_the_omission() {
         let detection = crate::nvwa::discovery::compact_detection(
             crate::nvwa::discovery::catalog_result(
@@ -742,7 +797,12 @@ fn choice_row<W: WxWidget>(
 
 fn button<W: WxWidget>(parent: &W, row: &BoxSizer, title: &str) -> Button {
     let control = Button::builder(parent).with_label(title).build();
-    row.add(&control, 0, SizerFlag::Right, 8);
+    row.add(
+        &control,
+        0,
+        SizerFlag::AlignCenterVertical | SizerFlag::Right,
+        8,
+    );
     control
 }
 
@@ -947,6 +1007,21 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> NvwaTab {
         tr(text, "指定租户（可选）", "Specific tenant (optional)"),
         "",
     );
+    let client_path = text_field_row(
+        &addresses,
+        &addresses_grid,
+        tr(
+            text,
+            "客户端配置位置（自动查找）",
+            "Client settings location (automatic)",
+        ),
+        "",
+    );
+    client_path.set_tooltip(tr(
+        text,
+        "Hub 自动查找并核对所选客户端的配置。仅自定义安装位置需要手动填写；天工使用官方本机连接设置。",
+        "Hub locates and checks the selected client's settings automatically. Enter a path only for a custom location; TianGong uses its official local connection settings.",
+    ));
     addresses.set_sizer(addresses_grid, true);
     let (password_settings, password_settings_grid) = section(&content, &advanced_root);
     let unit = text_field_row(
@@ -1013,18 +1088,14 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> NvwaTab {
         16,
     );
     let commands = BoxSizer::builder(Orientation::Horizontal).build();
-    let reload = button(&page, &commands, tr(text, "刷新", "Refresh"));
     let save = button(&page, &commands, tr(text, "保存环境", "Save environment"));
-    let delete = button(&page, &commands, tr(text, "删除环境", "Delete environment"));
     let login = button(&page, &commands, tr(text, "登录 / 授权", "Sign in"));
     let cancel = button(&page, &commands, tr(text, "取消登录", "Cancel sign-in"));
     cancel.set_tooltip(tr(
         text,
-        "取消本次登录并暂时停用已有接入；原账号和租户重新登录成功后恢复连接。退出登录则撤销接入授权。",
-        "Cancel sign-in and suspend existing access until the same account and tenant sign in again. Sign out revokes access.",
+        "取消本次登录并暂时停用已有接入；原账号和租户重新登录成功后恢复连接。",
+        "Cancel sign-in and suspend existing access until the same account and tenant sign in again.",
     ));
-    let logout = button(&page, &commands, tr(text, "退出登录", "Sign out"));
-    let detect = button(&page, &commands, tr(text, "检测 MCP", "Check MCP"));
     root.add_sizer(
         &commands,
         0,
@@ -1058,108 +1129,64 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> NvwaTab {
             SizerFlag::AlignCenterVertical | SizerFlag::Right,
             14,
         );
-        let selector = Choice::builder(&page).build();
+        let selector = Choice::builder(&page).with_size(Size::new(210, -1)).build();
         for title in ["ChatGPT(Codex)", "WorkBuddy", "天工 Work"] {
             selector.append(title);
         }
         selector.set_selection(0);
         selector.set_tooltip(tr(
             text,
-            "选择要检查或接入的客户端；下方按钮和结果只对应当前选项。",
-            "Choose the client to inspect or connect. The buttons and result below apply only to the selected client.",
+            "选择要连接的客户端，然后点击右侧“连接并检测”。",
+            "Choose a client, then select Connect and check.",
         ));
-        selector_row.add(&selector, 1, SizerFlag::Expand, 0);
+        selector_row.add(
+            &selector,
+            0,
+            SizerFlag::AlignCenterVertical | SizerFlag::Right,
+            8,
+        );
+        let check = button(
+            &page,
+            &selector_row,
+            tr(text, "连接并检测", "Connect and check"),
+        );
+        check.set_tooltip(tr(
+            text,
+            "自动核对接入，必要时确认保存或修复，然后检测连接并显示工具概览。",
+            "Check settings automatically, confirm setup or repair when needed, then verify the connection and show the tool overview.",
+        ));
+        let manage = Button::builder(&page)
+            .with_label("⋯")
+            .with_style(ButtonStyle::ExactFit)
+            .with_size(Size::new(34, 30))
+            .build();
+        manage.set_tooltip(tr(
+            text,
+            "连接管理：断开当前客户端、撤销上次连接更改或删除当前环境。",
+            "Manage connections: disconnect this client, undo the last connection change, or delete this environment.",
+        ));
+        selector_row.add(&manage, 0, SizerFlag::AlignCenterVertical, 0);
         root.add_sizer(
             &selector_row,
             0,
             SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Bottom,
             16,
         );
-        let row_grid = FlexGridSizer::builder(0, 2)
-            .with_vgap(6)
-            .with_hgap(14)
-            .build();
-        row_grid.add_growable_col(1, 1);
-        let path = text_field_row(
-            &page,
-            &row_grid,
-            tr(text, "配置位置", "Settings location"),
-            "",
-        );
-        path.set_tooltip(tr(text, "留空自动查找客户端配置；天工使用官方本机连接设置。", "Leave blank to locate client settings automatically; TianGong uses its official local connection settings."));
-        root.add_sizer(
-            &row_grid,
-            0,
-            SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right,
-            16,
-        );
-        let client_commands = BoxSizer::builder(Orientation::Horizontal).build();
-        let inspect = button(&page, &client_commands, tr(text, "检查", "Inspect"));
-        inspect.set_tooltip(tr(
-            text,
-            "读取客户端的连接设置及 MCP 名称；要确认工具连通，请使用“检测本机桥”。",
-            "Read the client's connection settings and MCP name. Use Check local bridge to verify the tool connection.",
-        ));
-        let check = button(
-            &page,
-            &client_commands,
-            tr(text, "检测本机桥", "Check local bridge"),
-        );
-        check.set_tooltip(tr(
-            text,
-            "通过选中客户端的已接入连接读取工具清单，不执行工具；选中天工时成功后同步目录。",
-            "Read the tool list through the selected client's configured connection without invoking tools; also update TianGong's directory when selected.",
-        ));
-        let apply = button(
-            &page,
-            &client_commands,
-            tr(text, "预览接入", "Preview connection"),
-        );
-        apply.set_tooltip(tr(
-            text,
-            "查看将写入的 MCP 名称与设置，确认后添加或更新此客户端的 NVWA 连接。",
-            "Preview the MCP name and settings, then confirm to add or update this client's NVWA connection.",
-        ));
-        let remove = button(
-            &page,
-            &client_commands,
-            tr(text, "预览移除", "Preview removal"),
-        );
-        remove.set_tooltip(tr(
-            text,
-            "查看将移除的 NVWA 连接，确认后只删除 Hub 管理的这一项。",
-            "Preview the NVWA connection to remove, then confirm to delete only this Hub-managed entry.",
-        ));
-        let restore = button(
-            &page,
-            &client_commands,
-            tr(text, "预览恢复", "Preview restore"),
-        );
-        restore.set_tooltip(tr(
-            text,
-            "查看此连接最近一次修改前的备份，确认后还原；后续改动会阻止覆盖。",
-            "Preview the backup from before this connection's latest change, then confirm to restore; later changes prevent overwriting.",
-        ));
-        root.add_sizer(
-            &client_commands,
-            0,
-            SizerFlag::Left | SizerFlag::Right | SizerFlag::Top,
-            16,
-        );
         let status = StaticText::builder(&page)
-            .with_label(tr(text, "尚未检查", "Not inspected"))
+            .with_label(tr(
+                text,
+                "选择客户端后，点击“连接并检测”即可。",
+                "Choose a client, then select Connect and check.",
+            ))
             .build();
         status.wrap(920);
         root.add(&status, 0, SizerFlag::Expand | SizerFlag::All, 16);
         ClientControls {
             selector,
-            path,
+            path: client_path,
             status,
-            inspect,
             check,
-            apply,
-            remove,
-            restore,
+            manage,
         }
     };
     label(
@@ -1226,13 +1253,9 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> NvwaTab {
         status,
         identity,
         tools,
-        reload,
         save,
-        delete,
         login,
         cancel,
-        logout,
-        detect,
         send_factor,
         help,
         client,
@@ -1255,7 +1278,7 @@ const MAX_MANAGEMENT_RESPONSE_BYTES: u64 = 2 * 1024 * 1024;
 
 fn management_size_message(path: &str) -> String {
     if path == "/manage/tools/detect" {
-        "Hub 界面未能完整读取较大的检测结果；这不代表 MCP 连接失败。请刷新 Hub 后重新检测。".into()
+        "Hub 界面未能完整读取较大的检测结果；这不代表 MCP 连接失败。请再次点击“连接并检测”。".into()
     } else {
         "Hub 后台返回内容较大，界面未能完整读取结果。".into()
     }
@@ -1264,7 +1287,7 @@ fn management_size_message(path: &str) -> String {
 fn management_request(path: &str, body: Option<Value>) -> Result<Value, String> {
     let info = crate::nvwa::NvwaService::load_management_info(&config_path())
         .map_err(|_| "无法读取 NVWA 后台安全连接".to_string())?
-        .ok_or_else(|| "NVWA 后台尚未就绪，请刷新".to_string())?;
+        .ok_or_else(|| "NVWA 后台尚未就绪，请稍后重试".to_string())?;
     let url = url::Url::parse(&info.base_url).map_err(|_| "NVWA 后台地址无效".to_string())?;
     if url.scheme() != "http"
         || url.host_str() != Some("127.0.0.1")
@@ -1332,7 +1355,7 @@ fn start(
     path: &str,
     mut body: Option<Value>,
 ) {
-    if matches!(&action, Action::Detect | Action::DetectClient(_))
+    if matches!(&action, Action::DetectClient(_))
         && let Some(body) = body.as_mut()
     {
         body["summaryOnly"] = json!(true);
@@ -1378,11 +1401,11 @@ fn start(
             selected_client_kind(tab),
             tr(
                 tab.text,
-                "正在登录。成功后可检查现有客户端连接并检测本机桥。",
-                "Signing in. After success, inspect existing client settings and check the local bridge.",
+                "正在登录。成功后选择客户端，点击“连接并检测”即可。",
+                "Signing in. After success, choose a client and select Connect and check.",
             ),
         );
-    } else if matches!(action, Action::Cancel | Action::Logout) {
+    } else if matches!(action, Action::Cancel) {
         clear_client_results(tab);
         tab.tools.set_value("");
         tab.identity.set_label("");
@@ -1472,10 +1495,6 @@ pub(super) fn bind_actions(
         .on_selection_changed(move |_| update_secret_status(&t));
     let t = tab.clone();
     let sender = tx.clone();
-    tab.reload
-        .on_click(move |_| start(&t, &sender, Action::Refresh, "/manage/status", None));
-    let t = tab.clone();
-    let sender = tx.clone();
     let f = *frame;
     tab.save.on_click(move |_| {
         let state = t.state.borrow();
@@ -1528,16 +1547,6 @@ pub(super) fn bind_actions(
             "/manage/profile/save",
             Some(body),
         );
-    });
-    let t = tab.clone();
-    let sender = tx.clone();
-    let f = *frame;
-    tab.delete.on_click(move |_| {
-        if !confirm(&f, tr(text,"删除此环境及其本地授权？客户端受管条目应先移除。","Delete this environment and its local authorization? Remove managed client entries first.")) { return; }
-        let state = t.state.borrow();
-        let body = json!({"profileId":state.selected_id,"expectedRevision":config_revision(&state.config)});
-        drop(state);
-        start(&t, &sender, Action::Delete, "/manage/profile/delete", Some(body));
     });
     let t = tab.clone();
     let sender = tx.clone();
@@ -1608,33 +1617,17 @@ pub(super) fn bind_actions(
             );
         }
     });
-    for (control, path, action) in [
-        (tab.logout, "/manage/logout", Action::Logout),
-        (tab.cancel, "/manage/login/cancel", Action::Cancel),
-        (tab.detect, "/manage/tools/detect", Action::Detect),
-    ] {
-        let t = tab.clone();
-        let sender = tx.clone();
-        let f = *frame;
-        control.on_click(move |_| {
-            if matches!(action, Action::Detect) && !require_saved_form(&t, &f, text) {
-                return;
-            }
-            let body = json!({"profileId":t.state.borrow().selected_id});
-            start(&t, &sender, action.clone(), path, Some(body));
-        });
-    }
     let t = tab.clone();
     let sender = tx.clone();
-    tab.client.inspect.on_click(move |_| {
-        let kind = selected_client_kind(&t);
+    tab.cancel.on_click(move |_| {
+        let body = json!({"profileId":t.state.borrow().selected_id});
         start(
             &t,
             &sender,
-            Action::Inspect(kind.to_string()),
-            "/manage/client/inspect",
-            Some(client_body(&t, kind)),
-        )
+            Action::Cancel,
+            "/manage/login/cancel",
+            Some(body),
+        );
     });
     let t = tab.clone();
     let sender = tx.clone();
@@ -1647,48 +1640,20 @@ pub(super) fn bind_actions(
         start(
             &t,
             &sender,
-            Action::DetectClient(kind.to_string()),
-            "/manage/tools/detect",
+            Action::PrepareClient {
+                client: kind.to_string(),
+                body: client_body(&t, kind),
+            },
+            "/manage/client/prepare",
             Some(client_body(&t, kind)),
         );
     });
-    for (control, operation) in [
-        (tab.client.apply, "apply"),
-        (tab.client.remove, "remove"),
-        (tab.client.restore, "restore"),
-    ] {
-        let t = tab.clone();
-        let sender = tx.clone();
-        let f = *frame;
-        control.on_click(move |_| {
-            if !require_saved_form(&t, &f, text) {
-                return;
-            }
-            let kind = selected_client_kind(&t);
-            let mut body = client_body(&t, kind);
-            body["operation"] = json!(operation);
-            if let Some(backup) = t
-                .state
-                .borrow()
-                .clients
-                .get(kind)
-                .and_then(|v| v.get("backupRef"))
-            {
-                body["backupRef"] = backup.clone();
-            }
-            start(
-                &t,
-                &sender,
-                Action::Preview {
-                    client: kind.to_string(),
-                    operation: operation.to_string(),
-                    body: body.clone(),
-                },
-                "/manage/client/preview",
-                Some(body),
-            );
-        });
-    }
+    let t = tab.clone();
+    let sender = tx.clone();
+    let f = *frame;
+    tab.client
+        .manage
+        .on_click(move |_| show_connection_menu(&t, &f, text, &sender));
 }
 
 fn config_revision(config: &Value) -> &str {
@@ -1857,15 +1822,19 @@ pub(super) fn refresh_if_needed(
         return;
     }
     let mut state = tab.state.borrow_mut();
+    let retry_interval = if state.initial_refreshes < 3 {
+        Duration::from_secs(5)
+    } else {
+        Duration::from_secs(30)
+    };
     if state.snapshot_loaded
-        || state.initial_refreshes >= 3
         || state
             .last_refresh
-            .is_some_and(|last| last.elapsed() < Duration::from_secs(5))
+            .is_some_and(|last| last.elapsed() < retry_interval)
     {
         return;
     }
-    state.initial_refreshes += 1;
+    state.initial_refreshes = state.initial_refreshes.saturating_add(1);
     state.last_refresh = Some(Instant::now());
     drop(state);
     start(tab, tx, Action::Refresh, "/manage/status", None);
@@ -1880,6 +1849,132 @@ fn client_body(tab: &NvwaTab, kind: &str) -> Value {
     result
 }
 
+fn show_connection_menu(
+    tab: &NvwaTab,
+    frame: &Frame,
+    text: GuiText,
+    tx: &tokio::sync::mpsc::UnboundedSender<GuiMessage>,
+) {
+    if tab.busy.load(Ordering::SeqCst) || tab.state.borrow().selected_id.is_none() {
+        return;
+    }
+    const DISCONNECT: i32 = 15_201;
+    const RESTORE: i32 = 15_202;
+    const DELETE_ENVIRONMENT: i32 = 15_203;
+    let mut menu = Menu::builder()
+        .append_item(
+            DISCONNECT,
+            tr(text, "断开当前客户端…", "Disconnect this client…"),
+            tr(
+                text,
+                "移除当前环境在所选客户端中的受管连接，保留环境和其他客户端。",
+                "Remove this environment's managed entry from the selected client; keep the environment and other clients.",
+            ),
+        )
+        .append_item(
+            RESTORE,
+            tr(text, "撤销上次连接更改…", "Undo last connection change…"),
+            tr(
+                text,
+                "预览并恢复所选客户端最近一次连接更改前的备份。",
+                "Preview and restore the selected client's backup from before the last connection change.",
+            ),
+        )
+        .append_separator()
+        .append_item(
+            DELETE_ENVIRONMENT,
+            tr(text, "删除当前环境…", "Delete this environment…"),
+            tr(
+                text,
+                "删除 Hub 中当前环境的地址、已保存登录资料和授权；须先断开各客户端。",
+                "Delete this environment's URLs, saved credentials and access from Hub; disconnect its clients first.",
+            ),
+        )
+        .build();
+    let can_restore = tab
+        .state
+        .borrow()
+        .clients
+        .get(selected_client_kind(tab))
+        .and_then(|value| value["backupRef"].as_str())
+        .is_some();
+    menu.enable_item(RESTORE, can_restore);
+    let t = tab.clone();
+    let sender = tx.clone();
+    let f = *frame;
+    menu.on_selected(move |event| {
+        if t.busy.load(Ordering::SeqCst) || t.state.borrow().selected_id.is_none() {
+            return;
+        }
+        let operation = match event.get_id() {
+            DISCONNECT => "remove",
+            RESTORE => "restore",
+            DELETE_ENVIRONMENT => {
+                let state = t.state.borrow();
+                let name = state
+                    .profiles
+                    .iter()
+                    .find(|profile| profile["id"].as_str() == state.selected_id.as_deref())
+                    .and_then(|profile| profile["name"].as_str())
+                    .unwrap_or("NVWA")
+                    .to_string();
+                drop(state);
+                let message = match text.locale {
+                    GuiLocale::ZhCn => format!(
+                        "删除环境“{name}”？\n\n这会清理 Hub 中该环境的地址、已保存登录资料和全部接入授权。\n\n请先切换到各已接入客户端，通过“⋯ → 断开当前客户端”移除受管连接。"
+                    ),
+                    GuiLocale::EnUs => format!(
+                        "Delete environment “{name}”?\n\nThis removes its URLs, saved credentials and all local access grants from Hub.\n\nFirst select each connected client and use ⋯ → Disconnect this client to remove its managed entry."
+                    ),
+                };
+                if confirm(&f, &message) {
+                    let state = t.state.borrow();
+                    let body = json!({
+                        "profileId": state.selected_id,
+                        "expectedRevision": config_revision(&state.config),
+                    });
+                    drop(state);
+                    start(&t, &sender, Action::Delete, "/manage/profile/delete", Some(body));
+                }
+                return;
+            }
+            _ => return,
+        };
+        if !require_saved_form(&t, &f, text) {
+            return;
+        }
+        let kind = selected_client_kind(&t);
+        let mut body = client_body(&t, kind);
+        body["operation"] = json!(operation);
+        if let Some(backup) = t
+            .state
+            .borrow()
+            .clients
+            .get(kind)
+            .and_then(|value| value.get("backupRef"))
+        {
+            body["backupRef"] = backup.clone();
+        }
+        start(
+            &t,
+            &sender,
+            Action::Preview {
+                client: kind.to_string(),
+                operation: operation.to_string(),
+                body: body.clone(),
+                check_after: false,
+            },
+            "/manage/client/preview",
+            Some(body),
+        );
+    });
+    let position = tab
+        .client
+        .manage
+        .client_to_screen(Point::new(0, tab.client.manage.get_size().height));
+    tab.client.manage.popup_menu(&mut menu, Some(position));
+}
+
 fn confirm(frame: &Frame, message: &str) -> bool {
     MessageDialog::builder(frame, message, "Dumpling-MCP")
         .with_style(MessageDialogStyle::YesNo | MessageDialogStyle::IconQuestion)
@@ -1892,33 +1987,33 @@ fn configuration_help(text: GuiText) -> &'static str {
     tr(
         text,
         concat!(
-            "1. 填写环境\n填写环境名称和 NVWA 服务地址。Codex、WorkBuddy、天工中的 MCP 都使用已保存的环境名称，支持 1～64 位英文字母、数字、- 或 _，例如 MCP196；各客户端的旧名称可通过“预览接入”并确认更新。MCP 默认 /mcp，可在高级设置改路径或完整地址；路径跟随服务地址的部署前缀。认证服务单独部署时，再填写独立认证地址。\n\n",
+            "1. 填写环境\n填写环境名称和 NVWA 服务地址。Codex、WorkBuddy、天工中的 MCP 都使用已保存的环境名称，支持 1～64 位英文字母、数字、- 或 _，例如 MCP196；各客户端的旧名称可通过“连接并检测”并确认更新。MCP 默认 /mcp，可在高级设置改路径或完整地址；路径跟随服务地址的部署前缀。认证服务单独部署时，再填写独立认证地址。\n\n",
             "2. 选择登录方式\n账号密码：填写账号和密码，收到验证码要求后再填写验证码；改密或图形验证码按服务提示处理。密码在页面直接显示。\n",
             "认证服务连接：在认证服务管理添加应用服务，获取ClientID和ClientSecret。填写这两个值，ClientSecret 在页面直接显示。默认勾选共享应用，填写要代表的账号；应用为该账号申请连接，不验证个人密码。没有应用管理权限时，请向管理员获取应用资料。\n\n",
             "3. 浏览器授权（可选）\n取消共享应用勾选后，用同一组 ClientID/ClientSecret，在打开的产品页面完成个人登录和授权。应用还须允许 Hub 的本机回调地址。高级“限定授权账号”可留空，填写时须与实际授权账号一致。旧浏览器环境保持此方式。\n\n",
             "4. 登录后确认账号与租户\n先保存环境，再点击“登录 / 授权”。成功后显示服务实际返回的账号和租户；__default_tenant__ 表示默认租户。高级指定租户通常可留空。登录未成功时，先处理登录提示，再检测 MCP。\n\n",
-            "5. 检测并接入\n“检测 MCP”读取可用工具清单。下拉选择 ChatGPT(Codex)、WorkBuddy 或天工 Work，三个客户端共用下方按钮和一处反馈，操作只针对当前选项。首次接入点击“预览接入”，确认环境与保存位置后点“是”添加；已接入可直接“检测本机桥”，也可先“检查”现有配置。保存后刷新客户端或重开会话，并按客户端提示确认使用；天工先检测这条连接，再开始下一轮对话。工具是否能执行，在客户端中确认。\n\n",
+            "5. 连接客户端\n选择 ChatGPT(Codex)、WorkBuddy 或天工 Work，点击“连接并检测”。Hub 自动查找并核对配置，需要接入或修复时显示一次确认，保存后继续检测并显示工具数量与用途概览。已有连接正常时直接检测。右侧“⋯”仅保留连接管理：断开当前客户端只移除该端连接，保留环境及其他客户端；撤销上次连接更改按备份恢复；删除当前环境会清理 Hub 保存的整套环境资料，须先断开各客户端。自定义配置位置在高级设置中，通常无需填写。保存后刷新客户端或重开会话，并按客户端提示确认使用；天工从下一轮对话使用。工具是否能执行，在客户端中确认。\n\n",
             "共享应用勾选切换会保留 ClientID、ClientSecret 和保存密钥选项，取消当前登录并暂时停用旧连接；保存后重新登录，认证目标和真实身份一致时恢复原连接。主认证下拉切换会清空旧方式的输入。\n",
             "“保存应用密钥”在新环境默认关闭；勾选后点击“保存环境”就保存 ClientSecret，无需先登录成功。已保存环境会恢复勾选，并在选择、刷新或重新打开时将 ClientSecret 明文显示在输入框中；填写新值并保存可替换。环境设置改变时需要重新填写。取消勾选并保存环境会删除保存的应用密钥。密钥仍由系统保护存储，不写入普通配置。\n",
             "“记住密码”仍只在登录成功后保存密码，之后选择、刷新或重新打开环境会明文回显。登录成功后保留本次输入的密码或 ClientSecret；未勾选保存的值只保留在本次页面中。HTTP 401 表示服务拒绝了该步请求；请按提示中的失败步骤核对，保存密钥不代表登录成功。\n\n",
             "6. 有效期与自动重新认证\nClientID + ClientSecret 取票换得的凭证默认固定 24 小时，调用不会延长；认证服务应用的 tokenValidTime 可覆盖。服务返回准确时间时显示到期时间（UTC）和剩余时间，没有返回时只说明默认规则。账号密码登录默认闲置 30 分钟超时，正常认证访问可延长；连续使用不会仅因登录已过 30 分钟被 Hub 判定到期，实际是否有效由服务判断。\n",
             "账号密码需勾选“记住密码”并成功登录；共享应用需勾选“保存应用密钥”并保存环境，再成功登录。认证过期后，Hub 会在下次检测、接入或客户端请求前使用已保存资料获取新认证，保持原账号与租户及已有客户端连接。无需一直打开此页，也不按固定周期提前登录。\n",
-            "客户端连接的是 Hub，保存的本机接入凭据与上游会过期的登录 token 分开。手动重新登录或取消登录时已有接入暂时停用；服务确认同一账号身份和租户后自动恢复，无需再次预览接入。Hub 正常重启后由客户端重新建立连接会话，不重写接入设置。只有首次接入、退出登录、认证目标或真实身份变化、接入凭据无法安全恢复时才需要重新预览确认；只改环境名称或更新同一认证目标的保存密钥不应撤销原接入。\n",
+            "客户端连接的是 Hub，保存的本机接入凭据与上游会过期的登录 token 分开。手动重新登录或取消登录时已有接入暂时停用；服务确认同一账号身份和租户后自动恢复。Hub 正常重启后由客户端重新建立连接会话。首次接入、断开或撤销后重新接入、认证目标或真实身份变化、接入凭据无法安全恢复时，“连接并检测”会显示确认；只改环境名称或更新同一认证目标的保存密钥不应撤销原接入。\n",
             "已经发送的操作如果收到认证拒绝，不会自动重新执行；下次请求才使用新认证。重新认证失败后至少间隔一分钟才自动重试，手动登录可立即进行。验证码、双因子、改密或个人浏览器授权仍需手动完成。"
         ),
         concat!(
-            "1. Environment\nEnter a name and the NVWA service URL. Codex, WorkBuddy and TianGong use the saved environment name for MCP: 1–64 letters, numbers, - or _, for example MCP196. Select Preview connection and confirm in each client to update a previous name. MCP defaults to /mcp; edit its path or full URL in advanced settings. Paths preserve the service deployment prefix. Set a separate authentication URL only if deployed separately.\n\n",
+            "1. Environment\nEnter a name and the NVWA service URL. Codex, WorkBuddy and TianGong use the saved environment name for MCP: 1–64 letters, numbers, - or _, for example MCP196. Select Connect and check and confirm in each client to update a previous name. MCP defaults to /mcp; edit its path or full URL in advanced settings. Paths preserve the service deployment prefix. Set a separate authentication URL only if deployed separately.\n\n",
             "2. Sign-in method\nAccount and password: enter both, then complete any requested verification. Follow service instructions for password changes or captcha. Password input is visible.\n",
             "Authentication service connection: add an application service in authentication service management to obtain ClientID and ClientSecret. Enter both; ClientSecret input is visible. Shared application delegation is checked by default; enter the account to represent. This requests access for that account without validating its password. Obtain application settings from your administrator if needed.\n\n",
             "3. Browser authorization (optional)\nUncheck shared delegation and use the same ClientID/ClientSecret to sign in and authorize on the product page. The application must allow Hub's local callback. A restricted username in advanced settings is optional and must match the authorized account if set. Existing browser profiles keep this method.\n\n",
             "4. Check account and tenant\nSave, then select Sign in. After success, Hub shows the returned account and tenant. __default_tenant__ is the default tenant. Specific tenant can usually be left blank. Resolve sign-in errors before checking MCP.\n\n",
-            "5. Check and connect\nCheck MCP reads the available tools. Choose ChatGPT(Codex), WorkBuddy or TianGong Claw from the dropdown; the shared buttons and single result apply only to that client. For first setup, preview the connection, review the environment and save location, then select Yes to add it. Existing connections can use Check local bridge directly, or Inspect to read their settings first. Refresh or reopen the client session and follow its confirmation prompts. For TianGong, check the connection first and start a new conversation turn. Verify actual tool use in the client.\n\n",
+            "5. Connect a client\nChoose ChatGPT(Codex), WorkBuddy or TianGong Work, then select Connect and check. Hub locates and checks settings automatically and opens one confirmation if setup or repair is needed. After saving it checks the connection and shows tool counts and purposes. Working connections are checked directly. The ⋯ menu contains maintenance only: disconnect this client keeps the environment and other clients; undo restores the last connection backup; delete this environment removes its saved details from Hub after its clients are disconnected. Custom settings paths are in advanced settings and can usually be left blank. Refresh or reopen the client session and follow its confirmation prompts; TianGong uses the connection from the next turn. Verify actual tool use in the client.\n\n",
             "Toggling shared delegation keeps ClientID, ClientSecret and Save application secret, and cancels sign-in while suspending existing access. Save and sign in again; the same authentication target and verified identity restore the connection. Switching the main sign-in dropdown clears the previous inputs.\n",
             "Save application secret defaults to off for new environments. Check it and select Save environment to store ClientSecret immediately, even before successful sign-in. Selecting, refreshing or reopening a saved environment restores the checkbox and shows its saved ClientSecret as plain text in the input. Enter a new value and save to replace it. Changed environment settings require entering it again. Uncheck and save to remove the stored application secret. System-protected storage is still used; the secret is not written to ordinary configuration.\n",
             "Remember password still stores the password only after successful sign-in. Selecting, refreshing or reopening the environment then shows the saved password as plain text. Successful sign-in keeps the current password or ClientSecret in the input; unsaved values remain only in the current form. HTTP 401 means the service rejected that request step; check the named step. Saving a secret does not sign you in.\n\n",
             "6. Validity and automatic renewal\nClientID + ClientSecret ticket tokens default to a fixed 24 hours; calls do not extend them. The application's tokenValidTime can override this. Hub shows the expiry time (UTC) and remaining time when supplied by the service; otherwise it explains the default rule. Password sign-in defaults to a 30-minute idle timeout, extended by normal authenticated access. Hub does not expire an actively used session merely because 30 minutes have passed since sign-in; the service decides whether it is valid.\n",
             "For password sign-in, enable Remember password and sign in successfully. For a shared application, enable Save application secret, save the environment and sign in successfully. After expiry, Hub uses the saved credentials before the next check, connection or client request, preserving the account, tenant and existing client connections. This page need not stay open; Hub does not sign in early on a timer.\n",
-            "Clients connect to Hub using a local access key, separate from the expiring upstream login token. Manual sign-in or cancellation suspends existing access; it restores when the service verifies the same account identity and tenant, without another preview. After a normal Hub restart, clients rebuild their sessions without rewriting settings. Preview and confirm again only after first setup, sign-out, authentication target or identity changes, or unrecoverable local credentials. Renaming an environment or updating saved credentials for the same authentication target should not revoke access.\n",
+            "Clients connect to Hub using a local access key, separate from the expiring upstream login token. Manual sign-in or cancellation suspends existing access; it restores when the service verifies the same account identity and tenant. After a normal Hub restart, clients rebuild their sessions. Connect and check asks for confirmation at first setup, reconnection after disconnecting or undoing a change, authentication target or identity changes, or unrecoverable local credentials. Renaming an environment or updating saved credentials for the same authentication target should not revoke access.\n",
             "An operation already sent when authentication is rejected is not replayed; the next request can use renewed credentials. Failed automatic renewal waits at least one minute before another attempt; manual sign-in is available immediately. Captcha, two-factor verification, password changes and personal browser authorization require manual completion."
         ),
     )
@@ -1961,30 +2056,32 @@ pub(super) fn apply_result(
         Err(error) => {
             let message = display_message(text, &error);
             if result.action.client_kind().is_none() {
-                tab.status.set_label(&message);
+                let status = if matches!(result.action, Action::Refresh)
+                    && !tab.state.borrow().snapshot_loaded
+                {
+                    format!(
+                        "{message}\n{}",
+                        tr(
+                            text,
+                            "Hub 会自动重试读取状态。",
+                            "Hub will retry loading the status automatically.",
+                        )
+                    )
+                } else {
+                    message.clone()
+                };
+                tab.status.set_label(&status);
                 tab.status.wrap(920);
             }
             match &result.action {
-                Action::Inspect(kind) => show_client_failure(
-                    tab,
-                    kind,
-                    tr(
-                        text,
-                        "客户端配置检查未完成",
-                        "Client settings check did not complete",
-                    ),
-                    &message,
-                ),
-                Action::DetectClient(kind) => show_client_failure(
-                    tab,
-                    kind,
-                    tr(
-                        text,
-                        "本机桥检测未完成",
-                        "Local bridge check did not complete",
-                    ),
-                    &message,
-                ),
+                Action::DetectClient(kind) | Action::PrepareClient { client: kind, .. } => {
+                    show_client_failure(
+                        tab,
+                        kind,
+                        tr(text, "连接未完成", "Connection incomplete"),
+                        &message,
+                    )
+                }
                 Action::Preview { client, .. } => show_client_failure(
                     tab,
                     client,
@@ -1995,7 +2092,7 @@ pub(super) fn apply_result(
                     ),
                     &message,
                 ),
-                Action::Mutate(kind) => show_client_failure(
+                Action::Mutate { client: kind, .. } => show_client_failure(
                     tab,
                     kind,
                     tr(
@@ -2153,7 +2250,7 @@ pub(super) fn apply_result(
                 start(tab, tx, Action::RefreshAfterLogin, "/manage/status", None);
             }
         }
-        Action::Logout | Action::Cancel => {
+        Action::Cancel => {
             clear_login_material(tab);
             tab.tools.set_value("");
             tab.state.borrow_mut().twofactor_session = None;
@@ -2162,28 +2259,6 @@ pub(super) fn apply_result(
         }
         Action::ResetAuthentication => {
             tab.status.set_label("");
-        }
-        Action::Detect => {
-            tab.tools.set_value(&tool_catalog_text(text, &value));
-            let kind = selected_client_kind(tab);
-            let has_access = runtime_client_access(&value["runtimeProfile"], kind).0;
-            let next_step = if has_access {
-                tr(
-                    text,
-                    "当前所选客户端已有本机接入授权，可直接“检测本机桥”，无需重复预览接入。",
-                    "The selected client has a local access grant. Check its local bridge without another connection preview.",
-                )
-            } else {
-                tr(
-                    text,
-                    "可在下方选择客户端并“检查”现有设置；首次接入再预览确认。",
-                    "Choose a client below and inspect its settings; preview and confirm for first setup.",
-                )
-            };
-            tab.status.set_label(&format!(
-                "{} {next_step}",
-                catalog_connection_text(text, &value, false)
-            ));
         }
         Action::DetectClient(kind) => {
             tab.tools.set_value(&tool_catalog_text(text, &value));
@@ -2256,201 +2331,74 @@ pub(super) fn apply_result(
                     .unwrap_or("Verification code requested"),
             ));
         }
-        Action::Inspect(kind) => {
-            let value = value.get("status").cloned().unwrap_or(value);
-            apply_client(tab, &kind, value, true);
+        Action::PrepareClient { client, body } => {
+            if value["readyForDetection"] == true {
+                if let Some(status) = value.get("status") {
+                    apply_client(tab, &client, status.clone());
+                }
+                start(
+                    tab,
+                    tx,
+                    Action::DetectClient(client),
+                    "/manage/tools/detect",
+                    Some(body),
+                );
+            } else {
+                show_client_preview(
+                    tab,
+                    frame,
+                    text,
+                    tx,
+                    client,
+                    "apply".into(),
+                    body,
+                    &value["preview"],
+                    true,
+                );
+            }
         }
-        Action::Mutate(kind) => {
+        Action::Mutate {
+            client: kind,
+            check_after,
+        } => {
             let value = value.get("status").cloned().unwrap_or(value);
-            apply_client(tab, &kind, value, false);
+            apply_client(tab, &kind, value);
+            if let Some(body) = check_after {
+                set_client_feedback(
+                    tab,
+                    &kind,
+                    tr(
+                        text,
+                        "连接已保存，正在连接并检测…",
+                        "Connection saved; checking the local bridge…",
+                    ),
+                );
+                start(
+                    tab,
+                    tx,
+                    Action::DetectClient(kind),
+                    "/manage/tools/detect",
+                    Some(body),
+                );
+            }
         }
         Action::Preview {
             client,
             operation,
-            mut body,
+            body,
+            check_after,
         } => {
-            let fingerprint = value
-                .get("targetFingerprint")
-                .or_else(|| value.get("target_fingerprint"))
-                .or_else(|| value.pointer("/status/targetFingerprint"))
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            let allowed = value
-                .get("canApply")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            let detail = value
-                .pointer("/status/detail")
-                .or_else(|| value.get("detail"))
-                .and_then(Value::as_str)
-                .unwrap_or("无法取得客户端预览详情");
-            if !allowed || fingerprint.is_empty() {
-                let message = if allowed {
-                    tr(
-                        text,
-                        "未取得最新客户端配置，暂时无法保存。请重新检查，再预览接入。",
-                        "The latest client settings were not returned, so saving is unavailable. Inspect the client and preview the connection again.",
-                    )
-                    .to_string()
-                } else {
-                    display_message(text, detail)
-                };
-                if let Some(status) = value.get("status") {
-                    apply_client(tab, &client, status.clone(), false);
-                }
-                show_client_failure(
-                    tab,
-                    &client,
-                    tr(text, "此次预览无法继续保存", "This preview cannot be saved"),
-                    &message,
-                );
-            } else {
-                let target_path = value
-                    .pointer("/status/targetPath")
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
-                let warnings = value["warnings"]
-                    .as_array()
-                    .map(|items| {
-                        items
-                            .iter()
-                            .filter_map(Value::as_str)
-                            .map(|message| display_message(text, message))
-                            .collect::<Vec<_>>()
-                            .join("\n")
-                    })
-                    .unwrap_or_default();
-                let client_name = client_title(&client);
-                let environment = tab.name.get_value();
-                let mcp_name = if operation == "apply" {
-                    value
-                        .pointer("/status/desiredServerName")
-                        .or_else(|| value.get("desiredServerName"))
-                        .and_then(Value::as_str)
-                } else {
-                    None
-                }
-                .or_else(|| {
-                    value
-                        .pointer("/status/serverName")
-                        .or_else(|| value.get("serverName"))
-                        .and_then(Value::as_str)
-                })
-                .filter(|name| !name.trim().is_empty())
-                .unwrap_or(tr(text, "服务未返回名称", "Name was not returned"));
-                let name_change = if operation == "apply" {
-                    value
-                        .pointer("/status/previousServerName")
-                        .or_else(|| value.get("previousServerName"))
-                        .and_then(Value::as_str)
-                        .filter(|name| !name.trim().is_empty() && *name != mcp_name)
-                        .map(|previous| match (text.locale, value.pointer("/status/present").and_then(Value::as_bool)) {
-                            (GuiLocale::ZhCn, Some(false)) => format!(
-                                "\n历史名称：{previous}（客户端中已缺失）；确认后按上方 MCP 名称重新添加。"
-                            ),
-                            (GuiLocale::EnUs, Some(false)) => format!(
-                                "\nPrevious name: {previous} (missing from the client); confirmation adds the MCP name above."
-                            ),
-                            (GuiLocale::ZhCn, _) => format!(
-                                "\n当前名称：{previous}；确认后更新为上方 MCP 名称。"
-                            ),
-                            (GuiLocale::EnUs, _) => format!(
-                                "\nCurrent name: {previous}; confirmation updates it to the MCP name above."
-                            ),
-                        })
-                        .unwrap_or_default()
-                } else {
-                    String::new()
-                };
-                let (introduction, decision) = match operation.as_str() {
-                    "apply" => (
-                        match text.locale {
-                            GuiLocale::ZhCn => {
-                                format!("将把“{environment}”的 NVWA 工具连接添加到 {client_name}。")
-                            }
-                            GuiLocale::EnUs => {
-                                format!("Add the NVWA tools for '{environment}' to {client_name}.")
-                            }
-                        },
-                        tr(
-                            text,
-                            "点击“是”保存连接；点击“否”取消。",
-                            "Select Yes to save the connection, or No to cancel.",
-                        ),
-                    ),
-                    "remove" => (
-                        match text.locale {
-                            GuiLocale::ZhCn => format!(
-                                "将从 {client_name} 移除“{environment}”的 NVWA 工具连接，移除后该连接将不能使用。"
-                            ),
-                            GuiLocale::EnUs => format!(
-                                "Remove the NVWA connection for '{environment}' from {client_name}. This connection will no longer be usable."
-                            ),
-                        },
-                        tr(
-                            text,
-                            "点击“是”移除连接；点击“否”取消。",
-                            "Select Yes to remove the connection, or No to cancel.",
-                        ),
-                    ),
-                    "restore" => (
-                        match text.locale {
-                            GuiLocale::ZhCn => format!(
-                                "将把 {client_name} 中“{environment}”的 NVWA 连接设置恢复到 Hub 修改前的备份，恢复后需要重新接入。"
-                            ),
-                            GuiLocale::EnUs => format!(
-                                "Restore the backed-up settings from before Hub changed the NVWA connection for '{environment}' in {client_name}. Reconnect afterwards."
-                            ),
-                        },
-                        tr(
-                            text,
-                            "点击“是”恢复备份；点击“否”取消。",
-                            "Select Yes to restore the backup, or No to cancel.",
-                        ),
-                    ),
-                    _ => return,
-                };
-                let target = if target_path.is_empty() {
-                    tr(
-                        text,
-                        "保存位置：天工中的 MCP 连接设置",
-                        "Save location: TianGong MCP connection settings",
-                    )
-                    .to_string()
-                } else {
-                    format!(
-                        "{}\n{target_path}",
-                        tr(text, "配置文件：", "Configuration file:")
-                    )
-                };
-                let detail = display_message(text, detail);
-                let message = format!(
-                    "{introduction}\n\n{}{mcp_name}{name_change}\n{target}\n\n{detail}\n{warnings}\n\n{decision}",
-                    tr(text, "MCP 名称：", "MCP name: "),
-                );
-                if confirm(frame, &message) {
-                    body["expectedFingerprint"] = json!(fingerprint);
-                    if let Some(backup) = value
-                        .pointer("/status/backupRef")
-                        .or_else(|| value.get("backupRef"))
-                    {
-                        body["backupRef"] = backup.clone();
-                    }
-                    start(
-                        tab,
-                        tx,
-                        Action::Mutate(client),
-                        &format!("/manage/client/{operation}"),
-                        Some(body),
-                    );
-                } else {
-                    set_client_feedback(
-                        tab,
-                        &client,
-                        tr(text, "已取消配置修改。", "Settings change cancelled."),
-                    );
-                }
-            }
+            show_client_preview(
+                tab,
+                frame,
+                text,
+                tx,
+                client,
+                operation,
+                body,
+                &value,
+                check_after,
+            );
         }
     }
     update_controls(tab);
@@ -2458,6 +2406,245 @@ pub(super) fn apply_result(
     tab.identity.wrap(920);
     tab.page.layout();
     tab.page.fit_inside();
+}
+
+fn preview_operation_allowed(requested: &str, returned: &str) -> bool {
+    match requested {
+        "apply" => matches!(returned, "apply" | "repair"),
+        "remove" => returned == "remove",
+        "restore" => returned == "restore",
+        _ => false,
+    }
+}
+
+fn show_client_preview(
+    tab: &NvwaTab,
+    frame: &Frame,
+    text: GuiText,
+    tx: &tokio::sync::mpsc::UnboundedSender<GuiMessage>,
+    client: String,
+    requested: String,
+    mut body: Value,
+    value: &Value,
+    check_after: bool,
+) {
+    let operation = value["operation"]
+        .as_str()
+        .unwrap_or(&requested)
+        .to_string();
+    if !preview_operation_allowed(&requested, &operation) {
+        show_client_failure(
+            tab,
+            &client,
+            tr(text, "接入未完成", "Connection incomplete"),
+            tr(
+                text,
+                "预览结果不属于本次操作，请重试。",
+                "The preview does not match this operation. Try again.",
+            ),
+        );
+        return;
+    }
+    let fingerprint = value
+        .get("targetFingerprint")
+        .or_else(|| value.get("target_fingerprint"))
+        .or_else(|| value.pointer("/status/targetFingerprint"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let allowed = value
+        .get("canApply")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let detail = value
+        .pointer("/status/detail")
+        .or_else(|| value.get("detail"))
+        .and_then(Value::as_str)
+        .unwrap_or("无法取得客户端预览详情");
+    if !allowed || fingerprint.is_empty() {
+        let message = if allowed {
+            tr(
+                text,
+                "未取得最新客户端配置，请再次点击“连接并检测”。",
+                "The latest client settings were not returned. Select Connect and check again.",
+            )
+            .to_string()
+        } else {
+            display_message(text, detail)
+        };
+        if let Some(status) = value.get("status") {
+            apply_client(tab, &client, status.clone());
+        }
+        show_client_failure(
+            tab,
+            &client,
+            tr(text, "连接需要处理", "Connection needs attention"),
+            &message,
+        );
+    } else {
+        let target_path = value
+            .pointer("/status/targetPath")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let warnings = value["warnings"]
+            .as_array()
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(|message| display_message(text, message))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default();
+        let client_name = client_title(&client);
+        let environment = tab.name.get_value();
+        let mcp_name = if matches!(operation.as_str(), "apply" | "repair") {
+            value
+                .pointer("/status/desiredServerName")
+                .or_else(|| value.get("desiredServerName"))
+                .and_then(Value::as_str)
+        } else {
+            None
+        }
+        .or_else(|| {
+            value
+                .pointer("/status/serverName")
+                .or_else(|| value.get("serverName"))
+                .and_then(Value::as_str)
+        })
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or(tr(text, "服务未返回名称", "Name was not returned"));
+        let name_change = if matches!(operation.as_str(), "apply" | "repair") {
+            value
+                .pointer("/status/previousServerName")
+                .or_else(|| value.get("previousServerName"))
+                .and_then(Value::as_str)
+                .filter(|name| !name.trim().is_empty() && *name != mcp_name)
+                .map(|previous| match (text.locale, value.pointer("/status/present").and_then(Value::as_bool)) {
+                    (GuiLocale::ZhCn, Some(false)) => format!(
+                        "\n历史名称：{previous}（客户端中已缺失）；确认后按上方 MCP 名称重新添加。"
+                    ),
+                    (GuiLocale::EnUs, Some(false)) => format!(
+                        "\nPrevious name: {previous} (missing from the client); confirmation adds the MCP name above."
+                    ),
+                    (GuiLocale::ZhCn, _) => format!(
+                        "\n当前名称：{previous}；确认后更新为上方 MCP 名称。"
+                    ),
+                    (GuiLocale::EnUs, _) => format!(
+                        "\nCurrent name: {previous}; confirmation updates it to the MCP name above."
+                    ),
+                })
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let (introduction, decision) = match operation.as_str() {
+            "repair" => (
+                match text.locale {
+                    GuiLocale::ZhCn => {
+                        format!("将备份并修复 {client_name} 中“{environment}”的工具连接。")
+                    }
+                    GuiLocale::EnUs => format!(
+                        "Back up and repair the tool connection for '{environment}' in {client_name}."
+                    ),
+                },
+                tr(
+                    text,
+                    "点击“是”修复并自动检测；点击“否”取消。",
+                    "Select Yes to repair and check automatically, or No to cancel.",
+                ),
+            ),
+            "apply" => (
+                match text.locale {
+                    GuiLocale::ZhCn => {
+                        format!("将把“{environment}”的 NVWA 工具连接添加到 {client_name}。")
+                    }
+                    GuiLocale::EnUs => {
+                        format!("Add the NVWA tools for '{environment}' to {client_name}.")
+                    }
+                },
+                tr(
+                    text,
+                    "点击“是”保存并自动检测；点击“否”取消。",
+                    "Select Yes to save and check automatically, or No to cancel.",
+                ),
+            ),
+            "remove" => (
+                match text.locale {
+                    GuiLocale::ZhCn => format!(
+                        "将断开 {client_name} 中“{environment}”的 NVWA 工具连接，并撤销该端接入授权。\n环境资料和其他客户端连接保留。"
+                    ),
+                    GuiLocale::EnUs => format!(
+                        "Disconnect the NVWA connection for '{environment}' in {client_name} and revoke that client's access.\nKeep the environment and other client connections."
+                    ),
+                },
+                tr(
+                    text,
+                    "点击“是”断开连接；点击“否”取消。",
+                    "Select Yes to disconnect, or No to cancel.",
+                ),
+            ),
+            "restore" => (
+                match text.locale {
+                    GuiLocale::ZhCn => format!(
+                        "将把 {client_name} 中“{environment}”的 NVWA 连接设置恢复到 Hub 修改前的备份，恢复后需要重新接入。"
+                    ),
+                    GuiLocale::EnUs => format!(
+                        "Restore the backed-up settings from before Hub changed the NVWA connection for '{environment}' in {client_name}. Reconnect afterwards."
+                    ),
+                },
+                tr(
+                    text,
+                    "点击“是”恢复备份；点击“否”取消。",
+                    "Select Yes to restore the backup, or No to cancel.",
+                ),
+            ),
+            _ => return,
+        };
+        let target = if target_path.is_empty() {
+            tr(
+                text,
+                "保存位置：天工中的 MCP 连接设置",
+                "Save location: TianGong MCP connection settings",
+            )
+            .to_string()
+        } else {
+            format!(
+                "{}\n{target_path}",
+                tr(text, "配置文件：", "Configuration file:")
+            )
+        };
+        let detail = display_message(text, detail);
+        let message = format!(
+            "{introduction}\n\n{}{mcp_name}{name_change}\n{target}\n\n{detail}\n{warnings}\n\n{decision}",
+            tr(text, "MCP 名称：", "MCP name: "),
+        );
+        if confirm(frame, &message) {
+            body["expectedFingerprint"] = json!(fingerprint);
+            if let Some(backup) = value
+                .pointer("/status/backupRef")
+                .or_else(|| value.get("backupRef"))
+            {
+                body["backupRef"] = backup.clone();
+            }
+            start(
+                tab,
+                tx,
+                Action::Mutate {
+                    client,
+                    check_after: check_after.then(|| body.clone()),
+                },
+                &format!("/manage/client/{operation}"),
+                Some(body),
+            );
+        } else {
+            set_client_feedback(
+                tab,
+                &client,
+                tr(text, "已取消配置修改。", "Settings change cancelled."),
+            );
+        }
+    }
 }
 
 fn show_client_failure(tab: &NvwaTab, kind: &str, title: &str, message: &str) {
@@ -2469,17 +2656,11 @@ fn show_client_failure(tab: &NvwaTab, kind: &str, title: &str, message: &str) {
     }
 }
 
-fn apply_client(tab: &NvwaTab, kind: &str, value: Value, inspected: bool) {
-    render_client_status(tab, kind, value, inspected, true);
+fn apply_client(tab: &NvwaTab, kind: &str, value: Value) {
+    render_client_status(tab, kind, value, true);
 }
 
-fn render_client_status(
-    tab: &NvwaTab,
-    kind: &str,
-    value: Value,
-    inspected: bool,
-    update_path: bool,
-) {
+fn render_client_status(tab: &NvwaTab, kind: &str, value: Value, update_path: bool) {
     let detail = value
         .get("detail")
         .and_then(Value::as_str)
@@ -2513,40 +2694,48 @@ fn render_client_status(
     let load = if value["available"].as_bool() == Some(false) {
         tr(
             tab.text,
-            "下一步：先打开并连接客户端，再点击“检查”。",
-            "Next: open and connect the client, then select Inspect.",
+            "下一步：先打开并连接客户端，再点击“连接并检测”。",
+            "Next: open and connect the client, then select Connect and check.",
+        )
+    } else if value["repairable"].as_bool() == Some(true)
+        && value["modified"].as_bool() == Some(true)
+    {
+        tr(
+            tab.text,
+            "下一步：点击“连接并检测”，确认后备份并修复，再自动检测。",
+            "Next: select Connect and check to back up, repair and check after confirmation.",
         )
     } else if value["modified"].as_bool() == Some(true)
         || value["nameConflict"].as_bool() == Some(true)
     {
         tr(
             tab.text,
-            "下一步：按上方提示核对连接，再点击“检查”；本次未覆盖现有设置。",
-            "Next: review the connection as described above, then select Inspect. Existing settings were preserved.",
+            "下一步：按上方提示核对连接，再点击“连接并检测”自动复查。",
+            "Next: review the connection as described above, then select Connect and check to verify it again.",
         )
     } else if access_suspended {
         tr(
             tab.text,
-            "下一步：完成原账号和租户的登录；同身份登录成功后原接入授权会恢复，无需重新接入。若客户端中的条目已缺失，再预览添加。",
-            "Next: complete sign-in with the original account and tenant. The same identity restores the existing access grant without reconnecting. Preview an addition if the entry is missing from the client.",
+            "下一步：完成原账号和租户的登录，原接入授权会恢复；再点击“连接并检测”即可自动核对和补齐连接。",
+            "Next: complete sign-in with the original account and tenant to restore access, then select Connect and check to verify or repair the connection.",
         )
     } else if recovery_failed && requires_access {
         tr(
             tab.text,
-            "下一步：之前的本机接入授权未能安全恢复。请重新登录，再“预览接入”并确认一次；普通认证到期不会要求重复接入。",
+            "下一步：之前的本机接入授权未能安全恢复。请重新登录，再“连接并检测”并确认一次；普通认证到期不会要求重复接入。",
             "Next: the previous local access grant could not be safely restored. Sign in, then preview and confirm once. Normal authentication expiry does not require reconnecting.",
         )
     } else if missing_managed {
         tr(
             tab.text,
-            "下一步：登录成功后点击“预览接入”并确认，重新添加已缺失的连接，再检测本机桥。",
-            "Next: after signing in, preview and confirm the connection to add the missing entry again, then check the local bridge.",
+            "下一步：登录成功后点击“连接并检测”，确认重新添加后自动继续检测。",
+            "Next: sign in and select Connect and check. Confirm adding the missing connection to continue automatically.",
         )
     } else if requires_access {
         tr(
             tab.text,
-            "下一步：此客户端尚无当前身份的接入授权。登录成功后“预览接入”并确认一次，再检测本机桥；普通到期或同身份重登录不需要重复接入。",
-            "Next: this client has no access grant for the current identity. Sign in, then preview and confirm once before checking the local bridge. Normal expiry or same-identity sign-in does not require reconnecting.",
+            "下一步：点击“连接并检测”，会直接显示接入确认并在保存后自动继续检测。",
+            "Next: select Connect and check. Setup opens automatically and detection continues after you confirm.",
         )
     } else {
         match load {
@@ -2562,13 +2751,13 @@ fn render_client_status(
             ),
             "not_configured" => tr(
                 tab.text,
-                "下一步：登录成功后点击“预览接入”。",
-                "Next: sign in, then select Preview connection.",
+                "下一步：登录成功后点击“连接并检测”。",
+                "Next: sign in, then select Connect and check.",
             ),
             "unavailable" => tr(
                 tab.text,
-                "下一步：先打开并连接客户端，再点击“检查”。",
-                "Next: open and connect the client, then select Inspect.",
+                "下一步：先打开并连接客户端，再点击“连接并检测”。",
+                "Next: open and connect the client, then select Connect and check.",
             ),
             _ => "",
         }
@@ -2586,8 +2775,8 @@ fn render_client_status(
         ),
         _ => tr(
             tab.text,
-            "“检查”读取连接设置；接入后，“检测本机桥”可读取工具清单并确认连接。",
-            "Inspect reads the connection settings. After connecting, Check local bridge reads the tool list and verifies the connection.",
+            "点击“连接并检测”，自动核对设置并显示工具概览。",
+            "Connect and check verifies settings automatically and shows the tool overview.",
         ),
     };
     let detail = display_message(tab.text, detail);
@@ -2628,14 +2817,14 @@ fn render_client_status(
                 if missing_managed {
                     tr(
                         tab.text,
-                        "点击“预览接入”并确认，将按环境名称重新添加连接。",
-                        "Select Preview connection and confirm to add the missing connection under the environment name.",
+                        "点击“连接并检测”并确认，将按环境名称重新添加连接。",
+                        "Select Connect and check and confirm to add the missing connection under the environment name.",
                     )
                 } else {
                     tr(
                         tab.text,
-                        "点击“预览接入”并确认，才会将旧名称更新为环境名称。",
-                        "Select Preview connection and confirm to change the old name to the environment name.",
+                        "点击“连接并检测”并确认，才会将旧名称更新为环境名称。",
+                        "Select Connect and check and confirm to change the old name to the environment name.",
                     )
                 },
             )
@@ -2652,20 +2841,7 @@ fn render_client_status(
         ),
         _ => String::new(),
     };
-    let inspected = if inspected && value["available"].as_bool() != Some(false) {
-        tr(
-            tab.text,
-            "已读取客户端配置。\n",
-            "Client settings were read.\n",
-        )
-    } else {
-        ""
-    };
-    set_client_feedback(
-        tab,
-        kind,
-        &format!("{inspected}{mcp_name}{detail}\n{load}\n{bridge}"),
-    );
+    set_client_feedback(tab, kind, &format!("{mcp_name}{detail}\n{load}\n{bridge}"));
     tab.state
         .borrow_mut()
         .clients
@@ -3062,8 +3238,18 @@ fn update_secret_status(tab: &NvwaTab) {
     tab.secret_status.wrap(740);
 }
 
+fn login_in_progress(state: &Selection) -> bool {
+    state.active_login
+        || state.login_attempt.is_some()
+            && !state.runtime_profiles.iter().any(|profile| {
+                profile["profileId"].as_str() == state.selected_id.as_deref()
+                    && profile["state"] == "authenticated"
+            })
+}
+
 fn update_controls(tab: &NvwaTab) {
-    let busy = tab.busy.load(Ordering::SeqCst);
+    // Initial status retries must not replace a draft entered before the first snapshot.
+    let busy = tab.busy.load(Ordering::SeqCst) || !tab.state.borrow().snapshot_loaded;
     let saved = tab.state.borrow().selected_id.is_some();
     let mode = auth_mode(tab);
     let password = mode == "password";
@@ -3102,36 +3288,16 @@ fn update_controls(tab: &NvwaTab) {
     tab.remember_secret.enable(!busy && !password);
     tab.send_factor.enable(!busy && twofactor);
     tab.factor_code.enable(!busy && twofactor);
-    tab.reload.enable(!busy);
     tab.save.enable(!busy);
-    tab.delete.enable(!busy && saved);
-    for control in [tab.login, tab.logout, tab.detect] {
-        control.enable(!busy && saved);
-    }
+    tab.login.enable(!busy && saved);
     tab.cancel
         .enable(saved && (!busy || tab.state.borrow().active_login));
+    tab.cancel.show(login_in_progress(&tab.state.borrow()));
     let kind = selected_client_kind(tab);
     tab.client.selector.enable(!busy);
-    for control in [
-        tab.client.inspect,
-        tab.client.check,
-        tab.client.apply,
-        tab.client.remove,
-    ] {
+    for control in [tab.client.check, tab.client.manage] {
         control.enable(!busy && saved);
     }
-    tab.client.restore.enable(
-        !busy
-            && saved
-            && tab
-                .state
-                .borrow()
-                .clients
-                .get(kind)
-                .and_then(|v| v.get("backupRef"))
-                .and_then(Value::as_str)
-                .is_some(),
-    );
     tab.client.path.set_editable(kind != "tiangong");
     tab.client.path.enable(!busy && kind != "tiangong");
     for choice in [

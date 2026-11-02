@@ -51,6 +51,80 @@ pub(super) fn desired(name: &str, endpoint: &str, bearer: &str) -> Snapshot {
     Snapshot::Toml(doc.to_string())
 }
 
+pub(super) fn merge(current: &Snapshot, old_name: &str, desired: &Snapshot) -> Result<Snapshot> {
+    let (Snapshot::Toml(current), Snapshot::Toml(desired)) = (current, desired) else {
+        anyhow::bail!("Codex 修复设置类型无效");
+    };
+    let mut doc = document(current.as_bytes())?;
+    let new_doc = document(desired.as_bytes())?;
+    let (new_name, new_entry) = new_doc["mcp_servers"]
+        .as_table_like()
+        .and_then(|servers| servers.iter().next())
+        .ok_or_else(|| anyhow::anyhow!("Codex 修复缺少目标设置"))?;
+    let servers = doc["mcp_servers"]
+        .as_table_like_mut()
+        .ok_or_else(|| anyhow::anyhow!("Codex 修复缺少受管设置"))?;
+    let mut entry = servers
+        .remove(old_name)
+        .ok_or_else(|| anyhow::anyhow!("Codex 修复缺少受管条目"))?;
+    let table = entry
+        .as_table_like_mut()
+        .ok_or_else(|| anyhow::anyhow!("Codex 修复条目格式无效"))?;
+    for key in [
+        "command",
+        "args",
+        "env",
+        "env_vars",
+        "cwd",
+        "bearer_token_env_var",
+        "type",
+        "transport",
+    ] {
+        table.remove(key);
+    }
+    for key in ["url", "enabled"] {
+        table.insert(key, new_entry[key].clone());
+    }
+    for key in ["startup_timeout_sec", "tool_timeout_sec"] {
+        if table.get(key).is_none() {
+            table.insert(key, new_entry[key].clone());
+        }
+    }
+    if table
+        .get("http_headers")
+        .and_then(Item::as_table_like)
+        .is_none()
+    {
+        table.insert("http_headers", Item::Table(Table::new()));
+    }
+    if table
+        .get("env_http_headers")
+        .is_some_and(|item| item.as_table_like().is_none())
+    {
+        table.remove("env_http_headers");
+    }
+    for key in ["http_headers", "env_http_headers"] {
+        if let Some(headers) = table.get_mut(key).and_then(Item::as_table_like_mut) {
+            let auth_names: Vec<_> = headers
+                .iter()
+                .filter(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+                .map(|(name, _)| name.to_owned())
+                .collect();
+            for name in auth_names {
+                headers.remove(&name);
+            }
+            if key == "http_headers" {
+                headers.insert(
+                    "Authorization",
+                    new_entry["http_headers"]["Authorization"].clone(),
+                );
+            }
+        }
+    }
+    servers.insert(new_name, entry);
+    Ok(Snapshot::Toml(doc.to_string()))
+}
+
 pub(super) fn replace(raw: &[u8], name: &str, entry: Option<&Snapshot>) -> Result<Vec<u8>> {
     replace_many(raw, &BTreeMap::from([(name.to_owned(), entry.cloned())]))
 }

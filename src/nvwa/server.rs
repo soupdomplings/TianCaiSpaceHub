@@ -20,6 +20,9 @@ use super::{
     types::{AuthMode, AuthOutcome, AuthResult, ClientKind, NvwaProfile, PasswordLoginInput},
 };
 
+#[cfg(all(test, windows))]
+mod client_preflight_tests;
+
 const BROWSER_TTL_MS: u64 = 10 * 60 * 1000;
 const MAX_LOGIN_ATTEMPTS: usize = 4096;
 
@@ -473,7 +476,20 @@ async fn command(service: &NvwaService, operation: &str, body: &Value) -> Result
                 .map(bridge::client_kind)
                 .transpose()?;
             let summary_only = body.get("summaryOnly").and_then(Value::as_bool) == Some(true);
-            let mut detected = bridge::detect(service, &profile, client, summary_only).await?;
+            let local = if client.is_some() {
+                let target = client_target(&profile, body)?;
+                let context = adapter_context(service, target.client).await?;
+                Some(
+                    validated_local_bridge(service, &profile, &context, &target)
+                        .await?
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("Client connection needs repair; use Connect or repair")
+                        })?,
+                )
+            } else {
+                None
+            };
+            let mut detected = bridge::detect(service, &profile, local, summary_only).await?;
             if body.get("clientKind").and_then(Value::as_str) == Some("tiangong") {
                 detected["tiangongDirectoryUpdated"] = Value::Bool(
                     detected["catalogComplete"] == true
@@ -881,12 +897,7 @@ async fn adapter_context(service: &NvwaService, client: ClientKind) -> Result<Ad
     })
 }
 
-async fn client_operation(
-    service: &NvwaService,
-    profile: &NvwaProfile,
-    operation: &str,
-    body: &Value,
-) -> Result<Value> {
+fn client_target(profile: &NvwaProfile, body: &Value) -> Result<AdapterTarget> {
     let client = bridge::client_kind(required(body, "clientKind")?)?;
     let legacy_name = adapters::managed_server_name(&profile.id)?;
     let server_name = profile.name.trim().to_owned();
@@ -902,7 +913,7 @@ async fn client_operation(
             "MCP 名称应与已保存环境名称一致，请刷新后重新预览"
         );
     }
-    let target = AdapterTarget {
+    Ok(AdapterTarget {
         profile_id: profile.id.clone(),
         client,
         server_name,
@@ -911,9 +922,76 @@ async fn client_operation(
             .and_then(Value::as_str)
             .filter(|v| !v.is_empty())
             .map(PathBuf::from),
+    })
+}
+
+async fn validated_local_bridge(
+    service: &NvwaService,
+    profile: &NvwaProfile,
+    context: &AdapterContext,
+    target: &AdapterTarget,
+) -> Result<Option<bridge::LocalBridge>> {
+    let Some(credential) = service
+        .inner
+        .runtime
+        .existing_capability(&profile.id, target.client)
+        .await
+    else {
+        return Ok(None);
     };
+    let endpoint = format!(
+        "{}/mcp/{}/{}",
+        service.inner.management.base_url,
+        profile.id,
+        target.client.as_str()
+    );
+    if !adapters::bridge_matches(context, target, &endpoint, &credential).await? {
+        return Ok(None);
+    }
+    Ok(Some(bridge::LocalBridge {
+        client: target.client,
+        endpoint,
+        credential,
+    }))
+}
+
+async fn client_operation(
+    service: &NvwaService,
+    profile: &NvwaProfile,
+    operation: &str,
+    body: &Value,
+) -> Result<Value> {
+    let target = client_target(profile, body)?;
+    let client = target.client;
     let context = adapter_context(service, client).await?;
     match operation {
+        "prepare" => {
+            service.ensure_authenticated(profile).await?;
+            let gate = service.gate(&profile.id).await;
+            let _guard = gate.lock().await;
+            ensure!(
+                super::profile_fingerprint(&service.profile(&profile.id)?)
+                    == super::profile_fingerprint(profile),
+                "环境已变化，请刷新后重试"
+            );
+            // No grants are created by this read-only preflight. Missing keys,
+            // stale URLs and disabled entries use one confirmed setup/repair.
+            let ready = validated_local_bridge(service, profile, &context, &target)
+                .await?
+                .is_some();
+            let runtime = runtime_profile(service, profile).await;
+            if ready {
+                let mut status = serde_json::to_value(adapters::inspect(&context, &target).await?)?;
+                set_client_access_status(&mut status, &runtime, client);
+                Ok(json!({"readyForDetection":true,"status":status,"runtimeProfile":runtime}))
+            } else {
+                let mut preview = serde_json::to_value(
+                    adapters::preview(&context, &target, AdapterOperation::Apply).await?,
+                )?;
+                set_client_access_status(&mut preview["status"], &runtime, client);
+                Ok(json!({"readyForDetection":false,"preview":preview,"runtimeProfile":runtime}))
+            }
+        }
         "inspect" => {
             let mut value = serde_json::to_value(adapters::inspect(&context, &target).await?)?;
             value["bridgeCheckedAtMs"] = service
@@ -944,17 +1022,25 @@ async fn client_operation(
                 "restore" => AdapterOperation::Restore,
                 _ => bail!("Unknown client operation"),
             };
-            if matches!(operation, AdapterOperation::Apply) {
+            if matches!(
+                operation,
+                AdapterOperation::Apply | AdapterOperation::Repair
+            ) {
                 service.ensure_authenticated(profile).await?;
             }
             Ok(serde_json::to_value(
                 adapters::preview(&context, &target, operation).await?,
             )?)
         }
-        "apply" => {
+        "apply" | "repair" => {
             service.ensure_authenticated(profile).await?;
             let gate = service.gate(&profile.id).await;
             let _guard = gate.lock().await;
+            ensure!(
+                super::profile_fingerprint(&service.profile(&profile.id)?)
+                    == super::profile_fingerprint(profile),
+                "环境已变化，请刷新后重试"
+            );
             let credential = service
                 .inner
                 .runtime
@@ -973,6 +1059,7 @@ async fn client_operation(
                 required(body, "expectedFingerprint")?,
                 &endpoint,
                 &credential,
+                operation == "repair",
             )
             .await?;
             let mut value = serde_json::to_value(outcome)?;
