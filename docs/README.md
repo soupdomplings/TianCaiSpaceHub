@@ -1,6 +1,6 @@
 # TianCaiSpaceHub 文档总入口
 
-2026-11-02 `v0.4.30-10` 用户本地试用反馈“可以了”，已授权同步 GitHub 唯一 `main` 并启动 Windows x64、macOS universal Actions 打包。344 个构建输入与测试包清单一致，代码和版本不变；提交、运行身份及实际状态见 [v10 交付](releases/v0.4.30-10.md#2026-11-02-用户反馈与-github-打包准备)。反馈不扩展为全部功能或 macOS 实机验收，下面的未推送/未发布记录保留当时阶段。
+2026-11-02 `v0.4.30-10` 源码已按用户授权推送至 GitHub 唯一 `main`（`7c78350`），Windows x64、macOS universal Actions job 均已实际开始，核对时 `in_progress`。用户本地试用反馈“可以了”，344 个构建输入与测试包清单一致，代码和版本不变；运行链接与实际状态见 [v10 交付](releases/v0.4.30-10.md#2026-11-02-源码已推送与两平台-actions-打包)。本轮上传 Actions artifacts，反馈不扩展为全部功能或 macOS 实机验收；下面的未推送/未发布记录保留当时阶段。
 
 2026-11-01 `v0.4.30-10` 本地测试交付：Dumpling-MCP 检测结果改为模块/工具数量与少量用途摘要，完整 schema 不回传 GUI；目录读取达到容量上限时区分“已连通、目录未完整读取”和真实认证/协议失败。继承 v9 历史恢复，未修改本机授权生命周期。30 项离线回归、Windows 构建和 MSI 静态核验通过，准确包身份见 [v10 交付](releases/v0.4.30-10.md)，当前未推送/未发布，实机待用户验收；现行行为见 [Dumpling-MCP](customizations/nvwa-mcp.md)。
 
