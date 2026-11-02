@@ -1,5 +1,9 @@
 # Dumpling-MCP 接入（NVWA）
 
+2026-11-02 用户对 `v0.4.30-10` Windows 本地测试交付反馈“可以了”，并授权同步 GitHub、使用 Actions 生成 Windows/macOS 包；本次代码与测试包 344 个输入一致。该反馈不扩大为其他用户授权问题或全部工具验收，具体源码与运行状态见 [v10 交付](../releases/v0.4.30-10.md#2026-11-02-用户反馈与-github-打包准备)。下方未推送/未发布表述保留当时阶段。
+
+2026-11-01 `v0.4.30-10` 当前实现：检测结果向 GUI 只返回模块/分组、准确工具数量与少量用途示例，完整工具参数不再回传界面，避免较大目录触发原 2 MiB 管理响应限制。初始化成功后遇目录读取上限，区分“已连通、目录未完整读取、总数未知”和认证/协议失败；不会把截断展示或过时缓存当作完整结果。普通配置、凭据和本机接入授权规则不变，其他用户授权缺失尚未定因。30 项离线回归、Windows 构建和 MSI 静态核验通过，测试包身份和待验收范围见 [v10 交付](../releases/v0.4.30-10.md)，当前未推送/未发布。以下日期记录保留各轮历史归属。
+
 2026-10-27 发布状态：用户初步反馈本地包正常；产品提交 `f322634`、完整 `v0.4.30-8` 标签和 Pre-release 已发布，Windows/macOS Actions 已确认开始后停止等待。准确源码、运行链接和尚待确认的包及验收范围见 [v8 交付](../releases/v0.4.30-8.md#2026-10-27-源码与-release-已发布两平台-actions-已开始)。下方未发布或待用户反馈的表述保留开发阶段归属。
 2026-10-22 `v0.4.30-8` 页面统一：与 WorkBuddy、天工 Work 共用只读灰底、可编辑浅色白底（深色主题对应卡片色）的规则；字段停用时同步灰底，天工客户端显示名统一为“天工 Work”。认证方式、凭据明文回显、按需续认证、本机桥生命周期、环境名和定向配置行为保留。无需配置迁移，切回旧版仅恢复旧样式/名称。编译、本地测试包和待实机验收见 [v8 交付](../releases/v0.4.30-8.md)。下方日期记录保持各轮历史范围。
 
@@ -96,11 +100,11 @@ GUI 读取期间沿用忙状态，禁用环境、认证方式和密码/密钥编
 | 预览移除 | 显示将移除的连接，确认后只删除该环境、该客户端中由 Hub 管理的条目，并撤销该端授权 |
 | 预览恢复 | 显示最近一次修改前的受保护备份，确认后只恢复该条目并撤销该端当前授权；后续外部修改会阻止覆盖 |
 
-“当前可用工具”取自当前环境实际 MCP 地址（`resolvedMcpUrl`）的 JSON-RPC `tools/list`，不是另一条 NVWA 能力查询接口，也不按本地固定清单生成。上方“检测 MCP”直达上游，客户端区“检测本机桥”经所选端本机连接，两者均经过 `initialize`、`notifications/initialized` 和完整分页 `tools/list`，最终显示服务返回的工具对象。接入、检查配置或读取目录成功不等于客户端已执行工具。
+“连接内容概览”取自当前环境实际 MCP 地址（`resolvedMcpUrl`）的 JSON-RPC `tools/list`，不是另一条 NVWA 能力查询接口，也不按本地固定清单生成。上方“检测 MCP”直达上游，客户端区“检测本机桥”经所选端本机连接，两者均经过 `initialize`、`notifications/initialized` 和完整分页 `tools/list`，后台核验工具定义，界面仅展示计数与少量用途摘要；不展示完整参数结构。接入、检查配置或读取目录成功不等于客户端已执行工具。
 
 “检查”读取配置与“检测本机桥”读取工具目录分别处理，结果在所选客户端的同一反馈区说明。读取配置成功会明确说明已经检查设置；桥尚未检测时提示使用“检测本机桥”。同认证范围、同真实身份重新登录后保留已有本机凭据，可先检查原设置再检测；首次接入、已撤销凭据、目标缺失或实际连接配置变化才需要预览确认。管理 `client/inspect` 的 `requiresClientAccess` 表示当前运行态是否缺少可用本机 capability，`clientAccessSuspended` 区分重新登录期间暂时挂起的旧接入，`clientAccessRecoveryFailed` 区分保护记录无法恢复；挂起不等于可用，也不要求立刻重写配置。界面对检查、接入、移除、恢复及本机桥检测的结果同时更新对应运行状态，避免使用先前检查缓存继续提示首次接入。移除/恢复成功撤销该端运行授权后仍返回 `requiresClientAccess=true`；`false` 或已有 capability 不证明保存的 URL/凭据匹配，不替代真实桥检测与客户端调用验收。预览失败、冲突或拒绝显示在当前端反馈区，不沿用旧检测结论。
 
-工具展示优先使用返回的 `title` 或兼容 `annotations.title`；没有独立标题时，取 `description` 第一行或第一句的有界短简介，保留原始 `name` 工具代码和服务说明。中文界面尽量采用服务已有的中文标题/说明；当前 NVWA 邻仓序列化主要提供 `description`，不保证每个工具都有中文名称。无中文服务字段时明确提示按代码核对，不猜译功能、不硬编码 code→中文映射，也不把 `inputSchema` 中业务参数的 `title` 当工具名称。标题最多显示 80 字符，简介最多 48 字符、说明最多 1600 字符，截断标注省略号；中英界面均保持原始代码。
+“连接内容概览”显示准确工具总数、模块或分组数量，每组计数及最多 3 个用途示例，最多展开 32 组，明确标注未展开的工具/分组数。优先按服务 `_meta.com.jiuqi.nvwa.moduleName` 归组，缺失时按 `name` 的点分命名空间归组并标明“工具分组”，没有命名空间归为 `other`，不把前缀猜成真实模块。示例采用 `title` 或兼容 `annotations.title`、原始 `name` 和 `description` 的第一非空行；代码最多 256、标题 80、用途 120 字符，超长文字带省略号。保留服务已有语言，不猜译或硬编码用途，也不把 schema 参数标题当工具名。省略仅影响展示，完整目录的工具总数不会因此减小；部分读取的分组计数只代表已读内容。
 
 登录等待期间仍可取消。每次管理登录带随机 `loginAttemptId`；取消登记有界、10 分钟的事务标记，并与登录开启按同一临界区排序，避免取消先到而旧登录后到重新开放授权。网络返回还须核对认证代次，界面不采用旧操作结果。此取消不证明已执行的远端业务被撤销。
 
@@ -176,7 +180,7 @@ Hub 先获取 `/anon/framework/api/encrypt/key`，按服务端真实公钥与 al
 
 桥由 Hub 后台承载，默认 `127.0.0.1:3849`，与模型网关/IM 的既有入口分开。每个 profile 和客户端都有独立随机本地连接凭据；客户端只配置 `/mcp/<profileId>/<codex|workbuddy|tiangong>` 的本机 URL 与本地 `Authorization: Bearer ...`，真实 NVWA 密码、密钥和 token 不写入客户端配置。管理接口另用受系统保护的实例凭据，并校验本机 Host 与存在时的 Origin；旧公开网关管理 API 不挂载这些 NVWA 操作。
 
-本机管理 GET `/manage/status` 返回配置和安全状态；POST `/manage/profile/save`、`profile/delete` 使用 `expectedRevision`，登录为 `login/password`、`login/browser`、`login/application`，另有 `login/twofactor/send`、`login/cancel`、`logout`、`tools/detect`。每端使用 `client/inspect`、`client/preview`、`client/apply`、`client/remove`、`client/restore`，字段为 `profileId/clientKind/overridePath?`，实际修改还需最新 `expectedFingerprint`，恢复需当前 `backupRef`；所有操作均需要后台管理凭据。成功包装为 `{ok:true,data:...}`，失败为安全 `{ok:false,error:{code,message}}`，不返回 token/原条目。本地请求体最多 2 MiB。
+本机管理 GET `/manage/status` 返回配置和安全状态；POST `/manage/profile/save`、`profile/delete` 使用 `expectedRevision`，登录为 `login/password`、`login/browser`、`login/application`，另有 `login/twofactor/send`、`login/cancel`、`logout`、`tools/detect`。每端使用 `client/inspect`、`client/preview`、`client/apply`、`client/remove`、`client/restore`，字段为 `profileId/clientKind/overridePath?`，实际修改还需最新 `expectedFingerprint`，恢复需当前 `backupRef`；所有操作均需要后台管理凭据。成功包装为 `{ok:true,data:...}`，失败为安全 `{ok:false,error:{code,message}}`，不返回 token/原条目。本地请求体最多 2 MiB。`tools/detect` 新增可选 `summaryOnly`（默认 `false`）；GUI 始终发送 `true`，后台在完成天工原生目录同步后移除完整 `tools`，只回传 `catalogSummary`、工具总数、连接/目录状态和有界服务名/版本。`catalogSummary` 含 `groupCount/moduleCount/groups/omittedGroupCount/examplesTruncated`；每组为 `name/source/toolCount/omittedToolCount/examples`，示例只含 `name/title/description`。不会回传工具 schema、操作合同或任意 `_meta`。未指定摘要模式仍按旧接口返回完整目录。
 
 运行状态的 `clientAccess` 字符串数组继续只列 active 本机凭据对应的客户端种类；新增 `suspendedClientAccess` 只列重新登录期间挂起的 `codex/workbuddy/tiangong`，不返回凭据。`client/inspect` 的 `clientAccessSuspended` 布尔值让 GUI 优先提示完成同身份登录后恢复旧连接，避免把挂起误当作需反复接入；这两类状态均不证明客户端配置匹配或实际工具调用成功。
 
@@ -192,7 +196,11 @@ initialize 成功后给客户端本地 `Mcp-Session-Id`。session 绑定 profile
 
 回退此次会话头兼容后，天工相同 session 的重复/合并头可能再次按整串查找而触发 404；认证和环境格式不迁移。回退前结束客户端旧会话、重新核对接入和身份，不能用重放失败工具请求验证；真实未知/过期会话仍应重新建立，不能当作需要放宽校验的重复头问题。
 
-限制包括最多 512 个本地 session、24 小时空闲期限、最多 256 个活动 RPC；远端响应最多 8 MiB。Hub 检测只发 `initialize`、`notifications/initialized` 与分页 `tools/list`，最多 100 页、10000 工具，并核对名称、输入 schema、cursor 循环及响应 ID；零工具目录合法，工具数未知与零分别显示，不硬编码历史数量、不调用 `tools/call`。
+限制包括最多 512 个本地 session、24 小时空闲期限、最多 256 个活动 RPC；远端单次解码响应最多 8 MiB，GUI 受保护管理响应最多 2 MiB。GUI 只接收有界目录摘要，这两个上限不再因完整 schema 回传而产生矛盾；现有 HTTP 解压兼容保留，保护值作用于解码内容，不以截断 JSON 伪造完整数据。Hub 检测仍只发 `initialize`、`notifications/initialized` 与分页 `tools/list`，最多 100 页、10000 工具，核对名称、输入 schema、cursor 循环及响应 ID，不调用 `tools/call`。准确统计仍需后台读取标准目录；减少的是后台向界面的重复传输与展示。
+
+初始化与 initialized 通知已核验成功后，摘要模式遇响应大小、页数或工具数上限，返回 `connectionVerified=true`、`state="connected_catalog_limited"`、`catalogComplete=false`、`toolCount=null`，`observedToolCount` 与概览只列已读部分，`catalogLimitReason` 分别为 `response_size/page_count/tool_count`。界面显示“已连通、目录未完整读取、总数未知”；不沿用过时工具总数，不记录该端完整检测通过，也不以部分目录覆盖天工原生目录。完整结果为 `tools_discovered/catalogComplete=true`，合法空目录的 `toolCount=0` 与未知区别展示。非摘要旧调用仍以原超限失败语义返回。
+
+本机桥新增 JSON-RPC `-32010` 固定表示响应体超限；本机检测只在 HTTP 502、同一非空 RPC ID、正确 JSON-RPC 包装及该错误码同时匹配时识别。只有初始化已通过后的目录容量问题可以得到上述部分结果；HTTP 401/403、其他错误、无效 JSON/schema、重复工具、循环 cursor、RPC ID 或认证代次变化仍失败，不会报告连接成功或生成接入授权。
 
 任何已经发送的 `tools/call` 在断连、超时、无法解析、ID 不匹配等情况下返回 `outcomeUnknown=true`、`retryable=false`，不自动重试。产品返回的工具结果和权限 error 保留业务语义，不伪造成功或提升权限。认证及桥自身错误只含安全阶段、HTTP/业务 code 和固定提示，响应 body、认证 header、密码、密钥、回调 query 不进入诊断。
 
@@ -285,7 +293,7 @@ NVWA 不复用模型 API Key、IM 授权或普通网关渠道。普通 profile �
 | [服务生命周期](../../src/nvwa/mod.rs)、[管理 API](../../src/nvwa/server.rs) | 后台桥、受保护管理引导、同认证范围环境保存与凭据变更挂起、浏览器事务、v2/旧快照迁移、发送前按需续认证、同代次自动失败 60 秒冷却、同身份手动登录保留及挂起快照，客户端操作的运行状态同步、缺失/挂起/恢复失败反馈 |
 | [类型](../../src/nvwa/types.rs)、[配置](../../src/nvwa/config.rs) | `TokenExpiryPolicy`、非秘密 DTO、默认值、URL 校验、认证范围规范化与 `authScopeFingerprint`、集合 revision 和普通配置原子保存 |
 | [认证](../../src/nvwa/auth.rs)、[系统存储](../../src/nvwa/secrets.rs) | 动态 RSA/SM2、取票/换票、身份、结构化核验 HTTP 401/身份变化、固定期限字段解析、密码闲置策略、Windows/macOS 系统保护 |
-| [桥](../../src/nvwa/bridge.rs)、[运行态](../../src/nvwa/runtime.rs) | `session_header` 共用于 POST/DELETE，仅天工受限相同重复值归一、冲突/空/过多/非法头400，未知/过期会话404；原期限迁移、RPC/session/ID 隔离、真实401标记、token/代次保护、同身份续期及手动登录挂起/恢复、响应返回的代次/capability/session 核对、未知结果及不重放 |
+| [桥](../../src/nvwa/bridge.rs)、[目录摘要](../../src/nvwa/discovery.rs)、[运行态](../../src/nvwa/runtime.rs) | `session_header` 共用于 POST/DELETE，仅天工受限相同重复值归一、冲突/空/过多/非法头400，未知/过期会话404；原期限迁移、RPC/session/ID 隔离、真实401标记、token/代次保护、同身份续期及手动登录挂起/恢复、响应返回的代次/capability/session 核对、未知结果及不重放 |
 | [适配器](../../src/nvwa/adapters/mod.rs)、[名称迁移](../../src/nvwa/adapters/migration.rs)、[Codex 配置](../../src/nvwa/adapters/codex.rs)、[WorkBuddy 配置](../../src/nvwa/adapters/workbuddy.rs)、[天工配置](../../src/nvwa/adapters/tiangong.rs)、[桌面窄 API](../../src/gmclaw_desktop.rs) | 三端环境名、路径/客户端范围与旧键兼容、所涉名称完整指纹/定向保护备份/journal/补偿；Codex/WorkBuddy 文件替换与天工逐步 API 边界；非 pending 受管缺失显式重建、旧恢复入口保护、真实缺失前像和 missing 归属恢复 |
 
 2026-10-16 已保存密码与应用密钥回显已实现：本轮基于 `main` 的 `63db348de4f22845cbf2a7ea28988ed72bbaa21d`，版本保持 `0.4.30-5`；Windows 必要编译、EXE 静态身份、源码格式和文档核对通过，源码 `7d4bf0463760555d020d45586d1404ce65033fc3` 已推送，两平台 Actions 已确认 job 开始并按要求停止等待；包结果未确认，真实显示和存储读取由用户验收。完整结果见 [本轮交付](../releases/v0.4.30-5.md#2026-10-16-已保存密码与应用密钥回显)。开发方不运行产品/客户端、测试、安装器或真实请求，不读取真实凭据/私有日志、不改运行配置、不本地打发布包；下方前轮结果不作为本轮证据。

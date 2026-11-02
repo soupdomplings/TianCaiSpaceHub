@@ -1,5 +1,11 @@
 # TianCaiSpaceHub 文档总入口
 
+2026-11-02 `v0.4.30-10` 用户本地试用反馈“可以了”，已授权同步 GitHub 唯一 `main` 并启动 Windows x64、macOS universal Actions 打包。344 个构建输入与测试包清单一致，代码和版本不变；提交、运行身份及实际状态见 [v10 交付](releases/v0.4.30-10.md#2026-11-02-用户反馈与-github-打包准备)。反馈不扩展为全部功能或 macOS 实机验收，下面的未推送/未发布记录保留当时阶段。
+
+2026-11-01 `v0.4.30-10` 本地测试交付：Dumpling-MCP 检测结果改为模块/工具数量与少量用途摘要，完整 schema 不回传 GUI；目录读取达到容量上限时区分“已连通、目录未完整读取”和真实认证/协议失败。继承 v9 历史恢复，未修改本机授权生命周期。30 项离线回归、Windows 构建和 MSI 静态核验通过，准确包身份见 [v10 交付](releases/v0.4.30-10.md)，当前未推送/未发布，实机待用户验收；现行行为见 [Dumpling-MCP](customizations/nvwa-mcp.md)。
+
+2026-10-29 `v0.4.30-9` 本地测试开发：已实现 Codex 新版 Fast 认证结构适配、打开具体历史会话时的执行配置等待，以及部分历史加载失败后的分页重试。增强脚本 v25，不在启动时遍历历史；持续 `EBADF` 写入异常的根因仍待核对。Windows 构建与本地 MSI 状态见 [v9 交付](releases/v0.4.30-9.md)，当前未推送/未发布、待用户安装验收。现行行为与回滚见 [历史恢复](customizations/codex-history-recovery.md)。
+
 2026-10-27 `v0.4.30-8` 已发布源码与 Pre-release：用户初步反馈本地包“暂时没问题”后授权发布，产品源码 `f322634` 已推送到唯一 `main`，完整标签和非草稿 Release 已创建；Windows x64、macOS universal Actions 均已确认 job 开始，按要求停止等待。正式包由 Actions 完成后自动上传，本地 debug MSI 不作为正式分发包；构建结果、安装包及 macOS/完整实机验收仍需分别确认。准确源码和运行链接见 [v8 交付](releases/v0.4.30-8.md#2026-10-27-源码与-release-已发布两平台-actions-已开始)。
 
 2026-10-22 本地测试阶段 `v0.4.30-8`：已实现天工 Work 主运行收尾/审批、任务模型绑定、默认流式上下文与后台运行/重连保护；WorkBuddy、天工 Work 的页面字段、说明及按钮统一，思考强度并入连接卡片，三页只读/编辑底色统一。Hub 不再提供天工默认模型设置，原配置、渠道及 `/tg` 保留。Windows 编译、162 个不同 Rust 聚焦用例及本地 MSI 静态核验已通过；当时源码未推送、未发布，详见 [v8 交付](releases/v0.4.30-8.md)、[Work 适配](customizations/tiangong-work-compatibility-assessment.md)。
@@ -70,6 +76,7 @@
 | 查看每次二开开发变更 | [二开变更记录](customizations/CHANGELOG.md) |
 | 开发时知道必须更新哪些文档 | [文档规划与维护规范](development/documentation.md) |
 | 登录 NVWA、检测 MCP、分别接入三客户端 | [NVWA MCP](customizations/nvwa-mcp.md)、[资料索引](nvwa/README.md) |
+| 查看 v9 历史恢复与 Fast 本地测试包 | [v0.4.30-9](releases/v0.4.30-9.md) |
 | 查看 v8 本地测试包、适配范围和验收边界 | [v0.4.30-8](releases/v0.4.30-8.md) |
 | 追溯 v5 基线、编译与当轮验收边界 | [v0.4.30-5 发布交付](releases/v0.4.30-5.md) |
 | 配置 WorkBuddy 模型、启动桌面及了解 `/wb` 边界 | [WorkBuddy 使用说明](workbuddy.md) |
@@ -108,6 +115,7 @@
 | [OpenAI Chat Completions](openai-chat-completions.md) | 通用兼容渠道与按渠道关闭推理；已实现 |
 | [动态模型](dynamic-codex-models.zh-CN.md) | 手填、远端获取、路由补齐和能力继承；v5 普通/ChatGPT 厂商空列表保存先自动获取，成功继续保存、失败留窗，客户端未配置模型中文指引；本轮状态见 v5 交付，实机待用户验收 |
 | [Codex 启动修复](customizations/codex-startup-repair.md) | TC-007：v7 程序路径与状态库独立检查/修复；可重新绑定当前内置程序，原路径/已知冲突分别备份恢复，Hub 保持运行；实机待用户验收 |
+| [Codex 历史恢复](customizations/codex-history-recovery.md) | TC-006/TC-007；v9 按需等待执行配置、取消与请求合并、部分历史失败后实际分页重试；持续 EBADF 根因未修复，Windows 包及用户验收见 v9 交付 |
 | [检查与修复中心](customizations/codex-repair-center.md) | TC-006/TC-007：v6 分类窗口、定向修复、插件隔离正式注册、备份联合恢复和可选页面适配；Windows/Mac 原生流程独立，实机待用户验收 |
 | [Codex 修复接入评估](customizations/codex-repair-integration-assessment.md) | 开发前的来源、取舍和限制；当前实现以修复中心专题为准 |
 | [网页导入](hub-external-import.md) | Windows/macOS 系统接入已随 v0.4.30-2 成功构建打包并预发布；本版实机导入待用户验收 |

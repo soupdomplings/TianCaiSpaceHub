@@ -820,6 +820,31 @@ impl Runtime {
         Ok(())
     }
 
+    pub async fn record_catalog_limit(
+        &self,
+        profile_id: &str,
+        client: Option<ClientKind>,
+        generation: &str,
+    ) -> Result<()> {
+        let mut inner = self.inner.lock().await;
+        let profile = inner
+            .profiles
+            .get_mut(profile_id)
+            .ok_or_else(|| anyhow::anyhow!("Login changed during detection"))?;
+        ensure!(
+            profile.generation == generation
+                && client.is_none_or(|client| profile.capabilities.contains_key(&client)),
+            "Login changed during detection"
+        );
+        live_auth(profile)?;
+        profile.tools = None;
+        if let Some(client) = client {
+            profile.client_checks.remove(&client);
+        }
+        profile.detail = "MCP connected; tool catalog exceeds read limit".into();
+        Ok(())
+    }
+
     pub async fn record_client_check(
         &self,
         profile_id: &str,
@@ -945,6 +970,52 @@ mod login_access_tests {
             .await
             .unwrap();
         (runtime, generation, capability, session, lease)
+    }
+
+    #[tokio::test]
+    async fn large_catalog_clears_stale_counts_but_preserves_client_authorization() {
+        let (runtime, generation, capability, _, lease) = connected().await;
+        runtime
+            .set_tools(
+                "fixture-profile",
+                &generation,
+                json!([{"name":"fixture.tool"}]),
+            )
+            .await
+            .unwrap();
+        runtime
+            .record_client_check("fixture-profile", ClientKind::Codex, &generation)
+            .await
+            .unwrap();
+        runtime
+            .record_catalog_limit("fixture-profile", Some(ClientKind::Codex), &generation)
+            .await
+            .unwrap();
+        assert!(runtime.tools("fixture-profile").await.is_none());
+        assert!(
+            runtime
+                .client_check("fixture-profile", ClientKind::Codex)
+                .await
+                .is_none()
+        );
+        assert!(
+            runtime
+                .lease_is_current("fixture-profile", ClientKind::Codex, &capability, &lease)
+                .await
+        );
+        assert!(
+            runtime
+                .record_catalog_limit("fixture-profile", None, "stale-generation")
+                .await
+                .is_err()
+        );
+        runtime.logout("fixture-profile").await;
+        assert!(
+            runtime
+                .record_catalog_limit("fixture-profile", Some(ClientKind::Codex), &generation)
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]

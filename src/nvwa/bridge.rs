@@ -12,12 +12,70 @@ use serde_json::{Value, json};
 use super::{
     NvwaService,
     config::resolve_mcp_url,
-    runtime::now_ms,
     types::{AuthResult, ClientKind, NvwaProfile},
 };
 
 pub(crate) const PROTOCOLS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26"];
 const MAX_REMOTE_BYTES: usize = 8 * 1024 * 1024;
+const RESPONSE_SIZE_ERROR_CODE: i64 = -32010;
+
+#[derive(Debug, thiserror::Error)]
+#[error("NVWA response exceeds size limit; result unconfirmed")]
+struct ResponseTooLarge;
+
+fn is_size_limit_response(status: StatusCode, request: &Value, reply: &Value) -> bool {
+    status == StatusCode::BAD_GATEWAY
+        && reply["jsonrpc"] == "2.0"
+        && request.get("id").is_some_and(|id| !id.is_null())
+        && reply.get("id") == request.get("id")
+        && reply.get("result").is_none()
+        && reply.pointer("/error/code").and_then(Value::as_i64) == Some(RESPONSE_SIZE_ERROR_CODE)
+}
+
+#[cfg(test)]
+mod catalog_limit_tests {
+    use super::*;
+
+    #[test]
+    fn local_size_limit_is_recognized_only_for_its_exact_rpc_response() {
+        let request = json!({"jsonrpc":"2.0","id":"fixture-list","method":"tools/list"});
+        let reply =
+            json!({"jsonrpc":"2.0","id":"fixture-list","error":{"code":RESPONSE_SIZE_ERROR_CODE}});
+        assert!(is_size_limit_response(
+            StatusCode::BAD_GATEWAY,
+            &request,
+            &reply
+        ));
+        for status in [
+            StatusCode::OK,
+            StatusCode::UNAUTHORIZED,
+            StatusCode::FORBIDDEN,
+        ] {
+            assert!(!is_size_limit_response(status, &request, &reply));
+        }
+        let mut changed = reply.clone();
+        changed["id"] = json!("other-request");
+        assert!(!is_size_limit_response(
+            StatusCode::BAD_GATEWAY,
+            &request,
+            &changed
+        ));
+        changed = reply.clone();
+        changed["error"]["code"] = json!(-32000);
+        assert!(!is_size_limit_response(
+            StatusCode::BAD_GATEWAY,
+            &request,
+            &changed
+        ));
+        changed = reply;
+        changed["result"] = json!({});
+        assert!(!is_size_limit_response(
+            StatusCode::BAD_GATEWAY,
+            &request,
+            &changed
+        ));
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 #[error("NVWA authorization expired")]
@@ -558,7 +616,11 @@ pub(crate) async fn post(
             rpc_error(
                 StatusCode::BAD_GATEWAY,
                 original_id,
-                -32603,
+                if error.is::<ResponseTooLarge>() {
+                    RESPONSE_SIZE_ERROR_CODE
+                } else {
+                    -32603
+                },
                 &error.to_string(),
                 method == "tools/call",
             )
@@ -695,10 +757,9 @@ pub(crate) async fn remote(
     while let Some(chunk) = response.chunk().await.map_err(|_| {
         anyhow::anyhow!("NVWA response interrupted; result unconfirmed; no retry was made")
     })? {
-        ensure!(
-            bytes.len().saturating_add(chunk.len()) <= MAX_REMOTE_BYTES,
-            "NVWA response exceeds size limit; result unconfirmed"
-        );
+        if bytes.len().saturating_add(chunk.len()) > MAX_REMOTE_BYTES {
+            return Err(ResponseTooLarge.into());
+        }
         bytes.extend_from_slice(&chunk);
     }
     let reply: Value = serde_json::from_slice(&bytes)
@@ -751,22 +812,37 @@ pub(crate) async fn detect(
     service: &NvwaService,
     profile: &NvwaProfile,
     client: Option<ClientKind>,
+    allow_catalog_limit: bool,
 ) -> Result<Value> {
     let (generation, auth) = service.inner.runtime.auth(&profile.id).await?;
     let mut transport = DetectionTransport::new(service, profile, client).await?;
-    let result = detect_catalog(service, profile, &generation, &auth, &mut transport).await;
+    let result = detect_catalog(
+        service,
+        profile,
+        &generation,
+        &auth,
+        &mut transport,
+        allow_catalog_limit,
+    )
+    .await;
     transport.close().await;
     if let Err(error) = &result {
         record_remote_auth_rejection(service, &profile.id, &generation, &auth, error).await;
     }
-    if result.is_ok()
-        && let Some(client) = client
-    {
-        service
-            .inner
-            .runtime
-            .record_client_check(&profile.id, client, &generation)
-            .await?;
+    if let Ok(detected) = &result {
+        if detected["catalogComplete"] == false {
+            service
+                .inner
+                .runtime
+                .record_catalog_limit(&profile.id, client, &generation)
+                .await?;
+        } else if let Some(client) = client {
+            service
+                .inner
+                .runtime
+                .record_client_check(&profile.id, client, &generation)
+                .await?;
+        }
     }
     result
 }
@@ -848,12 +924,15 @@ impl DetectionTransport {
         if response.status() == StatusCode::ACCEPTED && request.get("id").is_none() {
             return Ok(RemoteResponse::Accepted);
         }
+        let status = response.status();
         ensure!(
-            response.status() == StatusCode::OK,
+            matches!(status, StatusCode::OK | StatusCode::BAD_GATEWAY),
             "Local MCP bridge check returned HTTP {}",
-            response.status().as_u16()
+            status.as_u16()
         );
-        if request.get("method").and_then(Value::as_str) == Some("initialize") {
+        if status == StatusCode::OK
+            && request.get("method").and_then(Value::as_str) == Some("initialize")
+        {
             let session = response
                 .headers()
                 .get("mcp-session-id")
@@ -879,14 +958,26 @@ impl DetectionTransport {
             .await
             .map_err(|_| anyhow::anyhow!("Local MCP response interrupted"))?
         {
-            ensure!(
-                bytes.len().saturating_add(chunk.len()) <= MAX_REMOTE_BYTES,
-                "Local MCP response exceeds size limit"
-            );
+            if bytes.len().saturating_add(chunk.len()) > MAX_REMOTE_BYTES {
+                ensure!(
+                    status == StatusCode::OK,
+                    "Local MCP bridge check returned HTTP {}",
+                    status.as_u16()
+                );
+                return Err(ResponseTooLarge.into());
+            }
             bytes.extend_from_slice(&chunk);
         }
         let reply: Value = serde_json::from_slice(&bytes)
             .map_err(|_| anyhow::anyhow!("Local MCP response invalid JSON"))?;
+        if is_size_limit_response(status, request, &reply) {
+            return Err(ResponseTooLarge.into());
+        }
+        ensure!(
+            status == StatusCode::OK,
+            "Local MCP bridge check returned HTTP {}",
+            status.as_u16()
+        );
         ensure!(
             reply.get("jsonrpc").and_then(Value::as_str) == Some("2.0")
                 && (reply.get("result").is_some() ^ reply.get("error").is_some()),
@@ -916,6 +1007,7 @@ async fn detect_catalog(
     generation: &str,
     auth: &AuthResult,
     transport: &mut DetectionTransport,
+    allow_catalog_limit: bool,
 ) -> Result<Value> {
     let id = format!("hub-detect-{}", uuid::Uuid::new_v4());
     let init = json!({"jsonrpc":"2.0","id":id,"method":"initialize","params":{
@@ -952,10 +1044,23 @@ async fn detect_catalog(
         if let Some(cursor) = &cursor {
             request["params"]["cursor"] = Value::String(cursor.clone());
         }
-        let RemoteResponse::Json(reply) = transport
+        let response = transport
             .request(service, profile, auth, &request, &version)
-            .await?
-        else {
+            .await;
+        let response = match response {
+            Err(error) if allow_catalog_limit && error.is::<ResponseTooLarge>() => {
+                return Ok(super::discovery::catalog_result(
+                    &version,
+                    server_info,
+                    generation,
+                    transport.local.is_some(),
+                    tools,
+                    Some("response_size"),
+                ));
+            }
+            result => result?,
+        };
+        let RemoteResponse::Json(reply) = response else {
             bail!("MCP tools/list response missing");
         };
         ensure!(
@@ -984,6 +1089,16 @@ async fn detect_catalog(
                         && s.get("type").and_then(Value::as_str) == Some("object")),
                 "MCP tool input schema invalid"
             );
+            if tools.len() == 10_000 && allow_catalog_limit {
+                return Ok(super::discovery::catalog_result(
+                    &version,
+                    server_info,
+                    generation,
+                    transport.local.is_some(),
+                    tools,
+                    Some("tool_count"),
+                ));
+            }
             tools.push(tool.clone());
             ensure!(tools.len() <= 10_000, "MCP tool catalog exceeds size limit");
         }
@@ -996,7 +1111,21 @@ async fn detect_catalog(
         };
         if let Some(cursor) = &cursor {
             ensure!(
-                cursors.insert(cursor.clone()) && page < 99,
+                cursors.insert(cursor.clone()),
+                "MCP tool catalog cursor cycle or page limit exceeded"
+            );
+            if page == 99 && allow_catalog_limit {
+                return Ok(super::discovery::catalog_result(
+                    &version,
+                    server_info,
+                    generation,
+                    transport.local.is_some(),
+                    tools,
+                    Some("page_count"),
+                ));
+            }
+            ensure!(
+                page < 99,
                 "MCP tool catalog cursor cycle or page limit exceeded"
             );
         } else {
@@ -1006,13 +1135,17 @@ async fn detect_catalog(
                 .runtime
                 .set_tools(&profile.id, generation, catalog.clone())
                 .await?;
-            return Ok(
-                json!({"state":"tools_discovered","protocolVersion":version,"serverInfo":server_info,
-                "toolCount":catalog.as_array().map(Vec::len),"tools":catalog,"checkedAtMs":now_ms(),
-                "authGeneration":generation,
-                "localBridgeVerified":transport.local.is_some(),
-                "detail":"initialize and paginated tools/list verified; no tool invoked"}),
-            );
+            let Value::Array(tools) = catalog else {
+                unreachable!()
+            };
+            return Ok(super::discovery::catalog_result(
+                &version,
+                server_info,
+                generation,
+                transport.local.is_some(),
+                tools,
+                None,
+            ));
         }
     }
     bail!("MCP tool catalog incomplete")

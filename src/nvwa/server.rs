@@ -472,16 +472,22 @@ async fn command(service: &NvwaService, operation: &str, body: &Value) -> Result
                 .filter(|s| !s.is_empty())
                 .map(bridge::client_kind)
                 .transpose()?;
-            let mut detected = bridge::detect(service, &profile, client).await?;
+            let summary_only = body.get("summaryOnly").and_then(Value::as_bool) == Some(true);
+            let mut detected = bridge::detect(service, &profile, client, summary_only).await?;
             if body.get("clientKind").and_then(Value::as_str) == Some("tiangong") {
                 detected["tiangongDirectoryUpdated"] = Value::Bool(
-                    update_tiangong_catalog(service, &profile, &detected)
-                        .await
-                        .is_ok(),
+                    detected["catalogComplete"] == true
+                        && update_tiangong_catalog(service, &profile, &detected)
+                            .await
+                            .is_ok(),
                 );
             }
             detected["runtimeProfile"] = runtime_profile(service, &profile).await;
-            Ok(detected)
+            Ok(if summary_only {
+                super::discovery::compact_detection(detected)
+            } else {
+                detected
+            })
         }
         value if value.starts_with("client/") => {
             drop(_guard);

@@ -1,7 +1,7 @@
-TianCaiSpaceHub v0.4.30-8：天工 Work 适配与接入页面统一（2026-10-27）
+TianCaiSpaceHub v0.4.30-10：MCP 连通检测与内容概览（2026-11-02）
 
-适配天工 Work 的任务收尾、主任务审批、IM/桌面模型绑定、默认流式上下文和后台运行/重连保护，兼容旧协议。Hub 不再设置天工默认模型，保存保留原状态。
+Dumpling-MCP 检测向界面只返回模块/工具数量与少量用途示例，完整参数结构留在后台核验和天工原生目录同步，避免较大工具清单被界面响应上限误报失败。较多内容省略展示，完整目录的总数保持准确。
 
-WorkBuddy、天工 Work 统一管理模型、渠道名称和主要按钮，隐藏内部地址/Key/路径等展示；思考强度并入 WorkBuddy 连接卡片。两页与 Dumpling-MCP 共用只读/编辑底色，原路由、凭据和备份行为保留。
+初始化成功后若目录达到读取容量上限，明确显示“已连通、目录未完整读取、工具总数未知”；认证或协议错误仍失败，不以部分目录更新天工，也不撤销原客户端接入。其他用户“尚未取得接入授权”仍需现场证据，不宣称本轮已修复。
 
-版本递增至 v0.4.30-8 / Windows 0.4.30.8。Windows 本地测试包已交付，用户初步反馈“暂时没问题”并授权发布；162 个不同 Rust 聚焦用例、20 个桌面同步 JS 用例、4 个实际函数离线用例、Windows GUI 编译及 MSI 静态核验通过。Windows x64、macOS universal 的分发包由 GitHub Actions 生成并上传本 Release，本地 debug MSI 不作为正式分发包；构建开始不等于产物完成，macOS 实机及完整边界仍待验收。源码身份、兼容/回滚和各阶段状态见 [v8 交付](https://github.com/soupdomplings/TianCaiSpaceHub/blob/main/docs/releases/v0.4.30-8.md)。
+继承 v9 的 Codex 历史恢复与新版 Fast 兼容，原验证边界见 v9 交付。版本为 v0.4.30-10 / Windows 0.4.30.10；用户对 Windows 本地测试交付反馈“可以了”，本轮按授权同步 GitHub 并使用 Actions 构建 Windows x64 和 macOS universal 安装包，产物保存在 Actions artifacts。源码、实际构建状态、包身份及回滚见 [v10 交付](docs/releases/v0.4.30-10.md)。本地试用反馈不代表全部功能或 macOS 实机验收。

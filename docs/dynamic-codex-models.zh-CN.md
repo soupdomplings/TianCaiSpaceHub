@@ -1,8 +1,14 @@
 # 动态 Codex 可见模型
 
-维护日期：2026-10-20。当前版本 `v0.4.30-7`、唯一 `main`，关联 TC-006、TC-007。保留前轮 Fast 布尔/访问状态结构、Ultra 模型过滤、设置入口与独立可选启动策略；v6 增强脚本 v24 新增 Power、Ultra 本地偏好 fallback、Goal、语言和插件/浏览器组件的定向适配，并提供统一的 [检查与修复中心](customizations/codex-repair-center.md)。缺项仍不阻塞模型列表、语言等基础启动检查。v7 启动修复另补齐程序路径绑定，见 [启动修复](customizations/codex-startup-repair.md#程序路径修复与恢复)。源码已推送（`3b96fa6`），Windows/macOS Actions 均已确认开始，包结果和实机待确认；准确源码、构建及测试包身份见 [v7 交付](releases/v0.4.30-7.md)，本轮未创建标签或发布 Release。前轮源码与 Actions、现有 Fast 请求核对保留在 [v5 历史交付](releases/v0.4.30-5.md)；这些结果不等于本轮全部选项或 macOS 已验收。版本沿革见 [二开变更记录](customizations/CHANGELOG.md)。
+维护日期：2026-10-29。当前开发版本 `v0.4.30-9`、唯一 `main`，关联 TC-006、TC-007。v9 兼容 Fast 认证新增的 `amazonBedrock` 分支，保留旧布尔/访问状态型结构、真实 requirements 与模型能力；增强脚本 v25 增加独立于 Fast 选项的 [历史恢复](customizations/codex-history-recovery.md)。Windows 本地测试包、实际验证与待验收边界见 [v9 交付](releases/v0.4.30-9.md)，本轮未推送或发布；持续 EBADF 写入异常根因仍待排查。v7 及更早源码、Actions 和有限用户反馈保留各原版本归属，版本沿革见 [二开变更记录](customizations/CHANGELOG.md)。
 
 Codex 可见模型现在支持内置目录之外的模型。模型来源包括已配置渠道保存的模型列表，以及 Codex 接入页中手动输入的模型 ID。
+
+## 历史加载与新版 Fast 兼容
+
+v9 按实际已核对的局部结构支持 Fast UI/请求中的 `amazonBedrock` 认证分支；同一 auth/host/requirements 变量验证、未知/歧义不改写和受管本机范围继续保留。它只恢复入口及既有服务档读取流程，按钮出现不代表上游已使用 Fast。
+
+增强启动同时安装按需历史恢复，与 Fast/Ultra 配置勾选独立。首次打开会话遇到 `execution-config-loading` 时最多等待 15 秒并沿用原恢复；分页失败后显示原重试提示并实际调用原加载器，保留已有消息、游标和锚点。限制、取消、回滚与日志见 [历史恢复专题](customizations/codex-history-recovery.md)，不修改历史数据或 Statsig 身份。
 
 ## 初始化与增强启动固定 Codex 对话模式
 

@@ -252,6 +252,10 @@ fn display_message(text: GuiText, message: &str) -> String {
             "已连接到 MCP 并读取工具清单。可以继续接入客户端；工具是否能执行，需要在客户端中确认。",
             "MCP connected and its tool list was read. Connect a client next; verify tool execution there.",
         ),
+        "MCP connected; tool catalog exceeds read limit" => (
+            "MCP 已连通；工具目录较大，未完整读取，工具总数未知。",
+            "MCP connected; the tool catalog is large and incomplete, so the total is unknown.",
+        ),
         "Waiting for one-time browser authorization"
         | "Complete authorization in NVWA; callback must match this one-time transaction" => (
             "请在打开的 NVWA 页面完成登录和授权，然后回到 Hub 查看结果。",
@@ -510,103 +514,199 @@ fn select_client(tab: &NvwaTab) {
     update_controls(tab);
 }
 
-fn bounded_tool_text(value: &str, limit: usize) -> String {
-    let mut characters = value
-        .trim()
-        .chars()
-        .filter(|character| !character.is_control() || matches!(*character, '\n' | '\t'));
-    let mut text: String = characters.by_ref().take(limit).collect();
-    if characters.next().is_some() {
-        text.push('…');
+fn tool_catalog_text(text: GuiText, detection: &Value) -> String {
+    let fallback;
+    let summary = if let Some(summary) = detection.get("catalogSummary") {
+        summary
+    } else {
+        fallback = crate::nvwa::discovery::summarize_tools(
+            detection["tools"]
+                .as_array()
+                .map(Vec::as_slice)
+                .unwrap_or(&[]),
+        );
+        &fallback
+    };
+    let complete = detection["catalogComplete"].as_bool().unwrap_or(true);
+    let mut lines = vec![catalog_connection_text(text, detection, false)];
+    if let Some(count) = summary["groupCount"].as_u64().filter(|count| *count > 0) {
+        let kind = if summary["moduleCount"].as_u64() == Some(count) {
+            tr(text, "模块", "modules")
+        } else {
+            tr(text, "内容分组", "content groups")
+        };
+        lines.push(match (text.locale, complete) {
+            (GuiLocale::ZhCn, true) => format!("共 {count} 个{kind}。"),
+            (GuiLocale::ZhCn, false) => format!("已读取内容包含 {count} 个{kind}。"),
+            (GuiLocale::EnUs, true) => format!("{count} {kind}."),
+            (GuiLocale::EnUs, false) => format!("The content read so far contains {count} {kind}."),
+        });
     }
-    text
-}
-
-fn contains_chinese(value: &str) -> bool {
-    value
-        .chars()
-        .any(|character| matches!(character, '\u{3400}'..='\u{9fff}' | '\u{f900}'..='\u{faff}'))
-}
-
-fn tool_catalog_text(text: GuiText, tools: &[Value]) -> String {
-    if tools.is_empty() {
-        return tr(
-            text,
-            "MCP 服务未返回可用工具。",
-            "The MCP service returned no available tools.",
-        )
-        .to_string();
+    let groups = summary["groups"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    if groups.is_empty() {
+        lines.push(
+            tr(
+                text,
+                if complete {
+                    "服务未返回可用工具。"
+                } else {
+                    "目录未完整读取，暂时没有可展示的模块和用途。"
+                },
+                if complete {
+                    "The service returned no available tools."
+                } else {
+                    "The catalog is incomplete; no module or purpose details are available yet."
+                },
+            )
+            .to_string(),
+        );
     }
-    tools
-        .iter()
-        .enumerate()
-        .map(|(index, tool)| {
-            let code = tool
-                .get("name")
-                .and_then(Value::as_str)
-                .or_else(|| tool.as_str())
-                .unwrap_or("");
-            let title = tool
-                .get("title")
-                .and_then(Value::as_str)
-                .filter(|value| !value.trim().is_empty())
-                .or_else(|| {
-                    tool.pointer("/annotations/title")
-                        .and_then(Value::as_str)
-                        .filter(|value| !value.trim().is_empty())
-                });
-            let description = tool
-                .get("description")
-                .and_then(Value::as_str)
-                .filter(|value| !value.trim().is_empty());
-            let use_title = title.is_some_and(|title| {
-                matches!(text.locale, GuiLocale::EnUs)
-                    || contains_chinese(title)
-                    || !description.is_some_and(contains_chinese)
-            });
-            let heading = if let Some(title) = title.filter(|_| use_title) {
-                bounded_tool_text(title, 80)
-                    .split_whitespace()
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            } else if let Some(description) = description {
-                let summary = description
-                    .split(['。', '！', '？', '\n', '\r'])
-                    .find(|part| !part.trim().is_empty())
-                    .unwrap_or(description);
-                bounded_tool_text(summary, 48)
+    for group in groups {
+        let name = group["name"].as_str().unwrap_or("");
+        let count = group["toolCount"].as_u64().unwrap_or(0);
+        let kind = match group["source"].as_str() {
+            Some("module") => tr(text, "模块", "Module"),
+            _ => tr(text, "工具分组", "Tool group"),
+        };
+        lines.push(match text.locale {
+            GuiLocale::ZhCn => format!("\n{kind} {name}：{count} 个工具"),
+            GuiLocale::EnUs => format!("\n{kind} {name}: {count} tools"),
+        });
+        for example in group["examples"]
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+        {
+            let code = example["name"].as_str().unwrap_or("");
+            let title = example["title"]
+                .as_str()
+                .filter(|value| !value.is_empty())
+                .unwrap_or(code);
+            let heading = if title == code {
+                title.to_string()
             } else {
-                bounded_tool_text(code, 256)
+                format!("{title} ({code})")
             };
-            let mut entry = format!(
-                "{}. {heading}\n{}{}",
-                index + 1,
-                tr(text, "工具代码：", "Tool code: "),
-                code,
-            );
-            if let Some(description) = description {
-                entry.push_str(&format!(
-                    "\n{}{}",
-                    tr(text, "服务说明：", "Service description: "),
-                    bounded_tool_text(description, 1600),
-                ));
-            } else {
-                entry.push_str(tr(
-                    text,
-                    "\n服务未提供工具说明。",
-                    "\nThe service did not provide a tool description.",
-                ));
-            }
-            if matches!(text.locale, GuiLocale::ZhCn)
-                && !title.is_some_and(contains_chinese)
-                && !description.is_some_and(contains_chinese)
-            {
-                entry.push_str("\n服务未提供中文名称或说明，请按工具代码核对。");
-            }
-            entry
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n")
+            let description = example["description"]
+                .as_str()
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| {
+                    tr(
+                        text,
+                        "服务未提供用途说明",
+                        "The service did not describe its purpose",
+                    )
+                });
+            lines.push(format!("  • {heading}: {description}"));
+        }
+        let omitted = group["omittedToolCount"].as_u64().unwrap_or(0);
+        if omitted > 0 {
+            lines.push(match text.locale {
+                GuiLocale::ZhCn => format!("  另有 {omitted} 个工具未展开。"),
+                GuiLocale::EnUs => format!("  {omitted} more tools are not expanded."),
+            });
+        }
+    }
+    let omitted_groups = summary["omittedGroupCount"].as_u64().unwrap_or(0);
+    if omitted_groups > 0 {
+        lines.push(match text.locale {
+            GuiLocale::ZhCn => format!("\n另有 {omitted_groups} 个分组未展开。"),
+            GuiLocale::EnUs => format!("\n{omitted_groups} more groups are not expanded."),
+        });
+    }
+    lines.join("\n")
+}
+
+fn catalog_connection_text(text: GuiText, detection: &Value, local: bool) -> String {
+    if detection["catalogComplete"] == false {
+        return tr(text,
+            if local { "本机桥已连通；工具目录较大，未完整读取，工具总数未知。" }
+                else { "MCP 已连通；工具目录较大，未完整读取，工具总数未知。" },
+            if local { "Local bridge connected; the tool catalog is large and incomplete, so the total is unknown." }
+                else { "MCP connected; the tool catalog is large and incomplete, so the total is unknown." },
+        ).to_string();
+    }
+    let count = detection["toolCount"].as_u64().or_else(|| {
+        detection["tools"]
+            .as_array()
+            .map(|tools| tools.len() as u64)
+    });
+    match (text.locale, local, count) {
+        (GuiLocale::ZhCn, false, Some(count)) => format!("MCP 连接成功，共 {count} 个可用工具。"),
+        (GuiLocale::ZhCn, true, Some(count)) => format!("本机桥连接成功，共 {count} 个可用工具。"),
+        (GuiLocale::EnUs, false, Some(count)) => format!("MCP connected; {count} tools available."),
+        (GuiLocale::EnUs, true, Some(count)) => {
+            format!("Local bridge connected; {count} tools available.")
+        }
+        _ => tr(
+            text,
+            "连接成功，服务未提供工具总数。",
+            "Connected; the service did not provide a tool total.",
+        )
+        .to_string(),
+    }
+}
+
+#[cfg(test)]
+mod detection_summary_tests {
+    use super::*;
+
+    #[test]
+    fn abbreviated_examples_keep_the_exact_total_and_show_the_omission() {
+        let detection = crate::nvwa::discovery::compact_detection(
+            crate::nvwa::discovery::catalog_result(
+                "fixture", None, "fixture-generation", false,
+                (0..156).map(|index| json!({"name":format!("fixture.tool_{index}"),
+                    "description":"只读用途", "_meta":{"com.jiuqi.nvwa":{"moduleName":"fixture-module"}}})).collect(), None,
+            ),
+        );
+        let rendered = tool_catalog_text(
+            GuiText {
+                locale: GuiLocale::ZhCn,
+            },
+            &detection,
+        );
+        assert!(rendered.contains("156 个可用工具"));
+        assert!(rendered.contains("共 1 个模块"));
+        assert!(rendered.contains("153 个工具未展开"));
+        assert!(rendered.contains("只读用途"));
+        assert!(!rendered.contains("fixture.tool_3:"));
+    }
+
+    #[test]
+    fn incomplete_catalog_does_not_render_a_partial_or_zero_count_as_the_total() {
+        let partial = crate::nvwa::discovery::catalog_result(
+            "fixture",
+            None,
+            "fixture-generation",
+            true,
+            vec![json!({"name":"fixture.tool"})],
+            Some("response_size"),
+        );
+        let chinese = catalog_connection_text(
+            GuiText {
+                locale: GuiLocale::ZhCn,
+            },
+            &partial,
+            true,
+        );
+        assert!(chinese.contains("本机桥已连通"));
+        assert!(chinese.contains("工具总数未知"));
+        assert!(!chinese.contains("1 个"));
+        let english = catalog_connection_text(
+            GuiText {
+                locale: GuiLocale::EnUs,
+            },
+            &partial,
+            false,
+        );
+        assert!(english.contains("total is unknown"));
+        assert!(!english.contains("0 tools"));
+        assert!(!english.contains("1 tools"));
+    }
 }
 
 fn show_error(parent: &dyn WxWidget, message: &str) {
@@ -1062,14 +1162,18 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> NvwaTab {
             restore,
         }
     };
-    label(&page, &root, tr(text, "当前可用工具", "Available tools"));
+    label(
+        &page,
+        &root,
+        tr(text, "连接内容概览", "Connection overview"),
+    );
     label(
         &page,
         &root,
         tr(
             text,
-            "来自 MCP 服务返回的工具清单（tools/list）；显示返回的名称或短简介、说明与原始工具代码。",
-            "From the MCP service's tool list (tools/list); shows returned names or short summaries, descriptions and original tool codes.",
+            "显示可用工具数量、模块或分组及少量用途示例；较多内容会省略展示。",
+            "Shows the available tool count, modules or groups, and a few purpose examples; larger displays are abbreviated.",
         ),
     );
     let tools = TextCtrl::builder(&page)
@@ -1147,6 +1251,16 @@ fn config_path() -> PathBuf {
     daemon_config_path().unwrap_or_else(app_support_config_path)
 }
 
+const MAX_MANAGEMENT_RESPONSE_BYTES: u64 = 2 * 1024 * 1024;
+
+fn management_size_message(path: &str) -> String {
+    if path == "/manage/tools/detect" {
+        "Hub 界面未能完整读取较大的检测结果；这不代表 MCP 连接失败。请刷新 Hub 后重新检测。".into()
+    } else {
+        "Hub 后台返回内容较大，界面未能完整读取结果。".into()
+    }
+}
+
 fn management_request(path: &str, body: Option<Value>) -> Result<Value, String> {
     let info = crate::nvwa::NvwaService::load_management_info(&config_path())
         .map_err(|_| "无法读取 NVWA 后台安全连接".to_string())?
@@ -1184,18 +1298,18 @@ fn management_request(path: &str, body: Option<Value>) -> Result<Value, String> 
         .map_err(|_| "NVWA 后台连接失败或等待超时；操作不会自动重试".to_string())?;
     if response
         .content_length()
-        .is_some_and(|size| size > 2 * 1024 * 1024)
+        .is_some_and(|size| size > MAX_MANAGEMENT_RESPONSE_BYTES)
     {
-        return Err("NVWA 后台响应超过限制".to_string());
+        return Err(management_size_message(path));
     }
     let status = response.status();
     let mut bytes = Vec::new();
     response
-        .take(2 * 1024 * 1024 + 1)
+        .take(MAX_MANAGEMENT_RESPONSE_BYTES + 1)
         .read_to_end(&mut bytes)
         .map_err(|_| "无法读取 NVWA 后台响应".to_string())?;
-    if bytes.len() > 2 * 1024 * 1024 {
-        return Err("NVWA 后台响应超过限制".to_string());
+    if bytes.len() as u64 > MAX_MANAGEMENT_RESPONSE_BYTES {
+        return Err(management_size_message(path));
     }
     let payload: Value =
         serde_json::from_slice(&bytes).map_err(|_| "NVWA 后台响应格式无效".to_string())?;
@@ -1218,6 +1332,11 @@ fn start(
     path: &str,
     mut body: Option<Value>,
 ) {
+    if matches!(&action, Action::Detect | Action::DetectClient(_))
+        && let Some(body) = body.as_mut()
+    {
+        body["summaryOnly"] = json!(true);
+    }
     if matches!(action, Action::Cancel | Action::ResetAuthentication) {
         tab.busy.store(true, Ordering::SeqCst);
     } else if tab.busy.swap(true, Ordering::SeqCst) {
@@ -2045,12 +2164,7 @@ pub(super) fn apply_result(
             tab.status.set_label("");
         }
         Action::Detect => {
-            let tools = value
-                .get("tools")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
-            tab.tools.set_value(&tool_catalog_text(text, &tools));
+            tab.tools.set_value(&tool_catalog_text(text, &value));
             let kind = selected_client_kind(tab);
             let has_access = runtime_client_access(&value["runtimeProfile"], kind).0;
             let next_step = if has_access {
@@ -2066,20 +2180,21 @@ pub(super) fn apply_result(
                     "Choose a client below and inspect its settings; preview and confirm for first setup.",
                 )
             };
-            tab.status.set_label(&match text.locale {
-                GuiLocale::ZhCn => {
-                    format!("MCP 连接成功，已读取 {} 个工具。{next_step}", tools.len())
-                }
-                GuiLocale::EnUs => {
-                    format!("MCP connected; {} tools found. {next_step}", tools.len())
-                }
-            });
+            tab.status.set_label(&format!(
+                "{} {next_step}",
+                catalog_connection_text(text, &value, false)
+            ));
         }
         Action::DetectClient(kind) => {
-            let tools = value["tools"].as_array().cloned().unwrap_or_default();
-            tab.tools.set_value(&tool_catalog_text(text, &tools));
+            tab.tools.set_value(&tool_catalog_text(text, &value));
             let next_step = if kind == "tiangong" {
-                if value["tiangongDirectoryUpdated"].as_bool() == Some(true) {
+                if value["catalogComplete"] == false {
+                    tr(
+                        text,
+                        "目录未完整读取，本次未更新天工工具清单。",
+                        "The catalog is incomplete; TianGong's tool list was not updated.",
+                    )
+                } else if value["tiangongDirectoryUpdated"].as_bool() == Some(true) {
                     tr(
                         text,
                         "工具清单已更新到天工，可在下一轮对话中使用。",
@@ -2102,16 +2217,10 @@ pub(super) fn apply_result(
             set_client_feedback(
                 tab,
                 &kind,
-                &match text.locale {
-                    GuiLocale::ZhCn => format!(
-                        "Hub 已通过这条连接读取到 {} 个工具。{next_step}",
-                        tools.len()
-                    ),
-                    GuiLocale::EnUs => format!(
-                        "Hub read {} tools through this connection. {next_step}",
-                        tools.len()
-                    ),
-                },
+                &format!(
+                    "{} {next_step}",
+                    catalog_connection_text(text, &value, true)
+                ),
             );
             let mut status = tab
                 .state
@@ -2126,7 +2235,11 @@ pub(super) fn apply_result(
             status["clientAccessRecoveryFailed"] =
                 value["runtimeProfile"]["clientAccessRecoveryFailed"].clone();
             status["bridgeState"] = json!(if has_access && !suspended {
-                "checked"
+                if value["catalogComplete"] == false {
+                    "connected_catalog_limited"
+                } else {
+                    "checked"
+                }
             } else {
                 "unknown"
             });
@@ -2461,6 +2574,11 @@ fn render_client_status(
         }
     };
     let bridge = match bridge {
+        "connected_catalog_limited" => tr(
+            tab.text,
+            "本机桥已连通；目录未完整读取，工具总数未知。",
+            "Local bridge connected; the catalog is incomplete and the tool total is unknown.",
+        ),
         "checked" | "tools_discovered" => tr(
             tab.text,
             "Hub 已检测这条工具连接；客户端是否能使用，请在客户端确认。",

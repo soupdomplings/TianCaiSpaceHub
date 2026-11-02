@@ -26,9 +26,12 @@ pub(super) fn startup_reload_guard() -> &'static str {
       const afterLoad = () => setTimeout(() => {
         if (window.location.protocol !== 'app:') return;
         const source = window.__CODEXHUB_MODEL_CONTROLS_SOURCE__;
+        const history = window.__CODEXHUB_HISTORY_RECOVERY_SOURCE__;
         // Only retry a missed initial capture. A partial adaptation is usable;
         // unsupported optional components must not trigger another refresh.
-        if (source?.version !== 2 && window.__CODEXHUB_ENHANCED_MODE__?.modelControlsEnabled === true) {
+        if (source?.version !== 2 && history?.version !== 1 &&
+            (window.__CODEXHUB_ENHANCED_MODE__?.modelControlsEnabled === true ||
+             window.__CODEXHUB_ENHANCED_MODE__?.historyRecoveryEnabled === true)) {
           window.location.reload();
         }
       }, 250);
@@ -56,6 +59,7 @@ pub(super) fn fetch_options() -> Value {
         ,{"urlPattern": "app://*/assets/model-picker-*.js", "requestStage": "Response"}
         ,{"urlPattern": "app://*/assets/use-is-plugins-enabled-*.js", "requestStage": "Response"}
         ,{"urlPattern": "app://*/assets/use-plugin-install-flow-*.js", "requestStage": "Response"}
+        ,{"urlPattern": "app://*/assets/local-conversation-thread-*.js", "requestStage": "Response"}
     ]})
 }
 
@@ -87,6 +91,7 @@ fn supported_script_url(raw: &str) -> bool {
             "model-picker-",
             "use-is-plugins-enabled-",
             "use-plugin-install-flow-",
+            "local-conversation-thread-",
         ]
         .iter()
         .any(|prefix| name.starts_with(prefix))
@@ -106,6 +111,8 @@ struct AdaptedSource {
     ultra_models: bool,
     settings_sections: bool,
     extra_controls: bool,
+    history_resume: bool,
+    history_retry: bool,
 }
 
 impl AdaptedSource {
@@ -115,6 +122,8 @@ impl AdaptedSource {
             || self.ultra_models
             || self.settings_sections
             || self.extra_controls
+            || self.history_resume
+            || self.history_retry
     }
 }
 
@@ -145,12 +154,12 @@ fn adapt_source(source: String) -> AdaptedSource {
     static FAST_UI: LazyLock<Regex> = LazyLock::new(|| {
         // Boolean availability and access-state layouts share this auth/host
         // prefix. Validate the matching result and requirements in the tail.
-        Regex::new(r#"(?P<host>[$\w]+)=e\?\.hostId\?\?[$\w]+,(?P<auth>[$\w]+)=[$\w]+\((?P<auth_host>[$\w]+)\),(?P<allowed>[$\w]+)=(?P<chat_auth>[$\w]+)\?\.authMethod===`chatgpt`(?:\|\|(?P<pat_auth>[$\w]+)\?\.authMethod===`personalAccessToken`)?,"#).expect("Fast UI adapter pattern")
+        Regex::new(r#"(?P<host>[$\w]+)=e\?\.hostId\?\?[$\w]+,(?P<auth>[$\w]+)=[$\w]+\((?P<auth_host>[$\w]+)\),(?P<allowed>[$\w]+)=(?P<chat_auth>[$\w]+)\?\.authMethod===`chatgpt`(?:\|\|(?P<pat_auth>[$\w]+)\?\.authMethod===`personalAccessToken`)?(?:\|\|(?P<bedrock_auth>[$\w]+)\?\.authMethod===`amazonBedrock`)?,"#).expect("Fast UI adapter pattern")
     });
     static FAST_REQUEST: LazyLock<Regex> = LazyLock::new(|| {
         // Preserve each helper's original return type, query/cache operations
         // and requirements result; only scope its authentication early return.
-        Regex::new(r#"async function [$\w]+\((?P<scope>[$\w]+),(?P<host>[$\w]+)\)\{let (?P<auth>[$\w]+)=await [$\w]+\((?P<auth_scope>[$\w]+),(?P<auth_host>[$\w]+)\);(?P<denial>if\((?P<chat_auth>[$\w]+)!==`chatgpt`(?:&&(?P<pat_auth>[$\w]+)!==`personalAccessToken`)?\))return(?: null|!1);let (?P<requirements>[$\w]+)=await [$\w]+\((?P<requirements_scope>[$\w]+),(?P<requirements_host>[$\w]+),\{priority:`critical`\}\);return (?P<cache_scope>[$\w]+)\.query\.setData\([$\w]+,\{authMethod:(?P<cache_auth>[$\w]+),hostId:(?P<cache_host>[$\w]+)\},(?P<cache_requirements>[$\w]+)\),(?:[$\w]+\((?P<access_requirements>[$\w]+)\)|(?P<boolean_requirements>[$\w]+)\.requirements\?\.featureRequirements\?\.fast_mode!==!1)\}"#).expect("Fast request adapter pattern")
+        Regex::new(r#"async function [$\w]+\((?P<scope>[$\w]+),(?P<host>[$\w]+)\)\{let (?P<auth>[$\w]+)=await [$\w]+\((?P<auth_scope>[$\w]+),(?P<auth_host>[$\w]+)\);(?P<denial>if\((?P<chat_auth>[$\w]+)!==`chatgpt`(?:&&(?P<pat_auth>[$\w]+)!==`personalAccessToken`)?(?:&&(?P<bedrock_auth>[$\w]+)!==`amazonBedrock`)?\))return(?: null|!1);let (?P<requirements>[$\w]+)=await [$\w]+\((?P<requirements_scope>[$\w]+),(?P<requirements_host>[$\w]+),\{priority:`critical`\}\);return (?P<cache_scope>[$\w]+)\.query\.setData\([$\w]+,\{authMethod:(?P<cache_auth>[$\w]+),hostId:(?P<cache_host>[$\w]+)\},(?P<cache_requirements>[$\w]+)\),(?:[$\w]+\((?P<access_requirements>[$\w]+)\)|(?P<boolean_requirements>[$\w]+)\.requirements\?\.featureRequirements\?\.fast_mode!==!1)\}"#).expect("Fast request adapter pattern")
     });
     static ULTRA_MODELS: LazyLock<Regex> = LazyLock::new(|| {
         // 26.1007 omits teamCatalog; 26.1013 adds it to the same query.
@@ -170,6 +179,8 @@ fn adapt_source(source: String) -> AdaptedSource {
     adapted.fast_ui = replace_unique(&mut adapted.source, &FAST_UI, |c, tail| {
         if c["auth"] != c["chat_auth"]
             || c.name("pat_auth")
+                .is_some_and(|auth| auth.as_str() != &c["auth"])
+            || c.name("bedrock_auth")
                 .is_some_and(|auth| auth.as_str() != &c["auth"])
             || c["host"] != c["auth_host"]
         {
@@ -214,6 +225,8 @@ fn adapt_source(source: String) -> AdaptedSource {
             .or_else(|| c.name("boolean_requirements"))?;
         if returned_requirements.as_str() != &c["requirements"]
             || c.name("pat_auth")
+                .is_some_and(|auth| auth.as_str() != &c["auth"])
+            || c.name("bedrock_auth")
                 .is_some_and(|auth| auth.as_str() != &c["auth"])
         {
             return None;
@@ -391,6 +404,8 @@ impl Interceptor {
                 ]
                 .iter()
                 .any(|key| value[*key].as_bool() == Some(true));
+                adapted.history_resume = value["historyResume"].as_bool() == Some(true);
+                adapted.history_retry = value["historyRetry"].as_bool() == Some(true);
             }
             return self
                 .finish_adaptation(socket, command_id, paused, adapted)
@@ -413,8 +428,9 @@ impl Interceptor {
                     // Run the pure optional adapter inside the attached renderer;
                     // no installed Node/Python dependency and no persistent patch.
                     let expression = format!(
-                        "({})({})",
+                        "((source)=>{{const controls=({})(source);const history=({})(controls.source);return {{...controls,...history}};}})({})",
                         include_str!("../../assets/codex-repair/renderer-adapter.js"),
+                        include_str!("../../assets/codex-repair/history-adapter.js"),
                         serde_json::to_string(&adapted.source)?
                     );
                     let id = send_cdp_request(
@@ -506,12 +522,14 @@ impl Interceptor {
                     })).await?;
             self.pending_fulfillments.insert(id, paused);
             chain_log::write_line(format!(
-                "[codex_app_enhanced] event=model_controls_source_adapted fast_ui={} fast_request={} ultra_models={} settings_sections={} extra_controls={}",
+                "[codex_app_enhanced] event=model_controls_source_adapted fast_ui={} fast_request={} ultra_models={} settings_sections={} extra_controls={} history_resume={} history_retry={}",
                 adapted.fast_ui,
                 adapted.fast_request,
                 adapted.ultra_models,
                 adapted.settings_sections,
-                adapted.extra_controls
+                adapted.extra_controls,
+                adapted.history_resume,
+                adapted.history_retry
             ));
         } else {
             chain_log::write_line("[codex_app_enhanced] event=model_controls_source_preserved reason=unsupported_layout".to_string());
@@ -597,6 +615,53 @@ mod tests {
     }
 
     #[test]
+    fn bedrock_auth_branch_keeps_fast_requirements_and_rejects_wrong_locals() {
+        let ui = UI.replace(
+            "`personalAccessToken`,",
+            "`personalAccessToken`||auth?.authMethod===`amazonBedrock`,",
+        );
+        let request = REQUEST.replace(
+            "`personalAccessToken`)",
+            "`personalAccessToken`&&auth!==`amazonBedrock`)",
+        );
+        let adapted = adapt_source(format!("{ui}{request}"));
+        assert!(adapted.fast_ui && adapted.fast_request);
+        assert!(adapted.source.contains("auth!==`amazonBedrock`&&!"));
+        assert!(
+            adapted
+                .source
+                .contains("requirements),access(requirements)")
+        );
+        assert!(adapted.source.contains("hostId:host},requirements)"));
+        for altered in [
+            ui.replace(
+                "auth?.authMethod===`amazonBedrock`",
+                "other?.authMethod===`amazonBedrock`",
+            ),
+            request.replace("auth!==`amazonBedrock`", "other!==`amazonBedrock`"),
+            ui.replace("`amazonBedrock`", "`unknownAuth`"),
+            request.replace("`amazonBedrock`", "`unknownAuth`"),
+            format!("{ui}{ui}"),
+            format!("{request}{request}"),
+        ] {
+            let result = adapt_source(altered.clone());
+            assert!(!result.changed());
+            assert_eq!(result.source, altered);
+        }
+    }
+
+    #[test]
+    #[ignore = "optional static check of user-supplied extracted JavaScript; does not execute Desktop"]
+    fn supplied_desktop_fast_asset_is_adapted() {
+        let input = std::env::var("HUB_CODEX_STATIC_INPUT").expect("input JavaScript path");
+        let output = std::env::var("HUB_CODEX_STATIC_OUTPUT").expect("output JavaScript path");
+        let adapted = adapt_source(std::fs::read_to_string(input).expect("read supplied source"));
+        assert!(adapted.fast_ui && adapted.fast_request);
+        std::fs::write(output, adapted.source)
+            .expect("write in-memory adapter result for syntax check");
+    }
+
+    #[test]
     fn mismatched_auth_or_host_does_not_rewrite_request() {
         for altered in [
             REQUEST.replace(
@@ -660,6 +725,9 @@ mod tests {
     #[test]
     fn only_packaged_model_control_assets_are_eligible() {
         assert!(supported_script_url("app://-/assets/app-initial-123.js"));
+        assert!(supported_script_url(
+            "app://-/assets/local-conversation-thread-123.js"
+        ));
         assert!(supported_script_url(
             "app://-/assets/configuration-panel-123.js"
         ));

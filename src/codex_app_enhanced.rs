@@ -35,7 +35,7 @@ const BROWSER_ATTACH_MAX_ATTEMPTS: usize = 2;
 // after that window so a cold renderer does not accumulate retry timers.
 const ENHANCED_SCRIPT_RETRY_INTERVAL: Duration = Duration::from_secs(43);
 const ENHANCED_STATUS_POLL_INTERVAL: Duration = Duration::from_millis(250);
-const ENHANCED_SCRIPT_VERSION: u64 = 24;
+const ENHANCED_SCRIPT_VERSION: u64 = 25;
 type CdpSocket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 type BrowserSessionFailure = Arc<Mutex<Option<&'static str>>>;
 
@@ -323,7 +323,7 @@ async fn launch_and_inject_inner(
     // The page-only fallback installs the enhanced script, but cannot serve
     // Fetch events. Explicitly attach the browser session if early auto-attach
     // missed this renderer (including an already running app).
-    if adapt_model_controls && early_attach.target_id.as_deref() != Some(target.id.as_str()) {
+    if early_attach.target_id.as_deref() != Some(target.id.as_str()) {
         stop_retained_browser_cdp_session().await;
         *browser_failure
             .lock()
@@ -396,6 +396,12 @@ async fn launch_and_inject_inner(
             "[codex_app_enhanced] event=remote_control_preference_deferred reason=optional_state_unavailable"
         }
     });
+    chain_log::write_line(format!(
+        "[codex_app_enhanced] event=history_recovery_optional_status installed={} resume_adapted={} retry_adapted={} wait_limit_ms=15000",
+        status.history_recovery_installed,
+        status.history_resume_adapted,
+        status.history_retry_adapted,
+    ));
     chain_log::write_line(format!(
         "[codex_app_enhanced] event=model_controls_optional_status enabled={} complete={} fast_ui={} fast_request={} ultra_models={} settings_sections={}",
         status.model_controls_enabled,
@@ -655,7 +661,7 @@ async fn attach_to_initial_renderer(
                     if is_renderer && renderer.is_none() {
                         // Only a freshly launched renderer may be reloaded. An
                         // already running user's window is never refreshed here.
-                        if adapt_model_controls && !target.waiting_for_debugger {
+                        if !target.waiting_for_debugger {
                             send_cdp_request(
                                 &mut socket,
                                 &mut command_id,
@@ -899,7 +905,7 @@ fn is_codex_renderer_target(target: &AttachedTarget) -> bool {
 fn attached_target_commands(
     target: &AttachedTarget,
     source: &str,
-    adapt_model_controls: bool,
+    _adapt_model_controls: bool,
 ) -> Vec<(&'static str, Value)> {
     if !is_codex_renderer_target(target) {
         return target
@@ -927,14 +933,14 @@ fn attached_target_commands(
             ),
         ]
     };
-    if adapt_model_controls {
-        commands.insert(0, ("Fetch.enable", model_controls::fetch_options()));
-        commands.insert(
-            0,
-            ("Network.setCacheDisabled", json!({"cacheDisabled": true})),
-        );
-        commands.insert(0, ("Network.enable", json!({})));
-    }
+    // History recovery is independent of the optional Fast/Ultra preference.
+    // Each rewritten feature still checks its own runtime enable flag.
+    commands.insert(0, ("Fetch.enable", model_controls::fetch_options()));
+    commands.insert(
+        0,
+        ("Network.setCacheDisabled", json!({"cacheDisabled": true})),
+    );
+    commands.insert(0, ("Network.enable", json!({})));
     commands
 }
 
@@ -1353,6 +1359,12 @@ struct InjectedStatus {
     model_controls_ready: bool,
     #[serde(default)]
     model_controls_source: ModelControlsSourceStatus,
+    #[serde(default)]
+    history_recovery_installed: bool,
+    #[serde(default)]
+    history_resume_adapted: bool,
+    #[serde(default)]
+    history_retry_adapted: bool,
 }
 
 async fn inject_until_ready(
@@ -1604,6 +1616,9 @@ async fn inspect_injected_status_on_socket(active: &mut ActiveInjection) -> Resu
            const gates = {gates};
            const modelControls = window.__CODEXHUB_MODEL_CONTROLS_SOURCE__;
            return {{
+             historyRecoveryInstalled: window.__CODEXHUB_HISTORY_RECOVERY__?.version === 1,
+             historyResumeAdapted: window.__CODEXHUB_HISTORY_RECOVERY_SOURCE__?.historyResume === true,
+             historyRetryAdapted: window.__CODEXHUB_HISTORY_RECOVERY_SOURCE__?.historyRetry === true,
              scriptInstalled: Boolean(enhanced?.installed),
              scriptApplied: Boolean(enhanced?.applied),
              scriptVersion: enhanced?.version ?? null,
@@ -1694,7 +1709,7 @@ fn enhanced_statsig_script(
     local_initialize_url.set_fragment(None);
     let local_initialize_url = serde_json::to_string(local_initialize_url.as_str())?;
     let script_version = ENHANCED_SCRIPT_VERSION;
-    Ok(format!(
+    let script = format!(
         r#"(() => {{
   const MARKER = "__CODEXHUB_ENHANCED_MODE__";
   const SCRIPT_VERSION = {script_version};
@@ -1706,6 +1721,7 @@ fn enhanced_statsig_script(
   const existing = window[MARKER];
   if (existing?.installed && existing.version === SCRIPT_VERSION) {{
       existing.modelControlsEnabled = MODEL_CONTROLS_ENABLED;
+      existing.historyRecoveryEnabled = true;
       existing.update?.(MODELS);
       existing.installPluginCatalogDispatchPatch?.();
       existing.refreshPluginCatalogCache?.();
@@ -1720,6 +1736,7 @@ fn enhanced_statsig_script(
     installed: true,
     version: SCRIPT_VERSION,
     modelControlsEnabled: MODEL_CONTROLS_ENABLED,
+    historyRecoveryEnabled: true,
     applied: false,
     attempts: 0,
     client: null,
@@ -2975,6 +2992,10 @@ fn enhanced_statsig_script(
   hookStatsigGlobal();
   queueMicrotask(attach);
 }})();"#
+    );
+    Ok(format!(
+        "{}\n{script}",
+        include_str!("../assets/codex-repair/history-recovery.js")
     ))
 }
 
@@ -3494,7 +3515,7 @@ mod tests {
         assert!(script.contains("const modelIsV2"));
         assert!(script.contains("installStorePatch"));
         assert!(script.contains("patchCachedI18nLayer"));
-        assert!(script.contains("SCRIPT_VERSION = 23"));
+        assert!(script.contains(&format!("SCRIPT_VERSION = {ENHANCED_SCRIPT_VERSION}")));
         assert!(script.contains("state.pluginCatalogCacheRefreshAttempts < 240"));
         assert!(script.contains("state.pluginCatalogCacheRefreshAttempts < 80 ? 25 : 250"));
         assert!(script.contains("PLUGIN_DIRECTORY_LINK_ID"));
@@ -3627,11 +3648,21 @@ mod tests {
         assert_eq!(
             methods,
             vec![
+                "Network.enable",
+                "Network.setCacheDisabled",
+                "Fetch.enable",
                 "Page.addScriptToEvaluateOnNewDocument",
                 "Runtime.runIfWaitingForDebugger"
             ]
         );
-        assert_eq!(commands[0].1["source"], "window.testEnhanced = true;");
+        assert_eq!(commands[3].1["source"], "window.testEnhanced = true;");
+        assert!(
+            commands[2].1["patterns"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|p| { p["urlPattern"] == "app://*/assets/local-conversation-thread-*.js" })
+        );
         assert!(!methods.contains(&"Runtime.evaluate"));
         assert!(!methods.contains(&"Page.reload"));
     }
@@ -3667,7 +3698,13 @@ mod tests {
 
         assert_eq!(
             methods,
-            vec!["Runtime.evaluate", "Page.addScriptToEvaluateOnNewDocument"]
+            vec![
+                "Network.enable",
+                "Network.setCacheDisabled",
+                "Fetch.enable",
+                "Runtime.evaluate",
+                "Page.addScriptToEvaluateOnNewDocument"
+            ]
         );
         assert!(!methods.contains(&"Page.reload"));
     }
@@ -3837,6 +3874,9 @@ mod tests {
             model_controls_enabled: false,
             model_controls_ready: false,
             model_controls_source: ModelControlsSourceStatus::default(),
+            history_recovery_installed: false,
+            history_resume_adapted: false,
+            history_retry_adapted: false,
         };
 
         assert!(injected_status_is_ready(&status, &expected_models));
@@ -3933,6 +3973,9 @@ mod tests {
             model_controls_enabled: false,
             model_controls_ready: false,
             model_controls_source: ModelControlsSourceStatus::default(),
+            history_recovery_installed: false,
+            history_resume_adapted: false,
+            history_retry_adapted: false,
         };
 
         assert!(!should_reapply_script(&status, Duration::from_secs(2)));

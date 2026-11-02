@@ -2,6 +2,7 @@ pub mod adapters;
 pub mod auth;
 mod bridge;
 pub mod config;
+pub(crate) mod discovery;
 mod runtime;
 pub mod secrets;
 mod server;
