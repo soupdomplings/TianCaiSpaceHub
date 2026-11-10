@@ -1,6 +1,6 @@
 # TianCaiSpaceHub 文档总入口
 
-2026-11-10 当前 **V1.0.16 统一 Windows 测试交付**：集中汇总顶部菜单/主题日历/密钥实际用量，以及 Codex CLI 启动与 MCP 升级、移除同步修复。唯一新包 `220951` 已生成，1354 个不同 Rust 用例及 14 项 Node 检查通过，受影响 4 项补跑替代同名结果，不重复计数；release 构建及静态包核验通过，准确包身份与验收边界见 [本批交付](releases/v1.0.16.md)。长期采用 [统一会话协作与测试打包](development/documentation.md#统一会话协作与测试打包)，根 [AGENTS.md](../AGENTS.md) 按管理/开发/打包职责分工；用户已授权本轮文件整理、缓存清理和 GitHub 源码提交，实际同步结果见 [清理记录](development/repository-cleanup.md)。旧包保留，真实安装待用户验收，尚未正式发布。下方各阶段检查和“未提交”等状态保留当时事实。
+2026-11-10 当前 **V1.0.16 统一 Windows 测试交付**：集中汇总顶部菜单/主题日历/密钥实际用量，以及 Codex CLI 启动与 MCP 升级、移除同步修复。唯一新包 `220951` 已生成，1354 个不同 Rust 用例及 14 项 Node 检查通过，受影响 4 项补跑替代同名结果，不重复计数；release 构建及静态包核验通过，准确包身份与验收边界见 [本批交付](releases/v1.0.16.md)。长期采用 [统一会话协作与测试打包](development/documentation.md#统一会话协作与测试打包)，根 [AGENTS.md](../AGENTS.md) 按管理/开发/打包职责分工。累计有效开发及本轮文件整理已按授权提交并推送至 GitHub `main`（`4f3e3a0`），详见 [清理记录](development/repository-cleanup.md)。旧包保留，真实安装待用户验收；本轮未触发 Actions、标签或正式发布。下方各阶段检查和“未提交”等状态保留当时事实。
 
 2026-11-10 当前 **V1.0.16 协助启动及MCP管理修正**：[本机协助](customizations/tiangong-local-assistance.md)明确CLI执行端、自动查找/商店包运行缓存及系统失败恢复；工具目录独立定时更新、删除/停用同步；[资源管理](customizations/desktop-capability-management.md)补端内移除和缺失使用记录清理。本任务开发就绪，GUI测试目标编译及68项定向离线检查通过；汇总测试包由统一打包会话核对共同源码后生成，本会话未独立打包，见[V16记录](releases/v1.0.16.md)。保留下方界面/账户增补和全部未提交开发，真实启动/同步及macOS待用户验收。
 

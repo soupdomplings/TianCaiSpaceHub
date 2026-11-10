@@ -1,10 +1,12 @@
 # 二开变更记录
 
-## 未发布 · 2026-11-10 · 管理角色指令、仓库归类与 GitHub 提交准备
+## 未发布 · 2026-11-10 · 管理角色指令、仓库归类与 GitHub 源码同步
 
 根据用户本轮明确授权完善根 [AGENTS.md](../../AGENTS.md)，拆分 [管理](../development/agents/management.md)、[开发](../development/agents/development.md) 和 [唯一打包](../development/agents/packaging.md) 职责；管理会话统一接收需求、维护精简上下文及归档已完成会话，开发并行但每批只交付一个汇总测试包。共享索引/总表/本记录由管理会话合并，产品专题及验证由对应会话交接。源码提交和推送已获授权，Actions、标签、Release 及用户验收仍分别记录。
 
 新增本机资料与缓存忽略规则；完整站点 ZIP/源码保留且排除提交，新增 [资料说明](../tiancaispace/README.md)，配套补丁继续独立维护。删除 18 个 Python 字节码及一个空测试元数据，共 19 个文件、251,126 字节；工具链、历史包、设计记录和用户运行数据保留。具体范围、回滚与验证状态见 [清理记录](../development/repository-cleanup.md)。本轮流程整理不提高 `1.0.16` 版本，累计产品开发及统一测试交付按下方原记录保留。
+
+累计有效开发、产品资源和本轮整理共 406 份改动已提交为 [`4f3e3a0`](https://github.com/soupdomplings/TianCaiSpaceHub/commit/4f3e3a0ca816dab9c97568adf5e19a03bac8b12c)，并正常推送至唯一 `origin/main`；58 份 Markdown 的 1,875 处本地链接及暂存差异检查通过。未触发 Actions、创建标签或 Release，唯一 Windows 测试包及用户待验收边界保持；当前补记只更新同步状态。
 
 ## 未发布 · 2026-11-10 · 文档治理：统一会话管理与测试打包
 

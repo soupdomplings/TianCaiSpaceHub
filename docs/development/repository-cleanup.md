@@ -2,7 +2,9 @@
 
 ## 2026-11-10 · 角色指令、文件归类与开发缓存清理
 
-用户明确要求管理会话编写自身指令、按需拆分职责、整理文件、清理开发垃圾并提交 GitHub。本轮保留唯一 `main`、`1.0.16` 版本及累计 v13/V1 开发；纯流程整理不升版本。源码提交和推送已获本轮授权，Actions、标签及 Release 未包含在该授权内，实际提交结果另记。
+用户明确要求管理会话编写自身指令、按需拆分职责、整理文件、清理开发垃圾并提交 GitHub。本轮保留唯一 `main`、`1.0.16` 版本及累计 v13/V1 开发；纯流程整理不升版本。
+
+**源码已提交并正常推送至 GitHub 唯一 `main`**：[产品与整理提交 `4f3e3a0`](https://github.com/soupdomplings/TianCaiSpaceHub/commit/4f3e3a0ca816dab9c97568adf5e19a03bac8b12c)，包含 406 份源码、资源及文档改动。推送从 `25d024b` 正常快进，没有强制推送、另建分支、触发 Actions、创建标签或 Release。本节后续提交只登记已完成的同步结果；Windows 测试包仍为唯一 `220951`，用户实机验收仍待完成。
 
 - 根 [AGENTS.md](../../AGENTS.md) 统一共同规则，按角色读取 [管理](agents/management.md)、[开发](agents/development.md)、[打包](agents/packaging.md) 指令；明确文件写入责任、精简交接、已完成会话归档和每批一份测试包。已完成的四个多余开发/排查会话已归档，唯一打包会话保留到交付完成。
 - `.gitignore` 补齐禁止读取/提交的 `zhenduan/`、`docs/.obsidian/`，以及脚本缓存、系统杂物和本机站点参考资料规则。`docs/tiancaispace/` 的 ZIP 与解压源码保留原位，只提交 [资料说明](../tiancaispace/README.md)；Hub 配套补丁继续在 `integrations/` 维护。
