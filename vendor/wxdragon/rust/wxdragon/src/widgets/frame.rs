@@ -127,10 +127,13 @@ impl Default for FrameBuilder {
     fn default() -> Self {
         Self {
             parent_ptr: ptr::null_mut(),
-            id: ID_ANY as i32,                      // Use ID_ANY from base (already i32)
-            title: "wxDragon Frame".to_string(),    // Default title
-            pos: Point::DEFAULT_POSITION,           // Default position
-            size: Size { width: 500, height: 400 }, // Specific default size for Frame
+            id: ID_ANY as i32, // Use ID_ANY from base (already i32)
+            title: "wxDragon Frame".to_string(), // Default title
+            pos: Point::DEFAULT_POSITION, // Default position
+            size: Size {
+                width: 500,
+                height: 400,
+            }, // Specific default size for Frame
             style: FrameStyle::Default,
             // name: String::new(),
         }
@@ -207,6 +210,45 @@ impl FrameBuilder {
 // --- Frame Implementation ---
 
 impl Frame {
+    /// Replace the Windows system caption with application content while
+    /// preserving native resize/system-menu/snap semantics. Returns false on
+    /// platforms which retain their native title bar. Only opt in the main frame.
+    pub fn enable_integrated_chrome(&self, dark: bool, border: crate::Colour) -> bool {
+        if !self.is_valid() {
+            return false;
+        }
+        let colour = border.r as u32 | ((border.g as u32) << 8) | ((border.b as u32) << 16);
+        unsafe { ffi::wxd_Frame_EnableIntegratedChrome(self.handle_ptr().cast(), dark, colour) }
+    }
+
+    /// Mark a window as title-bar background. Interactive descendants remain
+    /// ordinary controls unless they are explicitly registered as drag regions.
+    pub fn register_chrome_drag_region(&self, window: &impl WxWidget) {
+        if self.is_valid() && window.is_valid() {
+            unsafe {
+                ffi::wxd_Frame_RegisterChromeRegion(
+                    self.handle_ptr().cast(),
+                    window.handle_ptr(),
+                    1,
+                )
+            };
+        }
+    }
+
+    /// Use a native HTMAXBUTTON target for Windows 11 snap layouts. The widget
+    /// retains its focus/keyboard command and application painting.
+    pub fn register_chrome_maximize_button(&self, window: &impl WxWidget) {
+        if self.is_valid() && window.is_valid() {
+            unsafe {
+                ffi::wxd_Frame_RegisterChromeRegion(
+                    self.handle_ptr().cast(),
+                    window.handle_ptr(),
+                    2,
+                )
+            };
+        }
+    }
+
     /// Creates a new `FrameBuilder` for constructing a frame.
     pub fn builder() -> FrameBuilder {
         FrameBuilder::default()
@@ -216,7 +258,10 @@ impl Frame {
     /// This is for backwards compatibility with widgets that compose Frame.
     /// The parent_ptr parameter is ignored (kept for API compatibility).
     #[allow(dead_code)]
-    pub(crate) fn new_from_composition(_window: Window, _parent_ptr: *mut ffi::wxd_Window_t) -> Self {
+    pub(crate) fn new_from_composition(
+        _window: Window,
+        _parent_ptr: *mut ffi::wxd_Window_t,
+    ) -> Self {
         // Use the window's pointer to create a new WindowHandle
         Self {
             handle: WindowHandle::new(_window.as_ptr()),
@@ -339,9 +384,12 @@ impl Frame {
             return None;
         }
         // Use ToolBarStyle default bits if None
-        let style_bits = style.map(|s| s.bits()).unwrap_or(ToolBarStyle::default().bits());
+        let style_bits = style
+            .map(|s| s.bits())
+            .unwrap_or(ToolBarStyle::default().bits());
 
-        let tb_ptr = unsafe { ffi::wxd_Frame_CreateToolBar(ptr, style_bits as ffi::wxd_Style_t, id) };
+        let tb_ptr =
+            unsafe { ffi::wxd_Frame_CreateToolBar(ptr, style_bits as ffi::wxd_Style_t, id) };
         if tb_ptr.is_null() {
             None
         } else {
@@ -359,8 +407,13 @@ impl Frame {
         }
         unsafe {
             let name_c = CString::new(name).unwrap_or_default();
-            let statbar_ptr =
-                ffi::wxd_Frame_CreateStatusBar(ptr, number as c_int, style as ffi::wxd_Style_t, id, name_c.as_ptr());
+            let statbar_ptr = ffi::wxd_Frame_CreateStatusBar(
+                ptr,
+                number as c_int,
+                style as ffi::wxd_Style_t,
+                id,
+                name_c.as_ptr(),
+            );
             StatusBar::from_ptr(statbar_ptr)
         }
     }

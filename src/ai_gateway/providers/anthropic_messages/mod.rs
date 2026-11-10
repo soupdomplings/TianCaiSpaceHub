@@ -27,11 +27,12 @@ use crate::ai_gateway::request_log::{
 use crate::ai_gateway::responses_compat::ResponsesCompatSseStream;
 use crate::ai_gateway::tool_names::ToolNameMap;
 
-use super::{apply_total_request_timeout, ensure_success_response, execute_provider_request};
+use super::{apply_total_request_timeout, ensure_success_response, execute_context_request};
 
 mod citations;
 mod custom_tools;
 mod glm_compat;
+pub(crate) mod native;
 mod options;
 mod request;
 mod request_content;
@@ -143,10 +144,11 @@ pub async fn handle(
         }
     }
 
-    let upstream_resp = execute_provider_request(
+    let upstream_resp = execute_context_request(
         client,
         upstream_req,
         provider,
+        ctx,
         "anthropic upstream request failed",
     )
     .await?;
@@ -454,10 +456,11 @@ async fn stream_anthropic_round(
         options,
     )?;
     update_upstream_log(log_context, upstream_req.headers(), anthropic_body);
-    let upstream_resp = execute_provider_request(
+    let upstream_resp = execute_context_request(
         client,
         upstream_req,
         provider,
+        ctx,
         "anthropic upstream request failed",
     )
     .await?;
@@ -583,10 +586,11 @@ async fn execute_anthropic_stream_message(
         options,
     )?;
     update_upstream_log(log_context, upstream_req.headers(), anthropic_body);
-    let upstream_resp = execute_provider_request(
+    let upstream_resp = execute_context_request(
         client,
         upstream_req,
         provider,
+        ctx,
         "anthropic upstream request failed",
     )
     .await?;
@@ -613,10 +617,11 @@ async fn execute_internal_web_search(
     search_request.stream = true;
     let upstream_req =
         build_anthropic_upstream_request(client, ctx, &search_request, &body, provider, options)?;
-    let upstream_resp = execute_provider_request(
+    let upstream_resp = execute_context_request(
         client,
         upstream_req,
         provider,
+        ctx,
         "anthropic internal web search request failed",
     )
     .await?;

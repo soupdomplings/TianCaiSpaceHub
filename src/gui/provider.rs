@@ -1,3 +1,4 @@
+use crate::gui::controls::TextCtrl;
 use wxdragon::prelude::*;
 
 pub(super) fn set_combo_value_if_changed(input: &ComboBox, value: &str) {

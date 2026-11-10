@@ -4,6 +4,8 @@
 #include "../wxd_types.h"
 
 // --- Common Window Functions ---
+// Synchronous hidden-window WM_PRINT capture on Windows; null on other ports.
+WXD_EXPORTED wxd_Bitmap_t* wxd_Window_CaptureBitmap(wxd_Window_t* window);
 WXD_EXPORTED void
 wxd_Window_SetSizer(wxd_Window_t* window, wxd_Sizer_t* sizer, bool deleteOldSizer);
 WXD_EXPORTED void

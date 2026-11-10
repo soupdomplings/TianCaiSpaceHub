@@ -1,3 +1,5 @@
+use super::controls::Button;
+use crate::gui::controls::Choice;
 use std::{
     cell::RefCell,
     collections::BTreeMap,
@@ -39,16 +41,18 @@ pub(super) struct WorkBuddyProviderOption {
     models: Vec<String>,
     model_aliases: BTreeMap<String, String>,
     compatibility: Option<String>,
+    copy: Option<(String, String)>,
 }
 
 type WorkBuddyProviderOptions = Rc<RefCell<Vec<WorkBuddyProviderOption>>>;
 
 #[derive(Clone)]
 pub(super) struct WorkBuddyTab {
-    pub(super) page: ScrolledWindow,
-    entry: Choice,
+    pub(super) page: Panel,
+    editor_scroll: ScrolledWindow,
+    entry: super::model_list::ModelList,
     provider: Choice,
-    model: ComboBox,
+    model: Choice,
     protocol: Choice,
     default_effort: Choice,
     text: GuiText,
@@ -61,6 +65,7 @@ pub(super) struct WorkBuddyTab {
     in_flight: Arc<AtomicBool>,
     provider_options: WorkBuddyProviderOptions,
     selection: Rc<RefCell<WorkBuddySelection>>,
+    draft: Rc<RefCell<Option<(WorkBuddyModelConfig, String)>>>,
 }
 
 #[derive(Default)]
@@ -75,7 +80,10 @@ pub(super) enum WorkBuddyActionResult {
     Save(Result<WorkBuddyConfigStatus, String>),
     Restore(Result<WorkBuddyConfigStatus, String>),
     Delete(Result<WorkBuddyConfigStatus, String>),
-    Refresh(Result<(Vec<WorkBuddyProviderOption>, WorkBuddyConfigStatus), String>),
+    Refresh(
+        Result<(Vec<WorkBuddyProviderOption>, WorkBuddyConfigStatus), String>,
+        bool,
+    ),
 }
 
 const PROVIDER_REFRESH_ATTEMPTS: usize = 30;
@@ -88,14 +96,26 @@ fn tr(text: GuiText, zh: &'static str, en: &'static str) -> &'static str {
     }
 }
 
-pub(super) fn create(parent: &Notebook, text: GuiText) -> WorkBuddyTab {
-    let page = ScrolledWindow::builder(parent)
+pub(super) fn create(parent: &dyn WxWidget, text: GuiText) -> WorkBuddyTab {
+    create_with_settings(parent, text, None, None)
+}
+pub(super) fn create_with_settings(
+    parent: &dyn WxWidget,
+    text: GuiText,
+    settings: Option<&Panel>,
+    header_actions: Option<(Button, Button)>,
+) -> WorkBuddyTab {
+    let page = Panel::builder(parent).build();
+    page.set_background_color(theme::theme().bg_app);
+    let root = BoxSizer::builder(Orientation::Vertical).build();
+    let editor_scroll = ScrolledWindow::builder(&page)
         .with_style(ScrolledWindowStyle::VScroll)
         .build();
-    page.set_background_color(theme::theme().bg_card_alt);
-    let root = BoxSizer::builder(Orientation::Vertical).build();
+    editor_scroll.set_min_size(Size::new(0, 0));
+    editor_scroll.set_background_color(theme::theme().bg_app);
+    editor_scroll.set_scroll_rate(0, editor_scroll.from_dip(10));
     let (section, section_sizer) =
-        card_section(&page, tr(text, "WorkBuddy 接入", "WorkBuddy connection"));
+        card_section(&editor_scroll, tr(text, "模型配置", "Model settings"));
     let hint = StaticText::builder(&section)
         .with_label(tr(
             text,
@@ -104,35 +124,24 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> WorkBuddyTab {
         ))
         .build();
     hint.set_foreground_color(theme::theme().ink_muted);
-    section_sizer.add(&hint, 0, SizerFlag::Expand | SizerFlag::All, 10);
+    hint.hide();
     let grid = FlexGridSizer::builder(0, 2)
-        .with_vgap(10)
-        .with_hgap(14)
+        .with_vgap(page.from_dip(10))
+        .with_hgap(page.from_dip(16))
         .build();
     grid.add_growable_col(1, 1);
-    let entry = connection_choice_row(
-        &section,
-        &grid,
-        tr(text, "管理模型", "Managed model"),
-        &[tr(text, "新增模型", "Add a model")],
-    );
-    entry.set_selection(0);
-    let provider = connection_choice_row(
-        &section,
-        &grid,
-        tr(text, "大模型接入渠道", "Model channel"),
-        &[],
-    );
+    let entry = super::model_list::ModelList::new(&page);
+    let provider =
+        connection_choice_row(&section, &grid, tr(text, "来源渠道", "Model channel"), &[]);
     let label = StaticText::builder(&section)
         .with_label(tr(text, "模型", "Model"))
         .build();
     label.set_foreground_color(theme::theme().ink_secondary);
     grid.add(&label, 0, SizerFlag::AlignCenterVertical, 0);
-    let model = ComboBox::builder(&section)
-        .with_style(ComboBoxStyle::ReadOnly)
-        .with_size(Size::new(420, -1))
+    let model = Choice::builder(&section)
+        .with_size(Size::new(260, -1))
         .build();
-    model.set_min_size(Size::new(420, 30));
+    model.set_min_size(super::visual::dip_size(&section, 0, 36));
     connection_field_theme(&model, true);
     grid.add(&model, 1, SizerFlag::Expand, 0);
     let protocol = connection_choice_row(
@@ -153,10 +162,30 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> WorkBuddyTab {
         "未指定思考强度的请求使用此设置。",
         "Used when a request does not specify a reasoning effort.",
     ));
-    section_sizer.add_sizer(&grid, 0, SizerFlag::Expand | SizerFlag::All, 10);
-    root.add(&section, 0, SizerFlag::Expand | SizerFlag::All, 10);
-    let status = StaticText::builder(&page).with_label("").build();
+    section_sizer.add_sizer(
+        &grid,
+        0,
+        SizerFlag::Expand | SizerFlag::All,
+        page.from_dip(12),
+    );
+    let editor = BoxSizer::builder(Orientation::Horizontal).build();
+    editor.add(
+        &entry,
+        0,
+        SizerFlag::Expand | SizerFlag::Right,
+        page.from_dip(12),
+    );
+    let field_col = BoxSizer::builder(Orientation::Vertical).build();
+    field_col.add(&section, 0, SizerFlag::Expand, 0);
+    editor_scroll.set_sizer(field_col, true);
+    editor.add(&editor_scroll, 1, SizerFlag::Expand, 0);
+    root.add_sizer(&editor, 1, SizerFlag::Expand, 0);
+    let status = StaticText::builder(&page)
+        .with_label("")
+        .with_style(StaticTextStyle::EllipsizeEnd)
+        .build();
     status.set_foreground_color(theme::theme().ink_muted);
+    status.set_min_size(Size::new(0, -1));
     root.add(
         &status,
         0,
@@ -164,37 +193,61 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> WorkBuddyTab {
         20,
     );
     let actions = BoxSizer::builder(Orientation::Horizontal).build();
-    let start_button = Button::builder(&page)
-        .with_label(tr(text, "启动 WorkBuddy", "Start WorkBuddy"))
+    let maintenance: &dyn WxWidget = settings.map(|p| p as &dyn WxWidget).unwrap_or(&page);
+    let start_button = header_actions.map(|a| a.0).unwrap_or_else(|| {
+        Button::builder(maintenance)
+            .with_label(tr(text, "启动 WorkBuddy", "Start WorkBuddy"))
+            .build()
+    });
+    let reload_button = header_actions.map(|a| a.1).unwrap_or_else(|| {
+        Button::builder(maintenance)
+            .with_label(tr(text, "重新读取", "Reload"))
+            .build()
+    });
+    let restore_button = Button::builder(maintenance)
+        .with_label(tr(text, "恢复配置", "Restore configuration"))
+        .with_kind(super::controls::ButtonKind::Ghost)
         .build();
-    let reload_button = Button::builder(&page)
-        .with_label(tr(text, "刷新", "Refresh"))
-        .build();
-    let restore_button = Button::builder(&page)
-        .with_label(tr(text, "撤销上次操作", "Undo last operation"))
-        .build();
+    restore_button.hide();
     let save_button = Button::builder(&page)
         .with_label(tr(text, "保存模型", "Save model"))
         .build();
     let delete_button = Button::builder(&page)
-        .with_label(tr(text, "删除所选模型", "Delete selected model"))
+        .with_label(tr(text, "移除模型", "Remove model"))
+        .with_kind(super::controls::ButtonKind::Ghost)
         .build();
-    for button in [
-        &start_button,
-        &reload_button,
-        &restore_button,
-        &save_button,
-        &delete_button,
-    ] {
-        actions.add(button, 0, SizerFlag::Right, 8);
+    let utilities = BoxSizer::builder(Orientation::Vertical).build();
+    let maintenance_buttons = if header_actions.is_some() {
+        vec![&restore_button]
+    } else {
+        vec![&start_button, &reload_button, &restore_button]
+    };
+    for button in maintenance_buttons {
+        utilities.add(button, 0, SizerFlag::Left | SizerFlag::Top, 18);
     }
-    root.add_sizer(&actions, 0, SizerFlag::All, 20);
+    if let Some(host) = settings {
+        if let Some(s) = host.get_sizer() {
+            s.add_sizer(&utilities, 0, SizerFlag::Expand, 0);
+        }
+    } else {
+        root.add_sizer(&utilities, 0, SizerFlag::Expand, 0);
+    }
+    actions.add_stretch_spacer(1);
+    actions.add(&delete_button, 0, SizerFlag::Right, page.from_dip(8));
+    actions.add(&save_button, 0, SizerFlag::default(), 0);
+    root.add_sizer(
+        &actions,
+        0,
+        SizerFlag::Expand | SizerFlag::Top | SizerFlag::Bottom,
+        page.from_dip(8),
+    );
     page.set_sizer(root, true);
-    page.set_scroll_rate(0, 10);
+    page.set_min_size(Size::new(0, 0));
     page.layout();
-    page.fit_inside();
+    editor_scroll.fit_inside();
     let tab = WorkBuddyTab {
         page,
+        editor_scroll,
         entry,
         provider,
         model,
@@ -210,10 +263,53 @@ pub(super) fn create(parent: &Notebook, text: GuiText) -> WorkBuddyTab {
         in_flight: Arc::new(AtomicBool::new(false)),
         provider_options: Rc::new(RefCell::new(Vec::new())),
         selection: Rc::new(RefCell::new(WorkBuddySelection::default())),
+        draft: Default::default(),
     };
     apply_model(&tab, &WorkBuddyModelConfig::default());
     update_controls(&tab);
+    bind_editor_events(&tab);
     tab
+}
+
+fn bind_editor_events(tab: &WorkBuddyTab) {
+    let entry_tab = tab.clone();
+    tab.entry.on_selection_changed(move |_| {
+        if entry_tab.in_flight.load(Ordering::SeqCst) {
+            return;
+        }
+        let Some(mut status) = entry_tab.selection.borrow().status.clone() else {
+            return;
+        };
+        capture_draft(&entry_tab);
+        let selected = entry_tab
+            .entry
+            .get_selection()
+            .and_then(|index| status.entries.get(index as usize))
+            .map(|entry| entry.entry_id.clone());
+        select_status_entry(&mut status, selected.as_deref());
+        apply_status(&entry_tab, status);
+    });
+    let provider_tab = tab.clone();
+    tab.provider.on_selection_changed(move |_| {
+        let Some(index) = provider_tab.provider.get_selection() else {
+            return;
+        };
+        if let Some(index) = index.checked_sub(1) {
+            apply_provider_option(&provider_tab, index as usize);
+        } else {
+            provider_tab.model.clear();
+            refresh_model_settings(&provider_tab);
+        }
+        update_controls(&provider_tab);
+    });
+    let model_tab = tab.clone();
+    tab.model.on_selection_changed(move |_| {
+        refresh_model_settings(&model_tab);
+        update_controls(&model_tab);
+    });
+    let protocol_tab = tab.clone();
+    tab.protocol
+        .on_selection_changed(move |_| refresh_model_settings(&protocol_tab));
 }
 
 pub(super) fn bind_actions(
@@ -243,45 +339,6 @@ pub(super) fn bind_actions(
             wxdragon::wake_up_idle();
         });
     });
-    let entry_tab = tab.clone();
-    tab.entry.on_selection_changed(move |_| {
-        if entry_tab.in_flight.load(Ordering::SeqCst) {
-            return;
-        }
-        let Some(mut status) = entry_tab.selection.borrow().status.clone() else {
-            return;
-        };
-        let selected = entry_tab
-            .entry
-            .get_selection()
-            .and_then(|index| index.checked_sub(1))
-            .and_then(|index| status.entries.get(index as usize))
-            .map(|entry| entry.entry_id.clone());
-        select_status_entry(&mut status, selected.as_deref());
-        apply_status(&entry_tab, status);
-    });
-    let provider_tab = tab.clone();
-    tab.provider.on_selection_changed(move |_| {
-        let Some(index) = provider_tab.provider.get_selection() else {
-            return;
-        };
-        if let Some(index) = index.checked_sub(1) {
-            apply_provider_option(&provider_tab, index as usize);
-        } else {
-            provider_tab.model.clear();
-            refresh_model_settings(&provider_tab);
-        }
-        update_controls(&provider_tab);
-    });
-    let model_tab = tab.clone();
-    tab.model.on_selection_changed(move |_| {
-        refresh_model_settings(&model_tab);
-        update_controls(&model_tab);
-    });
-    let protocol_tab = tab.clone();
-    tab.protocol
-        .on_selection_changed(move |_| refresh_model_settings(&protocol_tab));
-
     let save_button = tab.save_button;
     let tab_for_save = tab.clone();
     let api_for_save = api.clone();
@@ -301,10 +358,19 @@ pub(super) fn bind_actions(
         if !begin_action(&tab_for_save, text.workbuddy_saving()) {
             return;
         }
+        let copy = copy_request(&tab_for_save, &request);
         let api = api_for_save.clone();
         let gui_tx = gui_tx_for_save.clone();
         thread::spawn(move || {
-            let result = api.save_workbuddy_config(&request);
+            let result = if let Some(body) = copy {
+                api.desktop_post("/api/desktop/models/copy", &body)
+                    .and_then(|v| {
+                        serde_json::from_value(v["status"].clone())
+                            .map_err(|_| "已返回保存结果，请重新读取 WorkBuddy 配置核对".into())
+                    })
+            } else {
+                api.save_workbuddy_config(&request)
+            };
             let _ = gui_tx.send(super::GuiMessage::WorkBuddy(WorkBuddyActionResult::Save(
                 result,
             )));
@@ -343,6 +409,16 @@ pub(super) fn bind_actions(
     let delete_tx = gui_tx.clone();
     let delete_frame = *frame;
     tab.delete_button.on_click(move |_| {
+        if is_draft(&delete_tab) {
+            delete_tab.draft.borrow_mut().take();
+            let current = delete_tab.selection.borrow().status.clone();
+            if let Some(mut status) = current {
+                let id = status.entries.first().map(|e| e.entry_id.clone());
+                select_status_entry(&mut status, id.as_deref());
+                apply_status(&delete_tab, status);
+            }
+            return;
+        }
         let Some(entry_id) = selected_entry_id(&delete_tab) else {
             return;
         };
@@ -371,9 +447,15 @@ pub(super) fn bind_actions(
     let api_for_reload = api.clone();
     let gui_tx_for_reload = gui_tx.clone();
     tab.reload_button.on_click(move |_| {
-        refresh_configuration(&tab_for_reload, &api_for_reload, &gui_tx_for_reload, false);
+        refresh_configuration(
+            &tab_for_reload,
+            &api_for_reload,
+            &gui_tx_for_reload,
+            false,
+            true,
+        );
     });
-    refresh_configuration(tab, api, gui_tx, true);
+    refresh_configuration(tab, api, gui_tx, true, false);
 }
 
 pub(super) fn apply_result(
@@ -394,6 +476,9 @@ pub(super) fn apply_result(
             show_error(frame, &error);
         }
         WorkBuddyActionResult::Save(Ok(status)) => {
+            if is_draft(tab) {
+                tab.draft.borrow_mut().take();
+            }
             apply_status(tab, status);
             tab.status.set_label(text.workbuddy_saved());
             show_info(frame, text.workbuddy_saved());
@@ -411,11 +496,18 @@ pub(super) fn apply_result(
                 "Selected model deleted. You can undo this operation.",
             ));
         }
-        WorkBuddyActionResult::Refresh(Ok((options, status))) => {
-            *tab.provider_options.borrow_mut() = options;
+        WorkBuddyActionResult::Refresh(Ok((options, status)), rebase) => {
+            if rebase || tab.draft.borrow().is_none() {
+                *tab.provider_options.borrow_mut() = options;
+            }
+            if rebase {
+                if let Some(draft) = tab.draft.borrow_mut().as_mut() {
+                    draft.1 = status.revision.clone();
+                }
+            }
             apply_status(tab, status);
         }
-        WorkBuddyActionResult::Refresh(Err(error)) => {
+        WorkBuddyActionResult::Refresh(Err(error), _) => {
             tab.selection.borrow_mut().fresh = false;
             tab.status.set_label(&format!(
                 "{}\n{error}",
@@ -431,23 +523,25 @@ pub(super) fn apply_result(
         | WorkBuddyActionResult::Restore(Err(error)) => {
             tab.selection.borrow_mut().fresh = false;
             tab.status.set_label(tr(text,
-                "操作未完成，当前输入已保留；请刷新以读取最新配置后重试。",
-                "The operation did not complete. Your inputs are retained; refresh to load current configuration before retrying."));
+                "操作未完成，当前输入已保留；点击“载入更新”后重试。",
+                "The operation did not complete. Your inputs are retained; load updates before retrying."));
             show_error(frame, &error);
         }
     }
     update_controls(tab);
     tab.status.wrap(920);
     tab.page.layout();
-    tab.page.fit_inside();
+    tab.editor_scroll.fit_inside();
 }
 
-fn refresh_configuration(
+pub(super) fn refresh_configuration(
     tab: &WorkBuddyTab,
     api: &ApiClient,
     gui_tx: &tokio::sync::mpsc::UnboundedSender<super::GuiMessage>,
     startup: bool,
+    rebase_draft: bool,
 ) {
+    capture_draft(tab);
     if !begin_action(
         tab,
         tr(
@@ -481,7 +575,7 @@ fn refresh_configuration(
                 if let Some(selected) = &previous_selection {
                     select_status_entry(&mut status, selected.as_deref());
                 }
-                Ok((provider_options_from_config(&config), status))
+                Ok((provider_options_with_copies(&config), status))
             });
             if result.is_ok() || attempt + 1 == attempts {
                 break;
@@ -489,7 +583,7 @@ fn refresh_configuration(
             thread::sleep(PROVIDER_REFRESH_RETRY_DELAY);
         }
         let _ = gui_tx.send(super::GuiMessage::WorkBuddy(
-            WorkBuddyActionResult::Refresh(result),
+            WorkBuddyActionResult::Refresh(result, rebase_draft),
         ));
         wxdragon::wake_up_idle();
     });
@@ -504,6 +598,60 @@ fn provider_options_from_config(config: &AppConfig) -> Vec<WorkBuddyProviderOpti
         .filter_map(provider_option)
         .collect()
 }
+fn provider_options_with_copies(config: &AppConfig) -> Vec<WorkBuddyProviderOption> {
+    let mut options = provider_options_from_config(config);
+    if let Some(revision) = &config.revision {
+        options.extend(
+            config
+                .ai_gateway
+                .providers
+                .iter()
+                .filter(|p| p.enabled && p.is_client_reserved())
+                .filter_map(|p| {
+                    let mut option = provider_option(p)?;
+                    option.display_name = copy_source_label(p);
+                    option.copy = Some((
+                        crate::ai_gateway::config::provider_route_id(p),
+                        revision.clone(),
+                    ));
+                    Some(option)
+                }),
+        );
+    }
+    options
+}
+fn copy_request(tab: &WorkBuddyTab, request: &WorkBuddySaveRequest) -> Option<serde_json::Value> {
+    let options = tab.provider_options.borrow();
+    let option = options
+        .iter()
+        .find(|p| p.name == request.model.upstream_provider)?;
+    let (route, revision) = option.copy.as_ref()?;
+    Some(
+        serde_json::json!({"client":"workbuddy","sourceRoute":route,"revision":revision,"model":request.model.provider_model,"workbuddy":request}),
+    )
+}
+
+pub(super) fn copy_source_label(provider: &ProviderConfig) -> String {
+    let client = if provider.is_workbuddy() {
+        "WorkBuddy"
+    } else if provider.is_gmclaw() {
+        "天工 Work"
+    } else {
+        provider
+            .desktop_binding
+            .as_ref()
+            .map(|b| b.client.name())
+            .unwrap_or("客户端")
+    };
+    let model = provider
+        .model_aliases
+        .keys()
+        .next()
+        .or_else(|| provider.models.first())
+        .map(String::as_str)
+        .unwrap_or("模型");
+    format!("{client} · {model}")
+}
 
 fn provider_option(provider: &ProviderConfig) -> Option<WorkBuddyProviderOption> {
     let mut models = provider.models.clone();
@@ -516,6 +664,7 @@ fn provider_option(provider: &ProviderConfig) -> Option<WorkBuddyProviderOption>
         return None;
     }
     Some(WorkBuddyProviderOption {
+        copy: None,
         name: provider.name.clone(),
         display_name: provider.name.clone(),
         upstream_url: if provider.provider_type == ProviderType::ChatGptResponses {
@@ -769,6 +918,8 @@ fn select_status_entry(status: &mut WorkBuddyConfigStatus, selected: Option<&str
         model.id.clear();
         model.name.clear();
         model.url.clear();
+        model.reasoning.default_effort = "xhigh".into();
+        model.upstream_default_reasoning_effort = "xhigh".into();
         model.provider_model.clear();
         model
     });
@@ -781,6 +932,57 @@ fn selected_entry_id(tab: &WorkBuddyTab) -> Option<String> {
         .as_ref()
         .and_then(|status| status.selected_entry_id.clone())
 }
+fn is_draft(tab: &WorkBuddyTab) -> bool {
+    tab.draft.borrow().is_some() && selected_entry_id(tab).is_none()
+}
+fn capture_draft(tab: &WorkBuddyTab) {
+    if !is_draft(tab) {
+        return;
+    }
+    let mut draft = tab.draft.borrow_mut();
+    let (model, _) = draft.as_mut().unwrap();
+    model.provider_model = tab.model.get_value();
+    model.upstream_provider = tab
+        .provider
+        .get_selection()
+        .and_then(|i| i.checked_sub(1))
+        .and_then(|i| {
+            tab.provider_options
+                .borrow()
+                .get(i as usize)
+                .map(|p| p.name.clone())
+        })
+        .unwrap_or_default();
+    model.upstream_protocol = selected_protocol(tab).into();
+    model.reasoning.default_effort = tab
+        .default_effort
+        .get_string_selection()
+        .unwrap_or_default();
+}
+pub(super) fn begin_model_draft(tab: &WorkBuddyTab) {
+    if tab.in_flight.load(Ordering::SeqCst) {
+        return;
+    }
+    let Some(mut status) = tab.selection.borrow().status.clone() else {
+        return;
+    };
+    if !tab.selection.borrow().fresh || status.revision.is_empty() {
+        return;
+    }
+    if is_draft(tab) {
+        return;
+    }
+    if tab.draft.borrow().is_none() {
+        let mut model = WorkBuddyModelConfig::default();
+        model.id.clear();
+        model.name.clear();
+        model.provider_model.clear();
+        model.url.clear();
+        *tab.draft.borrow_mut() = Some((model, status.revision.clone()));
+    }
+    select_status_entry(&mut status, None);
+    apply_status(tab, status);
+}
 
 fn current_revision(tab: &WorkBuddyTab) -> Result<String, String> {
     let selection = tab.selection.borrow();
@@ -788,7 +990,17 @@ fn current_revision(tab: &WorkBuddyTab) -> Result<String, String> {
         .status
         .as_ref()
         .filter(|status| selection.fresh && !status.revision.is_empty())
-        .map(|status| status.revision.clone())
+        .map(|status| {
+            if status.selected_entry_id.is_none() {
+                tab.draft
+                    .borrow()
+                    .as_ref()
+                    .map(|d| d.1.clone())
+                    .unwrap_or_else(|| status.revision.clone())
+            } else {
+                status.revision.clone()
+            }
+        })
         .ok_or_else(|| {
             tr(
                 tab.text,
@@ -834,6 +1046,11 @@ fn update_controls(tab: &WorkBuddyTab) {
             .any(|model| model.eq_ignore_ascii_case(&tab.model.get_value()))
     });
     tab.reload_button.enable(!busy);
+    tab.reload_button.set_label("载入更新");
+    tab.reload_button.show(!fresh && !busy);
+    if let Some(parent) = tab.reload_button.get_parent() {
+        parent.layout();
+    }
     tab.start_button.enable(!busy);
     tab.entry.enable(editable);
     tab.provider.enable(editable);
@@ -843,11 +1060,17 @@ fn update_controls(tab: &WorkBuddyTab) {
     tab.save_button.enable(editable && model_valid);
     tab.delete_button.enable(
         editable
-            && selection
+            && (selection
                 .status
                 .as_ref()
-                .is_some_and(|status| status.selected_entry_id.is_some()),
+                .is_some_and(|status| status.selected_entry_id.is_some())
+                || tab.draft.borrow().is_some()),
     );
+    tab.delete_button.set_label(if is_draft(tab) {
+        "放弃新建"
+    } else {
+        "移除模型"
+    });
     // A legacy backup may still recover a malformed current file; the daemon
     // performs the corresponding backup and revision validation.
     tab.restore_button.enable(
@@ -858,12 +1081,9 @@ fn update_controls(tab: &WorkBuddyTab) {
                 .as_ref()
                 .is_some_and(|status| status.backup_exists),
     );
-    for choice in [
-        &tab.entry,
-        &tab.provider,
-        &tab.protocol,
-        &tab.default_effort,
-    ] {
+    tab.restore_button
+        .show(selection.status.as_ref().is_some_and(|s| s.backup_exists));
+    for choice in [&tab.provider, &tab.protocol, &tab.default_effort] {
         connection_field_theme(choice, choice.is_enabled());
     }
     connection_field_theme(&tab.model, tab.model.is_enabled());
@@ -872,29 +1092,44 @@ fn update_controls(tab: &WorkBuddyTab) {
 fn apply_status(tab: &WorkBuddyTab, mut status: WorkBuddyConfigStatus) {
     let selected_id = status.selected_entry_id.clone();
     select_status_entry(&mut status, selected_id.as_deref());
-    tab.entry.clear();
-    tab.entry.append(tr(tab.text, "新增模型", "Add a model"));
-    for entry in &status.entries {
-        let short_id: String = entry.entry_id.chars().take(8).collect();
-        tab.entry.append(&format!(
-            "{} · {} · {}",
-            entry.model.provider_model,
-            entry
-                .source_provider
-                .as_deref()
-                .unwrap_or(tr(tab.text, "来源待选择", "Select source")),
-            short_id
-        ));
+    let mut labels = status
+        .entries
+        .iter()
+        .map(|entry| {
+            format!(
+                "{} · {}",
+                entry.model.provider_model,
+                if entry.configured {
+                    "使用中"
+                } else {
+                    "待完善"
+                }
+            )
+        })
+        .collect::<Vec<_>>();
+    if tab.draft.borrow().is_some() {
+        labels.push("新建模型".into());
     }
+    tab.entry.replace(&labels);
     let selected = status.selected_entry_id.as_ref().and_then(|id| {
         status
             .entries
             .iter()
             .position(|entry| &entry.entry_id == id)
     });
-    tab.entry
-        .set_selection(selected.map(|index| index as u32 + 1).unwrap_or(0));
-    let mut model = status.model.clone();
+    tab.entry.set_selection(
+        selected.unwrap_or(status.entries.len()) as u32,
+        selected.is_some() || tab.draft.borrow().is_some(),
+    );
+    let mut model = if status.selected_entry_id.is_none() {
+        tab.draft
+            .borrow()
+            .as_ref()
+            .map(|d| d.0.clone())
+            .unwrap_or_else(|| status.model.clone())
+    } else {
+        status.model.clone()
+    };
     if let Some(entry) = selected.and_then(|index| status.entries.get(index)) {
         model.upstream_provider = entry.source_provider.clone().unwrap_or_default();
         model.url = entry.local_url.clone();
@@ -933,7 +1168,7 @@ fn apply_status(tab: &WorkBuddyTab, mut status: WorkBuddyConfigStatus) {
     };
     update_controls(tab);
     tab.page.layout();
-    tab.page.fit_inside();
+    tab.editor_scroll.fit_inside();
 }
 
 fn apply_model(tab: &WorkBuddyTab, model: &WorkBuddyModelConfig) {
@@ -967,6 +1202,182 @@ fn protocol_index(protocol: &str) -> u32 {
         "anthropic-messages" => 2,
         _ => 0,
     }
+}
+#[cfg(all(test, windows))]
+pub(super) fn review_inline_draft(
+    frame: &Frame,
+    model: &super::model_fields::ModelPage,
+    settings: &Panel,
+    header: &super::client_header::ClientHeader,
+) {
+    let text = GuiText::new(GuiLocale::ZhCn);
+    let review_api = ApiClient::new("http://127.0.0.1:1/unused-native-review".into(), text);
+    let (review_tx, _review_rx) = tokio::sync::mpsc::unbounded_channel();
+    let tab = create_with_settings(
+        &model.legacy_host,
+        text,
+        Some(settings),
+        Some((header.launch, header.reload)),
+    );
+    model
+        .legacy_host
+        .get_sizer()
+        .unwrap()
+        .add(&tab.page, 1, SizerFlag::Expand, 0);
+    let config = AppConfig {
+        ai_gateway: crate::ai_gateway::config::AiGatewayConfig {
+            providers: vec![ProviderConfig {
+                name: "synthetic-source".into(),
+                base_url: "https://provider.example.invalid".into(),
+                models: vec!["gpt-6".into()],
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    *tab.provider_options.borrow_mut() = provider_options_from_config(&config);
+    let mut saved = WorkBuddyModelConfig::default();
+    saved.provider_model = "gpt-6".into();
+    saved.upstream_provider = "synthetic-source".into();
+    let status = WorkBuddyConfigStatus {
+        path: "C:/Synthetic/workbuddy/models.json".into(),
+        exists: true,
+        backup_path: String::new(),
+        backup_exists: false,
+        model: saved.clone(),
+        entries: vec![crate::workbuddy_config::WorkBuddyEntryStatus {
+            entry_id: "saved-entry".into(),
+            model: saved,
+            configured: true,
+            local_url: "http://127.0.0.1:3210/synthetic".into(),
+            source_provider: Some("synthetic-source".into()),
+        }],
+        selected_entry_id: Some("saved-entry".into()),
+        revision: "original-revision".into(),
+        error: None,
+    };
+    apply_status(&tab, status);
+    for _ in 0..4 {
+        begin_model_draft(&tab);
+        begin_model_draft(&tab);
+        assert_eq!(tab.entry.get_selection(), Some(1));
+        assert!(tab.entry.find_window_by_name("client-model-0").is_some());
+        assert!(tab.entry.find_window_by_name("client-model-2").is_none());
+        tab.provider.set_selection(1);
+        apply_provider_option(&tab, 0);
+        tab.protocol.set_selection(1);
+        refresh_model_settings(&tab);
+        tab.default_effort.set_value("max");
+        let draft = build_request(&tab).unwrap();
+        assert!(draft.entry_id.is_none());
+        assert_eq!(draft.model.upstream_protocol, "openai-chat");
+        assert_eq!(draft.model.reasoning.default_effort, "max");
+        super::native_model_review::click(
+            &tab.entry.find_window_by_name("client-model-0").unwrap(),
+        );
+        assert_eq!(selected_entry_id(&tab).as_deref(), Some("saved-entry"));
+        begin_model_draft(&tab);
+        assert_eq!(selected_protocol(&tab), "openai-chat");
+        assert_eq!(
+            tab.default_effort.get_string_selection().as_deref(),
+            Some("max")
+        );
+    }
+    let mut copy_config = config.clone();
+    copy_config.revision = Some("original-source-revision".into());
+    let mut source = copy_config.ai_gateway.providers[0].clone();
+    source.name = "gmclaw:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into();
+    copy_config.ai_gateway.providers.push(source.clone());
+    assert_eq!(provider_options_from_config(&copy_config).len(), 1);
+    let current = build_model(&tab).unwrap();
+    *tab.provider_options.borrow_mut() = provider_options_with_copies(&copy_config);
+    apply_provider_options(&tab, &current);
+    tab.provider.set_selection(2);
+    apply_provider_option(&tab, 1);
+    tab.protocol.set_selection(1);
+    refresh_model_settings(&tab);
+    tab.default_effort.set_value("max");
+    capture_draft(&tab);
+    let request = build_request(&tab).unwrap();
+    let copy = copy_request(&tab, &request).expect("explicit cross-client source");
+    assert_eq!(copy["revision"], "original-source-revision");
+    assert_eq!(copy["workbuddy"]["revision"], "original-revision");
+    assert_eq!(
+        copy["sourceRoute"],
+        crate::ai_gateway::config::provider_route_id(&source)
+    );
+    assert_eq!(
+        copy["workbuddy"]["model"]["upstreamProtocol"],
+        "openai-chat"
+    );
+    assert_eq!(
+        copy["workbuddy"]["model"]["upstreamDefaultReasoningEffort"],
+        "max"
+    );
+    let mut latest = tab.selection.borrow().status.clone().unwrap();
+    latest.revision = "later-external-revision".into();
+    apply_result(
+        &tab,
+        frame,
+        text,
+        &review_api,
+        &review_tx,
+        WorkBuddyActionResult::Refresh(Ok((vec![], latest.clone())), false),
+    );
+    assert_eq!(build_request(&tab).unwrap().revision, "original-revision");
+    assert_eq!(
+        copy_request(&tab, &build_request(&tab).unwrap()).unwrap()["revision"],
+        "original-source-revision"
+    );
+    tab.selection.borrow_mut().fresh = false;
+    update_controls(&tab);
+    assert!(tab.reload_button.is_shown());
+    copy_config.revision = Some("explicitly-loaded-source-revision".into());
+    apply_result(
+        &tab,
+        frame,
+        text,
+        &review_api,
+        &review_tx,
+        WorkBuddyActionResult::Refresh(
+            Ok((provider_options_with_copies(&copy_config), latest)),
+            true,
+        ),
+    );
+    let loaded = build_request(&tab).unwrap();
+    assert_eq!(loaded.revision, "later-external-revision");
+    assert_eq!(loaded.model.upstream_protocol, "openai-chat");
+    assert_eq!(loaded.model.reasoning.default_effort, "max");
+    assert_eq!(
+        copy_request(&tab, &loaded).unwrap()["revision"],
+        "explicitly-loaded-source-revision"
+    );
+    assert!(!tab.reload_button.is_shown());
+    frame.layout();
+    model.show_draft(false);
+    tab.page.layout();
+    tab.editor_scroll.fit_inside();
+    let bounds = tab.page.get_client_size();
+    assert!(bounds.width > 500 && bounds.height > 280, "{bounds:?}");
+    assert!(
+        tab.provider.is_shown()
+            && tab.model.is_shown()
+            && tab.protocol.is_shown()
+            && tab.default_effort.is_shown()
+    );
+    assert!(tab.save_button.get_position().y + tab.save_button.get_size().height <= bounds.height);
+    assert!(
+        (bounds.width - tab.save_button.get_position().x - tab.save_button.get_size().width).abs()
+            <= tab.page.from_dip(12),
+        "WorkBuddy save action must stay at the right edge"
+    );
+    let viewport = tab.editor_scroll.get_client_size();
+    let virtual_size = tab.editor_scroll.get_virtual_size();
+    assert!(
+        virtual_size.height <= viewport.height + tab.page.from_dip(2),
+        "complete WorkBuddy draft must fit: {virtual_size:?} {viewport:?}"
+    );
 }
 
 #[cfg(test)]
@@ -1018,7 +1429,7 @@ mod tests {
             options[3].upstream_url,
             crate::ai_gateway::chatgpt_auth::BASE_URL
         );
-        assert_eq!(options[0].upstream_url, "https://provider.example/v1");
+        assert_eq!(options[0].upstream_url, "https://provider.example");
         assert!(options[0].has_api_key);
         assert!(!format!("{:?}", options[0]).contains("secret"));
         assert_eq!(options[0].models, vec!["model-a", "model-b"]);
@@ -1091,8 +1502,8 @@ mod tests {
             "coding",
             &claude.default_effort,
         );
-        assert_eq!(gpt.default_effort, "high");
-        assert!(!gpt.supported_efforts.iter().any(|v| v == "max"));
+        assert_eq!(gpt.default_effort, "max");
+        assert!(gpt.supported_efforts.iter().any(|v| v == "max"));
         let native = reasoning_for_selection(Some(&option), "anthropic-messages", "coding", "max");
         assert_eq!(native.default_effort, "max");
         source.compatibility = Some("glm_anthropic".into());

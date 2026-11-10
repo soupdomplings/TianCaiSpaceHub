@@ -27,7 +27,7 @@ wxd_ListBox_Create(wxd_Window_t* parent, wxd_Id id, wxd_Point pos, wxd_Size size
         return nullptr;
 
     wxListBox* listbox = new wxListBox(parentWin, id, wxd_cpp_utils::to_wx(pos),
-                                       wxd_cpp_utils::to_wx(size), 0, nullptr, style);
+                                       wxd_cpp_utils::to_wx(size), 0, nullptr, (style & ~wxBORDER_MASK) | wxBORDER_NONE);
     return (wxd_ListBox_t*)listbox;
 }
 

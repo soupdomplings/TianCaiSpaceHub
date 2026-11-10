@@ -4,6 +4,12 @@
 #include "../wxd_types.h"
 
 // --- Frame Functions ---
+// Opt-in Windows integrated title bar; false retains native chrome elsewhere.
+WXD_EXPORTED bool
+wxd_Frame_EnableIntegratedChrome(wxd_Frame_t* frame, bool dark, uint32_t border);
+WXD_EXPORTED void
+wxd_Frame_RegisterChromeRegion(wxd_Frame_t* frame, wxd_Window_t* window, int role);
+
 WXD_EXPORTED wxd_Frame_t*
 wxd_Frame_Create(wxd_Window_t* parent, wxd_Id id, const char* title, wxd_Point pos, wxd_Size size,
                  wxd_Style_t style);

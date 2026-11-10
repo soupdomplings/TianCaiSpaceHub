@@ -301,6 +301,18 @@ impl Window {
 
 /// Trait for common wxWidget operations.
 pub trait WxWidget: std::any::Any {
+    /// Render this window's existing child layout with WM_PRINT. Does not show
+    /// a hidden window or start an event loop. Unsupported ports return None.
+    fn capture_bitmap(&self) -> Option<crate::bitmap::Bitmap> {
+        let ptr = self.handle_ptr();
+        if ptr.is_null() { return None; }
+        let bitmap = unsafe { ffi::wxd_Window_CaptureBitmap(ptr) };
+        if bitmap.is_null() { None } else { Some(crate::bitmap::Bitmap::from(bitmap)) }
+    }
+    /// Convert a design-independent distance using this window's current DPI.
+    fn from_dip(&self, value: i32) -> i32 {
+        unsafe { ffi::wxd_Window_FromDIP(self.handle_ptr(), value) }
+    }
     /// Returns the raw underlying window pointer.
     /// Unsafe because the lifetime is not tied to self.
     /// Primarily for internal use or passing back to FFI.

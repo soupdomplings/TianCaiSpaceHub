@@ -15,12 +15,12 @@ use axum::{
 use futures_util::{Stream, StreamExt};
 use serde_json::{Value, json};
 
-use super::config::{ProviderConfig, provider_api_root};
+use super::config::{ProviderConfig, provider_endpoint};
 use super::context::{GatewayContext, apply_upstream_headers};
 use super::error::GatewayError;
 use super::model::GatewayRequest;
 use super::providers::{
-    apply_total_request_timeout, ensure_success_response, execute_provider_request,
+    apply_total_request_timeout, ensure_success_response, execute_context_request,
 };
 use super::request_log::{self, RequestLogContext, RequestLogUpdate, UpstreamSseCaptureStream};
 
@@ -433,19 +433,26 @@ pub async fn proxy_chat_completion(
     if super::gmclaw::uses_chat_cache_controls(provider, upstream_model) {
         apply_chat_cache_controls(&mut raw_body, ctx, provider);
     }
-    if !provider.is_gmclaw() {
+    if !provider.is_gmclaw() || provider.tiangong_builtin.is_some() {
         super::providers::apply_chat_reasoning_override(&mut raw_body, provider);
     }
-    let stream = raw_body
+    let client_stream = raw_body
         .get("stream")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let gmclaw_deadline = (gmclaw_replay.is_some() && !stream)
+    let native = crate::desktop::tiangong_models::parameters_for_provider(provider);
+    let stream = native.as_ref().map(|p| p.stream).unwrap_or(client_stream);
+    if native.is_some() {
+        raw_body["stream"] = stream.into();
+        if !stream {
+            raw_body.as_object_mut().unwrap().remove("stream_options");
+        }
+    }
+    let gmclaw_deadline = ((gmclaw_replay.is_some() && !client_stream) || native.is_some())
         .then(|| super::gmclaw_stream::deadline(provider.timeout_secs));
-    let url = format!(
-        "{}/v1/chat/completions",
-        provider_api_root(&provider.base_url)
-    );
+    let deadline_context = gmclaw_deadline.map(|deadline| ctx.clone().with_deadline(deadline));
+    let ctx = deadline_context.as_ref().unwrap_or(ctx);
+    let url = provider_endpoint(&provider.base_url, "/v1/chat/completions");
     let builder = client
         .post(&url)
         .header("content-type", "application/json")
@@ -480,8 +487,13 @@ pub async fn proxy_chat_completion(
         }
     }
 
-    let execution =
-        execute_provider_request(client, request, provider, "chat upstream request failed");
+    let execution = execute_context_request(
+        client,
+        request,
+        provider,
+        ctx,
+        "chat upstream request failed",
+    );
     let upstream = if let Some(deadline) = gmclaw_deadline {
         tokio::time::timeout_at(deadline, execution)
             .await
@@ -498,7 +510,7 @@ pub async fn proxy_chat_completion(
     } else {
         success.await?
     };
-    if stream {
+    if stream && client_stream {
         let bytes = upstream.bytes_stream();
         let body = if let Some(log_context) = log_context {
             let captured = UpstreamSseCaptureStream::new(bytes, log_context);
@@ -586,6 +598,18 @@ pub async fn proxy_chat_completion(
         if let Err(error) = log_context.store.update_record(log_context.log_id, &update) {
             request_log::log_update_error(error);
         }
+    }
+    if client_stream && !stream {
+        let value = serde_json::from_slice::<Value>(&bytes)
+            .map_err(|_| GatewayError::bad_request("上游 Chat 响应格式不兼容"))?;
+        let chunks = super::providers::chat_json_stream::chunks(&value)?
+            .into_iter()
+            .map(Ok::<_, std::io::Error>);
+        return Ok(Response::builder()
+            .header("content-type", "text/event-stream")
+            .header("cache-control", "no-cache")
+            .body(Body::from_stream(futures_util::stream::iter(chunks)))
+            .unwrap());
     }
     let mut response = Response::new(Body::from(bytes));
     *response.status_mut() = StatusCode::OK;
@@ -1452,6 +1476,9 @@ mod tests {
     #[test]
     fn chat_cache_controls_fill_missing_values_and_preserve_explicit_key() {
         let ctx = GatewayContext {
+            activity_id: None,
+            config_state: None,
+            upstream_deadline: None,
             request_id: "request-1".to_string(),
             session_id: None,
             thread_id: None,

@@ -3,7 +3,7 @@ use std::{cell::Cell, rc::Rc};
 use wxdragon::prelude::*;
 
 use super::{
-    CODEX_TAB_INDEX, GMCLAW_TAB_INDEX, UiHandles, WORKBUDDY_TAB_INDEX,
+    UiHandles,
     api::{DashboardSnapshot, ImAccountItem},
     text::{GuiLocale, GuiText},
     theme,
@@ -142,11 +142,13 @@ impl ClientOverviewUi {
         }
     }
 
-    pub(super) fn select_page(&self, page: i32) -> bool {
+    pub(super) fn select_page(&self, page: super::shell::PageId) -> bool {
+        use super::shell::PageId;
+        use crate::desktop::clients::ClientId;
         let kind = match page {
-            CODEX_TAB_INDEX => OverviewKind::Codex,
-            WORKBUDDY_TAB_INDEX => OverviewKind::WorkBuddy,
-            GMCLAW_TAB_INDEX => OverviewKind::GmClaw,
+            PageId::Client(ClientId::Codex) => OverviewKind::Codex,
+            PageId::Client(ClientId::WorkBuddy) => OverviewKind::WorkBuddy,
+            PageId::Client(ClientId::Tiangong) => OverviewKind::GmClaw,
             _ => return false,
         };
         self.kind.replace(kind) != kind

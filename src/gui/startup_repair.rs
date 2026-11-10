@@ -4,6 +4,8 @@ use super::{
     theme,
 };
 use crate::codex_repair_center::{self as repair, Kind, Outcome, Record};
+use crate::gui::controls::Button;
+use crate::gui::controls::{Choice, TextCtrl};
 use std::{
     cell::{Cell, RefCell},
     path::PathBuf,

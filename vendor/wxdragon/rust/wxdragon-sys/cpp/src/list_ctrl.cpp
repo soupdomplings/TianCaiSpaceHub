@@ -5,6 +5,9 @@
 #include <wx/imaglist.h>
 #include <wx/listctrl.h>
 #include <wx/string.h> // For wxString::FromUTF8 / wxString::ToUTF8
+#ifdef __WXMSW__
+#include <wx/msw/wrapcctl.h>
+#endif
 
 // --- wxListCtrl ---
 
@@ -12,14 +15,43 @@ class WxdListCtrl : public wxListCtrl {
 public:
     WxdListCtrl(wxWindow* parent, wxWindowID id, const wxPoint& pos, const wxSize& size,
                 long style)
-        : wxListCtrl(parent, id, pos, size, style), m_userdata(nullptr), m_textCallback(nullptr),
+        : wxListCtrl(parent, id, pos, size, (style & ~wxBORDER_MASK) | wxBORDER_NONE), m_userdata(nullptr), m_textCallback(nullptr),
           m_freeString(nullptr), m_freeUserdata(nullptr)
     {
+        SetFont(parent->GetFont());
+        // A small-image list determines the report row height on Windows even
+        // for text-only rows. Ownership transfers to the list control.
+        auto* spacing = new wxImageList(1, FromDIP(32), false);
+        AssignImageList(spacing, wxIMAGE_LIST_SMALL);
     }
 
     ~WxdListCtrl() override
     {
         ClearVirtualTextCallback();
+    }
+
+    // The native header does not inherit explicit list colours on Windows.
+    // Use wxWidgets' header attributes so it follows the same surface/font,
+    // including dark mode, while retaining native column resize and events.
+    bool SetBackgroundColour(const wxColour& colour) override
+    {
+        const bool changed = wxListCtrl::SetBackgroundColour(colour);
+        UpdateHeaderAppearance();
+        return changed;
+    }
+
+    bool SetForegroundColour(const wxColour& colour) override
+    {
+        const bool changed = wxListCtrl::SetForegroundColour(colour);
+        UpdateHeaderAppearance();
+        return changed;
+    }
+
+    bool SetFont(const wxFont& font) override
+    {
+        const bool changed = wxListCtrl::SetFont(font);
+        UpdateHeaderAppearance();
+        return changed;
     }
 
     void SetVirtualTextCallback(void* userdata, wxd_listctrl_virtual_text_callback callback,
@@ -45,6 +77,76 @@ public:
     }
 
 protected:
+#ifdef __WXMSW__
+    bool MSWOnNotify(int idCtrl, WXLPARAM lParam, WXLPARAM* result) override
+    {
+        const auto* notification = reinterpret_cast<NMHDR*>(lParam);
+        const HWND header = ListView_GetHeader(reinterpret_cast<HWND>(GetHandle()));
+        if (header && notification->hwndFrom == header && notification->code == NM_CUSTOMDRAW) {
+            auto* draw = reinterpret_cast<NMCUSTOMDRAW*>(lParam);
+            const auto bg = GetBackgroundColour(), fg = GetForegroundColour();
+            const auto fill = [&](RECT area) {
+                const auto brush = ::CreateSolidBrush(RGB(bg.Red(), bg.Green(), bg.Blue()));
+                ::FillRect(draw->hdc, &area, brush); ::DeleteObject(brush);
+            };
+            if (draw->dwDrawStage == CDDS_PREPAINT) {
+                fill(draw->rc);
+                *result = CDRF_NOTIFYITEMDRAW | CDRF_NOTIFYPOSTPAINT;
+                return true;
+            }
+            if (draw->dwDrawStage == CDDS_ITEMPREPAINT) {
+                // HeaderAttr changes the font/ink but themed MSW headers can
+                // still paint a white cell. Paint only the presentation here;
+                // the real header retains hit testing, resize and accessibility.
+                fill(draw->rc);
+                const int index = static_cast<int>(draw->dwItemSpec);
+                wxListItem column;
+                column.SetMask(wxLIST_MASK_TEXT | wxLIST_MASK_FORMAT);
+                if (GetColumn(index, column)) {
+                    RECT text = draw->rc;
+                    const int inset = FromDIP(6);
+                    text.left += inset; text.right -= inset;
+                    HDITEMW item{}; item.mask = HDI_FORMAT;
+                    ::SendMessageW(header, HDM_GETITEMW, index, reinterpret_cast<LPARAM>(&item));
+                    const bool sorted = (item.fmt & (HDF_SORTUP | HDF_SORTDOWN)) != 0;
+                    if (sorted) text.right -= FromDIP(12);
+                    UINT flags = DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX;
+                    flags |= column.GetAlign() == wxLIST_FORMAT_RIGHT ? DT_RIGHT : column.GetAlign() == wxLIST_FORMAT_CENTRE ? DT_CENTER : DT_LEFT;
+                    const auto font = reinterpret_cast<HFONT>(::SendMessageW(header, WM_GETFONT, 0, 0));
+                    const auto oldFont = font ? ::SelectObject(draw->hdc, font) : nullptr;
+                    const int oldMode = ::SetBkMode(draw->hdc, TRANSPARENT);
+                    const auto oldInk = ::SetTextColor(draw->hdc, RGB(fg.Red(), fg.Green(), fg.Blue()));
+                    const auto label = column.GetText();
+                    ::DrawTextW(draw->hdc, label.wc_str(), static_cast<int>(label.length()), &text, flags);
+                    if (sorted) {
+                        const auto pen = ::CreatePen(PS_SOLID, FromDIP(1), RGB(fg.Red(), fg.Green(), fg.Blue()));
+                        const auto oldPen = ::SelectObject(draw->hdc, pen);
+                        const int x = draw->rc.right - inset - FromDIP(4), y = (draw->rc.top + draw->rc.bottom) / 2;
+                        const int d = item.fmt & HDF_SORTUP ? FromDIP(2) : -FromDIP(2);
+                        ::MoveToEx(draw->hdc, x - FromDIP(3), y + d, nullptr);
+                        ::LineTo(draw->hdc, x, y - d); ::LineTo(draw->hdc, x + FromDIP(3), y + d);
+                        ::SelectObject(draw->hdc, oldPen); ::DeleteObject(pen);
+                    }
+                    ::SetTextColor(draw->hdc, oldInk); ::SetBkMode(draw->hdc, oldMode);
+                    if (oldFont) ::SelectObject(draw->hdc, oldFont);
+                }
+                *result = CDRF_SKIPDEFAULT;
+                return true;
+            }
+            if (draw->dwDrawStage == CDDS_POSTPAINT) {
+                RECT tail{}; ::GetClientRect(header, &tail);
+                const int count = Header_GetItemCount(header);
+                RECT last{};
+                if (count > 0 && Header_GetItemRect(header, count - 1, &last)) tail.left = last.right;
+                if (tail.left < tail.right) fill(tail);
+                *result = CDRF_DODEFAULT;
+                return true;
+            }
+        }
+        return wxListCtrl::MSWOnNotify(idCtrl, lParam, result);
+    }
+#endif
+
     wxString OnGetItemText(long item, long column) const override
     {
         if (!m_textCallback) {
@@ -65,6 +167,13 @@ protected:
     }
 
 private:
+    void UpdateHeaderAppearance()
+    {
+        if (GetHandle()) {
+            SetHeaderAttr(wxItemAttr(GetForegroundColour(), GetBackgroundColour(), GetFont()));
+        }
+    }
+
     void* m_userdata;
     wxd_listctrl_virtual_text_callback m_textCallback;
     wxd_listctrl_free_string_callback m_freeString;

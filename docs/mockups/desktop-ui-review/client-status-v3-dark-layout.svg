@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1366" height="1068" viewBox="0 0 1366 1068"><title>TianCaiSpaceHub 第三稿 · 独立合成布局图，非浏览器截图</title><style>text{font-family:'Microsoft YaHei UI','Segoe UI',sans-serif}path{stroke-linejoin:round;stroke-linecap:round}</style><rect x="0" y="0" width="1366" height="1068" rx="0" fill="#111a22"/>
+<rect x="0" y="0" width="1366" height="30" rx="0" fill="#e5edf2"/>
+<text x="16" y="20" font-size="11" font-weight="600" fill="#19252f" text-anchor="start">界面方案 03  ·  合成数据</text>
+<text x="1346" y="20" font-size="11" font-weight="400" fill="#19252f" text-anchor="end">日常使用   ⌄       深色预览       重置演示</text>
+<rect x="0" y="30" width="204" height="1038" rx="0" fill="#19252f"/>
+<path d="M204 30L204 1068" fill="none" stroke="#30424f"/>
+<rect x="22" y="55" width="34" height="34" rx="8" fill="#50c7c7"/>
+<text x="39" y="80" font-size="23" font-weight="700" fill="#102a2e" text-anchor="middle">T</text>
+<text x="67" y="70" font-size="16" font-weight="600" fill="#e5edf2" text-anchor="start">天才空间</text>
+<text x="67" y="87" font-size="10" font-weight="400" fill="#a3b3bf" text-anchor="start">TianCaiSpaceHub</text>
+<text x="27" y="135" font-size="17" font-weight="400" fill="#a3b3bf" text-anchor="start">⌁</text>
+<text x="54" y="135" font-size="13" font-weight="400" fill="#a3b3bf" text-anchor="start">概览</text>
+<text x="25" y="184" font-size="11" font-weight="400" fill="#91a5b3" text-anchor="start">客户端</text>
+<rect x="12" y="198" width="180" height="39" rx="6" fill="#173d40"/>
+<text x="27" y="222" font-size="17" font-weight="400" fill="#50c7c7" text-anchor="start">◉</text>
+<text x="54" y="222" font-size="13" font-weight="600" fill="#50c7c7" text-anchor="start">ChatGPT(Codex)</text>
+<text x="27" y="265" font-size="17" font-weight="400" fill="#a3b3bf" text-anchor="start">W</text>
+<text x="54" y="265" font-size="13" font-weight="400" fill="#a3b3bf" text-anchor="start">WorkBuddy</text>
+<text x="27" y="308" font-size="17" font-weight="400" fill="#a3b3bf" text-anchor="start">T</text>
+<text x="54" y="308" font-size="13" font-weight="400" fill="#a3b3bf" text-anchor="start">天工 Work</text>
+<text x="102" y="347" font-size="20" font-weight="500" fill="#a3b3bf" text-anchor="middle">⋯</text>
+<text x="25" y="395" font-size="11" font-weight="400" fill="#91a5b3" text-anchor="start">共用能力</text>
+<text x="27" y="433" font-size="17" font-weight="400" fill="#a3b3bf" text-anchor="start">◇</text>
+<text x="54" y="433" font-size="13" font-weight="400" fill="#a3b3bf" text-anchor="start">模型与渠道</text>
+<text x="27" y="476" font-size="17" font-weight="400" fill="#a3b3bf" text-anchor="start">▤</text>
+<text x="54" y="476" font-size="13" font-weight="400" fill="#a3b3bf" text-anchor="start">Skill 管理</text>
+<text x="27" y="519" font-size="17" font-weight="400" fill="#a3b3bf" text-anchor="start">♧</text>
+<text x="54" y="519" font-size="13" font-weight="400" fill="#a3b3bf" text-anchor="start">MCP 管理</text>
+<text x="27" y="562" font-size="17" font-weight="400" fill="#a3b3bf" text-anchor="start">◌</text>
+<text x="54" y="562" font-size="13" font-weight="400" fill="#a3b3bf" text-anchor="start">聊天接入</text>
+<text x="27" y="605" font-size="17" font-weight="400" fill="#a3b3bf" text-anchor="start">⌁</text>
+<text x="54" y="605" font-size="13" font-weight="400" fill="#a3b3bf" text-anchor="start">请求记录</text>
+<text x="27" y="940" font-size="17" font-weight="400" fill="#a3b3bf" text-anchor="start">⚙</text>
+<text x="54" y="940" font-size="13" font-weight="400" fill="#a3b3bf" text-anchor="start">设置</text>
+<text x="27" y="980" font-size="17" font-weight="400" fill="#a3b3bf" text-anchor="start">?</text>
+<text x="54" y="980" font-size="13" font-weight="400" fill="#a3b3bf" text-anchor="start">帮助</text>
+<text x="24" y="1026" font-size="10" font-weight="400" fill="#a3b3bf" text-anchor="start">界面评审稿</text>
+<text x="24" y="1044" font-size="10" font-weight="400" fill="#91a5b3" text-anchor="start">基线 v0.4.30-13</text>
+<rect x="204" y="30" width="1162" height="48" rx="0" fill="#19252f"/>
+<path d="M204 78L1366 78" fill="none" stroke="#30424f"/>
+<text x="230" y="59" font-size="12" font-weight="400" fill="#a3b3bf" text-anchor="start">工作台 / ChatGPT(Codex)</text>
+<circle cx="1197" cy="54" r="3" fill="#8dd4af"/>
+<text x="1209" y="59" font-size="12" font-weight="400" fill="#a3b3bf" text-anchor="start">本机服务运行中   ›</text>
+<rect x="204" y="1041" width="1162" height="27" rx="0" fill="#19252f"/>
+<path d="M204 1041L1366 1041" fill="none" stroke="#30424f"/>
+<text x="230" y="1058" font-size="10" font-weight="400" fill="#a3b3bf" text-anchor="start">独立布局图 · 非 HTML / 产品运行截图 · 仅供界面评审</text>
+<text x="230" y="126" font-size="24" font-weight="600" fill="#e5edf2" text-anchor="start">ChatGPT(Codex)</text>
+<circle cx="473" cy="119" r="3" fill="#8dd4af"/>
+<text x="483" y="124" font-size="12" font-weight="400" fill="#8dd4af" text-anchor="start">已打开</text>
+<rect x="1189" y="107" width="112" height="33" rx="8" fill="#50c7c7"/>
+<text x="1245" y="128" font-size="12" font-weight="500" fill="#102a2e" text-anchor="middle">打开客户端</text>
+<circle cx="1324" cy="124" r="9" fill="#a3b3bf"/>
+<text x="1324" y="129" font-size="13" font-weight="600" fill="#19252f" text-anchor="middle">?</text>
+<path d="M230 200L1340 200" fill="none" stroke="#30424f"/>
+<text x="230" y="187" font-size="13" font-weight="600" fill="#50c7c7" text-anchor="start">状态概览</text>
+<rect x="230" y="199" width="52" height="2" rx="0" fill="#50c7c7"/>
+<text x="312" y="187" font-size="13" font-weight="400" fill="#a3b3bf" text-anchor="start">模型</text>
+<text x="368" y="187" font-size="13" font-weight="400" fill="#a3b3bf" text-anchor="start">接入设置</text>
+<text x="450" y="187" font-size="13" font-weight="400" fill="#a3b3bf" text-anchor="start">Skill 与 MCP</text>
+<text x="623" y="187" font-size="13" font-weight="400" fill="#a3b3bf" text-anchor="start">历史与维护</text>
+<text x="238" y="249" font-size="16" font-weight="600" fill="#e5edf2" text-anchor="start">状态概览</text>
+<path d="M440.6 384.4 H752" fill="none" stroke="#30424f" stroke-width="1.5"/>
+<path d="M818 384.4 H1129.4" fill="none" stroke="#30424f" stroke-width="1.5"/>
+<path d="M374.6 384.4 C322.6 384.4 322.6 600 374.6 600" fill="none" stroke="#30424f" stroke-width="1.5" stroke-dasharray="4 9"/>
+<path d="M440.6 384.4 C597.6 384.4 635 600 752 600" fill="none" stroke="#30424f" stroke-width="1.5" stroke-dasharray="4 9"/>
+<path d="M818 384.4 C975 384.4 1012.4000000000001 600 1129.4 600" fill="none" stroke="#30424f" stroke-width="1.5" stroke-dasharray="4 9"/>
+<rect x="377.6" y="354.4" width="60" height="60" rx="21" fill="#19252f" stroke="#30424f"/>
+<text x="407.6" y="393.4" font-size="24" font-weight="600" fill="#50c7c7" text-anchor="middle">C</text>
+<circle cx="434.6" cy="409.4" r="5" fill="#19252f"/>
+<circle cx="434.6" cy="409.4" r="3.5" fill="#8dd4af"/>
+<text x="407.6" y="441.4" font-size="13" font-weight="600" fill="#e5edf2" text-anchor="middle">Codex</text>
+<text x="407.6" y="465.4" font-size="11" font-weight="400" fill="#a3b3bf" text-anchor="middle">已打开</text>
+<rect x="755" y="354.4" width="60" height="60" rx="22" fill="#50c7c7"/>
+<text x="785" y="393.4" font-size="26" font-weight="600" fill="#102a2e" text-anchor="middle">T</text>
+<circle cx="812" cy="409.4" r="5" fill="#19252f"/>
+<circle cx="812" cy="409.4" r="3.5" fill="#8dd4af"/>
+<text x="785" y="441.4" font-size="13" font-weight="600" fill="#e5edf2" text-anchor="middle">天才 Hub</text>
+<text x="785" y="465.4" font-size="11" font-weight="400" fill="#a3b3bf" text-anchor="middle">运行中</text>
+<rect x="1132.4" y="354.4" width="60" height="60" rx="21" fill="#19252f" stroke="#30424f"/>
+<text x="1162.4" y="393.4" font-size="24" font-weight="600" fill="#50c7c7" text-anchor="middle">◇</text>
+<circle cx="1189.4" cy="409.4" r="5" fill="#19252f"/>
+<circle cx="1189.4" cy="409.4" r="3.5" fill="#8dd4af"/>
+<text x="1162.4" y="441.4" font-size="13" font-weight="600" fill="#e5edf2" text-anchor="middle">模型</text>
+<text x="1162.4" y="465.4" font-size="11" font-weight="400" fill="#a3b3bf" text-anchor="middle">2 个使用中</text>
+<rect x="377.6" y="570" width="60" height="60" rx="21" fill="#19252f" stroke="#30424f"/>
+<text x="407.6" y="609" font-size="24" font-weight="600" fill="#50c7c7" text-anchor="middle">▤</text>
+<circle cx="434.6" cy="625" r="5" fill="#19252f"/>
+<circle cx="434.6" cy="625" r="3.5" fill="#8dd4af"/>
+<text x="407.6" y="657" font-size="13" font-weight="600" fill="#e5edf2" text-anchor="middle">Skill</text>
+<text x="407.6" y="681" font-size="11" font-weight="400" fill="#a3b3bf" text-anchor="middle">1 项使用中</text>
+<rect x="755" y="570" width="60" height="60" rx="21" fill="#19252f" stroke="#30424f"/>
+<text x="785" y="609" font-size="24" font-weight="600" fill="#50c7c7" text-anchor="middle">♧</text>
+<circle cx="812" cy="625" r="5" fill="#19252f"/>
+<circle cx="812" cy="625" r="3.5" fill="#8dd4af"/>
+<text x="785" y="657" font-size="13" font-weight="600" fill="#e5edf2" text-anchor="middle">MCP</text>
+<text x="785" y="681" font-size="11" font-weight="400" fill="#a3b3bf" text-anchor="middle">2 项使用中</text>
+<rect x="1132.4" y="570" width="60" height="60" rx="21" fill="#19252f" stroke="#30424f"/>
+<text x="1162.4" y="609" font-size="24" font-weight="600" fill="#50c7c7" text-anchor="middle">◌</text>
+<circle cx="1189.4" cy="625" r="5" fill="#19252f"/>
+<circle cx="1189.4" cy="625" r="3.5" fill="#8dd4af"/>
+<text x="1162.4" y="657" font-size="13" font-weight="600" fill="#e5edf2" text-anchor="middle">聊天与执行</text>
+<text x="1162.4" y="681" font-size="11" font-weight="400" fill="#a3b3bf" text-anchor="middle">App 已连接</text>
+<path d="M230 710L1340 710" fill="none" stroke="#30424f"/></svg>

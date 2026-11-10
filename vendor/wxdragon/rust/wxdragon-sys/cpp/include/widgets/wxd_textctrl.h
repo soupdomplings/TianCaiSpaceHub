@@ -9,6 +9,8 @@ wxd_TextCtrl_Create(wxd_Window_t* parent, wxd_Id id, const char* value, wxd_Poin
                     wxd_Size size, wxd_Style_t style);
 WXD_EXPORTED void
 wxd_TextCtrl_SetValue(wxd_TextCtrl_t* textCtrl, const char* value);
+WXD_EXPORTED bool
+wxd_TextCtrl_SetHint(wxd_TextCtrl_t* textCtrl, const char* hint);
 WXD_EXPORTED int
 wxd_TextCtrl_GetValue(wxd_TextCtrl_t* textCtrl, char* buffer, int buffer_len);
 WXD_EXPORTED void

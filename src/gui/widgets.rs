@@ -1,3 +1,4 @@
+use crate::gui::controls::{Choice, TextCtrl};
 use std::{cell::RefCell, collections::HashMap};
 
 use image::imageops::FilterType;
@@ -136,16 +137,8 @@ pub(super) fn apply_dataview_theme(list: &DataViewCtrl) {
 }
 
 pub(super) fn dataview_table_style(vertical_rules: bool) -> DataViewStyle {
-    let base = DataViewStyle::Single;
-    if theme::theme().is_dark {
-        base
-    } else if vertical_rules {
-        base | DataViewStyle::RowLines
-            | DataViewStyle::HorizontalRules
-            | DataViewStyle::VerticalRules
-    } else {
-        base | DataViewStyle::RowLines | DataViewStyle::HorizontalRules
-    }
+    let _ = vertical_rules;
+    DataViewStyle::Single | DataViewStyle::BorderNone
 }
 
 pub(super) fn apply_listctrl_theme(list: &ListCtrl) {
@@ -155,11 +148,7 @@ pub(super) fn apply_listctrl_theme(list: &ListCtrl) {
 }
 
 pub(super) fn listctrl_report_style() -> ListCtrlStyle {
-    if theme::theme().is_dark {
-        ListCtrlStyle::Report
-    } else {
-        ListCtrlStyle::Report | ListCtrlStyle::HRules | ListCtrlStyle::VRules
-    }
+    ListCtrlStyle::Report | ListCtrlStyle::BorderNone
 }
 
 pub(super) fn apply_listctrl_row_theme(list: &ListCtrl, row: i64) {
@@ -208,7 +197,7 @@ pub(super) fn connection_choice_row<W: WxWidget>(
     label.set_foreground_color(theme::theme().ink_secondary);
     sizer.add(&label, 0, SizerFlag::AlignCenterVertical, 0);
     let input = Choice::builder(parent)
-        .with_size(Size::new(420, -1))
+        .with_size(Size::new(240, -1))
         .with_choices(choices.iter().map(|value| (*value).to_owned()).collect())
         .build();
     connection_field_theme(&input, true);
@@ -231,18 +220,7 @@ fn flat_bordered_panel<W: WxWidget>(parent: &W, background: Colour) -> Panel {
         .build();
     panel.set_background_color(background);
 
-    let panel_for_paint = panel;
-    panel.on_paint(move |_| {
-        let dc = PaintDC::new(&panel_for_paint);
-        let size = panel_for_paint.get_client_size();
-        let width = size.width.max(1);
-        let height = size.height.max(1);
-        dc.set_background(background);
-        dc.clear();
-        dc.set_pen(theme::theme().border, 1, PenStyle::Solid);
-        dc.set_brush(background, BrushStyle::Transparent);
-        dc.draw_rectangle(0, 0, width.saturating_sub(1), height.saturating_sub(1));
-    });
+    super::controls::paint_surface(panel, theme::SURFACE_RADIUS);
 
     panel
 }
@@ -255,7 +233,11 @@ fn flat_bordered_panel<W: WxWidget>(parent: &W, background: Colour) -> Panel {
 /// their layout to `content_sizer`; add `card_panel` itself to the page sizer.
 pub(super) fn card_section<W: WxWidget>(parent: &W, title: &str) -> (Panel, BoxSizer) {
     let t = theme::theme();
-    let card = flat_bordered_panel(parent, t.bg_card);
+    let card = Panel::builder(parent)
+        .with_style(PanelStyle::BorderNone)
+        .build();
+    card.set_background_color(t.bg_card);
+    super::controls::paint_surface(card, theme::SURFACE_RADIUS);
 
     let outer = BoxSizer::builder(Orientation::Vertical).build();
     let header = StaticText::builder(&card).with_label(title).build();
@@ -265,7 +247,7 @@ pub(super) fn card_section<W: WxWidget>(parent: &W, title: &str) -> (Panel, BoxS
         &header,
         0,
         SizerFlag::Left | SizerFlag::Right | SizerFlag::Top,
-        theme::SPACE_MD,
+        card.from_dip(theme::PANEL_INSET),
     );
 
     let content = BoxSizer::builder(Orientation::Vertical).build();
@@ -273,7 +255,7 @@ pub(super) fn card_section<W: WxWidget>(parent: &W, title: &str) -> (Panel, BoxS
         &content,
         1,
         SizerFlag::Expand | SizerFlag::All,
-        theme::SPACE_XS,
+        card.from_dip(theme::SPACE_XS),
     );
     card.set_sizer(outer, true);
     (card, content)
@@ -880,7 +862,7 @@ pub(super) fn text_field_row<W: WxWidget>(
         .with_style(TextCtrlStyle::Default)
         .build();
     apply_textctrl_theme(&input);
-    input.set_min_size(Size::new(420, 30));
+    input.set_min_size(super::visual::dip_size(&input, 300, 36));
     sizer.add(&input, 1, SizerFlag::Expand, 0);
     input
 }

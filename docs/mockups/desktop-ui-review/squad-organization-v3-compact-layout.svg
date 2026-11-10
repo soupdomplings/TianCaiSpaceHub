@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="1068" viewBox="0 0 900 1068"><title>天才小分队 · 合成独立布局图，非 HTML 截图</title><style>text{font-family:'Microsoft YaHei UI','Segoe UI',sans-serif}path{stroke-linecap:round;stroke-linejoin:round}</style><rect x="0" y="0" width="900" height="1068" rx="0" fill="#f4f6f8"/>
+<rect x="0" y="0" width="900" height="30" rx="0" fill="#172b36"/>
+<text x="16" y="20" fill="#ffffff" font-size="11" font-weight="600">界面方案 03 · 合成数据</text>
+<rect x="0" y="30" width="168" height="1038" rx="0" fill="#ffffff"/>
+<path d="M168 30L168 1068" stroke="#e2e8ed" fill="none"/>
+<rect x="22" y="55" width="34" height="34" rx="9" fill="#087f83"/>
+<text x="31" y="81" fill="#fff" font-size="24" font-weight="700">T</text>
+<text x="67" y="71" fill="#172b36" font-size="16" font-weight="600">天才空间</text>
+<text x="67" y="88" fill="#586b78" font-size="10" font-weight="400">TianCaiSpaceHub</text>
+<text x="25" y="130" fill="#586b78" font-size="16" font-weight="400">⌁</text>
+<text x="51" y="130" fill="#586b78" font-size="11" font-weight="400">概览</text>
+<rect x="12" y="147" width="144" height="39" rx="7" fill="#e8f5f3"/>
+<text x="25" y="171" fill="#087f83" font-size="16" font-weight="400">✦</text>
+<text x="51" y="171" fill="#087f83" font-size="11" font-weight="600">天才小分队</text>
+<text x="25" y="213" fill="#586b78" font-size="11" font-weight="400">客户端</text>
+<text x="25" y="250" fill="#586b78" font-size="16" font-weight="400">◉</text>
+<text x="51" y="250" fill="#586b78" font-size="11" font-weight="400">ChatGPT(Codex)</text>
+<text x="25" y="291" fill="#586b78" font-size="16" font-weight="400">W</text>
+<text x="51" y="291" fill="#586b78" font-size="11" font-weight="400">WorkBuddy</text>
+<text x="25" y="332" fill="#586b78" font-size="16" font-weight="400">T</text>
+<text x="51" y="332" fill="#586b78" font-size="11" font-weight="400">天工 Work</text>
+<text x="78" y="369" fill="#586b78" font-size="20" font-weight="400">⋯</text>
+<text x="25" y="410" fill="#586b78" font-size="11" font-weight="400">共用能力</text>
+<text x="25" y="448" fill="#586b78" font-size="16" font-weight="400">◇</text>
+<text x="51" y="448" fill="#586b78" font-size="11" font-weight="400">模型与渠道</text>
+<text x="25" y="489" fill="#586b78" font-size="16" font-weight="400">▤</text>
+<text x="51" y="489" fill="#586b78" font-size="11" font-weight="400">Skill 管理</text>
+<text x="25" y="530" fill="#586b78" font-size="16" font-weight="400">♧</text>
+<text x="51" y="530" fill="#586b78" font-size="11" font-weight="400">MCP 管理</text>
+<text x="25" y="571" fill="#586b78" font-size="16" font-weight="400">◌</text>
+<text x="51" y="571" fill="#586b78" font-size="11" font-weight="400">聊天接入</text>
+<text x="25" y="612" fill="#586b78" font-size="16" font-weight="400">⌁</text>
+<text x="51" y="612" fill="#586b78" font-size="11" font-weight="400">请求记录</text>
+<text x="25" y="944" fill="#586b78" font-size="16" font-weight="400">⚙</text>
+<text x="51" y="944" fill="#586b78" font-size="11" font-weight="400">设置</text>
+<text x="25" y="984" fill="#586b78" font-size="16" font-weight="400">?</text>
+<text x="51" y="984" fill="#586b78" font-size="11" font-weight="400">帮助</text>
+<text x="24" y="1030" fill="#586b78" font-size="10" font-weight="400">界面评审稿</text>
+<text x="24" y="1047" fill="#586b78" font-size="10" font-weight="400">基线 v0.4.30-13</text>
+<rect x="168" y="30" width="732" height="48" rx="0" fill="#ffffff"/>
+<text x="194" y="59" fill="#586b78" font-size="12" font-weight="400">工作台 / 天才小分队</text>
+<circle cx="744" cy="54" r="3" fill="#087f83"/>
+<text x="755" y="59" fill="#586b78" font-size="11" font-weight="400">本机服务运行中</text>
+<text x="194" y="126" fill="#172b36" font-size="24" font-weight="600">天才小分队</text>
+<rect x="672" y="106" width="88" height="34" rx="7" fill="#f8fafb"/>
+<text x="685" y="128" fill="#172b36" font-size="12" font-weight="500">账号场景</text>
+<rect x="769" y="106" width="74" height="34" rx="7" fill="#f8fafb"/>
+<text x="782" y="128" fill="#172b36" font-size="12" font-weight="500">退出账号</text>
+<circle cx="865" cy="123" r="9" fill="#586b78"/>
+<text x="862" y="128" fill="#ffffff" font-size="12" font-weight="600">?</text>
+<text x="194" y="183" fill="#586b78" font-size="11" font-weight="400">账户概览</text>
+<text x="254" y="183" fill="#586b78" font-size="11" font-weight="400">API 密钥</text>
+<text x="340" y="183" fill="#586b78" font-size="11" font-weight="400">使用记录</text>
+<text x="400" y="183" fill="#087f83" font-size="11" font-weight="600">组织与扣费</text>
+<rect x="400" y="196" width="55" height="2" rx="0" fill="#087f83"/>
+<text x="471" y="183" fill="#586b78" font-size="11" font-weight="400">模型广场</text>
+<text x="531" y="183" fill="#586b78" font-size="11" font-weight="400">充值/订阅</text>
+<text x="602" y="183" fill="#586b78" font-size="11" font-weight="400">账户与工具</text>
+<path d="M194 198L874 198" stroke="#e2e8ed" fill="none"/>
+<rect x="168" y="1041" width="732" height="27" rx="0" fill="#ffffff"/>
+<text x="194" y="1058" fill="#586b78" font-size="10" font-weight="400">独立合成布局图 · 非 HTML / 产品运行截图</text>
+<rect x="194" y="218" width="70" height="32" rx="6" fill="#e8f5f3"/>
+<text x="204" y="239" fill="#087f83" font-size="12" font-weight="600">扣费顺序</text>
+<text x="274" y="239" fill="#586b78" font-size="12" font-weight="400">组织管理</text>
+<text x="344" y="239" fill="#586b78" font-size="12" font-weight="400">成员用量</text>
+<text x="414" y="239" fill="#586b78" font-size="12" font-weight="400">外部账号详情</text>
+<text x="508" y="239" fill="#586b78" font-size="12" font-weight="400">组织架构</text>
+<rect x="194" y="274" width="680" height="340" rx="10" fill="#ffffff"/>
+<text x="216" y="308" fill="#172b36" font-size="15" font-weight="600">扣费顺序</text>
+<rect x="746" y="285" width="106" height="34" rx="7" fill="#087f83"/>
+<text x="759" y="307" fill="#fff" font-size="12" font-weight="500">保存顺序</text>
+<rect x="216" y="347" width="32" height="32" rx="8" fill="#f8fafb"/>
+<text x="228" y="369" fill="#586b78" font-size="12" font-weight="400">1</text>
+<text x="264" y="357" fill="#172b36" font-size="13" font-weight="600">示例组织</text>
+<text x="264" y="382" fill="#586b78" font-size="12" font-weight="400">组织额度 · $318.42</text>
+<rect x="694" y="349" width="67" height="29" rx="6" fill="#e8f5f3"/>
+<text x="705" y="368" fill="#087f83" font-size="11" font-weight="400">使用中</text>
+<text x="793" y="370" fill="#586b78" font-size="18" font-weight="400">↑    ↓</text>
+<path d="M216 416L852 416" stroke="#e2e8ed" fill="none"/>
+<rect x="216" y="430" width="32" height="32" rx="8" fill="#f8fafb"/>
+<text x="228" y="452" fill="#586b78" font-size="12" font-weight="400">2</text>
+<text x="264" y="440" fill="#172b36" font-size="13" font-weight="600">示例组织 / 研发组</text>
+<text x="264" y="465" fill="#586b78" font-size="12" font-weight="400">部门额度 · $86.20</text>
+<rect x="694" y="432" width="67" height="29" rx="6" fill="#e8f5f3"/>
+<text x="705" y="451" fill="#087f83" font-size="11" font-weight="400">使用中</text>
+<text x="793" y="453" fill="#586b78" font-size="18" font-weight="400">↑    ↓</text>
+<path d="M216 499L852 499" stroke="#e2e8ed" fill="none"/>
+<rect x="216" y="513" width="32" height="32" rx="8" fill="#f8fafb"/>
+<text x="228" y="535" fill="#586b78" font-size="12" font-weight="400">3</text>
+<text x="264" y="523" fill="#172b36" font-size="13" font-weight="600">个人余额</text>
+<text x="264" y="548" fill="#586b78" font-size="12" font-weight="400">个人余额 · $128.50</text>
+<rect x="694" y="515" width="67" height="29" rx="6" fill="#e8f5f3"/>
+<text x="705" y="534" fill="#087f83" font-size="11" font-weight="400">使用中</text>
+<text x="793" y="536" fill="#586b78" font-size="18" font-weight="400">↑    ↓</text></svg>

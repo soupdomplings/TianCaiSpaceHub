@@ -103,7 +103,14 @@ impl Font {
         };
         let ptr = unsafe {
             // This FFI function seems to be available based on lack of lint errors for it.
-            ffi::wxd_Font_CreateEx(point_size, family, style, weight, underlined, c_face_name.as_ptr())
+            ffi::wxd_Font_CreateEx(
+                point_size,
+                family,
+                style,
+                weight,
+                underlined,
+                c_face_name.as_ptr(),
+            )
         };
         if ptr.is_null() {
             None
@@ -162,7 +169,11 @@ impl Font {
         let mut buffer = vec![0; 256];
         let len = unsafe { ffi::wxd_Font_GetFaceName(self.ptr, buffer.as_mut_ptr(), buffer.len()) };
         if len > 0 {
-            unsafe { CStr::from_ptr(buffer.as_ptr()).to_string_lossy().to_string() }
+            unsafe {
+                CStr::from_ptr(buffer.as_ptr())
+                    .to_string_lossy()
+                    .to_string()
+            }
         } else {
             String::new()
         }
@@ -190,6 +201,11 @@ impl Font {
         unsafe {
             ffi::wxd_Font_SetPointSize(self.ptr, point_size);
         }
+    }
+
+    /// Pixel height for explicit-scale canvas rendering; widget fonts use points.
+    pub fn set_pixel_height(&mut self, height: i32) {
+        unsafe { ffi::wxd_Font_SetPixelHeight(self.ptr, height) };
     }
 
     /// Sets the font family.
@@ -341,7 +357,11 @@ impl FontBuilder {
     }
 
     pub fn build(self) -> Option<Font> {
-        let point_size = if self.point_size == 0 { 10 } else { self.point_size };
+        let point_size = if self.point_size == 0 {
+            10
+        } else {
+            self.point_size
+        };
 
         let mut font = Font::new_with_details(
             point_size as c_int,

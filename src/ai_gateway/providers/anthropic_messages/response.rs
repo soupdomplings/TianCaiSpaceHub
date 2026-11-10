@@ -391,7 +391,7 @@ fn extract_custom_tool_input(input: &Value) -> String {
         })
 }
 
-fn convert_usage_value(usage: &Value) -> Usage {
+pub(super) fn convert_usage_value(usage: &Value) -> Usage {
     let uncached_input = usage
         .get("input_tokens")
         .and_then(Value::as_i64)

@@ -219,9 +219,14 @@ pub async fn passthrough(
         "proxying image request"
     );
 
-    let upstream_response =
-        super::execute_openai_request(client, request, provider, "upstream image request failed")
-            .await?;
+    let upstream_response = super::execute_openai_request(
+        client,
+        request,
+        provider,
+        ctx,
+        "upstream image request failed",
+    )
+    .await?;
     request_log::record_upstream_response_headers(
         log_context.as_ref(),
         upstream_response.headers(),

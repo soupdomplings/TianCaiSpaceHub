@@ -22,15 +22,26 @@ pub(super) type PendingAiGwChannelToggle = Rc<RefCell<Option<AiGwChannelToggle>>
 pub(super) struct AiGwProviderRow {
     pub(super) enabled: bool,
     pub(super) name: String,
+    pub(super) display_name: String,
     pub(super) provider_type: ProviderType,
     pub(super) compatibility: Option<String>,
     pub(super) base_url: String,
     pub(super) models_url: Option<String>,
     pub(super) weight: u32,
+    pub(super) scope_label: String,
 }
 
 pub(super) fn provider_scope_display(name: &str, text: GuiText) -> &'static str {
-    if is_workbuddy_provider_name(name) {
+    if let Some(key) = name
+        .strip_prefix(crate::desktop::models::PREFIX)
+        .and_then(|n| n.split(':').next())
+    {
+        crate::desktop::clients::ClientId::ALL
+            .into_iter()
+            .find(|c| c.key() == key)
+            .map(|c| c.name())
+            .unwrap_or("客户端专用")
+    } else if is_workbuddy_provider_name(name) {
         text.ai_gw_scope_workbuddy()
     } else if is_gmclaw_provider_name(name) {
         text.ai_gw_scope_gmclaw()
@@ -40,7 +51,9 @@ pub(super) fn provider_scope_display(name: &str, text: GuiText) -> &'static str 
 }
 
 pub(super) fn provider_scope_help(name: &str, text: GuiText) -> &'static str {
-    if is_workbuddy_provider_name(name) {
+    if name.starts_with(crate::desktop::models::PREFIX) {
+        "此模型配置只用于所属客户端，可独立调整；同步来源需在对应客户端页面选择。"
+    } else if is_workbuddy_provider_name(name) {
         text.ai_gw_scope_workbuddy_help()
     } else if is_gmclaw_provider_name(name) {
         text.ai_gw_scope_gmclaw_help()
@@ -99,6 +112,42 @@ pub(super) fn delete_ai_gw_provider(api: &ApiClient, name: &str) -> Result<(), S
     config.ai_gateway.providers.retain(|p| p.name != name);
     api.save_app_config(&config)?;
     Ok(())
+}
+
+pub(super) fn save_confirmed_provider_url(
+    api: &ApiClient,
+    expected: &ProviderConfig,
+    corrected: &str,
+) -> Result<(), String> {
+    if corrected == expected.base_url {
+        return Ok(());
+    }
+    let mut config = api.get_app_config()?;
+    if config
+        .ai_gateway
+        .providers
+        .iter()
+        .filter(|p| p.name == expected.name)
+        .count()
+        != 1
+    {
+        return Ok(());
+    }
+    let Some(current) = config
+        .ai_gateway
+        .providers
+        .iter_mut()
+        .find(|p| p.name == expected.name)
+    else {
+        return Ok(());
+    };
+    if serde_json::to_value(&*current).ok() != serde_json::to_value(expected).ok() {
+        return Ok(());
+    }
+    if !current.confirm_base_url(corrected) {
+        return Ok(());
+    }
+    api.save_app_config(&config).map(|_| ())
 }
 
 pub(super) fn set_ai_gw_provider_enabled(
@@ -180,9 +229,21 @@ pub(super) fn refresh_ai_gw_enable_logging(
 }
 
 pub(super) fn refresh_ai_gw_provider_list(handles: &UiHandles, config: Option<&AiGatewayConfig>) {
-    let rows = ai_gw_provider_list_rows(config);
+    // A graph/channel jump reveals the exact dedicated scope before selecting it.
+    if let Some(provider) = handles.shell.take_source_focus().and_then(|route| {
+        config.and_then(|c| {
+            c.providers
+                .iter()
+                .find(|p| crate::ai_gateway::config::provider_route_id(p) == route)
+        })
+    }) {
+        handles.ai_gw_scope.set_selection(provider_scope(provider));
+    }
+    let rows = ai_gw_provider_list_rows(config, handles.ai_gw_scope.get_selection().unwrap_or(0));
     let mut current_rows = handles.ai_gw_provider_rows.borrow_mut();
     if *current_rows == rows {
+        drop(current_rows);
+        focus_pending_source(handles, config);
         return;
     }
 
@@ -207,23 +268,68 @@ pub(super) fn refresh_ai_gw_provider_list(handles: &UiHandles, config: Option<&A
             }
         }
     }
+    focus_pending_source(handles, config);
+}
+pub(super) fn focus_pending_source(handles: &UiHandles, config: Option<&AiGatewayConfig>) {
+    if handles.shell.current() != super::shell::PageId::Sources {
+        return;
+    }
+    if let Some(route) = handles.shell.take_source_focus() {
+        if let Some(provider) = config.and_then(|c| {
+            c.providers
+                .iter()
+                .find(|p| crate::ai_gateway::config::provider_route_id(p) == route)
+        }) {
+            if let Some(index) = handles
+                .ai_gw_provider_rows
+                .borrow()
+                .iter()
+                .position(|r| r.name == provider.name)
+            {
+                handles.ai_gw_provider_list.select_row(index);
+                handles.shell.clear_source_focus();
+            }
+        }
+    }
 }
 
-fn ai_gw_provider_list_rows(config: Option<&AiGatewayConfig>) -> Vec<AiGwProviderRow> {
+fn provider_scope(provider: &ProviderConfig) -> u32 {
+    if provider.is_workbuddy() {
+        1
+    } else if provider.is_gmclaw() {
+        2
+    } else if provider.is_client_reserved() {
+        3
+    } else {
+        0
+    }
+}
+fn ai_gw_provider_list_rows(config: Option<&AiGatewayConfig>, scope: u32) -> Vec<AiGwProviderRow> {
     let Some(config) = config else {
         return Vec::new();
     };
     config
         .providers
         .iter()
+        .filter(|p| scope == 4 || provider_scope(p) == scope)
         .map(|provider| AiGwProviderRow {
             enabled: provider.enabled,
             name: provider.name.clone(),
+            display_name: provider
+                .desktop_binding
+                .as_ref()
+                .map(|b| b.label.clone())
+                .unwrap_or_else(|| provider.name.clone()),
             provider_type: provider.provider_type.clone(),
             compatibility: provider.compatibility.clone(),
             base_url: provider.base_url.clone(),
             models_url: provider.models_url.clone(),
             weight: provider.effective_weight(),
+            scope_label: provider
+                .desktop_binding
+                .as_ref()
+                .map(|b| format!("{} 专用", b.client.name()))
+                .unwrap_or_default(),
         })
         .collect()
 }

@@ -1,0 +1,13 @@
+<idea-plugin require-restart="true">
+  <id>space.tiancai.hub.bridge</id>
+  <name>TianCaiSpaceHub Bridge</name>
+  <version>1.0.0</version>
+  <vendor url="https://tiancai.yc99.space/">TianCaiSpace</vendor>
+  <description>Receives local model settings from TianCaiSpaceHub and stores local bridge credentials in the IDE PasswordSafe. Open a project after installation.</description>
+  <idea-version since-build="262.11879" until-build="262.*"/>
+  <depends>com.intellij.modules.platform</depends>
+  <depends>com.intellij.ml.llm</depends>
+  <extensions defaultExtensionNs="com.intellij">
+    <postStartupActivity implementation="space.tiancai.hub.Startup"/>
+  </extensions>
+</idea-plugin>

@@ -328,6 +328,33 @@ fn model_for_id(config: &AiGatewayConfig, id: &str) -> Option<Value> {
             }
         }
     }
+    if let Some(parameters) =
+        provider.and_then(crate::desktop::tiangong_models::parameters_for_provider)
+    {
+        // Native defaults win over a donor template or a generic 32K fallback.
+        object.insert("context_window".into(), json!(parameters.context_window));
+        object.insert(
+            "max_context_window".into(),
+            json!(parameters.context_window),
+        );
+        object.insert("effective_context_window_percent".into(), json!(100));
+        object.insert(
+            "auto_compact_token_limit".into(),
+            json!(parameters.compact_threshold()),
+        );
+        object.insert("supported_reasoning_levels".into(), json!([]));
+        object.insert("default_reasoning_level".into(), Value::Null);
+        object.insert("supports_reasoning_summaries".into(), json!(false));
+        object.insert("supports_reasoning_summary_parameter".into(), json!(false));
+        object.insert(
+            "input_modalities".into(),
+            if parameters.supports_images == Some(true) {
+                json!(["text", "image"])
+            } else {
+                json!(["text"])
+            },
+        );
+    }
     Some(model)
 }
 

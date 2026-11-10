@@ -31,6 +31,13 @@ wxd_TextCtrl_SetValue(wxd_TextCtrl_t* textCtrl, const char* value)
     }
 }
 
+WXD_EXPORTED bool
+wxd_TextCtrl_SetHint(wxd_TextCtrl_t* textCtrl, const char* hint)
+{
+    wxTextCtrl* ctrl = (wxTextCtrl*)textCtrl;
+    return ctrl && ctrl->SetHint(wxString::FromUTF8(hint ? hint : ""));
+}
+
 // Get the value of the wxTextCtrl
 WXD_EXPORTED int
 wxd_TextCtrl_GetValue(wxd_TextCtrl_t* textCtrl, char* buffer, int buffer_len)

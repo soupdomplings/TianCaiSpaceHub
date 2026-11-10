@@ -54,6 +54,14 @@ static DISPLAY_OWNERSHIP: Mutex<std::collections::VecDeque<PendingDisplayRefresh
 static DISPLAY_DIAGNOSTIC: Mutex<Option<DisplayDiagnostic>> = Mutex::const_new(None);
 const DISPLAY_DIAGNOSTIC_MAX_AGE: Duration = Duration::from_secs(30);
 
+/// Reuses the same process, listener and installed-file checks as message sync.
+/// Discovery never starts TianGong or reads private conversation content.
+pub(crate) async fn assistance_socket() -> Result<url::Url> {
+    let installation = tokio::task::spawn_blocking(discover).await??;
+    let executable = installation.executable.context("尚未找到天工 Work")?;
+    display::target(&executable, &installation.process_ids).await
+}
+
 struct PendingDisplayRefresh {
     task_id: String,
     session_id: String,
@@ -555,6 +563,7 @@ pub(crate) async fn run_connection_monitor(
     mut shutdown: watch::Receiver<bool>,
 ) {
     tokio::spawn(run_display_monitor(state.clone(), shutdown.clone()));
+    tokio::spawn(crate::local_assistance::run_monitor(state.clone(), shutdown.clone()));
     let mut interval = tokio::time::interval(MONITOR_INTERVAL);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
@@ -1180,6 +1189,19 @@ where
         let _ = child.wait();
     });
     Ok(None)
+}
+
+/// Read-only location for the installed model adapter. Does not launch a client.
+pub(crate) fn model_archive(config: &GmClawBridgeConfig) -> Result<PathBuf> {
+    let executable = config.desktop_path.as_deref().and_then(|p| resolve_executable(Path::new(p)))
+        .or(discover()?.executable).context("未找到天工 Work，请先安装或在接入设置选择程序")?;
+    #[cfg(windows)]
+    let resources = executable.parent().context("天工安装位置无效")?.join("resources");
+    #[cfg(target_os = "macos")]
+    let resources = executable.parent().and_then(Path::parent).context("天工安装位置无效")?.join("Resources");
+    #[cfg(not(any(windows, target_os = "macos")))]
+    let resources = { let _ = executable; anyhow::bail!("当前平台不支持天工内置模型") };
+    Ok(resources.join("app.asar"))
 }
 
 fn resolve_executable(path: &Path) -> Option<PathBuf> {

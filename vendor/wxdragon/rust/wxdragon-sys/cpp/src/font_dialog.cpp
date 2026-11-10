@@ -228,6 +228,10 @@ wxd_Font_SetPointSize(wxd_Font_t* self, int point_size)
     font->SetPointSize(point_size);
 }
 
+void wxd_Font_SetPixelHeight(wxd_Font_t* self, int height) {
+    if (self && height > 0) reinterpret_cast<wxFont*>(self)->SetPixelSize(wxSize(0, height));
+}
+
 void
 wxd_Font_SetFamily(wxd_Font_t* self, int family)
 {

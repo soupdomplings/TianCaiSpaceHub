@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' file: data:; script-src 'self' file:; style-src 'self' file: 'unsafe-inline'; img-src 'self' file: data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>TianCaiSpaceHub · 桌面重构评审 · 第三稿</title>
+  <link rel="stylesheet" href="review.css">
+  <link rel="stylesheet" href="workspace-review.css">
+  <link rel="stylesheet" href="motion-review.css">
+  <script defer src="client-marks.js"></script>
+  <script defer src="usage-data.js"></script>
+  <script defer src="capability-review.js"></script>
+  <script defer src="workspace-review.js"></script>
+  <link rel="stylesheet" href="refinements.css">
+  <script defer src="refinements.js"></script>
+  <link rel="stylesheet" href="mcp-entry.css">
+  <script defer src="mcp-entry.js"></script>
+  <link rel="stylesheet" href="squad-account.css">
+  <script defer src="squad-account.js"></script>
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <div class="review-strip">
+    <span><b>界面方案 03</b><span class="review-context"> · 运行状态 / 使用统计 / 模型复用 · 合成数据</span></span>
+    <div class="review-controls">
+      <label for="scenario">场景</label>
+      <select id="scenario"><option value="ready">日常使用</option><option value="empty">首次接入</option><option value="error">连接异常</option><option value="conflict">配置冲突</option><option value="source-update">来源有更新</option><option value="stale">读取失败 · 保留快照</option></select>
+      <button id="theme-toggle" class="review-button">深色预览</button>
+      <button id="motion-toggle" aria-pressed="true" data-action="v3-motion-toggle" class="review-button" title="动效也会遵循系统减少动态效果设置">暂停动效</button>
+      <button id="reset-demo" class="review-button">重置演示</button>
+    </div>
+  </div>
+  <div class="workspace">
+    <aside class="sidebar" aria-label="主导航">
+      <div class="brand"><span class="brand-mark" aria-hidden="true">T</span><div><strong>天才空间</strong><small>TianCaiSpaceHub</small></div></div>
+      <nav id="nav">
+        <button data-nav="home" class="nav-item" aria-current="page"><span data-icon="activity"></span>概览</button>
+        <button data-nav="squad" class="nav-item"><span data-icon="shield"></span>天才小分队</button>
+        <div class="client-nav-heading"><div class="nav-heading">客户端</div><button id="client-nav-toggle" class="client-nav-toggle" data-action="ui-client-nav-toggle" aria-expanded="false" aria-controls="client-nav-list" aria-label="收起客户端列表" hidden>收起</button></div>
+        <div id="client-nav-list"></div>
+        <button id="client-nav-more" class="client-nav-more" data-action="ui-client-nav-toggle" aria-expanded="false" aria-controls="client-nav-list" aria-label="展开全部客户端">⋯</button>
+        <div class="nav-heading">共用能力</div>
+        <button data-nav="sources" class="nav-item"><span data-icon="layers"></span>模型与渠道</button>
+        <button data-nav="skills" class="nav-item"><span data-icon="book"></span>Skill 管理</button>
+        <button data-nav="mcp" class="nav-item" id="mcp-nav"><span data-icon="plug"></span>MCP 管理</button>
+        <button data-nav="chat" class="nav-item"><span data-icon="chat"></span>聊天接入</button>
+        <button data-nav="logs" class="nav-item"><span data-icon="activity"></span>请求记录</button>
+      </nav>
+      <div class="sidebar-bottom">
+        <button data-nav="settings" class="nav-item"><span data-icon="settings"></span>设置</button>
+        <button data-nav="help" class="nav-item"><span data-icon="help"></span>帮助</button>
+        <div class="version">界面评审稿<span>基线 v0.4.30-13</span></div>
+      </div>
+    </aside>
+    <div class="content-shell">
+      <header class="topbar"><div id="breadcrumb">工作台 / 概览</div><button data-action="service" class="service-link"><span id="service-dot" class="dot"></span><span id="service-label">本机服务运行中</span><span data-icon="chevron"></span></button></header>
+      <main id="main" tabindex="-1"></main>
+      <footer class="workspace-footer"><span>静态交互原型 · 所有保存、登录、启动和检测均为演示</span><span id="viewport-note">布局随窗口宽度调整</span></footer>
+    </div>
+  </div>
+  <dialog id="dialog" aria-labelledby="dialog-title"><div class="dialog-header"><div><small id="dialog-kicker">任务</small><h2 id="dialog-title"></h2></div><button data-action="close-dialog" class="icon-button" aria-label="关闭窗口"><span data-icon="close"></span></button></div><div id="dialog-body" class="dialog-body"></div><div id="dialog-footer" class="dialog-footer"></div></dialog>
+  <div id="toast" role="status" aria-live="polite" hidden></div>
+  <noscript>此原型需启用 JavaScript。只使用本地合成数据，不连接 Hub 或外部服务。</noscript>
+</body>
+</html>

@@ -1,11 +1,13 @@
 pub mod apply_patch_tool;
 pub mod catalog;
 pub mod chatgpt_auth;
+mod client_inbound;
 #[allow(dead_code)]
 pub mod codec;
 pub mod config;
 pub mod context;
 pub mod encrypted_content;
+mod endpoint_repair;
 pub mod error;
 pub mod gmclaw;
 mod gmclaw_replay;
@@ -36,6 +38,22 @@ use crate::app_state::SharedState;
 /// 构建 AI Gateway 子路由（state 由父 Router 提供）。
 pub fn router() -> Router<SharedState> {
     Router::new()
+        .route(
+            "/clients/{client}/{entry}/v1/chat/completions",
+            post(client_inbound::chat),
+        )
+        .route(
+            "/clients/{client}/{entry}/v1/responses",
+            post(client_inbound::responses),
+        )
+        .route(
+            "/clients/{client}/{entry}/v1/messages",
+            post(client_inbound::messages),
+        )
+        .route(
+            "/clients/{client}/{entry}/v1/models",
+            get(client_inbound::models),
+        )
         .route(
             "/v1/responses",
             post(handler::handle_responses).get(websocket::handle_upgrade),

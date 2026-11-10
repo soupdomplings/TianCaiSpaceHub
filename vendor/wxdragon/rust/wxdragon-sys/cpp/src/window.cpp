@@ -11,6 +11,41 @@
 #include <wx/cursor.h>   // For wxCursor
 #include <wx/textctrl.h> // For wxTextCtrl scrolling
 #include <wx/menu.h>     // For wxCommandEvent wxEVT_MENU
+#include <wx/dcmemory.h>
+
+#ifdef __WXMSW__
+thread_local wxWindow* wxd_capture_window = nullptr;
+thread_local WXHDC wxd_capture_hdc = nullptr;
+static void wxd_capture_children(wxWindow* window, HDC hdc, int x, int y) {
+    const auto size = window->GetClientSize();
+    const int saved = ::SaveDC(hdc);
+    ::SetViewportOrgEx(hdc, x, y, nullptr);
+    ::IntersectClipRect(hdc, 0, 0, size.x, size.y);
+    // Fill the actual native surface first. WM_PRINTCLIENT does not always
+    // propagate inherited colours for controls in a hidden ancestor.
+    auto bg = window->GetBackgroundColour();
+    if (wxDynamicCast(window, wxStaticText) && window->GetParent()) bg = window->GetParent()->GetBackgroundColour();
+    RECT client{0, 0, size.x, size.y};
+    ::SetDCBrushColor(hdc, RGB(bg.Red(), bg.Green(), bg.Blue()));
+    ::FillRect(hdc, &client, static_cast<HBRUSH>(::GetStockObject(DC_BRUSH)));
+    auto* control = wxDynamicCast(window, wxControl);
+    const bool nativeControl = control && window->GetClassInfo() != wxCLASSINFO(wxControl);
+    if (window->GetBackgroundStyle() == wxBG_STYLE_PAINT && !nativeControl) {
+        wxd_capture_window = window; wxd_capture_hdc = hdc;
+        ::SendMessage(reinterpret_cast<HWND>(window->GetHandle()), WM_PAINT, reinterpret_cast<WPARAM>(hdc), 0);
+        wxd_capture_window = nullptr; wxd_capture_hdc = nullptr;
+    } else {
+        ::SendMessage(reinterpret_cast<HWND>(window->GetHandle()), nativeControl ? WM_PRINT : WM_PRINTCLIENT, reinterpret_cast<WPARAM>(hdc), PRF_CLIENT | PRF_CHILDREN | PRF_ERASEBKGND);
+    }
+    for (auto* child : window->GetChildren()) {
+        if (child->IsShown()) {
+            const auto p = child->GetPosition();
+            wxd_capture_children(child, hdc, x + p.x, y + p.y);
+        }
+    }
+    ::RestoreDC(hdc, saved);
+}
+#endif
 
 // Conditional includes for optional features
 #if wxdUSE_RICHTEXT
@@ -22,6 +57,21 @@
 #endif
 
 extern "C" {
+
+WXD_EXPORTED wxd_Bitmap_t* wxd_Window_CaptureBitmap(wxd_Window_t* window) {
+#ifdef __WXMSW__
+    auto* w = reinterpret_cast<wxWindow*>(window);
+    if (!w || w->GetClientSize().x <= 0 || w->GetClientSize().y <= 0) return nullptr;
+    auto* bitmap = new wxBitmap(w->GetClientSize().x, w->GetClientSize().y, 24);
+    wxMemoryDC dc(*bitmap);
+    dc.SetBackground(wxBrush(w->GetBackgroundColour())); dc.Clear();
+    wxd_capture_children(w, static_cast<HDC>(dc.GetHDC()), 0, 0);
+    dc.SelectObject(wxNullBitmap);
+    return reinterpret_cast<wxd_Bitmap_t*>(bitmap);
+#else
+    return nullptr;
+#endif
+}
 
 // --- General Window Functions ---
 

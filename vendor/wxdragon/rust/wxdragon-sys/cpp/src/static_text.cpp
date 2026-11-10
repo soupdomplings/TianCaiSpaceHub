@@ -4,6 +4,33 @@
 #include "wxd_utils.h"
 #include <wx/stattext.h> // Include wxStaticText header
 #include <string>        // For std::string conversion
+#include <wx/weakref.h>
+
+class WxdStaticText : public wxStaticText {
+    wxString original;
+    int limit = -1, previous = -1;
+    bool wrapping = false;
+public:
+    WxdStaticText(wxWindow* parent, wxWindowID id, const wxString& label, wxPoint pos, wxSize size, long style)
+        : wxStaticText(parent, id, label, pos, size, style), original(label) {
+        wxWeakRef<WxdStaticText> weak(this);
+        parent->Bind(wxEVT_SIZE, [weak](wxSizeEvent& e) { if (weak) weak->Reflow(); e.Skip(); });
+    }
+    void SetLabel(const wxString& value) override {
+        if (!wrapping) { original = value; previous = -1; }
+        wxStaticText::SetLabel(value);
+        if (!wrapping) Reflow();
+    }
+    void WrapTo(int width) { limit = width; previous = -1; Reflow(); }
+    void Reflow() {
+        if (wrapping || limit < 0 || !GetParent()) return;
+        int width = std::min(limit, GetParent()->GetClientSize().x - FromDIP(28));
+        if (width < FromDIP(72) || width == previous) return;
+        previous = width; wrapping = true;
+        wxStaticText::SetLabel(original); wxStaticText::Wrap(width);
+        InvalidateBestSize(); wrapping = false;
+    }
+};
 
 // Helper to convert wxPoint/wxSize if needed (assuming direct use is ok for now)
 // inline wxPoint ToWxPoint(wxd_Point p) { return wxPoint(p.x, p.y); }
@@ -26,7 +53,7 @@ wxd_StaticText_Create(wxd_Window_t* parent, wxd_Id id, const char* label, wxd_Po
     // Ensure label is valid UTF-8 before converting
     wxString wx_label = wxString::FromUTF8(label ? label : "");
 
-    wxStaticText* stext = new wxStaticText(wx_parent, id, wx_label, wxd_cpp_utils::to_wx(pos),
+    wxStaticText* stext = new WxdStaticText(wx_parent, id, wx_label, wxd_cpp_utils::to_wx(pos),
                                            wxd_cpp_utils::to_wx(size), style);
 
     return reinterpret_cast<wxd_StaticText_t*>(stext);
@@ -71,7 +98,8 @@ wxd_StaticText_Wrap(wxd_StaticText_t* stext, int width)
     if (!stext)
         return;
     wxStaticText* wx_stext = reinterpret_cast<wxStaticText*>(stext);
-    wx_stext->Wrap(width);
+    if (auto* modern = dynamic_cast<WxdStaticText*>(wx_stext)) modern->WrapTo(width);
+    else wx_stext->Wrap(width);
 }
 
 } // extern "C"

@@ -102,6 +102,23 @@ wxd_WebView_LoadURL(wxd_WebView_t* self, const char* url)
     }
 }
 
+WXD_EXPORTED wxd_WebView_t*
+wxd_WebView_CreatePrivate(wxd_Window_t* parent, const char* backend)
+{
+    if (!parent || !backend || !wxWebView::IsBackendAvailable(wxString::FromUTF8(backend)))
+        return nullptr;
+    auto configuration = wxWebView::NewConfiguration(wxString::FromUTF8(backend));
+    if (!configuration.EnablePersistentStorage(false))
+        return nullptr;
+    wxWebView* view = wxWebView::New(configuration);
+    if (!view) return nullptr;
+    if (!view->Create((wxWindow*)parent, wxID_ANY, "about:blank")) {
+        delete view;
+        return nullptr;
+    }
+    return (wxd_WebView_t*)view;
+}
+
 WXD_EXPORTED void
 wxd_WebView_Reload(wxd_WebView_t* self, int flags)
 {

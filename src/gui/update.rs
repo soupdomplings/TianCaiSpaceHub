@@ -1026,7 +1026,7 @@ mod update_tests {
         }
         assert!(windows.contains("make_latest: false"));
         assert!(linux.contains("make_latest: false"));
-        assert!(macos.contains("make_latest: ${{ contains(github.ref_name, '-')"));
+        assert!(macos.contains("make_latest: ${{ contains(env.RELEASE_TAG, '-')"));
         assert!(macos.contains("required=(latest-windows.json)"));
         assert!(macos.contains("refusing to promote it to Latest"));
     }
@@ -1086,8 +1086,17 @@ mod update_tests {
             .find("rm -rf \\\n            target/aarch64-apple-darwin")
             .expect("universal build cleanup");
         let create_dmg = workflow
-            .find("\n          hdiutil create ")
+            .find(
+                "\n          python3 \"$RUNNER_TEMP/create-hub-dmg.py\" \"$DMG_STAGING\" \"$DMG\"",
+            )
             .expect("DMG creation command");
+        assert!(workflow.contains(
+            "capacity_mib = max(256, math.ceil(logical_bytes * 2 / (1024 * 1024)) + 128)"
+        ));
+        assert!(workflow.contains("\"hdiutil\", \"create\", \"-size\", f\"{capacity_mib}m\""));
+        assert!(
+            workflow.contains("subprocess.run([\"hdiutil\", \"verify\", str(target)], check=True)")
+        );
         assert!(cleanup < create_dmg);
     }
 

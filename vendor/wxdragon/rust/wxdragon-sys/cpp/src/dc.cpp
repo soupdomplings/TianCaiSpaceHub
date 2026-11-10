@@ -4,6 +4,33 @@
 #include <wx/dcmemory.h>
 #include <wx/dcscreen.h>
 #include <wx/dcbuffer.h>
+#include <wx/dcgraph.h>
+#ifdef __WXMSW__
+#include <wx/msw/dcclient.h>
+extern thread_local wxWindow* wxd_capture_window;
+extern thread_local WXHDC wxd_capture_hdc;
+static wxDC* wxd_review_dc(wxWindow* window) {
+    if (wxd_capture_window != window || !wxd_capture_hdc) return nullptr;
+    return new wxPaintDCEx(window, wxd_capture_hdc);
+}
+#endif
+
+wxDC* wxd_CreateBufferedPaintDC(wxWindow* window) {
+#ifdef __WXMSW__
+    if (auto* review = wxd_review_dc(window)) return review;
+#endif
+    return new wxAutoBufferedPaintDC(window);
+}
+
+wxd_DC_t* wxd_GCDC_Create(wxd_DC_t* source)
+{
+    wxDC* dc = reinterpret_cast<wxDC*>(source);
+    if (auto* memory = dynamic_cast<wxMemoryDC*>(dc))
+        return reinterpret_cast<wxd_DC_t*>(new wxGCDC(*memory));
+    if (auto* window = dynamic_cast<wxWindowDC*>(dc))
+        return reinterpret_cast<wxd_DC_t*>(new wxGCDC(*window));
+    return nullptr;
+}
 
 // Type aliases for easier reference
 using wxd_DC_t = struct wxd_DC_t;
@@ -74,14 +101,17 @@ wxd_PaintDC_Create(wxd_Window_t* window)
     if (!window)
         return nullptr;
     wxWindow* wx_window = reinterpret_cast<wxWindow*>(window);
-    return reinterpret_cast<wxd_PaintDC_t*>(new wxPaintDC(wx_window));
+#ifdef __WXMSW__
+    if (auto* review = wxd_review_dc(wx_window)) return reinterpret_cast<wxd_PaintDC_t*>(review);
+#endif
+    return reinterpret_cast<wxd_PaintDC_t*>(static_cast<wxDC*>(new wxPaintDC(wx_window)));
 }
 
 void
 wxd_PaintDC_Destroy(wxd_PaintDC_t* dc)
 {
     if (dc) {
-        delete reinterpret_cast<wxPaintDC*>(dc);
+        delete reinterpret_cast<wxDC*>(dc);
     }
 }
 
@@ -119,14 +149,14 @@ wxd_AutoBufferedPaintDC_Create(wxd_Window_t* window)
     if (!window)
         return nullptr;
     wxWindow* wx_window = reinterpret_cast<wxWindow*>(window);
-    return reinterpret_cast<wxd_AutoBufferedPaintDC_t*>(new wxAutoBufferedPaintDC(wx_window));
+    return reinterpret_cast<wxd_AutoBufferedPaintDC_t*>(wxd_CreateBufferedPaintDC(wx_window));
 }
 
 void
 wxd_AutoBufferedPaintDC_Destroy(wxd_AutoBufferedPaintDC_t* dc)
 {
     if (dc) {
-        delete reinterpret_cast<wxAutoBufferedPaintDC*>(dc);
+        delete reinterpret_cast<wxDC*>(dc);
     }
 }
 
@@ -146,7 +176,7 @@ wxd_ClientDC_AsDC(wxd_ClientDC_t* dc)
 wxd_DC_t*
 wxd_PaintDC_AsDC(wxd_PaintDC_t* dc)
 {
-    return reinterpret_cast<wxd_DC_t*>(static_cast<wxDC*>(reinterpret_cast<wxPaintDC*>(dc)));
+    return reinterpret_cast<wxd_DC_t*>(dc);
 }
 
 wxd_DC_t*
@@ -164,8 +194,7 @@ wxd_ScreenDC_AsDC(wxd_ScreenDC_t* dc)
 wxd_DC_t*
 wxd_AutoBufferedPaintDC_AsDC(wxd_AutoBufferedPaintDC_t* dc)
 {
-    return reinterpret_cast<wxd_DC_t*>(
-        static_cast<wxDC*>(reinterpret_cast<wxAutoBufferedPaintDC*>(dc)));
+    return reinterpret_cast<wxd_DC_t*>(dc);
 }
 
 // Common DC operations

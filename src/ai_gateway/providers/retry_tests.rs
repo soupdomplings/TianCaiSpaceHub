@@ -13,6 +13,202 @@ use serde_json::{Value, json};
 use super::{anthropic_messages, execute_provider_request, openai_responses};
 
 #[tokio::test]
+async fn tiangong_transport_keeps_stream_and_json_bodies_and_sends_once() {
+    for stream in [false, true] {
+        let upstream = TestUpstream::start(vec![StatusCode::OK]).await;
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap();
+        let body = json!({"model":"fixture-pinned-model","messages":[{"role":"user","content":"fixture"}],"stream":stream});
+        let request = client
+            .post(format!("{}/chat/completions", upstream.base_url))
+            .header("authorization-cer-pat", "fixture-personal-pat")
+            .json(&body)
+            .build()
+            .unwrap();
+        let provider = upstream.provider("fixture-builtin", ProviderType::ChatCompletions);
+        let response = super::execute_tiangong_transport(
+            &client,
+            request,
+            &provider,
+            tokio::time::Instant::now() + std::time::Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+        let content_type = response.headers()["content-type"]
+            .to_str()
+            .unwrap()
+            .to_string();
+        let text = response.text().await.unwrap();
+        assert!(if stream {
+            content_type.contains("text/event-stream") && text.contains("[DONE]")
+        } else {
+            content_type.contains("application/json")
+                && serde_json::from_str::<Value>(&text).is_ok()
+        });
+        let captured = upstream.requests();
+        assert_eq!(captured.len(), 1);
+        assert_eq!(
+            captured[0].headers["authorization-cer-pat"],
+            "fixture-personal-pat"
+        );
+        assert_eq!(
+            serde_json::from_slice::<Value>(&captured[0].body).unwrap(),
+            body
+        );
+    }
+}
+
+#[tokio::test]
+async fn tiangong_transport_never_retries_or_returns_upstream_authentication_error_bodies() {
+    for code in [401, 403, 404, 429, 500, 502, 503] {
+        let upstream =
+            TestUpstream::start(vec![StatusCode::from_u16(code).unwrap(), StatusCode::OK]).await;
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap();
+        let request = client
+            .post(format!("{}/chat/completions", upstream.base_url))
+            .json(&json!({"model":"fixture"}))
+            .build()
+            .unwrap();
+        let error = super::execute_tiangong_transport(
+            &client,
+            request,
+            &upstream.provider("fixture-builtin", ProviderType::ChatCompletions),
+            tokio::time::Instant::now() + std::time::Duration::from_secs(5),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.upstream_status, Some(code));
+        assert!(!error.message.contains("upstream failure"));
+        assert_eq!(upstream.requests().len(), 1);
+        if code == 401 || code == 403 {
+            assert!(error.message.contains("天工 Work → 模型") && error.message.contains("重新登录"));
+        }
+    }
+}
+
+#[tokio::test]
+async fn tiangong_transport_does_not_follow_redirects_with_pat_headers() {
+    let destination = TestUpstream::start(vec![StatusCode::OK]).await;
+    let location = format!("{}/chat/completions", destination.base_url);
+    let app = Router::new().route(
+        "/redirect",
+        post(move || {
+            let location = location.clone();
+            async move {
+                (
+                    StatusCode::TEMPORARY_REDIRECT,
+                    [("location", location)],
+                    "fixture-error-body-must-not-be-returned",
+                )
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}/redirect", listener.local_addr().unwrap());
+    let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+    let req = client
+        .post(endpoint)
+        .header("authorization-cer-pat", "fixture-personal-pat")
+        .body("{}")
+        .build()
+        .unwrap();
+    let error = super::execute_tiangong_transport(
+        &client,
+        req,
+        &destination.provider("fixture-builtin", ProviderType::ChatCompletions),
+        tokio::time::Instant::now() + std::time::Duration::from_secs(5),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.message.contains("跳转"));
+    assert!(!error.message.contains("fixture-error-body"));
+    assert!(destination.requests().is_empty());
+    task.abort();
+}
+
+#[tokio::test]
+async fn new_desktop_entries_prefer_openai_streams_but_keep_the_clients_json_contract() {
+    for kind in [ProviderType::OpenAiResponses, ProviderType::ChatCompletions] {
+        for prefer in [false, true] {
+            let upstream = TestUpstream::start(vec![StatusCode::OK]).await;
+            let mut source = upstream.provider("synthetic-source", kind.clone());
+            source.models = vec!["upstream-model".into()];
+            source.compatibility = Some("openai_chat".into());
+            let dir = tempfile::tempdir().unwrap();
+            let target = crate::desktop::targets::target(
+                crate::desktop::clients::ClientId::VsCode,
+                "fixture",
+                dir.path().into(),
+                dir.path().join("skills"),
+                dir.path().join("mcp.json"),
+                crate::desktop::targets::McpFormat::Servers,
+                "chat",
+            );
+            let mut provider =
+                crate::desktop::models::copy(&source, &target, "upstream-model", "").unwrap();
+            provider.desktop_binding.as_mut().unwrap().capabilities =
+                json!({"preferStream":prefer,"defaultReasoningEffort":"xhigh"});
+            let mut raw = json!({"model":"upstream-model","stream":false,"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}]});
+            crate::desktop::models::apply_request_defaults(&mut raw, &provider, true);
+            let client = reqwest::Client::builder().no_proxy().build().unwrap();
+            let context = GatewayContext::extract(&HeaderMap::new(), Some("synthetic-session"));
+            let response = if kind == ProviderType::OpenAiResponses {
+                openai_responses::passthrough(
+                    &client,
+                    &context,
+                    raw,
+                    "upstream-model",
+                    &provider,
+                    None,
+                )
+                .await
+            } else {
+                let request = serde_json::from_value(raw).unwrap();
+                super::deepseek_chat::handle(
+                    &client,
+                    &context,
+                    &request,
+                    "upstream-model",
+                    &provider,
+                    None,
+                )
+                .await
+            }
+            .unwrap();
+            assert_eq!(response.headers()["content-type"], "application/json");
+            let result: Value =
+                serde_json::from_slice(&to_bytes(response.into_body(), 1024 * 1024).await.unwrap())
+                    .unwrap();
+            assert!(
+                result["output"].is_array(),
+                "{kind:?} prefer={prefer}: {result}"
+            );
+            let requests = upstream.requests();
+            assert_eq!(requests.len(), 1);
+            let sent: Value = serde_json::from_slice(&requests[0].body).unwrap();
+            assert_eq!(sent["stream"], prefer);
+            if kind == ProviderType::OpenAiResponses {
+                assert_eq!(sent["reasoning"]["effort"], "xhigh");
+            } else {
+                assert_eq!(sent["reasoning_effort"], "xhigh");
+            }
+        }
+    }
+}
+
+#[tokio::test]
 async fn workbuddy_model_settings_forward_efforts_and_protocol_specific_cache_controls() {
     for provider_type in [
         ProviderType::AnthropicMessages,
@@ -22,7 +218,7 @@ async fn workbuddy_model_settings_forward_efforts_and_protocol_specific_cache_co
         let efforts = if provider_type == ProviderType::AnthropicMessages {
             vec!["low", "medium", "high", "xhigh", "max"]
         } else {
-            vec!["high", "xhigh"]
+            vec!["high", "xhigh", "max"]
         };
         for stream in [false, true] {
             for effort in &efforts {

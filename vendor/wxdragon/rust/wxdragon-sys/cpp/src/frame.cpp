@@ -7,6 +7,7 @@
 #include <wx/gdicmn.h>
 #include <wx/menu.h>
 #include <wx/statusbr.h>
+#include "integrated_frame.h"
 
 #ifdef __WXOSX_COCOA__
 extern "C" bool
@@ -26,7 +27,7 @@ wxd_Frame_Create(wxd_Window_t* parent, wxd_Id id, const char* title, wxd_Point p
 
     // Create the wxFrame object
     wxFrame* wx_frame =
-        new wxFrame(wx_parent, id,
+        new WxdIntegratedFrame(wx_parent, id,
                     wxString::FromUTF8(title ? title : ""), // Ensure non-null string
                     wxd_cpp_utils::to_wx(pos), wxd_cpp_utils::to_wx(size), style);
 
@@ -34,6 +35,22 @@ wxd_Frame_Create(wxd_Window_t* parent, wxd_Id id, const char* title, wxd_Point p
     // Note: We are not creating/attaching the WxdEventHandler here.
     // It will be created lazily when the first event is bound via GetOrCreateEventHandler.
     return reinterpret_cast<wxd_Frame_t*>(wx_frame);
+}
+
+bool wxd_Frame_EnableIntegratedChrome(wxd_Frame_t* frame, bool dark, uint32_t border) {
+#ifdef __WXMSW__
+    auto* integrated = dynamic_cast<WxdIntegratedFrame*>(reinterpret_cast<wxFrame*>(frame));
+    return integrated && integrated->EnableIntegrated(dark, border);
+#else
+    return false;
+#endif
+}
+
+void wxd_Frame_RegisterChromeRegion(wxd_Frame_t* frame, wxd_Window_t* window, int role) {
+#ifdef __WXMSW__
+    auto* integrated = dynamic_cast<WxdIntegratedFrame*>(reinterpret_cast<wxFrame*>(frame));
+    if (integrated) integrated->RegisterRegion(reinterpret_cast<wxWindow*>(window), role);
+#endif
 }
 
 void

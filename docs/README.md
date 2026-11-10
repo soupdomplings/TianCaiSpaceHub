@@ -1,5 +1,58 @@
 # TianCaiSpaceHub 文档总入口
 
+2026-11-10 当前 **V1.0.16 统一 Windows 测试交付**：集中汇总顶部菜单/主题日历/密钥实际用量，以及 Codex CLI 启动与 MCP 升级、移除同步修复。唯一新包 `220951` 已生成，1354 个不同 Rust 用例及 14 项 Node 检查通过，受影响 4 项补跑替代同名结果，不重复计数；release 构建及静态包核验通过，准确包身份与验收边界见 [本批交付](releases/v1.0.16.md)。长期采用 [统一会话协作与测试打包](development/documentation.md#统一会话协作与测试打包)，根 [AGENTS.md](../AGENTS.md) 按管理/开发/打包职责分工；用户已授权本轮文件整理、缓存清理和 GitHub 源码提交，实际同步结果见 [清理记录](development/repository-cleanup.md)。旧包保留，真实安装待用户验收，尚未正式发布。下方各阶段检查和“未提交”等状态保留当时事实。
+
+2026-11-10 当前 **V1.0.16 协助启动及MCP管理修正**：[本机协助](customizations/tiangong-local-assistance.md)明确CLI执行端、自动查找/商店包运行缓存及系统失败恢复；工具目录独立定时更新、删除/停用同步；[资源管理](customizations/desktop-capability-management.md)补端内移除和缺失使用记录清理。本任务开发就绪，GUI测试目标编译及68项定向离线检查通过；汇总测试包由统一打包会话核对共同源码后生成，本会话未独立打包，见[V16记录](releases/v1.0.16.md)。保留下方界面/账户增补和全部未提交开发，真实启动/同步及macOS待用户验收。
+
+2026-11-10 当前 **V1.0.16 界面与密钥统计增补**：移除旧顶部菜单，诊断在帮助；日期改为主题日历浮层；API密钥读取站点今日/近30天已用及独立限额，人民币数字原样。见 [视觉](development/desktop-visual-system.md)、[账户](customizations/tiancai-squad-account.md)、[开发交接](releases/v1.0.16.md#本任务离线验证与统一打包交接)。本任务开发就绪、固定快照离线检查通过，由统一打包会话汇总；本会话未生成独立MSI。保留本机协助与全部未提交开发；真实账户/浮层/缩放及macOS待用户验收。
+
+2026-11-10 当前 **V1.0.16 本机协助参数修正**：[天工本机协助](customizations/tiangong-local-assistance.md)（TC-022）补齐真实任务上下文、完整MCP目录及统一调用示例，针对用户缺少 `context_ref` 的实测反馈修正；新增按模型选择思考强度，支持时默认 `xhigh`。默认关闭、只读、自动清理及进度/人类确认回天工保持。构建/离线/新包身份见 [V16交付](releases/v1.0.16.md)，真实端到端和macOS待用户验收；保留前轮包，未提交、推送或发布。下方评估记录为历史。
+
+2026-11-10（北京时间）：新增 [天工调用本机 Codex 协助评估](customizations/tiangong-local-assistance-assessment.md)。按用户反馈，首期即以处理过程中自动协助为正常路径，不要求点名 Codex：Hub MCP + 自动生效协作规则 + 本机执行通道；核对每次 MCP 新建连接、上下文及长任务/审批边界。**纯方案，未实现、不升版本、不改客户端或现有测试包**。
+
+2026-11-10（北京时间）当前 **V1.0.16 参数及模型清单修正**：天工来源参数、可选个人登录、用户主动身份测试和有限 Codex unary 文本压缩；ChatGPT 添加/获取统一候选区、删除后保存及再次分享恢复原别名。实现见 [天工专题](customizations/tiangong-builtin-models.md)、[动态目录](dynamic-codex-models.zh-CN.md)，最终构建/离线/新包身份见 [V16 交付](releases/v1.0.16.md)。前两轮包保留原身份，真实调用/压缩及客户端/macOS 待用户验收，未推送或发布。
+
+2026-11-10（UTC）：前次 **V1.0.16 天工登录包** 增加已有登录读取、Hub 登录及两个内置模型跨端分享，普通页面不再要求个人 PAT；当时仍有独立参数及额外登录核验行为，本轮已按上段修正。保留本版 Windows 一体化外框、移除 Hub 模型广场和其余开发。入口：[原交付身份](releases/v1.0.16.md#前次增补天工登录与内置模型分享)、[天工现行行为](customizations/tiangong-builtin-models.md)、[窗口视觉规范](development/desktop-visual-system.md)、[账户范围](customizations/tiancai-squad-account.md)。旧包验证保留原归属，不代表本轮已验收。
+
+2026-11-10（UTC）：新增 **V1.0.15** 天工内置模型发现与跨端授权适配。使用步骤、个人 PAT 前提与边界见 [天工内置模型](customizations/tiangong-builtin-models.md)，本轮验证和包身份见 [V1.0.15 交付](releases/v1.0.15.md)。真实授权/调用及客户端、macOS 待用户验收；未提交、推送或发布。下方 V1.0.14 记录保留原阶段归属。
+
+
+2026-11-10（UTC）：上一轮修复版本 **V1.0.14**。修正统计选中、模型新建默认强度/流式偏好、小分队原生日历和列表留白，新增广场价格对比并重排充值/订阅。保留全部既有开发。规范见 [桌面视觉规范](development/desktop-visual-system.md)，实现、验证及本地 MSI 身份见 [V1.0.14 交付](releases/v1.0.14.md)。**真实客户端、账户/支付、Windows 实际缩放和 macOS 待用户验收；尚未提交、推送或发布。**
+
+- [V1.0.14 本地测试交付](releases/v1.0.14.md) · [桌面视觉规范](development/desktop-visual-system.md)。
+- [V1.0.13 本地测试交付](releases/v1.0.13.md)：上一轮视觉系统及原版本包身份，验证结果保留原归属。
+- [V1.0.12 本地测试交付](releases/v1.0.12.md) · [客户端配置核对与剩余边界](customizations/client-configuration-audit.md)。
+- [V1.0.11 本地测试交付](releases/v1.0.11.md)：筛选、广场、按端模型表单、登录恢复及原版本验证/包身份。
+- [V1 桌面使用与验收指南](v1-desktop-guide.zh-CN.md)：新导航、运行/用量、七端模型复用、真实 Skill/MCP、账户和测试顺序。
+- [V1 实施记录](development/v1-implementation.md)：代码、接口、配置兼容、回滚、验证边界及已知限制。
+- [二开功能总表](customizations/README.md) · [变更记录](customizations/CHANGELOG.md) · [文档规范](development/documentation.md)。
+- [客户端适配](customizations/desktop-client-adapters.md) · [模型/Skill/MCP](customizations/desktop-capability-management.md) · [天才小分队账户](customizations/tiancai-squad-account.md)。
+- [Skill 广场与共用仓库](customizations/skill-marketplace.md)：真实公共仓库、固定提交完整包、使用客户端、容量和回退规则。
+- [界面功能盘点](customizations/desktop-ui-inventory.md) · [原型与研究](customizations/desktop-ui-redesign.md) · [主题](gui-theme.zh-CN.md) · [运行维护](gui-runtime-maintenance.zh-CN.md)。
+- [第三方参考及许可](../THIRD_PARTY_NOTICES.md)。站点保持已部署状态，Hub 原生界面不需部署网站；新增默认浏览器接续登录需现有站点应用 [配套补丁](../integrations/tiancai-squad-browser/README.md)，本轮尚未部署。
+
+## 前期原型及版本记录
+
+以下记录保留其原阶段身份；其中旧路线、未实施表述和合成验证不代表 V1 当前状态。现行入口和真实实现以上述文档为准。
+
+2026-11-08 用户确认按最终方案开始 **V1.0.0 整体实施**，版本基线改为 `1.0.0`，覆盖此前下一功能版 `-14` 的安排。当前实施进度、完整范围和验证边界统一见 [V1.0.0 实施记录](development/v1-implementation.md)。保留 v13 未提交开发；本轮不推送或发布，整体完成后由用户安装验收。天才小分队只开发 Hub 原生账户模块并使用现有 API，**不修改或重新部署站点**；先前评估中的站点 Hub 布局路线不再执行。下方原型和历史验证保留其原阶段归属。
+
+2026-11-08 桌面整体重构评估（**第三稿合成原型与适配研究，未实施到产品、不升版本**）：基于 v13 未提交 main 工作区，推荐沿用 Rust + vendor wxDragon 分阶段实施。入口：[整体方案](customizations/desktop-ui-redesign.md)、[全界面盘点](customizations/desktop-ui-inventory.md)、[交互原型及 43 组第三稿布局图](mockups/desktop-ui-review/README.md)。
+
+新增一级 [天才小分队](customizations/tiancai-squad-account.md)：已核对用户提供的本机站点源码，原型含登录、账户/密钥/使用记录、条件组织与扣费、模型广场、充值/订阅及账户工具；六项组织权限、独立开关与精简规则沿站点。API 密钥复用原 Hub 单次导入，默认不启用、不追加模型；站点账单与本机统计分开。推荐局部 wxWebView 复用站点原页并新增共享布局，不迁移整个 Hub。真实登录/组织/财务及两平台承载尚未实施。证据与检查在 `target/ui-squad-account-20261108/`。
+
+运行状态默认第一，统计只列输入/输出并保留实际日志；活动图谱为客户端 → Hub → 进行中模型 → 对应渠道，无活动端仅 Hub。按完整路由先列请求集合，渠道直达对应配置。客户端标题短状态与六节点概览图整合模型、Skill、MCP、聊天与执行，证据仍各自判断。
+
+模型添加集中在客户端页；模型、Skill、MCP 使用操作直接配置到选定端，普通界面只呈使用选择，异常才给决策与恢复；原型仅改内存。各端独立调整和来源选择同步保持，添加来源按当前八类厂商，聊天入口统一叫聊天接入。详见 [管理规格](customizations/desktop-capability-management.md)。新 [Magpie 客户端及外部接口研究](customizations/desktop-client-adapters.md) 核对 74 名声明范围、重点端的原生配置、协议缺口、Rust 适配合同与回归清单，不冒充 Hub 新增支持。
+
+本轮按用户继续细化：默认三端位置固定，访问已列端不重排，新增端只替换最久未用位置；“⋯”在第三端下方，展开后标题右侧收起。客户端选择为每行 2–4 个小图标，最大宽 124/最小高 84 CSS px；成功才点亮且使用端排前，失败保留旧状态/顺序，网格排序不改变左栏。运行图整行列标题移除。首批按用户指定研究 Cursor、VS Code、DeepSeek Harness、ZCode、WorkBuddy，详见 [适配规格](customizations/desktop-client-adapters.md#5-首批五类客户端的研究与实施建议)。
+
+本轮 125 组合成检查（原 107 + 账号 18）、138 组原页面、20 组原新增表单、117 组账号页面/子页及原 29 个帮助上下文加 1 个模块帮助通过；静态资源/链接、原开发字节及日志保护已核对。第三稿 43 组、第二稿历史 7 组独立图，本轮逐一查看账号模块新增 9 组图；前轮 MCP 结果保留原归属。自动浏览器前轮被策略阻止后停止，HTML/原生/真实客户端与用户验收未执行；未改 v13、配置或包，未构建、提交、推送或发布。
+
+本轮补充：2026-11-08 用户提供天工 Work 与 ChatGPT 截图后，MCP 添加改为默认完整“表单配置”与可编辑“JSON 配置”；远程地址/认证/Headers、本地命令/逐行参数/环境变量/传递变量/工作目录直接显示，两视图共用草稿，JSON 多项明确选择、错误与附加字段保留。目标客户端同窗选择后一次添加并使用，已有配置复用和 Dumpling 环境/NVWA 流程保持。前两轮用途分类及单粘贴框已替代。详见 [管理规格](customizations/desktop-capability-management.md)。验证及原开发保护记 `target/ui-mcp-form-json-20261108/`，仍未实施到产品。
+
+2026-11-07 `v0.4.30-13` 本地测试开发：普通模型地址先请求原路径，失败后同源补 `/v1` 一次，确认有效成功才保存，双失败保留原错；已确认修正保留路由与工具续轮身份。WorkBuddy 为 GPT-6、GPT-5.6 家族补齐 `max` 选择、保存与转发。当前规则见 [地址修正](customizations/provider-url-recovery.md)、[WorkBuddy](workbuddy.md)，实际隔离验证、构建和包身份见 [v13 交付](releases/v0.4.30-13.md)；未推送、未发布，待用户实机验收，以下记录保留原版本归属。
+
 2026-11-02 `v0.4.30-12` 用户反馈测试成功且刚才报错解决；源码已按授权推送至 GitHub 唯一 `main`（`5466ec2`），Windows/macOS Actions job 均已实际开始，核对时 `in_progress`。347 个产品输入与用户测试包一致，版本和功能不变；运行链接及反馈边界集中见 [v12 交付](releases/v0.4.30-12.md#2026-11-02-源码已推送与两平台-actions-打包)。本轮产物上传 Actions artifacts，未创建标签/Release；不扩大为全部工具或 macOS 验收，下方保留原阶段。
 
 2026-11-02 `v0.4.30-12` 本地测试交付：Dumpling-MCP 移除手工检查、刷新、单独上游检测及退出登录入口，配置由“连接并检测”自动查找核对；选择框缩短、主按钮紧邻，原“更多操作”改为仅三项维护的小型“⋯”菜单。断开单端连接与删除整套环境资料的范围分别说明。42 项离线回归、Windows 构建与 MSI 静态核验通过，准确包身份见 [v12 交付](releases/v0.4.30-12.md)，当前操作与回滚见 [Dumpling-MCP](customizations/nvwa-mcp.md)。本轮未推送、未发布，实机待用户验收；下方记录保留所属版本。
@@ -81,8 +134,11 @@
 | 了解全部二开内容、代码入口与保留项 | [二开功能总表](customizations/README.md) |
 | 查看每次二开开发变更 | [二开变更记录](customizations/CHANGELOG.md) |
 | 开发时知道必须更新哪些文档 | [文档规划与维护规范](development/documentation.md) |
+| 按管理、开发、统一打包职责协作 | [共同规则](../AGENTS.md)、[管理](development/agents/management.md)、[开发](development/agents/development.md)、[打包](development/agents/packaging.md) |
+| 区分本机站点参考资料与 Hub 配套补丁 | [站点资料说明](tiancaispace/README.md)、[配套补丁](../integrations/tiancai-squad-browser/README.md) |
 | 登录 NVWA、检测 MCP、分别接入三客户端 | [NVWA MCP](customizations/nvwa-mcp.md)、[资料索引](nvwa/README.md) |
 | 查看 v12 精简接入界面、本地测试包及验收边界 | [v0.4.30-12](releases/v0.4.30-12.md) |
+| 查看 v13 地址缺版本恢复、WorkBuddy max 和测试包 | [v0.4.30-13](releases/v0.4.30-13.md) |
 | 查看 v9 历史恢复与 Fast 本地测试包 | [v0.4.30-9](releases/v0.4.30-9.md) |
 | 查看 v8 本地测试包、适配范围和验收边界 | [v0.4.30-8](releases/v0.4.30-8.md) |
 | 追溯 v5 基线、编译与当轮验收边界 | [v0.4.30-5 发布交付](releases/v0.4.30-5.md) |
@@ -127,6 +183,7 @@
 | [Codex 修复接入评估](customizations/codex-repair-integration-assessment.md) | 开发前的来源、取舍和限制；当前实现以修复中心专题为准 |
 | [网页导入](hub-external-import.md) | Windows/macOS 系统接入已随 v0.4.30-2 成功构建打包并预发布；本版实机导入待用户验收 |
 | [导入协议 v1](HUB_EXTERNAL_IMPORT_CONTRACT_V1.md) | Hub 与 Sub2API 联调契约；不表示主站已上线 |
+| [大模型地址缺少 /v1 时自动修正](customizations/provider-url-recovery.md) | TC-015 / v13：原地址优先，确认补版本成功后保存，双失败保留原错，自动修正前后保持渠道身份 |
 | [品牌、桌面与交付](customizations/desktop-and-packaging.md) | 产品与程序统一 TianCaiSpaceHub，配置/升级身份兼容；v0.4.30-5：系统关机放行、普通 × 隐藏托盘，Windows MSI 完整交互成功页提供“打开”和“完成”。Windows EXE 编译与静态核对通过，关机/安装待验收、包由 Actions 生成 |
 | [v0.4.28 整合](upstream-v0.4.28-integration.md) | 历史上游整合记录 |
 | [v0.4.29 整合](upstream-v0.4.29-integration.md) | 历史上游整合记录 |

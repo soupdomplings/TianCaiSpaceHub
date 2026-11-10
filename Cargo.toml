@@ -1,6 +1,6 @@
 [package]
 name = "tiancaispacehub"
-version = "0.4.30-12"
+version = "1.0.16"
 edition = "2024"
 license = "Apache-2.0"
 build = "build.rs"
@@ -20,6 +20,7 @@ hex = "0.4"
 libsm = "0.6"
 image = { version = "0.25.10", default-features = false, features = ["png"], optional = true }
 mime_guess = "2"
+jsonc-parser = { version = "0.34", features = ["cst", "serde", "serde_json"] }
 md5 = "0.7"
 once_cell = "1"
 prost = "0.13"
@@ -27,9 +28,10 @@ qrcode = "0.14"
 rand = "0.8"
 regex = "1"
 rsa = "0.9"
-reqwest = { version = "0.12", features = ["json", "multipart", "rustls-tls", "stream", "gzip", "deflate", "brotli", "zstd", "system-proxy", "socks"], default-features = false }
+reqwest = { version = "0.12", features = ["json", "multipart", "rustls-tls", "stream", "gzip", "deflate", "brotli", "zstd", "system-proxy", "socks", "blocking"], default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+serde_yaml_ng = "0.10"
 serde_path_to_error = "0.1"
 sha2 = "0.10"
 rusqlite = { version = "0.32", features = ["bundled", "backup"] }
@@ -45,11 +47,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2"
 uuid = { version = "1", features = ["v4"] }
 wxdragon = { version = "0.9.17", optional = true }
-zip = { version = "2", default-features = false }
+zip = { version = "2", default-features = false, features = ["deflate"] }
 zstd = "0.13"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Globalization", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_Security_Authorization", "Win32_Security_Cryptography", "Win32_Storage_Packaging_Appx", "Win32_System_Pipes", "Win32_System_Com", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Globalization", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_Security_Authorization", "Win32_Security_Cryptography", "Win32_Storage_Packaging_Appx", "Win32_System_Pipes", "Win32_System_Com", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 winreg = "0.55"
 
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -60,7 +62,7 @@ security-framework = "3"
 embed-resource = "3.0.6"
 
 [features]
-gui = ["dep:image", "dep:wxdragon", "wxdragon/stc", "reqwest/blocking"]
+gui = ["dep:image", "dep:wxdragon", "wxdragon/stc", "wxdragon/webview", "reqwest/blocking"]
 
 [patch.crates-io]
 wxdragon = { path = "vendor/wxdragon/rust/wxdragon" }
@@ -70,3 +72,18 @@ wxdragon-macros = { path = "vendor/wxdragon/rust/wxdragon-macros" }
 [[bin]]
 name = "TianCaiSpaceHub"
 path = "src/main.rs"
+
+[[example]]
+name = "desktop_visual_review"
+path = "examples/desktop_visual_review.rs"
+required-features = ["gui"]
+
+[[example]]
+name = "desktop_layout_review"
+path = "examples/desktop_layout_review.rs"
+required-features = ["gui"]
+
+[[example]]
+name = "login_bridge_review"
+path = "examples/login_bridge_review.rs"
+required-features = ["gui"]

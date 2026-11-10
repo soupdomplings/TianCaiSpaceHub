@@ -170,13 +170,16 @@ async fn passthrough_to_endpoint(
     log_context: Option<RequestLogContext>,
     endpoint: ResponsesEndpoint,
 ) -> Result<Response<Body>, GatewayError> {
-    let gmclaw_unary = provider.is_gmclaw()
+    let gmclaw_unary = (provider.is_gmclaw()
+        || crate::desktop::models::prefers_upstream_stream(provider))
         && !endpoint.is_compact()
         && !raw_body
             .get("stream")
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
     let gmclaw_deadline = gmclaw_unary.then(|| gmclaw_stream::deadline(provider.timeout_secs));
+    let deadline_context = gmclaw_deadline.map(|deadline| ctx.clone().with_deadline(deadline));
+    let ctx = deadline_context.as_ref().unwrap_or(ctx);
     if gmclaw_unary && provider.provider_type.is_openai() {
         // GMClaw still receives unary Chat JSON. OpenAI Responses is collected
         // here, before returning to the handler and recording replay state.
@@ -346,8 +349,13 @@ async fn passthrough_to_endpoint(
             "proxying to openai responses endpoint"
         );
 
-        let execution =
-            execute_openai_request(client, upstream_req, provider, "upstream request failed");
+        let execution = execute_openai_request(
+            client,
+            upstream_req,
+            provider,
+            ctx,
+            "upstream request failed",
+        );
         let upstream_resp = if let Some(deadline) = gmclaw_deadline {
             tokio::time::timeout_at(deadline, execution)
                 .await

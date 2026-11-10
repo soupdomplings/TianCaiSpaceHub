@@ -898,9 +898,22 @@ mod tests {
         let root = std::env::temp_dir().join(unique);
         let logs = root.join("logs");
         std::fs::create_dir_all(&logs).expect("create logs dir");
+        // Rapid Windows writes can share an identical modification timestamp.
+        // Give the fixture an explicit ordering instead of assuming creation
+        // order proves recency (the exporter breaks timestamp ties by name).
+        let fixture_time = UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
         for index in 0..(MAX_LOG_FILES + 2) {
-            std::fs::write(logs.join(format!("codexhub-{index}.log")), "small log\n")
-                .expect("write log");
+            let path = logs.join(format!("codexhub-{index}.log"));
+            std::fs::write(&path, "small log\n").expect("write log");
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_times(
+                    std::fs::FileTimes::new()
+                        .set_modified(fixture_time + std::time::Duration::from_secs(index as u64)),
+                )
+                .expect("set fixture log timestamp");
         }
         let large_log = logs.join("codexhub-chain.log");
         let large_contents = format!(
@@ -908,6 +921,15 @@ mod tests {
             "padding\n".repeat((MAX_LOG_BYTES_PER_FILE as usize / 8) + 32)
         );
         std::fs::write(&large_log, large_contents).expect("write large log");
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&large_log)
+            .unwrap()
+            .set_times(
+                std::fs::FileTimes::new()
+                    .set_modified(fixture_time + std::time::Duration::from_secs(3600)),
+            )
+            .expect("set newest fixture timestamp");
 
         let input = ConnectionDiagnosticsInput {
             app_version: "v0.test".to_string(),
@@ -928,7 +950,8 @@ mod tests {
             .map(|index| archive.by_index(index).unwrap().name().to_string())
             .filter(|name| name.starts_with("logs/"))
             .collect::<Vec<_>>();
-        assert!(log_names.len() <= MAX_LOG_FILES);
+        assert_eq!(log_names.len(), MAX_LOG_FILES);
+        assert!(!log_names.iter().any(|name| name == "logs/codexhub-0.log"));
 
         let mut log = String::new();
         archive

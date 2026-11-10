@@ -1,10 +1,29 @@
 #include <wx/wxprec.h>
 #include <wx/wx.h>
 #include "wx/panel.h"
+#include <wx/popupwin.h>
 #include "wx/window.h" // Include parent class header if needed
 #include "wxdragon.h"
 
 extern "C" {
+
+WXD_EXPORTED wxd_Window_t* wxd_TransientPopup_Create(wxd_Window_t* parent) {
+    if (!parent) return nullptr;
+    auto* popup = new wxPopupTransientWindow(reinterpret_cast<wxWindow*>(parent), wxBORDER_NONE);
+    return reinterpret_cast<wxd_Window_t*>(popup);
+}
+
+WXD_EXPORTED void wxd_TransientPopup_Show(wxd_Window_t* popup, wxd_Window_t* anchor, wxd_Window_t* focus) {
+    if (!popup || !anchor) return;
+    auto* window = reinterpret_cast<wxPopupTransientWindow*>(popup);
+    auto* origin = reinterpret_cast<wxWindow*>(anchor);
+    window->Position(origin->ClientToScreen(wxPoint(0, 0)), origin->GetSize());
+    window->Popup(reinterpret_cast<wxWindow*>(focus));
+}
+
+WXD_EXPORTED void wxd_TransientPopup_Dismiss(wxd_Window_t* popup) {
+    if (popup) reinterpret_cast<wxPopupTransientWindow*>(popup)->Dismiss();
+}
 
 // Implement the creation function for wxPanel
 WXD_EXPORTED wxd_Panel_t*

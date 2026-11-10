@@ -1,3 +1,5 @@
+use crate::gui::controls::Button;
+use crate::gui::controls::TextCtrl;
 use serde::Serialize;
 use std::cell::RefCell;
 use std::rc::Rc;

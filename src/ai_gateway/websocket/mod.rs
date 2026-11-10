@@ -137,9 +137,15 @@ impl Session {
                 .filter(|v| !v.is_empty())
                 .ok_or_else(|| GatewayError::bad_request("response.create requires model"))?
                 .to_string();
-            let turn_headers = request_headers(headers, &request);
+            let activity = state.desktop_activity.begin("/v1/responses");
+            let mut turn_headers = request_headers(headers, &request);
+            turn_headers.insert(
+                crate::desktop::activity::INTERNAL_HEADER,
+                axum::http::HeaderValue::from_str(&activity.id).expect("UUID header"),
+            );
             let context =
-                GatewayContext::extract(&turn_headers, request["prompt_cache_key"].as_str());
+                GatewayContext::extract(&turn_headers, request["prompt_cache_key"].as_str())
+                    .with_state(state);
             let config = state.config.lock().await.ai_gateway.clone();
             if !config.enabled {
                 return Err(GatewayError::bad_request("AI Gateway is disabled"));
@@ -182,6 +188,7 @@ impl Session {
                 self.last_native_response = None;
             }
             self.selected = Some((provider.clone(), route_id.clone()));
+            context.bind_activity(&model, &provider, &route_id);
             if provider.provider_type.is_openai() {
                 let mut log = log::TurnLog::new(
                     &state.ai_gateway_request_logs,
@@ -214,7 +221,7 @@ impl Session {
                     }
                     let connection = self.native.as_mut().unwrap();
                     log.request(&request, &connection.request_headers, &connection.response_headers);
-                    let (id, outcome) = native_turn(downstream, connection, &request, &mut log, provider.timeout_secs).await?;
+                    let (id, outcome) = native_turn(downstream, connection, &request, &mut log, provider.timeout_secs, Some((&state.desktop_activity, activity.id.as_str()))).await?;
                     self.last_native_response = id;
                     Ok(outcome)
                 }.await;
@@ -259,6 +266,7 @@ async fn native_turn(
     request: &Value,
     log: &mut log::TurnLog,
     timeout_secs: u64,
+    activity: Option<(&crate::desktop::activity::ActivityStore, &str)>,
 ) -> Result<(Option<String>, handler::RoutingOutcome), GatewayError> {
     tokio::time::timeout(
         WRITE_TIMEOUT,
@@ -276,6 +284,7 @@ async fn native_turn(
             incoming = connection.socket.next() => {
                 match incoming {
                     Some(Ok(UpstreamMessage::Text(text))) => {
+                        if let Some((store, id)) = activity { store.touch(id); }
                         idle.as_mut().reset(tokio::time::Instant::now() + Duration::from_secs(timeout_secs.max(1)));
                         let mut event: Value = serde_json::from_str(&text).map_err(upstream_error)?;
                         if !event.is_object() { return Err(upstream_error("upstream WebSocket event must be a JSON object")); }

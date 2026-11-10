@@ -809,6 +809,7 @@ fn local_url(config: &AppConfig, entry_id: &str) -> Result<String> {
     ))
 }
 fn validate_source(provider: &ProviderConfig, config: &AppConfig) -> Result<()> {
+    crate::desktop::tiangong_models::validate_provider(provider)?;
     if provider.provider_type == ProviderType::ChatGptResponses {
         bail!("天工 Work 账号登录渠道暂未开放，请选择普通 API 渠道");
     }
@@ -847,6 +848,25 @@ fn save_at(
     config: &mut AppConfig,
     hub_path: &Path,
 ) -> Result<GmClawConfigStatus> {
+    save_with_source(path, request, config, hub_path, None)
+}
+/// A user-selected cross-client copy; normal source synchronisation is unchanged.
+pub fn save_copy(
+    request: &GmClawSaveRequest,
+    source: &ProviderConfig,
+    config: &mut AppConfig,
+    hub_path: &Path,
+) -> Result<GmClawConfigStatus> {
+    ensure!(source.enabled, "来源模型已停用，请重新选择");
+    save_with_source(&config_path(), request, config, hub_path, Some(source))
+}
+fn save_with_source(
+    path: &Path,
+    request: &GmClawSaveRequest,
+    config: &mut AppConfig,
+    hub_path: &Path,
+    copy_source: Option<&ProviderConfig>,
+) -> Result<GmClawConfigStatus> {
     ensure!(request.max_tokens > 0, "最大输出 token 数必须大于 0");
     ensure!(
         request.temperature.is_finite() && (0.0..=2.0).contains(&request.temperature),
@@ -854,16 +874,20 @@ fn save_at(
     );
     let model = request.model.trim();
     ensure!(!model.is_empty(), "请选择天工 Work 使用的模型");
-    let source = config
-        .ai_gateway
-        .providers
-        .iter()
-        .find(|provider| {
-            provider.name == request.source_provider.trim()
-                && provider.enabled
-                && !provider.is_client_reserved()
-        })
+    let source = copy_source
         .cloned()
+        .or_else(|| {
+            config
+                .ai_gateway
+                .providers
+                .iter()
+                .find(|provider| {
+                    provider.name == request.source_provider.trim()
+                        && provider.enabled
+                        && !provider.is_client_reserved()
+                })
+                .cloned()
+        })
         .ok_or_else(|| anyhow!("来源渠道不可用，请选择一个已启用的普通 Hub 渠道"))?;
     request
         .parameters
@@ -914,6 +938,7 @@ fn save_at(
     provider.name = gmclaw_provider_name(&entry_id).expect("validated entry identity");
     provider.enabled = true;
     provider.import_source = None;
+    provider.desktop_binding = None;
     provider.gmclaw_parameters = Some(request.parameters.clone());
     let mut next_config = config.clone();
     replace_provider(
@@ -1436,6 +1461,79 @@ mod tests {
     fn read_snapshot(path: &Path) -> ManagedSnapshot {
         let connection = Connection::open(path).unwrap();
         snapshot(&connection, &schema_columns(&connection).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn tiangong_builtin_copy_keeps_native_models_and_gateway_authorization_separate() {
+        let (_directory, path, hub_path, mut config) = fixture();
+        let mut source=config.ai_gateway.providers[0].clone();
+        source.provider_type=ProviderType::ChatCompletions;
+        source.base_url="https://tiangong.jiuqi.com.cn/api/v2/tg".into();source.api_key.clear();
+        source.tiangong_builtin=Some(crate::desktop::tiangong_models::BuiltinBinding {
+            model_id:"tiangong-builtin".into(),upstream_model:"real-model".into(),credential_ref:uuid::Uuid::new_v4().to_string(),parameters:None,
+        });
+        let mut pending=request(&path,&config,None);pending.make_active=false;
+        let saved=save_with_source(&path,&pending,&mut config,&hub_path,Some(&source)).unwrap();
+        let id=saved.selected_entry_id.unwrap();
+        let copy=&config.ai_gateway.providers[provider_position(&config,&id).unwrap().unwrap()];
+        assert_eq!(copy.tiangong_builtin,source.tiangong_builtin);assert!(copy.api_key.is_empty());
+        let db=Connection::open(&path).unwrap();
+        let (key,url):(String,String)=db.query_row("SELECT api_key,base_url FROM model_configs WHERE model_id=?1",[model_id(&id)],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
+        assert_eq!(key,GMCLAW_LOCAL_KEY);assert!(url.starts_with("http://127.0.0.1:"));
+        assert!(!String::from_utf8_lossy(&fs::read(&path).unwrap()).contains(&source.tiangong_builtin.unwrap().credential_ref));
+    }
+
+    #[test]
+    fn explicit_client_copy_preserves_full_parameters_default_and_stale_revision_protection() {
+        let (_directory, path, hub_path, mut config) = fixture();
+        let mut source = config.ai_gateway.providers[0].clone();
+        source.name = "workbuddy:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into();
+        source.models = vec!["gpt-6".into()];
+        source.model_aliases = BTreeMap::from([("alias".into(), "gpt-6".into())]);
+        config.ai_gateway.providers.push(source.clone());
+        config.save(&hub_path).unwrap();
+        let source_before = serde_json::to_value(&source).unwrap();
+        let mut pending = request(&path, &config, None);
+        pending.source_provider = source.name.clone();
+        pending.make_active = false;
+        pending.max_tokens = 32768;
+        pending.temperature = 0.35;
+        pending.parameters = GmClawParameters {
+            reasoning_effort: Some("max".into()),
+            temperature_mode: TemperatureMode::Preserve,
+        };
+        let hub_before = fs::read(&hub_path).unwrap();
+        assert!(save_at(&path, &pending, &mut config, &hub_path).is_err());
+        assert_eq!(fs::read(&hub_path).unwrap(), hub_before);
+        assert!(read_snapshot(&path).rows.is_empty());
+        let saved =
+            save_with_source(&path, &pending, &mut config, &hub_path, Some(&source)).unwrap();
+        let id = saved.selected_entry_id.unwrap();
+        let entry = saved.entries.iter().find(|e| e.entry_id == id).unwrap();
+        assert_eq!(entry.model.max_tokens, 32768);
+        assert_eq!(entry.model.temperature, 0.35);
+        assert_eq!(entry.parameters, pending.parameters);
+        assert!(!entry.active);
+        let copy = &config.ai_gateway.providers[provider_position(&config, &id).unwrap().unwrap()];
+        assert!(copy.is_gmclaw());
+        assert_eq!(copy.api_key, source.api_key);
+        assert_eq!(copy.resolve_upstream_model("alias"), Some("gpt-6"));
+        assert_eq!(
+            serde_json::to_value(
+                config
+                    .ai_gateway
+                    .providers
+                    .iter()
+                    .find(|p| p.name == source.name)
+                    .unwrap()
+            )
+            .unwrap(),
+            source_before
+        );
+        let hub_after = fs::read(&hub_path).unwrap();
+        assert!(save_with_source(&path, &pending, &mut config, &hub_path, Some(&source)).is_err());
+        assert_eq!(read_snapshot(&path).rows.len(), 1);
+        assert_eq!(fs::read(&hub_path).unwrap(), hub_after);
     }
 
     #[test]

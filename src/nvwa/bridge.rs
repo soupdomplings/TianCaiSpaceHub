@@ -492,8 +492,22 @@ pub(crate) async fn post(
     // Keep reading an admitted request to its terminal response even if its
     // downstream HTTP connection disappears. MCP 2025 disconnect is not a
     // cancellation signal; explicit notifications/cancelled owns that mapping.
+    let tool_call = method == "tools/call";
     let task = tokio::spawn(async move {
         let _permit = permit;
+        let _activity = if tool_call {
+            forwarding.inner.hub_state.upgrade().map(|hub| {
+                let client = match client {
+                    ClientKind::Codex => crate::desktop::clients::ClientId::Codex,
+                    ClientKind::Workbuddy => crate::desktop::clients::ClientId::WorkBuddy,
+                    ClientKind::Tiangong => crate::desktop::clients::ClientId::Tiangong,
+                };
+                hub.desktop_mcp_activity
+                    .begin(&profile.id, &profile.name, client, true)
+            })
+        } else {
+            None
+        };
         let result = remote(
             &forwarding,
             &profile,

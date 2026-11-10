@@ -11,6 +11,10 @@ wxd_ScrolledWindow_Create(wxd_Window_t* parent, wxd_Id id, wxd_Point pos, wxd_Si
 WXD_EXPORTED void
 wxd_ScrolledWindow_SetScrollRate(wxd_ScrolledWindow_t* self, int xstep, int ystep);
 
+// Hides visual indicators without disabling wheel/keyboard/focus scrolling.
+WXD_EXPORTED void
+wxd_ScrolledWindow_ShowScrollIndicators(wxd_ScrolledWindow_t* self, bool show);
+
 WXD_EXPORTED void
 wxd_ScrolledWindow_FitInside(wxd_ScrolledWindow_t* self);
 
@@ -32,5 +36,6 @@ wxd_ScrolledWindow_GetVirtualSize(wxd_ScrolledWindow_t* self, int* w, int* h);
 
 WXD_EXPORTED void
 wxd_ScrolledWindow_GetScrollPixelsPerUnit(wxd_ScrolledWindow_t* self, int* xUnit, int* yUnit);
+WXD_EXPORTED wxd_Point wxd_ScrolledWindow_GetViewStart(wxd_ScrolledWindow_t* self);
 
 #endif // WXD_SCROLLEDWINDOW_H

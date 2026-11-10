@@ -1,3 +1,5 @@
+use crate::gui::controls::Button;
+use crate::gui::controls::TextCtrl;
 use std::{
     sync::{
         Arc, Mutex,
@@ -15,7 +17,7 @@ use super::show_error;
 use super::text::GuiText;
 use super::theme;
 
-fn qr_bitmap(value: &str) -> Option<(Bitmap, i32)> {
+pub(super) fn qr_bitmap(value: &str) -> Option<(Bitmap, i32)> {
     let code = QrCode::new(value.as_bytes()).ok()?;
     const TARGET_PIXELS: usize = 560;
     let quiet_zone = 4usize;

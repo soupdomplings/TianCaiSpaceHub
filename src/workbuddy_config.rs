@@ -48,7 +48,8 @@ impl Default for WorkBuddyReasoningConfig {
 }
 
 impl WorkBuddyReasoningConfig {
-    /// WorkBuddy exposes the same five effort levels for current Claude models.
+    /// Match the Hub's known Claude and GPT max presets; other models keep
+    /// their existing effort set. This does not infer upstream capabilities.
     /// Resolve provider aliases before calling this so mixed-model providers work.
     pub fn for_model(
         protocol: &str,
@@ -71,9 +72,15 @@ impl WorkBuddyReasoningConfig {
             || ["claude", "opus", "sonnet", "haiku"]
                 .iter()
                 .any(|prefix| name == *prefix || name.starts_with(&format!("{prefix}-")));
+        let gpt_max = ["gpt-6", "gpt-5.6"].iter().any(|prefix| {
+            name == *prefix
+                || name
+                    .strip_prefix(prefix)
+                    .is_some_and(|tail| tail.starts_with(['-', '.']))
+        });
         let efforts = if glm {
             vec!["high", "max"]
-        } else if claude {
+        } else if claude || gpt_max {
             vec!["low", "medium", "high", "xhigh", "max"]
         } else {
             vec!["low", "medium", "high", "xhigh"]
@@ -218,17 +225,37 @@ enum WorkBuddyConfigFile {
 }
 
 pub fn config_path() -> PathBuf {
-    if let Some(path) = env::var_os("WORKBUDDY_CONFIG_PATH") {
-        return PathBuf::from(path);
-    }
-    let home = if cfg!(target_os = "windows") {
+    let user = if cfg!(target_os = "windows") {
         env::var_os("USERPROFILE")
     } else {
         env::var_os("HOME")
+    };
+    native_config_path(
+        env::var_os("WORKBUDDY_CONFIG_PATH"),
+        env::var_os("WORKBUDDY_CONFIG_DIR"),
+        user,
+    )
+}
+
+fn native_config_path(
+    explicit: Option<std::ffi::OsString>,
+    directory: Option<std::ffi::OsString>,
+    user: Option<std::ffi::OsString>,
+) -> PathBuf {
+    // Retain Hub's existing explicit file override; the client-native directory
+    // override follows Magpie workbuddy.go e6cdeac9 (MIT).
+    if let Some(path) = explicit.filter(|s| !s.is_empty()) {
+        return path.into();
     }
-    .map(PathBuf::from)
-    .unwrap_or_else(|| PathBuf::from("."));
-    home.join(".workbuddy").join("models.json")
+    if let Some(path) = directory
+        .map(|s| PathBuf::from(s.to_string_lossy().trim()))
+        .filter(|p| p.is_absolute())
+    {
+        return path.join("models.json");
+    }
+    user.map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".workbuddy/models.json")
 }
 
 #[cfg(test)]
@@ -533,6 +560,13 @@ fn restore_backup_at(path: &Path) -> Result<WorkBuddyConfigStatus> {
 struct ModelDocument {
     rows: Vec<Value>,
     legacy_object: bool,
+    container: Option<serde_json::Map<String, Value>>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct AvailableChange {
+    before: Vec<String>,
+    after: Vec<String>,
 }
 
 impl ModelDocument {
@@ -541,21 +575,43 @@ impl ModelDocument {
             None => Ok(Self {
                 rows: Vec::new(),
                 legacy_object: false,
+                container: None,
             }),
             Some(Value::Array(rows)) => Ok(Self {
                 rows,
                 legacy_object: false,
+                container: None,
             }),
+            Some(Value::Object(mut container))
+                if container.contains_key("models")
+                    || container.contains_key("availableModels") =>
+            {
+                let rows = match container.remove("models") {
+                    Some(Value::Array(rows)) => rows,
+                    None => Vec::new(),
+                    _ => bail!("WorkBuddy models 字段应为数组，原文件未修改"),
+                };
+                Ok(Self {
+                    rows,
+                    legacy_object: false,
+                    container: Some(container),
+                })
+            }
             Some(row @ Value::Object(_)) => Ok(Self {
                 rows: vec![row],
                 legacy_object: true,
+                container: None,
             }),
             _ => bail!("WorkBuddy 配置必须是模型数组或旧版模型对象"),
         }
     }
 
     fn bytes(&self) -> Result<Vec<u8>> {
-        let value = if self.legacy_object && self.rows.len() == 1 {
+        let value = if let Some(container) = &self.container {
+            let mut container = container.clone();
+            container.insert("models".into(), self.rows.clone().into());
+            container.into()
+        } else if self.legacy_object && self.rows.len() == 1 {
             self.rows[0].clone()
         } else {
             Value::Array(self.rows.clone())
@@ -563,6 +619,76 @@ impl ModelDocument {
         let mut bytes = serde_json::to_vec_pretty(&value)?;
         bytes.push(b'\n');
         Ok(bytes)
+    }
+
+    fn update_available(
+        &mut self,
+        before: Option<&Value>,
+        after: Option<&Value>,
+    ) -> Result<Option<AvailableChange>> {
+        let Some(value) = self
+            .container
+            .as_mut()
+            .and_then(|c| c.get_mut("availableModels"))
+        else {
+            return Ok(None);
+        };
+        let previous: Vec<String> = serde_json::from_value(value.clone())
+            .context("WorkBuddy availableModels 应为模型名称数组，原文件未修改")?;
+        if previous.is_empty() {
+            return Ok(None);
+        } // an empty list applies no allowlist
+        let old = before.and_then(|v| v["id"].as_str());
+        let new = after.and_then(|v| v["id"].as_str());
+        let mut next = previous.clone();
+        if old != new {
+            next.retain(|id| Some(id.as_str()) != old);
+        }
+        if let Some(id) = new {
+            if !next.iter().any(|v| v == id) {
+                next.push(id.into());
+            }
+        }
+        if next == previous {
+            return Ok(None);
+        }
+        *value = serde_json::to_value(&next)?;
+        Ok(Some(AvailableChange {
+            before: previous,
+            after: next,
+        }))
+    }
+
+    fn restore_available(&mut self, change: Option<&AvailableChange>) -> Result<()> {
+        let Some(change) = change else {
+            return Ok(());
+        };
+        let value = self
+            .container
+            .as_mut()
+            .and_then(|c| c.get_mut("availableModels"))
+            .context("WorkBuddy 模型可见列表结构已变化，未还原")?;
+        let mut current: Vec<String> = serde_json::from_value(value.clone())?;
+        let changed = change
+            .before
+            .iter()
+            .chain(&change.after)
+            .filter(|id| change.before.contains(id) != change.after.contains(id))
+            .collect::<std::collections::BTreeSet<_>>();
+        for id in &changed {
+            ensure!(
+                current.contains(id) == change.after.contains(id),
+                "WorkBuddy 目标模型的可见设置已后改，未还原"
+            );
+        }
+        current.retain(|id| !changed.contains(id) || change.before.contains(id));
+        for (index, id) in change.before.iter().enumerate() {
+            if changed.contains(id) && !current.contains(id) {
+                current.insert(index.min(current.len()), id.clone());
+            }
+        }
+        *value = serde_json::to_value(current)?;
+        Ok(())
     }
 
     fn entries(&self) -> Result<BTreeMap<String, usize>> {
@@ -668,6 +794,8 @@ struct OperationBackup {
     before_index: Option<usize>,
     before_exists: bool,
     before_legacy_object: bool,
+    #[serde(default)]
+    available_change: Option<AvailableChange>,
     before_provider: Option<ProviderConfig>,
     before_provider_index: Option<usize>,
     after_row_hash: String,
@@ -957,15 +1085,15 @@ fn prepare_model(
     entry_id: &str,
     request: &WorkBuddyModelConfig,
     previous: Option<&Value>,
+    copy_source: Option<&ProviderConfig>,
 ) -> Result<(Value, ProviderConfig)> {
-    let source = config
-        .ai_gateway
-        .providers
-        .iter()
-        .find(|provider| {
-            provider.enabled
-                && !provider.is_client_reserved()
-                && provider.name == request.upstream_provider.trim()
+    let source = copy_source
+        .or_else(|| {
+            config.ai_gateway.providers.iter().find(|provider| {
+                provider.enabled
+                    && !provider.is_client_reserved()
+                    && provider.name == request.upstream_provider.trim()
+            })
         })
         .ok_or_else(|| anyhow!("请选择已启用的普通来源渠道，专属渠道不能作为来源"))?;
     let requested_model = request.provider_model.trim();
@@ -985,6 +1113,11 @@ fn prepare_model(
         source.provider_type != ProviderType::ChatGptResponses
             || request.upstream_protocol == "openai-responses",
         "ChatGPT 账号渠道仅支持 Responses 协议"
+    );
+    crate::desktop::tiangong_models::validate_provider(source)?;
+    ensure!(
+        source.tiangong_builtin.is_none() || request.upstream_protocol == "openai-chat",
+        "天工内置来源仅支持聊天接口，请选择 OpenAI Chat 协议"
     );
     let url = url::Url::parse(source.base_url.trim())
         .map_err(|_| anyhow!("来源渠道地址无效，请先修正渠道"))?;
@@ -1030,6 +1163,31 @@ fn prepare_model(
         &request.upstream_default_reasoning_effort,
     );
     model.upstream_default_reasoning_effort = model.reasoning.default_effort.clone();
+    if let Some(parameters) = crate::desktop::tiangong_models::parameters_for_provider(&source) {
+        // These are native defaults, not generic GPT/Claude capabilities.
+        model.supports_images = parameters.supports_images.unwrap_or(false);
+        model.supports_reasoning = parameters.generation.contains_key("reasoning_effort")
+            || parameters.generation.contains_key("thinking")
+            || parameters.generation.contains_key("enable_thinking");
+        let effort = parameters
+            .generation
+            .get("reasoning_effort")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        model.upstream_default_reasoning_effort = effort.into();
+        model.reasoning.default_effort = effort.into();
+        model.reasoning.supported_efforts = if effort.is_empty() {
+            vec![]
+        } else {
+            vec![effort.into()]
+        };
+        model
+            .extra
+            .insert("contextWindow".into(), parameters.context_window.into());
+        model
+            .extra
+            .insert("maxTokens".into(), parameters.output_limit().into());
+    }
     model.extra.remove("cacheKey");
     model.extra.remove("cache_key");
     if uses_prompt_cache_key(&model.upstream_protocol) {
@@ -1053,6 +1211,7 @@ fn prepare_model(
         workbuddy_provider_name(entry_id).ok_or_else(|| anyhow!("WorkBuddy 条目身份无效"))?;
     provider.enabled = true;
     provider.import_source = None;
+    provider.desktop_binding = None;
     provider.gmclaw_parameters = None;
     provider.provider_type = match model.upstream_protocol.as_str() {
         "anthropic-messages" => ProviderType::AnthropicMessages,
@@ -1207,6 +1366,26 @@ fn save_entry_at(
     config: &mut AppConfig,
     hub_path: &Path,
 ) -> Result<WorkBuddyConfigStatus> {
+    save_entry_with_source(path, request, config, hub_path, None)
+}
+
+/// Explicit cross-client copy. Ordinary save/sync keeps its original scope rules.
+pub fn save_copy(
+    request: &WorkBuddySaveRequest,
+    source: &ProviderConfig,
+    config: &mut AppConfig,
+    hub_path: &Path,
+) -> Result<WorkBuddyConfigStatus> {
+    ensure!(source.enabled, "来源模型已停用，请重新选择");
+    save_entry_with_source(&config_path(), request, config, hub_path, Some(source))
+}
+fn save_entry_with_source(
+    path: &Path,
+    request: &WorkBuddySaveRequest,
+    config: &mut AppConfig,
+    hub_path: &Path,
+    copy_source: Option<&ProviderConfig>,
+) -> Result<WorkBuddyConfigStatus> {
     let _lock = configuration_lock(path, true)?;
     let before = read_optional(path)?;
     ensure!(
@@ -1238,13 +1417,21 @@ fn save_entry_at(
         "WorkBuddy 新条目身份冲突，请重试"
     );
     let before_row = index.map(|index| document.rows[index].clone());
-    let (row, provider) = prepare_model(config, &entry_id, &request.model, before_row.as_ref())?;
+    let (row, provider) = prepare_model(
+        config,
+        &entry_id,
+        &request.model,
+        before_row.as_ref(),
+        copy_source,
+    )?;
+    let available_change = document.update_available(before_row.as_ref(), Some(&row))?;
     let backup = OperationBackup {
         entry_id: entry_id.clone(),
         before_row,
         before_index: index,
         before_exists: before.is_some(),
         before_legacy_object: document.legacy_object,
+        available_change,
         before_provider: provider_index.map(|index| config.ai_gateway.providers[index].clone()),
         before_provider_index: provider_index,
         after_row_hash: fingerprint(&Some(&row))?,
@@ -1302,12 +1489,15 @@ fn delete_entry_at(
         .copied()
         .ok_or_else(|| anyhow!("WorkBuddy 条目已不存在，请刷新"))?;
     let provider_index = provider_position(config, &request.entry_id)?;
+    let before_row = document.rows.remove(index);
+    let available_change = document.update_available(Some(&before_row), None)?;
     let backup = OperationBackup {
         entry_id: request.entry_id.clone(),
-        before_row: Some(document.rows.remove(index)),
+        before_row: Some(before_row),
         before_index: Some(index),
         before_exists: before.is_some(),
         before_legacy_object: document.legacy_object,
+        available_change,
         before_provider: provider_index.map(|index| config.ai_gateway.providers[index].clone()),
         before_provider_index: provider_index,
         after_row_hash: fingerprint(&Option::<Value>::None)?,
@@ -1398,6 +1588,7 @@ fn restore_entry_at(
             document.rows.insert(index, row);
         }
         document.legacy_object = backup.before_legacy_object && document.rows.len() == 1;
+        document.restore_available(backup.available_change.as_ref())?;
         replace_entry_provider(
             &mut next,
             &backup.entry_id,
@@ -1481,6 +1672,147 @@ mod tests {
     use super::*;
     use crate::ai_gateway::config::AiGatewayConfig;
 
+    #[test]
+    fn native_directory_override_is_used_and_explicit_file_override_still_wins() {
+        let dir = tempfile::tempdir().unwrap();
+        let user = dir.path().join("home");
+        let native = dir.path().join("native custom dir");
+        let explicit = dir.path().join("explicit.json");
+        assert_eq!(
+            native_config_path(
+                None,
+                Some(native.clone().into_os_string()),
+                Some(user.clone().into_os_string())
+            ),
+            native.join("models.json")
+        );
+        assert_eq!(
+            native_config_path(
+                Some(explicit.clone().into_os_string()),
+                Some(native.into_os_string()),
+                Some(user.clone().into_os_string())
+            ),
+            explicit
+        );
+        assert_eq!(
+            native_config_path(
+                None,
+                Some("relative".into()),
+                Some(user.clone().into_os_string())
+            ),
+            user.join(".workbuddy/models.json")
+        );
+        assert_eq!(
+            native_config_path(None, Some("  ".into()), Some(user.clone().into_os_string())),
+            user.join(".workbuddy/models.json")
+        );
+    }
+
+    #[test]
+    fn wrapped_model_save_delete_and_restore_keep_other_rows_fields_and_later_visibility() {
+        let (_dir, path, hub_path, mut config) = multi_fixture();
+        let external = json!({"id":"external","name":"Existing","nativeUnknown":7});
+        fs::write(&path,serde_json::to_vec(&json!({"models":[external.clone()],"availableModels":["external"],"future":{"keep":true}})).unwrap()).unwrap();
+        let request = save_request(&path, &config, None, "source-a");
+        let saved = save_entry_at(&path, &request, &mut config, &hub_path).unwrap();
+        let entry = saved.selected_entry_id.unwrap();
+        let doc: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let native_id = doc["models"][1]["id"].as_str().unwrap().to_string();
+        assert_eq!(doc["models"][0], external);
+        assert_eq!(doc["future"], json!({"keep":true}));
+        assert_eq!(doc["availableModels"], json!(["external", native_id]));
+        let deleted = delete_entry_at(
+            &path,
+            &WorkBuddyEntryRequest {
+                entry_id: entry,
+                revision: current_status(&path, &config).revision,
+            },
+            &mut config,
+            &hub_path,
+        )
+        .unwrap();
+        let mut doc: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(doc["models"], json!([external.clone()]));
+        assert_eq!(doc["availableModels"], json!(["external"]));
+        doc["availableModels"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("later-external"));
+        doc["future"]["later"] = json!(42);
+        fs::write(&path, serde_json::to_vec(&doc).unwrap()).unwrap();
+        assert!(!deleted.revision.is_empty());
+        restore_entry_at(
+            &path,
+            &current_status(&path, &config).revision,
+            &mut config,
+            &hub_path,
+        )
+        .unwrap();
+        let doc: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(doc["models"][0], external);
+        assert_eq!(doc["models"][1]["id"], native_id);
+        assert!(
+            doc["availableModels"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("later-external"))
+        );
+        assert!(
+            doc["availableModels"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(native_id))
+        );
+        assert_eq!(doc["future"]["later"], 42);
+    }
+
+    #[test]
+    fn wrapped_model_restore_refuses_later_target_visibility_change_before_writing() {
+        let (_dir, path, hub_path, mut config) = multi_fixture();
+        fs::write(
+            &path,
+            br#"{"models":[],"availableModels":["external"],"future":7}"#,
+        )
+        .unwrap();
+        let request = save_request(&path, &config, None, "source-a");
+        save_entry_at(&path, &request, &mut config, &hub_path).unwrap();
+        let mut doc: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        doc["availableModels"] = json!(["external"]);
+        fs::write(&path, serde_json::to_vec(&doc).unwrap()).unwrap();
+        let before = fs::read(&path).unwrap();
+        let hub_before = fs::read(&hub_path).unwrap();
+        let revision = current_status(&path, &config).revision;
+        assert!(
+            restore_entry_at(&path, &revision, &mut config, &hub_path)
+                .unwrap_err()
+                .to_string()
+                .contains("可见设置已后改")
+        );
+        assert_eq!(fs::read(&path).unwrap(), before);
+        assert_eq!(fs::read(&hub_path).unwrap(), hub_before);
+    }
+
+    #[test]
+    fn wrapped_model_new_entry_undo_restores_the_original_container() {
+        let (_dir, path, hub_path, mut config) = multi_fixture();
+        let original = json!({"models":[],"availableModels":["external"],"future":{"keep":true}});
+        fs::write(&path, serde_json::to_vec(&original).unwrap()).unwrap();
+        let request = save_request(&path, &config, None, "source-a");
+        save_entry_at(&path, &request, &mut config, &hub_path).unwrap();
+        restore_entry_at(
+            &path,
+            &current_status(&path, &config).revision,
+            &mut config,
+            &hub_path,
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&fs::read(&path).unwrap()).unwrap(),
+            original
+        );
+        assert!(ModelDocument::parse(Some(br#"{"models":{},"future":7}"#)).is_err());
+    }
+
     fn multi_fixture() -> (tempfile::TempDir, PathBuf, PathBuf, AppConfig) {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("models.json");
@@ -1523,6 +1855,97 @@ mod tests {
                 ..Default::default()
             },
         }
+    }
+
+    #[test]
+    fn tiangong_builtin_copy_keeps_authorization_in_hub_and_rejects_wrong_upstream_protocol() {
+        let (_directory, path, hub_path, mut config) = multi_fixture();
+        let mut source = config.ai_gateway.providers[0].clone();
+        source.provider_type = ProviderType::ChatCompletions;
+        source.base_url = "https://tiangong.jiuqi.com.cn/api/v2/tg".into();
+        source.api_key.clear();
+        source.tiangong_builtin = Some(crate::desktop::tiangong_models::BuiltinBinding {
+            model_id: "tiangong-builtin".into(),
+            upstream_model: "same-model".into(),
+            credential_ref: uuid::Uuid::new_v4().to_string(),
+            parameters: None,
+        });
+        let mut pending = save_request(&path, &config, None, &source.name);
+        let before = read_optional(&path).unwrap();
+        assert!(
+            save_entry_with_source(&path, &pending, &mut config, &hub_path, Some(&source)).is_err()
+        );
+        assert_eq!(read_optional(&path).unwrap(), before);
+        pending.model.upstream_protocol = "openai-chat".into();
+        let saved =
+            save_entry_with_source(&path, &pending, &mut config, &hub_path, Some(&source)).unwrap();
+        let id = saved.selected_entry_id.unwrap();
+        let copy = config
+            .ai_gateway
+            .providers
+            .iter()
+            .find(|p| p.name == workbuddy_provider_name(&id).unwrap())
+            .unwrap();
+        assert_eq!(copy.tiangong_builtin, source.tiangong_builtin);
+        assert!(copy.api_key.is_empty());
+        let native = fs::read_to_string(&path).unwrap();
+        assert!(!native.contains(&source.tiangong_builtin.unwrap().credential_ref));
+        assert!(!native.contains("ignored-request-key"));
+        assert!(native.contains("127.0.0.1"));
+    }
+
+    #[test]
+    fn explicit_client_copy_preserves_editor_protocol_effort_and_stale_revision_protection() {
+        let (_directory, path, hub_path, mut config) = multi_fixture();
+        let mut source = config.ai_gateway.providers[0].clone();
+        source.name = "gmclaw:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into();
+        source.models = vec!["gpt-6".into()];
+        source.model_aliases = [("friendly".into(), "gpt-6".into())].into();
+        config.ai_gateway.providers.push(source.clone());
+        config.save(&hub_path).unwrap();
+        let source_before = serde_json::to_value(&source).unwrap();
+        let mut request = save_request(&path, &config, None, &source.name);
+        request.model.upstream_protocol = "openai-chat".into();
+        request.model.upstream_default_reasoning_effort = "max".into();
+        let hub_before = fs::read(&hub_path).unwrap();
+        assert!(save_entry_at(&path, &request, &mut config, &hub_path).is_err());
+        assert_eq!(fs::read(&hub_path).unwrap(), hub_before);
+        let saved =
+            save_entry_with_source(&path, &request, &mut config, &hub_path, Some(&source)).unwrap();
+        let id = saved.selected_entry_id.unwrap();
+        let row = &saved
+            .entries
+            .iter()
+            .find(|e| e.entry_id == id)
+            .unwrap()
+            .model;
+        assert_eq!(row.upstream_protocol, "openai-chat");
+        assert_eq!(row.reasoning.default_effort, "max");
+        assert_ne!(row.url, source.base_url);
+        let copy = &config.ai_gateway.providers[provider_position(&config, &id).unwrap().unwrap()];
+        assert!(copy.is_workbuddy());
+        assert_eq!(copy.provider_type, ProviderType::ChatCompletions);
+        assert_eq!(copy.api_key, source.api_key);
+        assert_eq!(copy.resolve_upstream_model("friendly"), Some("gpt-6"));
+        assert_eq!(
+            serde_json::to_value(
+                config
+                    .ai_gateway
+                    .providers
+                    .iter()
+                    .find(|p| p.name == source.name)
+                    .unwrap()
+            )
+            .unwrap(),
+            source_before
+        );
+        let after = fs::read(&path).unwrap();
+        let hub_after = fs::read(&hub_path).unwrap();
+        assert!(
+            save_entry_with_source(&path, &request, &mut config, &hub_path, Some(&source)).is_err()
+        );
+        assert_eq!(fs::read(&path).unwrap(), after);
+        assert_eq!(fs::read(&hub_path).unwrap(), hub_after);
     }
 
     #[test]
@@ -1985,7 +2408,7 @@ mod tests {
         );
         let workbuddy = &config.ai_gateway.providers[1];
         assert_eq!(workbuddy.name, WORKBUDDY_PROVIDER_NAME);
-        assert_eq!(workbuddy.base_url, "https://new.example/v1");
+        assert_eq!(workbuddy.base_url, "https://new.example");
         assert_eq!(workbuddy.provider_type, ProviderType::AnthropicMessages);
     }
 
@@ -2078,7 +2501,7 @@ mod tests {
         let workbuddy = &config.ai_gateway.providers[1];
         assert_eq!(workbuddy.provider_type, ProviderType::ChatCompletions);
         assert!(workbuddy.chatgpt_auth_id.is_none());
-        assert_eq!(workbuddy.base_url, "https://api.example/v1");
+        assert_eq!(workbuddy.base_url, "https://api.example");
         assert_eq!(workbuddy.api_key, "api-key");
         assert_eq!(
             serde_json::to_value(&config.ai_gateway.providers[0]).unwrap(),
@@ -2121,8 +2544,15 @@ mod tests {
             None,
             &claude.default_effort,
         );
-        assert_eq!(gpt.default_effort, "high");
-        assert_eq!(gpt.supported_efforts, ["low", "medium", "high", "xhigh"]);
+        assert_eq!(gpt.default_effort, "max");
+        assert_eq!(
+            gpt.supported_efforts,
+            ["low", "medium", "high", "xhigh", "max"]
+        );
+        let unknown =
+            WorkBuddyReasoningConfig::for_model("openai-chat", "custom-model", None, "max");
+        assert_eq!(unknown.default_effort, "high");
+        assert!(!unknown.supported_efforts.iter().any(|v| v == "max"));
         for name in ["claude-opus-4-8", "vendor/Claude-Sonnet-new", "opus-4-8"] {
             let config = WorkBuddyReasoningConfig::for_model("openai-chat", name, None, "xhigh");
             assert_eq!(config.supported_efforts, claude.supported_efforts);
@@ -2175,6 +2605,50 @@ mod tests {
         assert!(!uses_prompt_cache_key(&loaded.upstream_protocol));
         assert!(uses_prompt_cache_key("openai-chat"));
         assert!(uses_prompt_cache_key("openai-responses"));
+    }
+
+    #[test]
+    fn workbuddy_gpt_max_survives_save_and_reload() {
+        for protocol in ["openai-responses", "openai-chat"] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("models.json");
+            let model = WorkBuddyModelConfig {
+                upstream_provider: "openai-test".into(),
+                upstream_protocol: protocol.into(),
+                provider_model: "gpt-6.1-sol".into(),
+                upstream_default_reasoning_effort: "max".into(),
+                reasoning: WorkBuddyReasoningConfig::for_model(
+                    protocol,
+                    "gpt-6.1-sol",
+                    None,
+                    "max",
+                ),
+                ..Default::default()
+            };
+            save_at(&path, &model).unwrap();
+            let loaded = load_at(&path).unwrap().model;
+            assert_eq!(loaded.upstream_default_reasoning_effort, "max");
+            assert_eq!(loaded.reasoning.default_effort, "max");
+            assert!(
+                loaded
+                    .reasoning
+                    .supported_efforts
+                    .iter()
+                    .any(|v| v == "max")
+            );
+        }
+        for name in ["vendor/GPT-6-astra", "gpt-6.2", "gpt-5.6-sol"] {
+            assert_eq!(
+                WorkBuddyReasoningConfig::for_model("openai-responses", name, None, "max")
+                    .default_effort,
+                "max"
+            );
+        }
+        assert_eq!(
+            WorkBuddyReasoningConfig::for_model("openai-responses", "gpt-5.5", None, "max")
+                .default_effort,
+            "high"
+        );
     }
 
     #[test]

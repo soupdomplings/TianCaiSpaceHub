@@ -1,8 +1,12 @@
 # Hub 网页导入（Windows / macOS）
 
+V1.0.8 原生账户补充：天才小分队API密钥“导入Hub”创建票据时发送固定官网同源 `Origin`，满足站点现有Origin/Host检查；复用连接完成创建、单次兑换和模型目录读取，核对登录代次、来源及所选密钥ID。修复遗漏来源导致失败又被本机包装为HTTP409的问题，账户页显示可读原因；通用网页深链接的来源规则不改。仍进入原预览、默认禁用及受保护确认保存，不自动重放票据或发模型推理。完整行为见 [账户专题](customizations/tiancai-squad-account.md)，真实站点导入待用户验收，验证及包身份见 [V1.0.8](releases/v1.0.8.md)。
+
+`v0.4.30-13` 地址处理补充：保留主站下发的合法 Base URL 路径，不在导入时凭空补 `/v1`；模型目录仍只请求主站明确的地址（缺省为 Base URL 后的 `/models`），兑换与导入目录均不增加候选重试或重定向。保存后真实模型请求的缺版本恢复属于独立的 [TC-015](customizations/provider-url-recovery.md)，不改变本导入的凭据发送边界。
+
 维护日期：2026-10-03。关联 TC-009、TC-010。本文维护当前实现；需求字段见 [接口契约](HUB_EXTERNAL_IMPORT_CONTRACT_V1.md)，开发沿革见 [二开变更记录](customizations/CHANGELOG.md)。
 
-当前版本：`v0.4.30-2`，已发布 GitHub 预发布版。实现 Sub2API 外部导入约定 v1，默认禁用保存；Windows/macOS Actions 原生构建和打包均通过，macOS 系统接入代码已随本版交付。功能测试、安装升级、实机导入及真实站点调用仍待用户验收；Linux 不在本次范围。安装包和验证边界见 [版本交付](releases/v0.4.30-2.md)。
+历史发布基线：`v0.4.30-2`，已发布 GitHub 预发布版。实现 Sub2API 外部导入约定 v1，默认禁用保存；该版Windows/macOS Actions原生构建和打包均通过，macOS系统接入代码随该版交付。该结果不代替V1本地测试和实机验收；Linux不在本次范围。历史安装包和验证边界见 [版本交付](releases/v0.4.30-2.md)。
 
 本地未发布命名调整：当前源码的产品及程序统一为 `TianCaiSpaceHub`，Windows 为 `TianCaiSpaceHub.exe`，macOS 为 `TianCaiSpaceHub.app`；已发布包仍保留旧名称。导入协议、数据及安装升级身份不变，程序路径变化后需从所需版本重新注册，macOS 注意移除多余的旧名称 App 副本，详见 [品牌与交付](customizations/desktop-and-packaging.md)。
 

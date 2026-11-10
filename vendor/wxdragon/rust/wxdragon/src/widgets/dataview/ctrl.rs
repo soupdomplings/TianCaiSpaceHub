@@ -22,6 +22,7 @@ widget_style_enum!(
     name: DataViewStyle,
     doc: "Style flags for DataViewCtrl widgets.",
     variants: {
+        BorderNone: ffi::WXD_BORDER_NONE, "No outer frame.",
         Single: ffi::WXD_DV_SINGLE, "Single-selection mode.",
         Multiple: ffi::WXD_DV_MULTIPLE, "Multiple-selection mode.",
         RowLines: ffi::WXD_DV_ROW_LINES, "Display row dividers.",

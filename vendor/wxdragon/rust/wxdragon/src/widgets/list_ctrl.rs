@@ -25,6 +25,7 @@ widget_style_enum!(
     name: ListCtrlStyle,
     doc: "Style flags for ListCtrl widget.",
     variants: {
+        BorderNone: ffi::WXD_BORDER_NONE, "No outer frame.",
         Default: 0, "Default list control style.",
         SingleSel: ffi::WXD_LC_SINGLE_SEL, "Single selection (default is multiple).",
         SortAscending: ffi::WXD_LC_SORT_ASCENDING, "Sort in ascending order.",
@@ -1011,6 +1012,7 @@ impl WxEvtHandler for ListCtrl {
 }
 
 // Implement scrolling functionality for ListCtrl
+impl crate::event::WindowEvents for ListCtrl {}
 impl crate::scrollable::WxScrollable for ListCtrl {}
 
 // Use the widget_builder macro for ListCtrl

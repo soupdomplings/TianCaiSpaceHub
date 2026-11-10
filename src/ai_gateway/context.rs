@@ -4,7 +4,10 @@ use axum::http::{HeaderMap, HeaderName};
 /// 参考 AxonHub `codex/headers.go`。
 #[derive(Debug, Clone)]
 pub struct GatewayContext {
+    pub(super) config_state: Option<std::sync::Weak<crate::app_state::AppState>>,
+    pub(super) upstream_deadline: Option<tokio::time::Instant>,
     pub request_id: String,
+    pub activity_id: Option<String>,
     pub session_id: Option<String>,
     pub thread_id: Option<String>,
     pub window_id: Option<String>,
@@ -23,6 +26,9 @@ const LIB_MANAGED_HEADERS: &[&str] = &[
 ];
 
 const SENSITIVE_HEADERS: &[&str] = &[
+    "authorization-cer-pat",
+    "x-tiangong-end-user-id",
+    "x-tiangong-end-user-source",
     "authorization",
     "api-key",
     "x-api-key",
@@ -69,6 +75,8 @@ const BLOCKED_HEADERS: &[&str] = &[
     "ah-trace-id",
     "ah-thread-id",
     "x-initiator",
+    "x-tiancai-internal-activity",
+    "x-tiancai-desktop",
 ];
 
 const BLOCKED_HEADER_PREFIXES: &[&str] = &["cf-", "cdn-", "sec-websocket-"];
@@ -99,13 +107,92 @@ impl GatewayContext {
         let upstream_headers = collect_upstream_headers(headers);
 
         Self {
+            config_state: None,
+            upstream_deadline: None,
             request_id,
+            activity_id: get_header(headers, crate::desktop::activity::INTERNAL_HEADER),
             session_id: session_id.or(metadata_session_id),
             thread_id,
             window_id,
             prompt_cache_key,
             upstream_headers,
         }
+    }
+
+    pub fn with_state(mut self, state: &crate::app_state::SharedState) -> Self {
+        self.config_state = Some(std::sync::Arc::downgrade(state));
+        if let Some(id) = &self.activity_id {
+            state
+                .desktop_activity
+                .identify_headers(id, &self.upstream_headers);
+        }
+        self
+    }
+
+    pub fn bind_activity(
+        &self,
+        model: &str,
+        provider: &super::config::ProviderConfig,
+        route: &str,
+    ) {
+        if let (Some(id), Some(state)) = (
+            &self.activity_id,
+            self.config_state
+                .as_ref()
+                .and_then(std::sync::Weak::upgrade),
+        ) {
+            if let Some(binding) = &provider.desktop_binding {
+                state
+                    .desktop_activity
+                    .identify(id, binding.client, &binding.id);
+            } else if provider.is_workbuddy() {
+                state.desktop_activity.identify(
+                    id,
+                    crate::desktop::clients::ClientId::WorkBuddy,
+                    provider
+                        .name
+                        .split_once(':')
+                        .map(|(_, entry)| entry)
+                        .unwrap_or("legacy"),
+                );
+            } else if provider.is_gmclaw() {
+                state.desktop_activity.identify(
+                    id,
+                    crate::desktop::clients::ClientId::Tiangong,
+                    provider
+                        .name
+                        .split_once(':')
+                        .map(|(_, entry)| entry)
+                        .unwrap_or("legacy"),
+                );
+            }
+            state
+                .desktop_activity
+                .annotate(id, model, &provider.name, route);
+        }
+    }
+    pub fn bind_log_identity(&self, store: &super::request_log::RequestLogStore, log_id: i64) {
+        if let (Some(id), Some(state)) = (
+            &self.activity_id,
+            self.config_state
+                .as_ref()
+                .and_then(std::sync::Weak::upgrade),
+        ) {
+            if let Some(activity) = state.desktop_activity.get(id) {
+                store.bind_identity(
+                    log_id,
+                    activity.client.map(|c| c.key().to_string()),
+                    activity.entry,
+                    activity.route,
+                );
+                state.desktop_activity.log(id, log_id);
+            }
+        }
+    }
+
+    pub(super) fn with_deadline(mut self, deadline: tokio::time::Instant) -> Self {
+        self.upstream_deadline = Some(deadline);
+        self
     }
 }
 

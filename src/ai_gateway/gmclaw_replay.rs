@@ -280,10 +280,16 @@ impl StreamCapture {
 }
 
 fn provider_seed(provider: &ProviderConfig, model: &str) -> Option<Sha256> {
-    let provider = serde_json::to_value(provider).ok()?;
+    let mut serialized = serde_json::to_value(provider).ok()?;
+    let object = serialized.as_object_mut()?;
+    object.insert(
+        "baseUrl".into(),
+        Value::String(provider.identity_base_url().into()),
+    );
+    object.remove("baseUrlRepairOrigin");
     let mut hash = Sha256::new();
     hash.update(b"tiancaispacehub-gmclaw-replay-v1\0");
-    hash_value(&mut hash, &canonical_value(&provider))?;
+    hash_value(&mut hash, &canonical_value(&serialized))?;
     hash.update((model.len() as u64).to_be_bytes());
     hash.update(model.as_bytes());
     Some(hash)
@@ -486,6 +492,41 @@ mod tests {
                 "name":"lookup", "arguments":arguments,
             }}],
         })
+    }
+
+    #[test]
+    fn confirmed_url_repair_preserves_tool_history_but_manual_url_changes_do_not() {
+        let cache = Arc::new(Mutex::new(ReplayCache::default()));
+        let mut original = provider();
+        original.base_url = "https://example.invalid".into();
+        let first = json!({"model":"visible","messages":[{"role":"user","content":"lookup"}]});
+        let mut saved = assistant("{}");
+        saved["reasoning_content"] = json!("original thought");
+        context(&first, &original, &cache).remember_chat(&completion(saved));
+        let next = json!({"model":"visible","messages":[first["messages"][0],assistant("{}"),
+            {"role":"tool","tool_call_id":"call_same","content":"result"}]});
+        let mut repaired = original.clone();
+        assert!(repaired.confirm_base_url("https://example.invalid/v1"));
+        let mut continued = next.clone();
+        context(&continued.clone(), &repaired, &cache).restore_chat(&mut continued);
+        assert_eq!(
+            continued["messages"][1]["reasoning_content"],
+            "original thought"
+        );
+        for changed in [
+            ProviderConfig {
+                base_url: repaired.base_url.clone(),
+                ..original.clone()
+            },
+            ProviderConfig {
+                api_key: "different-key".into(),
+                ..repaired.clone()
+            },
+        ] {
+            let mut isolated = next.clone();
+            context(&isolated.clone(), &changed, &cache).restore_chat(&mut isolated);
+            assert!(isolated["messages"][1].get("reasoning_content").is_none());
+        }
     }
 
     #[test]

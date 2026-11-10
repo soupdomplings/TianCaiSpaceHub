@@ -1,4 +1,6 @@
 use super::{GuiTimers, api::ApiClient};
+use crate::gui::controls::Button;
+use crate::gui::controls::{Choice, TextCtrl};
 use crate::{
     config::AppConfig,
     external_import::{self as import, CommitImport, ImportDraft, ImportLink, UpdateTarget},
@@ -318,7 +320,7 @@ mod tests {
     }
 }
 
-fn preview(parent: &Frame, api: &ApiClient, draft: ImportDraft) {
+pub(super) fn preview(parent: &Frame, api: &ApiClient, draft: ImportDraft) {
     let config = match AppConfig::load_or_default(&config_path()) {
         Ok(config) => config,
         Err(_) => {

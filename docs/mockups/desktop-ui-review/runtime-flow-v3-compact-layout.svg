@@ -1,0 +1,122 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="1068" viewBox="0 0 900 1068"><title>TianCaiSpaceHub 第三稿 · 独立合成布局图，非浏览器截图</title><style>text{font-family:'Microsoft YaHei UI','Segoe UI',sans-serif}path{stroke-linejoin:round;stroke-linecap:round}</style><rect x="0" y="0" width="900" height="1068" rx="0" fill="#f4f6f8"/>
+<rect x="0" y="0" width="900" height="30" rx="0" fill="#172b36"/>
+<text x="16" y="20" font-size="11" font-weight="600" fill="#ffffff" text-anchor="start">界面方案 03  ·  合成数据</text>
+<text x="880" y="20" font-size="11" font-weight="400" fill="#ffffff" text-anchor="end">日常使用   ⌄       深色预览       重置演示</text>
+<rect x="0" y="30" width="168" height="1038" rx="0" fill="#ffffff"/>
+<path d="M168 30L168 1068" fill="none" stroke="#e2e8ed"/>
+<rect x="22" y="55" width="34" height="34" rx="8" fill="#087f83"/>
+<text x="39" y="80" font-size="23" font-weight="700" fill="#ffffff" text-anchor="middle">T</text>
+<text x="67" y="70" font-size="16" font-weight="600" fill="#172b36" text-anchor="start">天才空间</text>
+<text x="67" y="87" font-size="10" font-weight="400" fill="#586b78" text-anchor="start">TianCaiSpaceHub</text>
+<rect x="12" y="111" width="144" height="39" rx="6" fill="#e8f5f3"/>
+<text x="27" y="135" font-size="17" font-weight="400" fill="#087f83" text-anchor="start">⌁</text>
+<text x="54" y="135" font-size="12" font-weight="600" fill="#087f83" text-anchor="start">概览</text>
+<text x="25" y="184" font-size="11" font-weight="400" fill="#71828e" text-anchor="start">客户端</text>
+<text x="27" y="222" font-size="17" font-weight="400" fill="#586b78" text-anchor="start">◉</text>
+<text x="54" y="222" font-size="12" font-weight="400" fill="#586b78" text-anchor="start">ChatGPT(Codex)</text>
+<text x="27" y="265" font-size="17" font-weight="400" fill="#586b78" text-anchor="start">W</text>
+<text x="54" y="265" font-size="12" font-weight="400" fill="#586b78" text-anchor="start">WorkBuddy</text>
+<text x="27" y="308" font-size="17" font-weight="400" fill="#586b78" text-anchor="start">T</text>
+<text x="54" y="308" font-size="12" font-weight="400" fill="#586b78" text-anchor="start">天工 Work</text>
+<text x="84" y="347" font-size="20" font-weight="500" fill="#586b78" text-anchor="middle">⋯</text>
+<text x="25" y="395" font-size="11" font-weight="400" fill="#71828e" text-anchor="start">共用能力</text>
+<text x="27" y="433" font-size="17" font-weight="400" fill="#586b78" text-anchor="start">◇</text>
+<text x="54" y="433" font-size="12" font-weight="400" fill="#586b78" text-anchor="start">模型与渠道</text>
+<text x="27" y="476" font-size="17" font-weight="400" fill="#586b78" text-anchor="start">▤</text>
+<text x="54" y="476" font-size="12" font-weight="400" fill="#586b78" text-anchor="start">Skill 管理</text>
+<text x="27" y="519" font-size="17" font-weight="400" fill="#586b78" text-anchor="start">♧</text>
+<text x="54" y="519" font-size="12" font-weight="400" fill="#586b78" text-anchor="start">MCP 管理</text>
+<text x="27" y="562" font-size="17" font-weight="400" fill="#586b78" text-anchor="start">◌</text>
+<text x="54" y="562" font-size="12" font-weight="400" fill="#586b78" text-anchor="start">聊天接入</text>
+<text x="27" y="605" font-size="17" font-weight="400" fill="#586b78" text-anchor="start">⌁</text>
+<text x="54" y="605" font-size="12" font-weight="400" fill="#586b78" text-anchor="start">请求记录</text>
+<text x="27" y="940" font-size="17" font-weight="400" fill="#586b78" text-anchor="start">⚙</text>
+<text x="54" y="940" font-size="12" font-weight="400" fill="#586b78" text-anchor="start">设置</text>
+<text x="27" y="980" font-size="17" font-weight="400" fill="#586b78" text-anchor="start">?</text>
+<text x="54" y="980" font-size="12" font-weight="400" fill="#586b78" text-anchor="start">帮助</text>
+<text x="24" y="1026" font-size="10" font-weight="400" fill="#586b78" text-anchor="start">界面评审稿</text>
+<text x="24" y="1044" font-size="10" font-weight="400" fill="#71828e" text-anchor="start">基线 v0.4.30-13</text>
+<rect x="168" y="30" width="732" height="48" rx="0" fill="#ffffff"/>
+<path d="M168 78L900 78" fill="none" stroke="#e2e8ed"/>
+<text x="194" y="59" font-size="12" font-weight="400" fill="#586b78" text-anchor="start">工作台 / 概览</text>
+<circle cx="731" cy="54" r="3" fill="#207457"/>
+<text x="743" y="59" font-size="12" font-weight="400" fill="#586b78" text-anchor="start">本机服务运行中   ›</text>
+<rect x="168" y="1041" width="732" height="27" rx="0" fill="#ffffff"/>
+<path d="M168 1041L900 1041" fill="none" stroke="#e2e8ed"/>
+<text x="194" y="1058" font-size="10" font-weight="400" fill="#586b78" text-anchor="start">独立布局图 · 非 HTML / 产品运行截图 · 仅供界面评审</text>
+<text x="194" y="126" font-size="24" font-weight="600" fill="#172b36" text-anchor="start">概览</text>
+<rect x="716" y="108" width="116" height="33" rx="8" fill="#ffffff" stroke="#e2e8ed"/>
+<text x="774" y="129" font-size="12" font-weight="500" fill="#172b36" text-anchor="middle">+ 配置客户端</text>
+<circle cx="858" cy="124" r="9" fill="#586b78"/>
+<text x="858" y="129" font-size="13" font-weight="600" fill="#ffffff" text-anchor="middle">?</text>
+<path d="M194 191L874 191" fill="none" stroke="#e2e8ed"/>
+<text x="194" y="178" font-size="13" font-weight="600" fill="#087f83" text-anchor="start">运行状态</text>
+<rect x="194" y="190" width="52" height="2" rx="0" fill="#087f83"/>
+<text x="276" y="178" font-size="13" font-weight="400" fill="#586b78" text-anchor="start">使用统计</text>
+<rect x="194" y="215" width="680" height="460" rx="18" fill="#ffffff"/>
+<text x="214" y="247" font-size="16" font-weight="600" fill="#172b36" text-anchor="start">路由运行</text>
+<text x="300" y="246" font-size="11" font-weight="400" fill="#087f83" text-anchor="start">1 个请求处理中</text>
+<path d="M374 364 C392.3333333333333 364 389 440 407.3333333333333 440" stroke="#e2e8ed" stroke-width="1.4" opacity=".9" fill="none" stroke-dasharray="3 5"/>
+<path d="M374 425 C392.3333333333333 425 389 440 407.3333333333333 440" stroke="#7866c5" stroke-width="1.4" opacity=".32" fill="none"/>
+<path d="M374 425 C392.3333333333333 425 389 440 407.3333333333333 440" stroke="#7866c5" stroke-width="2.5" stroke-dasharray="2 22" fill="none"/>
+<path d="M374 482 C392.3333333333333 482 389 440 407.3333333333333 440" stroke="#c18c28" stroke-width="1.4" opacity=".32" fill="none"/>
+<path d="M491.3333333333333 440 C509.66666666666663 440 506.3333333333333 440 524.6666666666666 440" stroke="#7866c5" stroke-width="1.4" opacity=".32" fill="none"/>
+<path d="M491.3333333333333 440 C509.66666666666663 440 506.3333333333333 440 524.6666666666666 440" stroke="#7866c5" stroke-width="2.5" stroke-dasharray="2 22" fill="none"/>
+<path d="M672.6666666666666 440 C691 440 687.6666666666666 440 706 440" stroke="#7866c5" stroke-width="1.4" opacity=".32" fill="none"/>
+<path d="M672.6666666666666 440 C691 440 687.6666666666666 440 706 440" stroke="#7866c5" stroke-width="2.5" stroke-dasharray="2 22" fill="none"/>
+<rect x="214" y="335" width="160" height="58" rx="10" fill="#ffffff" stroke="#e2e8ed"/>
+<text x="234" y="369" font-size="18" font-weight="600" fill="#71828e" text-anchor="middle">◉</text>
+<text x="253" y="358" font-size="11" font-weight="600" fill="#172b36" text-anchor="start">ChatGPT / Codex</text>
+<text x="253" y="379" font-size="8" font-weight="400" fill="#586b78" text-anchor="start">执行</text>
+<circle cx="279" cy="376" r="2" fill="#207457"/>
+<text x="284" y="379" font-size="8" font-weight="400" fill="#207457" text-anchor="start">App</text>
+<circle cx="307" cy="376" r="2" fill="#71828e"/>
+<text x="312" y="379" font-size="8" font-weight="400" fill="#586b78" text-anchor="start">VS Code</text>
+<circle cx="349" cy="376" r="2" fill="#71828e"/>
+<text x="354" y="379" font-size="8" font-weight="400" fill="#586b78" text-anchor="start">CLI</text>
+<circle cx="363" cy="356" r="2.5" fill="#207457"/>
+<rect x="214" y="400" width="160" height="50" rx="10" fill="#ffffff" stroke="#e2e8ed"/>
+<text x="234" y="430" font-size="18" font-weight="600" fill="#7866c5" text-anchor="middle">W</text>
+<text x="253" y="423" font-size="11" font-weight="600" fill="#172b36" text-anchor="start">WorkBuddy</text>
+<text x="253" y="439" font-size="10" font-weight="400" fill="#586b78" text-anchor="start">请求处理中</text>
+<circle cx="363" cy="420" r="2.5" fill="#207457"/>
+<rect x="214" y="457" width="160" height="50" rx="10" fill="#ffffff" stroke="#e2e8ed"/>
+<text x="234" y="487" font-size="18" font-weight="600" fill="#c18c28" text-anchor="middle">T</text>
+<text x="253" y="480" font-size="11" font-weight="600" fill="#172b36" text-anchor="start">天工 Work</text>
+<text x="253" y="496" font-size="10" font-weight="400" fill="#586b78" text-anchor="start">已打开 · 空闲</text>
+<circle cx="363" cy="477" r="2.5" fill="#207457"/>
+<rect x="400.3333333333333" y="369" width="98" height="142" rx="28" fill="none" stroke="#087f83" opacity=".12"/>
+<rect x="407.3333333333333" y="376" width="84" height="128" rx="21" fill="#ffffff" stroke="#e2e8ed"/>
+<rect x="430.3333333333333" y="392" width="38" height="38" rx="13" fill="#087f83"/>
+<text x="449.3333333333333" y="420" font-size="24" font-weight="600" fill="#ffffff" text-anchor="middle">T</text>
+<text x="449.3333333333333" y="456" font-size="16" font-weight="600" fill="#172b36" text-anchor="middle">Hub</text>
+<circle cx="408.3333333333333" cy="476" r="2.5" fill="#207457"/>
+<text x="453.3333333333333" y="479" font-size="8" font-weight="400" fill="#207457" text-anchor="middle">本机服务运行中</text>
+<rect x="524.6666666666666" y="408" width="148" height="64" rx="10" fill="#ffffff" stroke="#7866c5"/>
+<text x="536.6666666666666" y="434" font-size="11" font-weight="600" fill="#172b36" text-anchor="start">gpt-6</text>
+<circle cx="660.6666666666666" cy="432" r="2.5" fill="#087f83"/>
+<text x="536.6666666666666" y="454" font-size="10" font-weight="400" fill="#586b78" text-anchor="start">WorkBuddy · 1 个请求</text>
+<rect x="706" y="408" width="148" height="64" rx="10" fill="#ffffff" stroke="#7866c5"/>
+<text x="724" y="445" font-size="18" font-weight="400" fill="#7866c5" text-anchor="middle">◇</text>
+<text x="741" y="434" font-size="11" font-weight="600" fill="#172b36" text-anchor="start">团队 API</text>
+<text x="741" y="454" font-size="10" font-weight="400" fill="#087f83" text-anchor="start">处理中</text>
+<path d="M214 617L854 617" fill="none" stroke="#e2e8ed"/>
+<text x="854" y="639" font-size="10" font-weight="400" fill="#586b78" text-anchor="end">演示状态  ⌄</text>
+<text x="209" y="723" font-size="18" font-weight="400" fill="#586b78" text-anchor="start">◌</text>
+<text x="238" y="717" font-size="12" font-weight="500" fill="#172b36" text-anchor="start">聊天接入</text>
+<text x="238" y="737" font-size="10" font-weight="400" fill="#586b78" text-anchor="start">2 个示例账号</text>
+<text x="522" y="724" font-size="15" font-weight="400" fill="#586b78" text-anchor="start">›</text>
+<path d="M534 699L534 746" fill="none" stroke="#e2e8ed"/>
+<text x="549" y="723" font-size="18" font-weight="400" fill="#586b78" text-anchor="start">▤</text>
+<text x="578" y="717" font-size="12" font-weight="500" fill="#172b36" text-anchor="start">Skill</text>
+<text x="578" y="737" font-size="10" font-weight="400" fill="#586b78" text-anchor="start">2 项使用中</text>
+<text x="862" y="724" font-size="15" font-weight="400" fill="#586b78" text-anchor="start">›</text>
+<text x="209" y="788" font-size="18" font-weight="400" fill="#586b78" text-anchor="start">♧</text>
+<text x="238" y="782" font-size="12" font-weight="500" fill="#172b36" text-anchor="start">MCP</text>
+<text x="238" y="802" font-size="10" font-weight="400" fill="#586b78" text-anchor="start">3 项使用中</text>
+<text x="522" y="789" font-size="15" font-weight="400" fill="#586b78" text-anchor="start">›</text>
+<path d="M534 764L534 811" fill="none" stroke="#e2e8ed"/>
+<text x="549" y="788" font-size="18" font-weight="400" fill="#586b78" text-anchor="start">◇</text>
+<text x="578" y="782" font-size="12" font-weight="500" fill="#172b36" text-anchor="start">Dumpling</text>
+<text x="578" y="802" font-size="10" font-weight="400" fill="#586b78" text-anchor="start"></text>
+<text x="862" y="789" font-size="15" font-weight="400" fill="#586b78" text-anchor="start">›</text></svg>

@@ -199,6 +199,96 @@ struct WriteStatus {
 }
 
 impl DesktopClient {
+    /// Exact task-scoped catalog used by the native harness. Contains local
+    /// authentication fields: callers may only expose whitelisted metadata.
+    pub(crate) async fn task_mcp_catalog(&self, agent: &str, user: &str, project: &str) -> Result<Vec<Value>> {
+        validate_id(agent)?;
+        let query = [("user_id", user.into()), ("project_id", project.into())];
+        let value = self.request_json(Method::GET, &["data", "mcp", "catalog", agent],
+            Some(&query), None, MAX_MCP_BYTES, false).await?.unwrap_or(Value::Null);
+        let catalog = value.get("catalog").unwrap_or(&value);
+        match catalog {
+            Value::Array(rows) => Ok(rows.clone()),
+            Value::Object(rows) => Ok(rows.values().cloned().collect()),
+            _ => anyhow::bail!("天工工具目录格式变化，未注入不完整的协助规则"),
+        }
+    }
+    pub(crate) async fn skills(&self) -> Result<Vec<Value>> {
+        let value = self
+            .request_json(
+                Method::GET,
+                &["data", "skills"],
+                None,
+                None,
+                MAX_LIST_BYTES,
+                false,
+            )
+            .await?
+            .unwrap_or(Value::Null);
+        value
+            .get("skills")
+            .and_then(Value::as_array)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("天工 Skill 列表格式不兼容，未修改"))
+    }
+    pub(crate) async fn skill_replace(
+        &self,
+        name: &str,
+        value: Option<Value>,
+        exists: bool,
+    ) -> Result<()> {
+        validate_id(name)?;
+        let (method, path, body) = match value {
+            Some(value) if exists => (Method::PUT, vec!["data", "skills", name], Some(value)),
+            Some(mut value) => {
+                value["name"] = name.into();
+                (Method::POST, vec!["data", "skills"], Some(value))
+            }
+            None => (Method::DELETE, vec!["data", "skills", name], None),
+        };
+        self.request_json(method, &path, None, body, MAX_METADATA_BYTES, true)
+            .await?;
+        Ok(())
+    }
+    pub(crate) async fn mcp_connections(&self) -> Result<Vec<Value>> {
+        let value = self
+            .request_json(
+                Method::GET,
+                &["data", "mcp", "connections"],
+                None,
+                None,
+                MAX_LIST_BYTES,
+                false,
+            )
+            .await?
+            .unwrap_or(Value::Null);
+        value
+            .get("connections")
+            .or_else(|| value.get("data"))
+            .unwrap_or(&value)
+            .as_array()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("天工 MCP 列表格式不兼容，未修改"))
+    }
+    pub(crate) async fn reload_configuration(&self) -> Result<()> {
+        let mut url = self.harness_url.clone();
+        url.set_path("/ctrl/config/reload");
+        let response = self
+            .http
+            .post(url)
+            .header(reqwest::header::AUTHORIZATION, self.authorization.clone())
+            .json(&json!({}))
+            .send()
+            .await
+            .map_err(|_| {
+                anyhow::anyhow!("天工配置已保存，重新加载未确认；可重新打开客户端后使用")
+            })?;
+        ensure!(
+            response.status().is_success(),
+            "天工配置已保存，重新加载未确认；可重新打开客户端后使用"
+        );
+        Ok(())
+    }
     pub(crate) fn with_authorization(
         endpoint: &str,
         mut authorization: HeaderValue,
@@ -242,6 +332,19 @@ impl DesktopClient {
             harness_url: harness,
             authorization,
         })
+    }
+    #[cfg(test)]
+    pub(crate) fn fixture(base: &str) -> Self {
+        let mut client = Self::with_authorization(
+            "http://127.0.0.1:7861",
+            HeaderValue::from_static("Bearer fixture"),
+        )
+        .unwrap();
+        let url = Url::parse(base).unwrap();
+        assert_eq!(url.host_str(), Some("127.0.0.1"));
+        client.base_url = url.clone();
+        client.harness_url = url;
+        client
     }
 
     /// Work keeps executing after the renderer sees OVER or disconnects.

@@ -1349,6 +1349,10 @@ mod tests {
         // AppState::new reads persisted state and initializes disk logs. These
         // rejection fixtures use only in-memory state, including SQLite logs.
         let state = Arc::new(AppState {
+            desktop_activity: crate::desktop::activity::ActivityStore::default(),
+            desktop_mcp_activity: crate::desktop::mcp_activity::McpActivityStore::default(),
+            desktop_squad: Mutex::new(Default::default()),
+            local_assistance: crate::local_assistance::Service::default(),
             config_path: PathBuf::from(":memory:"),
             daemon_identity: crate::daemon_process::DaemonIdentity {
                 service: "fixture".into(),

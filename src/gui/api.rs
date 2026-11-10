@@ -28,6 +28,9 @@ pub(super) struct ApiClient {
 }
 
 impl ApiClient {
+    pub(super) fn desktop_post(&self, path: &str, body: &Value) -> Result<Value, String> {
+        super::dialog_job::post(self, path, body)
+    }
     pub(super) fn new(base_url: String, text: GuiText) -> Self {
         let http = Client::builder()
             .connect_timeout(GUI_CONNECT_TIMEOUT)

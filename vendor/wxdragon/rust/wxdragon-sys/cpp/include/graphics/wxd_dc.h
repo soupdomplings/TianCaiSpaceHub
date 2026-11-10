@@ -16,6 +16,9 @@ typedef struct wxd_MemoryDC_t wxd_MemoryDC_t;
 typedef struct wxd_ScreenDC_t wxd_ScreenDC_t;
 typedef struct wxd_AutoBufferedPaintDC_t wxd_AutoBufferedPaintDC_t;
 
+// Antialiased adapter, borrowed source must outlive the wrapper.
+WXD_EXPORTED wxd_DC_t* wxd_GCDC_Create(wxd_DC_t* source);
+
 // DC Creation/Destruction
 WXD_EXPORTED wxd_WindowDC_t*
 wxd_WindowDC_Create(wxd_Window_t* window);

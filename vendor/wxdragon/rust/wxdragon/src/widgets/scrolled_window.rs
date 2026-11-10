@@ -59,6 +59,11 @@ pub struct ScrolledWindow {
 }
 
 impl ScrolledWindow {
+    /// Origin in scroll units, including when the native bars are hidden.
+    pub fn view_start(&self) -> Point {
+        let p = unsafe { ffi::wxd_ScrolledWindow_GetViewStart(self.scrolled_window_ptr()) };
+        Point::new(p.x, p.y)
+    }
     /// Creates a new builder for a ScrolledWindow.
     pub fn builder(parent: &dyn WxWidget) -> ScrolledWindowBuilder<'_> {
         ScrolledWindowBuilder::new(parent)
@@ -104,6 +109,14 @@ impl ScrolledWindow {
             return;
         }
         unsafe { ffi::wxd_ScrolledWindow_SetScrollRate(ptr, x_step, y_step) }
+    }
+
+    /// Shows or hides scroll indicators without disabling scrolling.
+    pub fn show_scroll_indicators(&self, show: bool) {
+        let ptr = self.scrolled_window_ptr();
+        if !ptr.is_null() {
+            unsafe { ffi::wxd_ScrolledWindow_ShowScrollIndicators(ptr, show) }
+        }
     }
 
     /// Fits the virtual scrolling area to the current sizer-managed contents.

@@ -13,6 +13,13 @@ typedef enum : int32_t {
 } wxd_ButtonBitmapPosition_t;
 
 // --- Button Functions ---
+WXD_EXPORTED wxd_Window_t* wxd_ActionButton_Create(wxd_Window_t* parent, wxd_Id id, const char* label);
+WXD_EXPORTED void wxd_ActionButton_SetPresentation(wxd_Window_t* button, uint32_t presentation);
+WXD_EXPORTED uint32_t wxd_ActionButton_GetPresentation(wxd_Window_t* button);
+WXD_EXPORTED uint32_t wxd_ActionButton_GetState(wxd_Window_t* button);
+WXD_EXPORTED void wxd_ActionButton_SetDefault(wxd_Window_t* button);
+WXD_EXPORTED int wxd_Window_FromDIP(wxd_Window_t* window, int value);
+
 WXD_EXPORTED wxd_Button_t*
 wxd_Button_Create(wxd_Window_t* parent, wxd_Id id, const char* label, wxd_Point pos, wxd_Size size,
                   wxd_Style_t style);

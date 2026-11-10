@@ -27,4 +27,10 @@ wxd_Choice_GetString(wxd_Choice_t* choice, int index, char* buffer, size_t buffe
 WXD_EXPORTED unsigned int
 wxd_Choice_GetCount(wxd_Choice_t* choice);
 
+// Display the native item menu below an application-rendered anchor. Selection
+// still emits wxEVT_CHOICE from the real choice, preserving its event contract.
+WXD_EXPORTED void
+wxd_Choice_Popup(wxd_Choice_t* choice, wxd_Window_t* anchor);
+WXD_EXPORTED void wxd_Choice_SelectAndNotify(wxd_Choice_t* choice, unsigned int index);
+
 #endif // WXD_CHOICE_H

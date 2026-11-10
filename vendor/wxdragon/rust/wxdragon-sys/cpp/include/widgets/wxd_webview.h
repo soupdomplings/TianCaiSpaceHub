@@ -16,6 +16,8 @@ WXD_EXPORTED wxd_WebView_t* wxd_WebView_Create(wxd_Window_t* parent, wxd_Id id, 
                                                const char* name, const char* backend);
 
 // Navigation
+// Creates an isolated memory-only modern view; never falls back to IE.
+WXD_EXPORTED wxd_WebView_t* wxd_WebView_CreatePrivate(wxd_Window_t* parent, const char* backend);
 WXD_EXPORTED void wxd_WebView_LoadURL(wxd_WebView_t* self, const char* url);
 WXD_EXPORTED void wxd_WebView_Reload(wxd_WebView_t* self, int flags);
 WXD_EXPORTED void wxd_WebView_Stop(wxd_WebView_t* self);

@@ -154,6 +154,20 @@ impl Choice {
         unsafe { ffi::wxd_Choice_GetCount(ptr) }
     }
 
+    /// Show the native item menu below a separately rendered control.
+    pub fn popup_for(&self, anchor: &dyn WxWidget) {
+        let ptr = self.widget_ptr();
+        if !ptr.is_null() && anchor.is_valid() {
+            unsafe { ffi::wxd_Choice_Popup(ptr, anchor.handle_ptr()) };
+        }
+    }
+    /// Notify the normal choice event when keyboard selection changes.
+    pub fn select_and_notify(&self, index: u32) {
+        if self.is_valid() {
+            unsafe { ffi::wxd_Choice_SelectAndNotify(self.widget_ptr(), index) };
+        }
+    }
+
     /// Returns the underlying WindowHandle for this choice.
     pub fn window_handle(&self) -> WindowHandle {
         self.handle

@@ -24,6 +24,7 @@ use tracing::{debug, warn};
 use crate::config::AppConfig;
 
 const DB_FILE_NAME: &str = "ai-gateway-request-logs.sqlite";
+pub mod desktop;
 const WRITE_QUEUE_CAPACITY: usize = 256;
 
 #[derive(Debug, Clone, Default)]
@@ -151,6 +152,12 @@ struct RequestLogStoreInner {
 }
 
 enum RequestLogWrite {
+    Identity {
+        id: i64,
+        client: Option<String>,
+        entry: Option<String>,
+        route: Option<String>,
+    },
     Insert {
         id: i64,
         record: RequestLogRecord,
@@ -422,6 +429,7 @@ fn request_log_writer_loop(
             .as_ref()
             .expect("request log writer connection initialized");
         let result = match command {
+            RequestLogWrite::Identity{id,client,entry,route}=>conn.execute("UPDATE ai_gateway_request_logs SET client_id=?1,client_entry=?2,route_id=?3 WHERE id=?4",params![client,entry,route,id]).map(|_|()),
             RequestLogWrite::Insert { id, record } => {
                 insert_record_with_id(conn, id, &record).map(|_| ())
             }
@@ -590,7 +598,7 @@ pub fn elapsed_ms(started_at: Instant) -> i64 {
 
 pub fn headers_to_json(headers: &HeaderMap) -> Option<String> {
     headers_to_json_with(headers, |name, value| {
-        if name.eq_ignore_ascii_case("x-openai-actor-authorization") {
+        if ["x-openai-actor-authorization", "authorization-cer-pat", "x-tiangong-end-user-id"].iter().any(|s|name.eq_ignore_ascii_case(s)) {
             "<redacted>".to_string()
         } else {
             value
@@ -649,7 +657,7 @@ fn headers_to_json_with(
 fn is_sensitive_header(name: &str) -> bool {
     matches!(
         name.to_ascii_lowercase().as_str(),
-        "authorization"
+        "authorization-cer-pat" | "x-tiangong-end-user-id" | "authorization"
             | "proxy-authorization"
             | "cookie"
             | "set-cookie"
@@ -1404,6 +1412,9 @@ fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
     )?;
 
     add_text_column_if_missing(conn, "request_headers_json")?;
+    add_text_column_if_missing(conn, "client_id")?;
+    add_text_column_if_missing(conn, "client_entry")?;
+    add_text_column_if_missing(conn, "route_id")?;
     add_integer_column_if_missing(conn, "upstream_request_body_bytes")?;
     add_integer_column_if_missing(conn, "upstream_stream")?;
     add_text_column_if_missing(conn, "upstream_request_headers_json")?;
@@ -1423,6 +1434,10 @@ fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
             ON ai_gateway_request_logs(channel);
         CREATE INDEX IF NOT EXISTS idx_ai_gateway_request_logs_status
             ON ai_gateway_request_logs(status);
+        CREATE INDEX IF NOT EXISTS idx_ai_gateway_request_logs_route_time
+            ON ai_gateway_request_logs(route_id, created_at_ms DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_ai_gateway_request_logs_client_time
+            ON ai_gateway_request_logs(client_id, client_entry, created_at_ms DESC, id DESC);
         -- Covering index for the request-log list query. The list view reads
         -- only small metadata columns, but rows also store request/response
         -- JSON blobs that frequently exceed 600 KB each. Without a covering
@@ -1986,7 +2001,9 @@ mod tests {
             let provider = ProviderConfig {
                 name: "mock".into(),
                 provider_type: ProviderType::OpenAiResponses,
-                base_url: format!("http://{address}"),
+                // This fixture tests response headers, not endpoint repair. An
+                // explicit version keeps errors on the endpoint under test.
+                base_url: format!("http://{address}/v1"),
                 api_key: "test".into(),
                 timeout_secs: 5,
                 ..Default::default()

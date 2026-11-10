@@ -773,7 +773,7 @@ fn fixed_token_expiry(token: &Value) -> Result<Option<u64>> {
     ))
 }
 
-fn encrypt_login_field(key: &str, alias: &str, value: &str) -> Result<String> {
+pub(crate) fn encrypt_login_field(key: &str, alias: &str, value: &str) -> Result<String> {
     match alias {
         "3" => {
             let public = if key.contains("-----BEGIN") {

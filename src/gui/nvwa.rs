@@ -1,3 +1,5 @@
+use crate::gui::controls::Button;
+use crate::gui::controls::{Choice, TextCtrl};
 use std::{
     cell::RefCell,
     collections::BTreeMap,
@@ -828,7 +830,7 @@ fn auth_mode(tab: &NvwaTab) -> &'static str {
     }
 }
 
-pub(super) fn create(parent: &Notebook, text: GuiText) -> NvwaTab {
+pub(super) fn create(parent: &dyn WxWidget, text: GuiText) -> NvwaTab {
     let page = ScrolledWindow::builder(parent)
         .with_style(ScrolledWindowStyle::VScroll)
         .build();

@@ -13,7 +13,9 @@ widget_style_enum!(
     variants: {
         Default: ffi::WXD_ALIGN_LEFT, "Default style (left-aligned, auto-resizing).",
         AlignRight: ffi::WXD_ALIGN_RIGHT, "Align text to the right.",
-        AlignCenterHorizontal: ffi::WXD_ALIGN_CENTRE_HORIZONTAL, "Align text to the center horizontally."
+        AlignCenterHorizontal: ffi::WXD_ALIGN_CENTRE_HORIZONTAL, "Align text to the center horizontally.",
+        // wxWidgets 3.3.2 include/wx/stattext.h: wxST_ELLIPSIZE_END.
+        EllipsizeEnd: 0x0010, "Truncate long labels with an ellipsis at the end."
     },
     default_variant: Default
 );

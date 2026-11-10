@@ -174,6 +174,7 @@ wxd_Font_GetPointSize(wxd_Font_t* self);
 
 WXD_EXPORTED void
 wxd_Font_SetPointSize(wxd_Font_t* self, int point_size);
+WXD_EXPORTED void wxd_Font_SetPixelHeight(wxd_Font_t* self, int height);
 
 WXD_EXPORTED int
 wxd_Font_GetFamily(wxd_Font_t* self);

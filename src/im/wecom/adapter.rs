@@ -686,11 +686,12 @@ mod tests {
         assert!(
             controls
                 .iter()
-                .all(|control| control["question_key"] != "effort")
+                .all(|control| control["question_key"] != "effort"
+                    && control["question_key"] != "permission")
         );
         assert_eq!(
             card["submit_button"]["key"],
-            "thread-create-custom-cwd:request-1:__default__"
+            "thread-create-submit:request-1:__default__"
         );
         assert!(
             card["sub_title_text"]

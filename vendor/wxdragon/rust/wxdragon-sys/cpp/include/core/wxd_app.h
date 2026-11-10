@@ -4,6 +4,9 @@
 #include "../wxd_types.h" // Adjust path as necessary if wxd_types.h is at the root of include/
 
 // --- App Functions ---
+// Isolated rendering: initializes drawing resources, never calls application
+// OnInit/OnRun and never creates a window or starts the event loop.
+WXD_EXPORTED bool wxd_RunOffscreen(void (*callback)(void*), void* data);
 WXD_EXPORTED wxd_App_t*
 wxd_GetApp();
 // Return the correctly adjusted wxEvtHandler base pointer for app event bindings.

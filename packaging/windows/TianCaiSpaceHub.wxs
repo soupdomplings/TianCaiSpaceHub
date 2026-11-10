@@ -108,6 +108,9 @@
         <Component Id="TianCaiSpaceHubConfigExample" Guid="{689018C1-C0BF-4877-AAA6-46367EC53506}">
           <File Id="ConfigExampleToml" Source="$(var.SourceDir)\config.example.toml" KeyPath="yes" />
         </Component>
+        <Component Id="TianCaiSpaceHubThirdPartyNotices" Guid="{9D3F2842-81B4-47B1-A6DE-FAC8C611B48B}">
+          <File Id="ThirdPartyNoticesMd" Source="$(var.SourceDir)\THIRD_PARTY_NOTICES.md" KeyPath="yes" />
+        </Component>
       </Directory>
     </StandardDirectory>
 
@@ -158,6 +161,7 @@
       <ComponentRef Id="TianCaiSpaceHubReadme" />
       <ComponentRef Id="TianCaiSpaceHubReadmeEn" />
       <ComponentRef Id="TianCaiSpaceHubConfigExample" />
+      <ComponentRef Id="TianCaiSpaceHubThirdPartyNotices" />
       <ComponentRef Id="TianCaiSpaceHubStartMenuShortcut" />
       <ComponentRef Id="TianCaiSpaceHubDesktopShortcut" />
     </Feature>

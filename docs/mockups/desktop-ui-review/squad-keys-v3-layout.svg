@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1366" height="940" viewBox="0 0 1366 940"><title>天才小分队 · 合成独立布局图，非 HTML 截图</title><style>text{font-family:'Microsoft YaHei UI','Segoe UI',sans-serif}path{stroke-linecap:round;stroke-linejoin:round}</style><rect x="0" y="0" width="1366" height="940" rx="0" fill="#f4f6f8"/>
+<rect x="0" y="0" width="1366" height="30" rx="0" fill="#172b36"/>
+<text x="16" y="20" fill="#ffffff" font-size="11" font-weight="600">界面方案 03 · 合成数据</text>
+<rect x="0" y="30" width="204" height="910" rx="0" fill="#ffffff"/>
+<path d="M204 30L204 940" stroke="#e2e8ed" fill="none"/>
+<rect x="22" y="55" width="34" height="34" rx="9" fill="#087f83"/>
+<text x="31" y="81" fill="#fff" font-size="24" font-weight="700">T</text>
+<text x="67" y="71" fill="#172b36" font-size="16" font-weight="600">天才空间</text>
+<text x="67" y="88" fill="#586b78" font-size="10" font-weight="400">TianCaiSpaceHub</text>
+<text x="25" y="130" fill="#586b78" font-size="16" font-weight="400">⌁</text>
+<text x="51" y="130" fill="#586b78" font-size="13" font-weight="400">概览</text>
+<rect x="12" y="147" width="180" height="39" rx="7" fill="#e8f5f3"/>
+<text x="25" y="171" fill="#087f83" font-size="16" font-weight="400">✦</text>
+<text x="51" y="171" fill="#087f83" font-size="13" font-weight="600">天才小分队</text>
+<text x="25" y="213" fill="#586b78" font-size="11" font-weight="400">客户端</text>
+<text x="25" y="250" fill="#586b78" font-size="16" font-weight="400">◉</text>
+<text x="51" y="250" fill="#586b78" font-size="13" font-weight="400">ChatGPT(Codex)</text>
+<text x="25" y="291" fill="#586b78" font-size="16" font-weight="400">W</text>
+<text x="51" y="291" fill="#586b78" font-size="13" font-weight="400">WorkBuddy</text>
+<text x="25" y="332" fill="#586b78" font-size="16" font-weight="400">T</text>
+<text x="51" y="332" fill="#586b78" font-size="13" font-weight="400">天工 Work</text>
+<text x="96" y="369" fill="#586b78" font-size="20" font-weight="400">⋯</text>
+<text x="25" y="410" fill="#586b78" font-size="11" font-weight="400">共用能力</text>
+<text x="25" y="448" fill="#586b78" font-size="16" font-weight="400">◇</text>
+<text x="51" y="448" fill="#586b78" font-size="13" font-weight="400">模型与渠道</text>
+<text x="25" y="489" fill="#586b78" font-size="16" font-weight="400">▤</text>
+<text x="51" y="489" fill="#586b78" font-size="13" font-weight="400">Skill 管理</text>
+<text x="25" y="530" fill="#586b78" font-size="16" font-weight="400">♧</text>
+<text x="51" y="530" fill="#586b78" font-size="13" font-weight="400">MCP 管理</text>
+<text x="25" y="571" fill="#586b78" font-size="16" font-weight="400">◌</text>
+<text x="51" y="571" fill="#586b78" font-size="13" font-weight="400">聊天接入</text>
+<text x="25" y="612" fill="#586b78" font-size="16" font-weight="400">⌁</text>
+<text x="51" y="612" fill="#586b78" font-size="13" font-weight="400">请求记录</text>
+<text x="25" y="816" fill="#586b78" font-size="16" font-weight="400">⚙</text>
+<text x="51" y="816" fill="#586b78" font-size="13" font-weight="400">设置</text>
+<text x="25" y="856" fill="#586b78" font-size="16" font-weight="400">?</text>
+<text x="51" y="856" fill="#586b78" font-size="13" font-weight="400">帮助</text>
+<text x="24" y="902" fill="#586b78" font-size="10" font-weight="400">界面评审稿</text>
+<text x="24" y="919" fill="#586b78" font-size="10" font-weight="400">基线 v0.4.30-13</text>
+<rect x="204" y="30" width="1162" height="48" rx="0" fill="#ffffff"/>
+<text x="230" y="59" fill="#586b78" font-size="12" font-weight="400">工作台 / 天才小分队</text>
+<circle cx="1210" cy="54" r="3" fill="#087f83"/>
+<text x="1221" y="59" fill="#586b78" font-size="11" font-weight="400">本机服务运行中</text>
+<text x="230" y="126" fill="#172b36" font-size="24" font-weight="600">天才小分队</text>
+<text x="405" y="125" fill="#586b78" font-size="12" font-weight="400">◇ 林同学 · 示例</text>
+<rect x="1138" y="106" width="88" height="34" rx="7" fill="#f8fafb"/>
+<text x="1151" y="128" fill="#172b36" font-size="12" font-weight="500">账号场景</text>
+<rect x="1235" y="106" width="74" height="34" rx="7" fill="#f8fafb"/>
+<text x="1248" y="128" fill="#172b36" font-size="12" font-weight="500">退出账号</text>
+<circle cx="1331" cy="123" r="9" fill="#586b78"/>
+<text x="1328" y="128" fill="#ffffff" font-size="12" font-weight="600">?</text>
+<text x="230" y="183" fill="#586b78" font-size="12" font-weight="400">账户概览</text>
+<text x="305" y="183" fill="#087f83" font-size="12" font-weight="600">API 密钥</text>
+<rect x="305" y="196" width="76" height="2" rx="0" fill="#087f83"/>
+<text x="408" y="183" fill="#586b78" font-size="12" font-weight="400">使用记录</text>
+<text x="483" y="183" fill="#586b78" font-size="12" font-weight="400">组织与扣费</text>
+<text x="570" y="183" fill="#586b78" font-size="12" font-weight="400">模型广场</text>
+<text x="645" y="183" fill="#586b78" font-size="12" font-weight="400">充值/订阅</text>
+<text x="732" y="183" fill="#586b78" font-size="12" font-weight="400">账户与工具</text>
+<path d="M230 198L1340 198" stroke="#e2e8ed" fill="none"/>
+<rect x="204" y="913" width="1162" height="27" rx="0" fill="#ffffff"/>
+<text x="230" y="930" fill="#586b78" font-size="10" font-weight="400">独立合成布局图 · 非 HTML / 产品运行截图</text>
+<rect x="230" y="222" width="1110" height="337" rx="10" fill="#ffffff"/>
+<text x="252" y="256" fill="#172b36" font-size="15" font-weight="600">API 密钥</text>
+<rect x="1209" y="233" width="109" height="34" rx="7" fill="#087f83"/>
+<text x="1222" y="255" fill="#fff" font-size="12" font-weight="500">+ 创建密钥</text>
+<text x="252" y="309" fill="#586b78" font-size="11" font-weight="400">名称</text>
+<text x="529.7" y="309" fill="#586b78" font-size="11" font-weight="400">可用渠道</text>
+<text x="796.1" y="309" fill="#586b78" font-size="11" font-weight="400">额度使用</text>
+<text x="995.9" y="309" fill="#586b78" font-size="11" font-weight="400">状态</text>
+<path d="M252 327L1318 327" stroke="#e2e8ed" fill="none"/>
+<text x="252" y="355" fill="#172b36" font-size="13" font-weight="600">日常编程</text>
+<text x="252" y="380" fill="#586b78" font-size="11" font-weight="400">sk-demo-••••7A2</text>
+<text x="529.7" y="355" fill="#172b36" font-size="12" font-weight="400">编程渠道 · 示例</text>
+<text x="796.1" y="355" fill="#172b36" font-size="12" font-weight="400">$12.80 / $50.00</text>
+<rect x="995.9" y="338" width="48" height="26" rx="5" fill="#e8f5f3"/>
+<text x="1006.9" y="355" fill="#087f83" font-size="11" font-weight="400">可用</text>
+<rect x="1178" y="334" width="86" height="34" rx="7" fill="#f8fafb"/>
+<text x="1191" y="356" fill="#172b36" font-size="12" font-weight="500">导入 Hub</text>
+<text x="1282" y="355" fill="#087f83" font-size="12" font-weight="400">管理</text>
+<path d="M252 417L1318 417" stroke="#e2e8ed" fill="none"/>
+<text x="252" y="445" fill="#172b36" font-size="13" font-weight="600">文档助手</text>
+<text x="252" y="470" fill="#586b78" font-size="11" font-weight="400">sk-demo-••••9B4</text>
+<text x="529.7" y="445" fill="#172b36" font-size="12" font-weight="400">文档渠道 · 示例</text>
+<text x="796.1" y="445" fill="#172b36" font-size="12" font-weight="400">$3.60 / $20.00</text>
+<rect x="995.9" y="428" width="48" height="26" rx="5" fill="#e8f5f3"/>
+<text x="1006.9" y="445" fill="#087f83" font-size="11" font-weight="400">可用</text>
+<rect x="1178" y="424" width="86" height="34" rx="7" fill="#f8fafb"/>
+<text x="1191" y="446" fill="#172b36" font-size="12" font-weight="500">导入 Hub</text>
+<text x="1282" y="445" fill="#087f83" font-size="12" font-weight="400">管理</text></svg>

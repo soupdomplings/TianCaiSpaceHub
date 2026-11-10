@@ -602,7 +602,7 @@ struct Target {
     web_socket_debugger_url: Option<String>,
 }
 
-async fn target(executable: &Path, desktop_pids: &[u32]) -> Result<Url> {
+pub(super) async fn target(executable: &Path, desktop_pids: &[u32]) -> Result<Url> {
     ensure!(
         !desktop_pids.is_empty() && desktop_pids.len() <= 64,
         "天工桌面运行身份无法核验"

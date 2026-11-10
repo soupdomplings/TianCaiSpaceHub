@@ -1,10 +1,14 @@
 # OpenAI Chat Completions 接入
 
-维护日期：2026-09-30。适用版本：`0.4.29-2`。关联 TC-005，最初本地定制快照为 `18621b0`。
+## V1.0.16 天工内置来源适配
+
+天工内置模型以其来源参数决定 upstream stream、输出/采样/推理与超时，下游仍按客户端 JSON / SSE 合同收集或转换，保留工具调用和真实用量。只对确切天工绑定启用；普通 OpenAI Chat 行为不变。Codex unary compact 的明文摘要兼容不等于服务端加密压缩或新版 streamed v2，详见 [天工专题](customizations/tiangong-builtin-models.md#codex-压缩兼容范围)。
+
+维护日期：2026-11-07。适用版本：`v0.4.30-13`。关联 TC-005、TC-015，最初本地定制快照为 `18621b0`。
 
 在“大模型接入”中新增大模型厂商，选择 **OpenAI Chat Completions**，填写上游 Base URL（例如 `https://tiancai.yc99.space/v1`）和自己的 API Key，获取远端模型列表后保存并启用。
 
-Base URL 填到 `/v1` 即可，Hub 自动追加 `/chat/completions`。请选用上游明确支持该接口的模型；模型列表中可见不代表支持所有协议。
+Base URL 可按服务要求填写，Hub 追加 `/chat/completions`。未带版本时先请求原地址，明确 HTTP 失败后补 `/v1` 尝试一次；确认有效成功才保存修正，两次失败保留原地址和原错误。已有版本不重复添加；独立模型目录成功不改对话地址。范围与回滚见 [地址自动修正](customizations/provider-url-recovery.md)。请选用上游明确支持该接口的模型；模型列表中可见不代表支持所有协议。
 
 Codex 接入步骤不变：勾选可见模型、保存列表、初始化配置，再增强模式启动。Hub 将客户端的 Responses 请求转换为 Chat Completions，并将 JSON 或 SSE 返回转换为客户端需要的 Responses 格式，支持文本和函数工具调用。Responses 专属的托管工具能力取决于转换器及上游支持情况，不能保证等价。
 

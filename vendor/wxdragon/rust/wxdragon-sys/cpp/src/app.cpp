@@ -11,6 +11,18 @@
 #include <utility>
 
 // --- Globals ---
+extern "C" bool wxd_RunOffscreen(void (*callback)(void*), void* data) {
+    if (!callback || wxTheApp) return false;
+    int argc = 1;
+    char name[] = "tiancai-visual-review";
+    char* argv[] = { name, nullptr };
+    if (!wxEntryStart(argc, argv)) return false;
+    wxInitAllImageHandlers();
+    wxInitializeStockLists();
+    callback(data);
+    wxEntryCleanup();
+    return true;
+}
 // Store the C callback and user data provided to wxd_Main
 static wxd_OnInitCallback g_OnInitCallback = nullptr;
 static void* g_OnInitUserData = nullptr;

@@ -1,0 +1,16 @@
+{
+  "session_id": "fixture-session",
+  "chat_id": "fixture-chat",
+  "query": "定位合成报错，只分析",
+  "user_id": "local",
+  "agent_id": "desktop-orchestration",
+  "project_id": "default",
+  "project": { "name": "合成项目", "path": "C:/synthetic-project", "id": "fixture-project" },
+  "files": [],
+  "mcp_servers": [],
+  "tool_execution_mode": "confirm",
+  "model_id": "fixture-model",
+  "model_options": {},
+  "max_steps": 1000,
+  "request_id": "fixture-request"
+}

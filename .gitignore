@@ -33,3 +33,18 @@ ai-gateway-request-logs.sqlite
 *.nvwa-secrets/
 # 用户提供的完整规范快照含未核对凭据示例，仅在本机保留作参考。
 /docs/nvwa/all-in-one.md
+
+# 用户私有诊断及编辑器状态，不读取或纳入提交。
+/zhenduan/
+/docs/.obsidian/
+
+# 用户提供的完整站点源码只留本机，Hub 配套补丁在 integrations/。
+/docs/tiancaispace/*
+!/docs/tiancaispace/README.md
+
+# 可再生成的脚本缓存和系统杂物。
+__pycache__/
+*.py[cod]
+.pytest_cache/
+Thumbs.db
+Desktop.ini

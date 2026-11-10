@@ -15,6 +15,7 @@ mod codex_session_history;
 mod codex_startup_repair;
 mod config;
 mod daemon_process;
+mod desktop;
 mod diagnostics_export;
 mod external_import;
 mod gmclaw_config;
@@ -26,6 +27,7 @@ mod gmclaw_runtime;
 mod gui;
 mod im;
 mod im_runtime;
+mod local_assistance;
 mod nvwa;
 mod outbound_http;
 mod remote_control_backend;
@@ -355,10 +357,12 @@ async fn run_daemon(config_path: PathBuf, config: AppConfig) -> anyhow::Result<(
     tokio::spawn(async move {
         let _ = shutdown_rx.await;
         let _ = shutdown_task_tx.send(true);
+        crate::desktop::mcp_bridge::shutdown().await;
     });
 
     let primary_result = serve_http(listener, app, server_shutdown_rx).await;
     let _ = server_shutdown_tx.send(true);
+    crate::desktop::mcp_bridge::shutdown().await;
     if tokio::time::timeout(Duration::from_millis(1200), &mut nvwa_task)
         .await
         .is_err()

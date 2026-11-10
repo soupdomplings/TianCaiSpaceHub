@@ -1,3 +1,5 @@
+use crate::gui::controls::Button;
+use crate::gui::controls::Choice;
 use std::{
     cell::RefCell,
     rc::Rc,

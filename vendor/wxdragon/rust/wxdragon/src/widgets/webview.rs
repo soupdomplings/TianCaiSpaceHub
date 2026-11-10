@@ -186,6 +186,19 @@ pub struct WebView {
 }
 
 impl WebView {
+    /// Isolated memory-only view for authenticated dialogs. Returns None when
+    /// the requested modern backend/private storage is unavailable.
+    pub fn try_private(parent: &dyn WxWidget, backend: WebViewBackend) -> Option<Self> {
+        let backend = CString::new(backend.as_str()).ok()?;
+        let ptr = unsafe { ffi::wxd_WebView_CreatePrivate(parent.handle_ptr(), backend.as_ptr()) };
+        if ptr.is_null() {
+            None
+        } else {
+            Some(Self {
+                handle: WindowHandle::new(ptr as *mut ffi::wxd_Window_t),
+            })
+        }
+    }
     /// Creates a new WebView builder.
     pub fn builder(parent: &dyn WxWidget) -> WebViewBuilder<'_> {
         WebViewBuilder::new(parent)
@@ -204,7 +217,10 @@ impl WebView {
     /// This is for backwards compatibility with widgets that compose WebView.
     /// The parent_ptr parameter is ignored (kept for API compatibility).
     #[allow(dead_code)]
-    pub(crate) fn new_from_composition(_window: Window, _parent_ptr: *mut ffi::wxd_Window_t) -> Self {
+    pub(crate) fn new_from_composition(
+        _window: Window,
+        _parent_ptr: *mut ffi::wxd_Window_t,
+    ) -> Self {
         // Use the window's pointer to create a new WindowHandle
         Self {
             handle: WindowHandle::new(_window.as_ptr()),
@@ -229,9 +245,18 @@ impl WebView {
         let c_backend = backend.map(|s| CString::new(s).unwrap_or_default());
 
         // Get raw pointers while keeping CStrings alive
-        let url_ptr = c_url.as_ref().map(|c| c.as_ptr()).unwrap_or(std::ptr::null());
-        let name_ptr = c_name.as_ref().map(|c| c.as_ptr()).unwrap_or(std::ptr::null());
-        let backend_ptr = c_backend.as_ref().map(|c| c.as_ptr()).unwrap_or(std::ptr::null());
+        let url_ptr = c_url
+            .as_ref()
+            .map(|c| c.as_ptr())
+            .unwrap_or(std::ptr::null());
+        let name_ptr = c_name
+            .as_ref()
+            .map(|c| c.as_ptr())
+            .unwrap_or(std::ptr::null());
+        let backend_ptr = c_backend
+            .as_ref()
+            .map(|c| c.as_ptr())
+            .unwrap_or(std::ptr::null());
 
         let ptr = unsafe {
             ffi::wxd_WebView_Create(
@@ -268,7 +293,10 @@ impl WebView {
             .unwrap_or(std::ptr::null_mut())
     }
 
-    fn read_string_with_retry(initial_capacity: usize, mut getter: impl FnMut(*mut c_char, i32) -> i32) -> String {
+    fn read_string_with_retry(
+        initial_capacity: usize,
+        mut getter: impl FnMut(*mut c_char, i32) -> i32,
+    ) -> String {
         let mut buffer: Vec<c_char> = vec![0; initial_capacity];
         let mut len = getter(buffer.as_mut_ptr(), buffer.len() as i32);
         if len < 0 {
@@ -281,7 +309,8 @@ impl WebView {
                 return String::new();
             }
         }
-        let byte_slice = unsafe { std::slice::from_raw_parts(buffer.as_ptr() as *const u8, len as usize) };
+        let byte_slice =
+            unsafe { std::slice::from_raw_parts(buffer.as_ptr() as *const u8, len as usize) };
         String::from_utf8_lossy(byte_slice).to_string()
     }
 
@@ -387,7 +416,11 @@ impl WebView {
         if ptr.is_null() {
             return String::new();
         }
-        unsafe { Self::read_string_with_retry(2048, |buf, len| ffi::wxd_WebView_GetCurrentURL(ptr, buf, len)) }
+        unsafe {
+            Self::read_string_with_retry(2048, |buf, len| {
+                ffi::wxd_WebView_GetCurrentURL(ptr, buf, len)
+            })
+        }
     }
 
     /// Returns the current page title.
@@ -397,7 +430,11 @@ impl WebView {
         if ptr.is_null() {
             return String::new();
         }
-        unsafe { Self::read_string_with_retry(1024, |buf, len| ffi::wxd_WebView_GetCurrentTitle(ptr, buf, len)) }
+        unsafe {
+            Self::read_string_with_retry(1024, |buf, len| {
+                ffi::wxd_WebView_GetCurrentTitle(ptr, buf, len)
+            })
+        }
     }
 
     /// Returns the page source (HTML).
@@ -421,7 +458,8 @@ impl WebView {
             if len >= buffer.len() as i32 {
                 // Allocate larger buffer and retry
                 buffer = vec![0; len as usize + 1];
-                let len2 = ffi::wxd_WebView_GetPageSource(ptr, buffer.as_mut_ptr(), buffer.len() as i32);
+                let len2 =
+                    ffi::wxd_WebView_GetPageSource(ptr, buffer.as_mut_ptr(), buffer.len() as i32);
                 if len2 < 0 {
                     return String::new(); // Error on second call
                 }
@@ -454,7 +492,8 @@ impl WebView {
             if len >= buffer.len() as i32 {
                 // Allocate larger buffer and retry
                 buffer = vec![0; len as usize + 1];
-                let len2 = ffi::wxd_WebView_GetPageText(ptr, buffer.as_mut_ptr(), buffer.len() as i32);
+                let len2 =
+                    ffi::wxd_WebView_GetPageText(ptr, buffer.as_mut_ptr(), buffer.len() as i32);
                 if len2 < 0 {
                     return String::new(); // Error on second call
                 }
@@ -543,7 +582,12 @@ impl WebView {
         let c_script = CString::new(javascript).unwrap_or_default();
         unsafe {
             let mut buffer: Vec<c_char> = vec![0; 4096];
-            let len = ffi::wxd_WebView_RunScript(ptr, c_script.as_ptr(), buffer.as_mut_ptr(), buffer.len() as i32);
+            let len = ffi::wxd_WebView_RunScript(
+                ptr,
+                c_script.as_ptr(),
+                buffer.as_mut_ptr(),
+                buffer.len() as i32,
+            );
 
             if len < 0 {
                 return None; // Error
@@ -553,7 +597,12 @@ impl WebView {
             if len >= buffer.len() as i32 {
                 // Allocate larger buffer and retry
                 buffer = vec![0; len as usize + 1];
-                let len2 = ffi::wxd_WebView_RunScript(ptr, c_script.as_ptr(), buffer.as_mut_ptr(), buffer.len() as i32);
+                let len2 = ffi::wxd_WebView_RunScript(
+                    ptr,
+                    c_script.as_ptr(),
+                    buffer.as_mut_ptr(),
+                    buffer.len() as i32,
+                );
                 if len2 < 0 {
                     return None; // Error on second call
                 }
@@ -706,7 +755,11 @@ impl WebView {
         if ptr.is_null() {
             return String::new();
         }
-        unsafe { Self::read_string_with_retry(4096, |buf, len| ffi::wxd_WebView_GetSelectedText(ptr, buf, len)) }
+        unsafe {
+            Self::read_string_with_retry(4096, |buf, len| {
+                ffi::wxd_WebView_GetSelectedText(ptr, buf, len)
+            })
+        }
     }
 
     /// Returns the selected HTML source.
@@ -716,7 +769,11 @@ impl WebView {
         if ptr.is_null() {
             return String::new();
         }
-        unsafe { Self::read_string_with_retry(4096, |buf, len| ffi::wxd_WebView_GetSelectedSource(ptr, buf, len)) }
+        unsafe {
+            Self::read_string_with_retry(4096, |buf, len| {
+                ffi::wxd_WebView_GetSelectedSource(ptr, buf, len)
+            })
+        }
     }
 
     /// Clears the current selection.
@@ -928,7 +985,8 @@ impl WebView {
             if len >= buffer.len() as i32 {
                 // Allocate larger buffer and retry
                 buffer = vec![0; len as usize + 1];
-                let len2 = ffi::wxd_WebView_GetUserAgent(ptr, buffer.as_mut_ptr(), buffer.len() as i32);
+                let len2 =
+                    ffi::wxd_WebView_GetUserAgent(ptr, buffer.as_mut_ptr(), buffer.len() as i32);
                 if len2 < 0 {
                     return String::new(); // Error on second call
                 }
@@ -977,7 +1035,11 @@ impl WebView {
 
     /// Adds a user script to be injected into pages.
     /// Returns false if the webview has been destroyed.
-    pub fn add_user_script(&self, javascript: &str, injection_time: WebViewUserScriptInjectionTime) -> bool {
+    pub fn add_user_script(
+        &self,
+        javascript: &str,
+        injection_time: WebViewUserScriptInjectionTime,
+    ) -> bool {
         let ptr = self.webview_ptr();
         if ptr.is_null() {
             return false;
@@ -1015,7 +1077,9 @@ impl WebView {
         if ptr.is_null() {
             return String::new();
         }
-        unsafe { Self::read_string_with_retry(256, |buf, len| ffi::wxd_WebView_GetBackend(ptr, buf, len)) }
+        unsafe {
+            Self::read_string_with_retry(256, |buf, len| ffi::wxd_WebView_GetBackend(ptr, buf, len))
+        }
     }
 
     /// Checks if a specific WebView backend is available on the current system.
@@ -1137,7 +1201,9 @@ extern "C" fn handler_callback_trampoline(
             std::mem::forget(data);
 
             let mime_ptr = match response.mime_type {
-                Some(m) => CString::new(m).map(|c| c.into_raw()).unwrap_or(std::ptr::null_mut()),
+                Some(m) => CString::new(m)
+                    .map(|c| c.into_raw())
+                    .unwrap_or(std::ptr::null_mut()),
                 None => std::ptr::null_mut(),
             };
 

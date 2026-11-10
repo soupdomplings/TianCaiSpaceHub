@@ -1,0 +1,80 @@
+<svg xmlns='http://www.w3.org/2000/svg' width='1280' height='840' viewBox='0 0 1280 840' font-family='Microsoft YaHei UI,Segoe UI,Arial,sans-serif'>
+<rect x='0' y='0' width='1280' height='840' rx='0' fill='#F4F6F8' stroke='none'/>
+<rect x='0' y='0' width='1280' height='36' rx='0' fill='#172B36' stroke='none'/>
+<text x='20' y='22' font-size='11' font-weight='400' fill='#FFFFFF'>界面方案 02   ·   静态布局示意 / 非运行截图   ·   合成数据</text>
+<text x='927' y='21' font-size='10' font-weight='400' fill='#D5E4E8'>详细页面、深浅色和错误场景见同目录 index.html</text>
+<rect x='0' y='36' width='214' height='804' rx='0' fill='#FFFFFF' stroke='none'/>
+<rect x='213' y='36' width='1' height='804' rx='0' fill='#E2E8ED' stroke='none'/>
+<rect x='24' y='61' width='35' height='35' rx='9' fill='#087F83' stroke='none'/>
+<text x='35' y='90' font-size='24' font-weight='600' fill='#FFFFFF'>T</text>
+<text x='71' y='76' font-size='17' font-weight='600' fill='#172B36'>天才空间</text>
+<text x='71' y='93' font-size='10' font-weight='400' fill='#586B78'>TianCaiSpaceHub</text>
+<text x='28' y='191' font-size='10' font-weight='400' fill='#71828E'>客 户 端</text>
+<text x='28' y='358' font-size='10' font-weight='400' fill='#71828E'>共 用 能 力</text>
+<rect x='29' y='140' width='12' height='12' rx='3' fill='#71828E' stroke='none'/>
+<text x='56' y='149' font-size='12' font-weight='400' fill='#586B78'>状态概览</text>
+<rect x='29' y='217' width='12' height='12' rx='3' fill='#71828E' stroke='none'/>
+<text x='56' y='226' font-size='12' font-weight='400' fill='#586B78'>ChatGPT(Codex)</text>
+<rect x='14' y='247' width='186' height='40' rx='7' fill='#E8F5F3' stroke='none'/>
+<rect x='29' y='261' width='12' height='12' rx='3' fill='#087F83' stroke='none'/>
+<text x='56' y='270' font-size='12' font-weight='600' fill='#087F83'>WorkBuddy</text>
+<rect x='29' y='305' width='12' height='12' rx='3' fill='#71828E' stroke='none'/>
+<text x='56' y='314' font-size='12' font-weight='400' fill='#586B78'>天工 Work</text>
+<rect x='29' y='384' width='12' height='12' rx='3' fill='#71828E' stroke='none'/>
+<text x='56' y='393' font-size='12' font-weight='400' fill='#586B78'>模型与渠道</text>
+<rect x='29' y='426' width='12' height='12' rx='3' fill='#71828E' stroke='none'/>
+<text x='56' y='435' font-size='12' font-weight='400' fill='#586B78'>Skill 管理</text>
+<rect x='29' y='468' width='12' height='12' rx='3' fill='#71828E' stroke='none'/>
+<text x='56' y='477' font-size='12' font-weight='400' fill='#586B78'>MCP 管理</text>
+<rect x='29' y='510' width='12' height='12' rx='3' fill='#71828E' stroke='none'/>
+<text x='56' y='519' font-size='12' font-weight='400' fill='#586B78'>聊天连接</text>
+<rect x='29' y='552' width='12' height='12' rx='3' fill='#71828E' stroke='none'/>
+<text x='56' y='561' font-size='12' font-weight='400' fill='#586B78'>活动记录</text>
+<rect x='29' y='728' width='12' height='12' rx='3' fill='#71828E' stroke='none'/>
+<text x='56' y='737' font-size='12' font-weight='400' fill='#586B78'>设置</text>
+<rect x='29' y='772' width='12' height='12' rx='3' fill='#71828E' stroke='none'/>
+<text x='56' y='781' font-size='12' font-weight='400' fill='#586B78'>帮助</text>
+<rect x='214' y='36' width='1066' height='57' rx='0' fill='#FFFFFF' stroke='none'/>
+<rect x='214' y='92' width='1066' height='1' rx='0' fill='#E2E8ED' stroke='none'/>
+<text x='248' y='71' font-size='12' font-weight='400' fill='#586B78'>客户端 / WorkBuddy / 模型</text>
+<rect x='1101' y='63' width='6' height='6' rx='3' fill='#207457' stroke='none'/>
+<text x='1116' y='68' font-size='11' font-weight='400' fill='#586B78'>本机服务运行中</text>
+<rect x='214' y='813' width='1066' height='27' rx='0' fill='#FFFFFF' stroke='none'/>
+<rect x='214' y='812' width='1066' height='1' rx='0' fill='#E2E8ED' stroke='none'/>
+<text x='248' y='832' font-size='10' font-weight='400' fill='#71828E'>静态评审图 · 保存、登录、启动、检测均未执行</text>
+<text x='1142' y='832' font-size='10' font-weight='400' fill='#71828E'>基线 v0.4.30-13</text>
+<text x='248' y='129' font-size='10' font-weight='600' fill='#087F83'>CLIENT WORKSPACE</text>
+<text x='248' y='170' font-size='28' font-weight='600' fill='#172B36'>WorkBuddy</text>
+<text x='248' y='199' font-size='13' font-weight='400' fill='#586B78'>当前条目的编辑已保留。</text>
+<rect x='246' y='234' width='1001' height='546' rx='10' fill='#FFFFFF' stroke='#E2E8ED'/>
+<rect x='0' y='36' width='1280' height='777' rx='0' fill='#E0E6E9' stroke='none'/>
+<rect x='319' y='167' width='745' height='498' rx='10' fill='#FFFFFF' stroke='#E2E8ED'/>
+<text x='347' y='197' font-size='10' font-weight='400' fill='#087F83'>交互示例 · 仅合成数据</text>
+<text x='347' y='235' font-size='23' font-weight='600' fill='#172B36'>配置已变化，草稿仍在</text>
+<rect x='320' y='260' width='743' height='1' rx='0' fill='#E2E8ED' stroke='none'/>
+<text x='347' y='299' font-size='13' font-weight='400' fill='#586B78'>先核对最新配置，再决定是否用当前草稿重新保存。</text>
+<rect x='345' y='331' width='693' height='41' rx='0' fill='#F4F6F8' stroke='none'/>
+<text x='360' y='356' font-size='12' font-weight='400' fill='#586B78'>字段</text>
+<text x='487' y='356' font-size='12' font-weight='400' fill='#586B78'>开始编辑时</text>
+<text x='669' y='356' font-size='12' font-weight='400' fill='#586B78'>最新保存值</text>
+<text x='855' y='356' font-size='12' font-weight='400' fill='#586B78'>当前草稿</text>
+<text x='360' y='407' font-size='13' font-weight='400' fill='#172B36'>模型来源</text>
+<text x='487' y='407' font-size='13' font-weight='400' fill='#172B36'>团队 API</text>
+<text x='669' y='407' font-size='13' font-weight='400' fill='#172B36'>备用 API</text>
+<text x='855' y='407' font-size='13' font-weight='400' fill='#172B36'>团队 API</text>
+<rect x='345' y='424' width='693' height='1' rx='0' fill='#E2E8ED' stroke='none'/>
+<text x='360' y='461' font-size='13' font-weight='400' fill='#172B36'>思考强度</text>
+<text x='487' y='461' font-size='13' font-weight='400' fill='#172B36'>high</text>
+<text x='669' y='461' font-size='13' font-weight='400' fill='#172B36'>high</text>
+<text x='855' y='461' font-size='13' font-weight='400' fill='#172B36'>max</text>
+<rect x='345' y='479' width='693' height='1' rx='0' fill='#E2E8ED' stroke='none'/>
+<rect x='345' y='500' width='693' height='69' rx='6' fill='#E8F5F3' stroke='none'/>
+<text x='361' y='526' font-size='12' font-weight='400' fill='#087F83'>继续仍需重新读取并核对目标、revision 与后改。</text>
+<text x='361' y='551' font-size='12' font-weight='400' fill='#586B78'>目标已删除或再次变化时停止覆盖，不把旧请求直接重放。</text>
+<rect x='320' y='596' width='743' height='1' rx='0' fill='#E2E8ED' stroke='none'/>
+<rect x='622' y='614' width='176' height='36' rx='6' fill='#FFFFFF' stroke='#E2E8ED'/>
+<text x='637' y='636' font-size='12' font-weight='600' fill='#172B36'>保留草稿，稍后处理</text>
+<rect x='813' y='614' width='225' height='36' rx='6' fill='#087F83' stroke='#087F83'/>
+<text x='828' y='636' font-size='12' font-weight='600' fill='#FFFFFF'>重新核对后保存草稿</text>
+<text x='416' y='720' font-size='13' font-weight='400' fill='#586B78'>静态冲突示意：并非产品已经提供差异比较接口。</text>
+</svg>

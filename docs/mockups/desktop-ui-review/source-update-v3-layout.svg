@@ -1,0 +1,123 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1366" height="940" viewBox="0 0 1366 940"><title>TianCaiSpaceHub 第三稿 · 独立合成布局图，非浏览器截图</title><style>text{font-family:'Microsoft YaHei UI','Segoe UI',sans-serif}path{stroke-linejoin:round;stroke-linecap:round}</style><rect x="0" y="0" width="1366" height="940" rx="0" fill="#f4f6f8"/>
+<rect x="0" y="0" width="1366" height="30" rx="0" fill="#172b36"/>
+<text x="16" y="20" font-size="11" font-weight="600" fill="#ffffff" text-anchor="start">界面方案 03  ·  合成数据</text>
+<text x="1346" y="20" font-size="11" font-weight="400" fill="#ffffff" text-anchor="end">日常使用   ⌄       深色预览       重置演示</text>
+<rect x="0" y="30" width="204" height="910" rx="0" fill="#ffffff"/>
+<path d="M204 30L204 940" fill="none" stroke="#e2e8ed"/>
+<rect x="22" y="55" width="34" height="34" rx="8" fill="#087f83"/>
+<text x="39" y="80" font-size="23" font-weight="700" fill="#ffffff" text-anchor="middle">T</text>
+<text x="67" y="70" font-size="16" font-weight="600" fill="#172b36" text-anchor="start">天才空间</text>
+<text x="67" y="87" font-size="10" font-weight="400" fill="#586b78" text-anchor="start">TianCaiSpaceHub</text>
+<text x="27" y="135" font-size="17" font-weight="400" fill="#586b78" text-anchor="start">⌁</text>
+<text x="54" y="135" font-size="13" font-weight="400" fill="#586b78" text-anchor="start">概览</text>
+<text x="25" y="184" font-size="11" font-weight="400" fill="#71828e" text-anchor="start">客户端</text>
+<text x="27" y="222" font-size="17" font-weight="400" fill="#586b78" text-anchor="start">◉</text>
+<text x="54" y="222" font-size="13" font-weight="400" fill="#586b78" text-anchor="start">ChatGPT(Codex)</text>
+<text x="27" y="265" font-size="17" font-weight="400" fill="#586b78" text-anchor="start">W</text>
+<text x="54" y="265" font-size="13" font-weight="400" fill="#586b78" text-anchor="start">WorkBuddy</text>
+<text x="27" y="308" font-size="17" font-weight="400" fill="#586b78" text-anchor="start">T</text>
+<text x="54" y="308" font-size="13" font-weight="400" fill="#586b78" text-anchor="start">天工 Work</text>
+<text x="102" y="347" font-size="20" font-weight="500" fill="#586b78" text-anchor="middle">⋯</text>
+<text x="25" y="395" font-size="11" font-weight="400" fill="#71828e" text-anchor="start">共用能力</text>
+<rect x="12" y="409" width="180" height="39" rx="6" fill="#e8f5f3"/>
+<text x="27" y="433" font-size="17" font-weight="400" fill="#087f83" text-anchor="start">◇</text>
+<text x="54" y="433" font-size="13" font-weight="600" fill="#087f83" text-anchor="start">模型与渠道</text>
+<text x="27" y="476" font-size="17" font-weight="400" fill="#586b78" text-anchor="start">▤</text>
+<text x="54" y="476" font-size="13" font-weight="400" fill="#586b78" text-anchor="start">Skill 管理</text>
+<text x="27" y="519" font-size="17" font-weight="400" fill="#586b78" text-anchor="start">♧</text>
+<text x="54" y="519" font-size="13" font-weight="400" fill="#586b78" text-anchor="start">MCP 管理</text>
+<text x="27" y="562" font-size="17" font-weight="400" fill="#586b78" text-anchor="start">◌</text>
+<text x="54" y="562" font-size="13" font-weight="400" fill="#586b78" text-anchor="start">聊天接入</text>
+<text x="27" y="605" font-size="17" font-weight="400" fill="#586b78" text-anchor="start">⌁</text>
+<text x="54" y="605" font-size="13" font-weight="400" fill="#586b78" text-anchor="start">请求记录</text>
+<text x="27" y="812" font-size="17" font-weight="400" fill="#586b78" text-anchor="start">⚙</text>
+<text x="54" y="812" font-size="13" font-weight="400" fill="#586b78" text-anchor="start">设置</text>
+<text x="27" y="852" font-size="17" font-weight="400" fill="#586b78" text-anchor="start">?</text>
+<text x="54" y="852" font-size="13" font-weight="400" fill="#586b78" text-anchor="start">帮助</text>
+<text x="24" y="898" font-size="10" font-weight="400" fill="#586b78" text-anchor="start">界面评审稿</text>
+<text x="24" y="916" font-size="10" font-weight="400" fill="#71828e" text-anchor="start">基线 v0.4.30-13</text>
+<rect x="204" y="30" width="1162" height="48" rx="0" fill="#ffffff"/>
+<path d="M204 78L1366 78" fill="none" stroke="#e2e8ed"/>
+<text x="230" y="59" font-size="12" font-weight="400" fill="#586b78" text-anchor="start">工作台 / 模型与渠道</text>
+<circle cx="1197" cy="54" r="3" fill="#207457"/>
+<text x="1209" y="59" font-size="12" font-weight="400" fill="#586b78" text-anchor="start">本机服务运行中   ›</text>
+<rect x="204" y="913" width="1162" height="27" rx="0" fill="#ffffff"/>
+<path d="M204 913L1366 913" fill="none" stroke="#e2e8ed"/>
+<text x="230" y="930" font-size="10" font-weight="400" fill="#586b78" text-anchor="start">独立布局图 · 非 HTML / 产品运行截图 · 仅供界面评审</text>
+<text x="230" y="126" font-size="24" font-weight="600" fill="#172b36" text-anchor="start">模型与渠道</text>
+<rect x="1158" y="109" width="140" height="33" rx="8" fill="#087f83"/>
+<text x="1228" y="130" font-size="12" font-weight="500" fill="#ffffff" text-anchor="middle">+ 添加模型来源</text>
+<circle cx="1324" cy="124" r="9" fill="#586b78"/>
+<text x="1324" y="129" font-size="13" font-weight="600" fill="#ffffff" text-anchor="middle">?</text>
+<path d="M230 200L1340 200" fill="none" stroke="#e2e8ed"/>
+<text x="230" y="187" font-size="13" font-weight="600" fill="#087f83" text-anchor="start">我的模型</text>
+<rect x="230" y="199" width="52" height="2" rx="0" fill="#087f83"/>
+<text x="312" y="187" font-size="13" font-weight="400" fill="#586b78" text-anchor="start">账号与渠道</text>
+<rect x="230" y="220" width="1110" height="58" rx="7" fill="#e8f5f3"/>
+<text x="248" y="254" font-size="13" font-weight="600" fill="#172b36" text-anchor="start">团队 API 有更新，客户端副本保持原样</text>
+<rect x="1228" y="233" width="94" height="33" rx="8" fill="#ffffff" stroke="#e2e8ed"/>
+<text x="1275" y="254" font-size="12" font-weight="500" fill="#172b36" text-anchor="middle">查看差异</text>
+<rect x="230" y="294" width="1110" height="346" rx="14" fill="#ffffff"/>
+<rect x="250" y="310" width="345" height="34" rx="6" fill="#f8fafb"/>
+<text x="264" y="332" font-size="12" font-weight="400" fill="#586b78" text-anchor="start">⌕  搜索模型或来源</text>
+<text x="1320" y="332" font-size="11" font-weight="400" fill="#586b78" text-anchor="end">3 个模型</text>
+<path d="M250 358L1320 358" fill="none" stroke="#e2e8ed"/>
+<rect x="250" y="377" width="38" height="38" rx="8" fill="#f8fafb"/>
+<text x="269" y="403" font-size="22" font-weight="500" fill="#087f83" text-anchor="middle">◇</text>
+<text x="304" y="391" font-size="14" font-weight="600" fill="#172b36" text-anchor="start">GPT-6</text>
+<text x="304" y="413" font-size="12" font-weight="400" fill="#586b78" text-anchor="start">团队 API · 日常编程</text>
+<rect x="1137" y="380" width="96" height="33" rx="8" fill="#ffffff" stroke="#e2e8ed"/>
+<text x="1185" y="401" font-size="12" font-weight="500" fill="#172b36" text-anchor="middle">模型设置</text>
+<rect x="1242" y="380" width="80" height="33" rx="8" fill="#ffffff" stroke="#e2e8ed"/>
+<text x="1282" y="401" font-size="12" font-weight="500" fill="#172b36" text-anchor="middle">查看来源</text>
+<path d="M250 441L1320 441" fill="none" stroke="#e2e8ed"/>
+<rect x="250" y="461" width="38" height="38" rx="8" fill="#f8fafb"/>
+<text x="269" y="487" font-size="22" font-weight="500" fill="#087f83" text-anchor="middle">◇</text>
+<text x="304" y="475" font-size="14" font-weight="600" fill="#172b36" text-anchor="start">Claude Sonnet · 示例</text>
+<text x="304" y="497" font-size="12" font-weight="400" fill="#586b78" text-anchor="start">备用 API · 文档与复杂任务</text>
+<rect x="1137" y="464" width="96" height="33" rx="8" fill="#ffffff" stroke="#e2e8ed"/>
+<text x="1185" y="485" font-size="12" font-weight="500" fill="#172b36" text-anchor="middle">模型设置</text>
+<rect x="1242" y="464" width="80" height="33" rx="8" fill="#ffffff" stroke="#e2e8ed"/>
+<text x="1282" y="485" font-size="12" font-weight="500" fill="#172b36" text-anchor="middle">查看来源</text>
+<path d="M250 525L1320 525" fill="none" stroke="#e2e8ed"/>
+<rect x="250" y="545" width="38" height="38" rx="8" fill="#f8fafb"/>
+<text x="269" y="571" font-size="22" font-weight="500" fill="#087f83" text-anchor="middle">◇</text>
+<text x="304" y="559" font-size="14" font-weight="600" fill="#172b36" text-anchor="start">GPT-6 · 账号来源</text>
+<text x="304" y="581" font-size="12" font-weight="400" fill="#586b78" text-anchor="start">ChatGPT 示例账号</text>
+<rect x="1137" y="548" width="96" height="33" rx="8" fill="#ffffff" stroke="#e2e8ed"/>
+<text x="1185" y="569" font-size="12" font-weight="500" fill="#172b36" text-anchor="middle">模型设置</text>
+<rect x="1242" y="548" width="80" height="33" rx="8" fill="#ffffff" stroke="#e2e8ed"/>
+<text x="1282" y="569" font-size="12" font-weight="500" fill="#172b36" text-anchor="middle">查看来源</text>
+<rect width="1366" height="940" fill="#101c29" fill-opacity=".38"/>
+<rect x="348" y="139" width="670" height="649" rx="10" fill="#ffffff"/>
+<text x="372" y="167" font-size="11" font-weight="400" fill="#586b78" text-anchor="start">继续上一场景：已复用到天工并独立调整</text>
+<text x="372" y="199" font-size="20" font-weight="600" fill="#172b36" text-anchor="start">来源更新 · 选择同步范围</text>
+<path d="M348 220L1018 220" fill="none" stroke="#e2e8ed"/>
+<rect x="372" y="241" width="622" height="67" rx="7" fill="#f8fafb"/>
+<text x="388" y="266" font-size="14" font-weight="600" fill="#172b36" text-anchor="start">GPT-6 · 团队 API</text>
+<text x="388" y="289" font-size="12" font-weight="400" fill="#586b78" text-anchor="start">来源版本 2 · 客户端副本不会自动更新</text>
+<text x="372" y="344" font-size="12" font-weight="400" fill="#586b78" text-anchor="start">连接地址</text>
+<text x="559" y="339" font-size="12" font-weight="400" fill="#586b78" text-anchor="start">api.example.com</text>
+<text x="559" y="362" font-size="13" font-weight="400" fill="#087f83" text-anchor="start">→ api.example.com/gateway</text>
+<path d="M372 381L994 381" fill="none" stroke="#e2e8ed"/>
+<text x="372" y="411" font-size="13" font-weight="400" fill="#172b36" text-anchor="start">同步来源连接信息，保留各端已经调整的模型参数。</text>
+<text x="372" y="436" font-size="12" font-weight="400" fill="#586b78" text-anchor="start">Codex 继续使用普通路由，不生成专用渠道。</text>
+<rect x="375" y="475" width="16" height="16" rx="3" fill="#ffffff" stroke="#e2e8ed"/>
+<text x="410" y="487" font-size="14" font-weight="600" fill="#172b36" text-anchor="start">WorkBuddy</text>
+<text x="410" y="512" font-size="12" font-weight="400" fill="#586b78" text-anchor="start">思考 high · 输出 8,192 · 保留</text>
+<text x="991" y="490" font-size="11" font-weight="400" fill="#586b78" text-anchor="end">待同步</text>
+<path d="M372 529L994 529" fill="none" stroke="#e2e8ed"/>
+<rect x="375" y="553" width="16" height="16" rx="3" fill="#087f83"/>
+<text x="383" y="566" font-size="12" font-weight="600" fill="#ffffff" text-anchor="middle">✓</text>
+<text x="410" y="565" font-size="14" font-weight="600" fill="#172b36" text-anchor="start">天工 Work</text>
+<text x="410" y="590" font-size="12" font-weight="400" fill="#586b78" text-anchor="start">思考 max · 输出 16,384 · 保留</text>
+<text x="991" y="568" font-size="11" font-weight="400" fill="#586b78" text-anchor="end">待同步</text>
+<path d="M372 607L994 607" fill="none" stroke="#e2e8ed"/>
+<rect x="372" y="639" width="622" height="62" rx="7" fill="#f8fafb"/>
+<text x="387" y="664" font-size="12" font-weight="400" fill="#586b78" text-anchor="start">只同步选中的天工副本；WorkBuddy 保持旧版本。</text>
+<text x="387" y="686" font-size="12" font-weight="400" fill="#586b78" text-anchor="start">写入前仍核对目标 revision、文件锁与外部后改。</text>
+<path d="M348 724L1018 724" fill="none" stroke="#e2e8ed"/>
+<rect x="758" y="740" width="77" height="33" rx="8" fill="#ffffff" stroke="#e2e8ed"/>
+<text x="796.5" y="761" font-size="12" font-weight="500" fill="#172b36" text-anchor="middle">取消</text>
+<rect x="848" y="740" width="146" height="33" rx="8" fill="#087f83"/>
+<text x="921" y="761" font-size="12" font-weight="500" fill="#ffffff" text-anchor="middle">同步所选客户端</text></svg>

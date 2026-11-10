@@ -3,6 +3,112 @@
 #include "../include/wxdragon.h"
 #include <wx/button.h>
 #include <wx/bitmap.h> // For wxBitmap
+#include <wx/control.h>
+#include <wx/weakref.h>
+#include <wx/textctrl.h>
+#if wxUSE_ACCESSIBILITY
+#include <wx/access.h>
+#endif
+
+// Native focus/command semantics, with application-owned painting. Never cast
+// this wxControl to wxButton; Rust exposes it as a separate widget type.
+class WxdActionButton : public wxControl {
+public:
+    uint32_t presentation = 0;
+    bool hover = false, pressed = false, keyboard = false;
+    WxdActionButton(wxWindow* parent, wxWindowID id, const wxString& label)
+        : wxControl(parent, id, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE) {
+        SetLabel(label); SetName(label); SetBackgroundStyle(wxBG_STYLE_PAINT);
+        Bind(wxEVT_ENTER_WINDOW, [this](wxMouseEvent& e) { hover = true; Refresh(false); e.Skip(); });
+        Bind(wxEVT_LEAVE_WINDOW, [this](wxMouseEvent& e) { hover = false; Refresh(false); e.Skip(); });
+        Bind(wxEVT_LEFT_DOWN, [this](wxMouseEvent& e) {
+            if (IsEnabled()) { SetFocus(); pressed = true; CaptureMouse(); Refresh(false); } e.Skip();
+        });
+        Bind(wxEVT_LEFT_UP, [this](wxMouseEvent& e) {
+            bool activate = pressed && GetClientRect().Contains(e.GetPosition()); pressed = false;
+            if (HasCapture()) ReleaseMouse(); Refresh(false); if (activate) Click(); e.Skip();
+        });
+        Bind(wxEVT_MOUSE_CAPTURE_LOST, [this](wxMouseCaptureLostEvent&) { pressed = false; Refresh(false); });
+        Bind(wxEVT_KEY_DOWN, [this](wxKeyEvent& e) {
+            if (e.GetKeyCode() == WXK_SPACE || e.GetKeyCode() == WXK_RETURN || e.GetKeyCode() == WXK_NUMPAD_ENTER) {
+                if (!keyboard && IsEnabled()) { keyboard = true; pressed = true; Refresh(false); }
+            } else e.Skip();
+        });
+        Bind(wxEVT_KEY_UP, [this](wxKeyEvent& e) {
+            if (keyboard && (e.GetKeyCode() == WXK_SPACE || e.GetKeyCode() == WXK_RETURN || e.GetKeyCode() == WXK_NUMPAD_ENTER)) {
+                keyboard = pressed = false; Refresh(false); Click();
+            } else e.Skip();
+        });
+        Bind(wxEVT_SET_FOCUS, [this](wxFocusEvent& e) { Refresh(false); e.Skip(); });
+        Bind(wxEVT_KILL_FOCUS, [this](wxFocusEvent& e) { keyboard = pressed = false; Refresh(false); e.Skip(); });
+    }
+    bool AcceptsFocus() const override { return true; }
+    bool AcceptsFocusFromKeyboard() const override { return true; }
+    wxSize DoGetBestSize() const override { return FromDIP(wxSize(96, 36)); }
+    void SetLabel(const wxString& label) override { wxControl::SetLabel(label); SetName(label); Refresh(false); }
+    void Click() {
+        if (!IsEnabled()) return;
+        wxCommandEvent event(wxEVT_BUTTON, GetId()); event.SetEventObject(this); event.SetString(GetLabel());
+        GetEventHandler()->ProcessEvent(event);
+    }
+#if wxUSE_ACCESSIBILITY
+    class Accessible : public wxWindowAccessible {
+    public:
+        explicit Accessible(WxdActionButton* window) : wxWindowAccessible(window) {}
+        wxAccStatus GetRole(int child, wxAccRole* role) override {
+            if (child != wxACC_SELF) return wxACC_NOT_IMPLEMENTED;
+            *role = (static_cast<WxdActionButton*>(GetWindow())->presentation & 0xff) == 6 ? wxROLE_SYSTEM_COMBOBOX : wxROLE_SYSTEM_PUSHBUTTON;
+            return wxACC_OK;
+        }
+        wxAccStatus GetName(int child, wxString* name) override {
+            if (child != wxACC_SELF) return wxACC_NOT_IMPLEMENTED; *name = GetWindow()->GetLabel(); return wxACC_OK;
+        }
+        wxAccStatus GetDefaultAction(int child, wxString* action) override {
+            if (child != wxACC_SELF) return wxACC_NOT_IMPLEMENTED; *action = "Press"; return wxACC_OK;
+        }
+        wxAccStatus DoDefaultAction(int child) override {
+            if (child != wxACC_SELF) return wxACC_NOT_IMPLEMENTED;
+            static_cast<WxdActionButton*>(GetWindow())->Click(); return wxACC_OK;
+        }
+    };
+    wxAccessible* CreateAccessible() override { return new Accessible(this); }
+#endif
+};
+
+extern "C" wxd_Window_t* wxd_ActionButton_Create(wxd_Window_t* parent, wxd_Id id, const char* label) {
+    return reinterpret_cast<wxd_Window_t*>(new WxdActionButton(reinterpret_cast<wxWindow*>(parent), id, wxString::FromUTF8(label ? label : "")));
+}
+extern "C" void wxd_ActionButton_SetPresentation(wxd_Window_t* button, uint32_t value) {
+    if (button) { auto* c = static_cast<WxdActionButton*>(reinterpret_cast<wxWindow*>(button)); c->presentation = value; c->Refresh(false); }
+}
+extern "C" uint32_t wxd_ActionButton_GetPresentation(wxd_Window_t* button) {
+    return button ? static_cast<WxdActionButton*>(reinterpret_cast<wxWindow*>(button))->presentation : 0;
+}
+extern "C" uint32_t wxd_ActionButton_GetState(wxd_Window_t* button) {
+    if (!button) return 0;
+    auto* c = static_cast<WxdActionButton*>(reinterpret_cast<wxWindow*>(button));
+    return (c->hover ? 1 : 0) | (c->pressed ? 2 : 0) | (c->HasFocus() ? 4 : 0) | (c->IsEnabled() ? 8 : 0);
+}
+extern "C" void wxd_ActionButton_SetDefault(wxd_Window_t* button) {
+    if (!button) return;
+    auto* b = static_cast<WxdActionButton*>(reinterpret_cast<wxWindow*>(button));
+    auto* top = wxDynamicCast(wxGetTopLevelParent(b), wxTopLevelWindow);
+    if (!top) return;
+    top->SetDefaultItem(b);
+    wxWeakRef<WxdActionButton> weak(b);
+    top->Bind(wxEVT_CHAR_HOOK, [weak, top](wxKeyEvent& e) {
+        auto* current = weak.get();
+        auto* focus = wxWindow::FindFocus();
+        auto* editor = wxDynamicCast(focus, wxTextCtrl);
+        const bool ownButton = focus && focus != current && (dynamic_cast<WxdActionButton*>(focus) || wxDynamicCast(focus, wxButton));
+        if (current && current->IsEnabled() && top->GetDefaultItem() == current && !ownButton && !(editor && editor->IsMultiLine()) &&
+            !e.HasModifiers() && (e.GetKeyCode() == WXK_RETURN || e.GetKeyCode() == WXK_NUMPAD_ENTER)) current->Click();
+        else e.Skip();
+    });
+}
+extern "C" int wxd_Window_FromDIP(wxd_Window_t* window, int value) {
+    return window ? reinterpret_cast<wxWindow*>(window)->FromDIP(value) : value;
+}
 
 // --- Button Functions Implementation ---
 

@@ -155,8 +155,10 @@ async fn openai_api_key_channel_probes_and_reuses_native_websocket() {
     let attempts = Arc::new(AtomicUsize::new(0));
     let seen = attempts.clone();
     let (requests_tx, mut requests_rx) = mpsc::channel(2);
+    let (release_tx, release_rx) = mpsc::channel::<()>(2);
+    let release_rx = Arc::new(Mutex::new(release_rx));
     let (upstream, upstream_task) = server(Router::new().route("/custom/v1/responses", get(move |headers:HeaderMap, ws:WebSocketUpgrade| {
-        let seen = seen.clone(); let requests = requests_tx.clone();
+        let seen = seen.clone(); let requests = requests_tx.clone();let release=release_rx.clone();
         async move {
             assert_eq!(headers["authorization"], "Bearer upstream-secret");
             assert_eq!(headers.get_all("authorization").iter().count(), 1);
@@ -168,6 +170,7 @@ async fn openai_api_key_channel_probes_and_reuses_native_websocket() {
                     let Some(Ok(Message::Text(text))) = socket.recv().await else { panic!("missing create") };
                     let request:Value=serde_json::from_str(&text).unwrap();
                     requests.send(request).await.unwrap();
+                    release.lock().await.recv().await.unwrap();
                     let response=json!({"type":"response.completed","response":{"id":format!("resp_{index}"),"status":"completed","output":[],"usage":{"input_tokens":12,"output_tokens":1,"total_tokens":13}}});
                     socket.send(Message::Text(response.to_string().into())).await.unwrap();
                 }
@@ -212,12 +215,24 @@ async fn openai_api_key_channel_probes_and_reuses_native_websocket() {
             .send(UpstreamMessage::Text(request.to_string()))
             .await
             .unwrap();
-        let response = next_event(&mut socket).await;
-        assert_eq!(response["type"], "response.completed");
         let forwarded = tokio::time::timeout(Duration::from_secs(5), requests_rx.recv())
             .await
             .unwrap()
             .unwrap();
+        let active = state.desktop_activity.snapshot();
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].model.as_deref(), Some("client-model"));
+        assert!(active[0].route.is_some());
+        release_tx.send(()).await.unwrap();
+        let response = next_event(&mut socket).await;
+        assert_eq!(response["type"], "response.completed");
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !state.desktop_activity.snapshot().is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
         assert_eq!(forwarded["model"], "upstream-model");
         assert_eq!(
             forwarded["previous_response_id"],
@@ -257,7 +272,7 @@ async fn rejected_websocket_closes_for_client_fallback_without_internal_post() {
             &temp,
             vec![ProviderConfig {
                 name: "openai".into(),
-                base_url: upstream,
+                base_url: format!("{upstream}/v1"),
                 models: vec!["gpt".into()],
                 api_key: "key".into(),
                 ..Default::default()

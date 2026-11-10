@@ -66,7 +66,7 @@ pub async fn handle_alpha_search(
         Err(error) => return error.into_response(),
     };
     let request_model = inspection.model.clone();
-    let context = GatewayContext::extract(&headers, None);
+    let context = GatewayContext::extract(&headers, None).with_state(&state);
     let routing_session_id = context
         .session_id
         .as_deref()
@@ -118,6 +118,7 @@ pub async fn handle_alpha_search(
         "ai-gateway alpha search request routed"
     );
 
+    context.bind_activity(&request_model, provider, &route_id);
     let log_context = request_logging_enabled
         .then(|| {
             insert_initial_alpha_search_log(
@@ -203,7 +204,7 @@ async fn handle_image_request(
     };
     let request_model = inspection.model.clone();
 
-    let context = GatewayContext::extract(&headers, None);
+    let context = GatewayContext::extract(&headers, None).with_state(&state);
     let routing_now = Instant::now();
     let (provider, route_id) = {
         let mut routing = state.ai_gateway_routing.lock().await;
@@ -252,6 +253,7 @@ async fn handle_image_request(
         "ai-gateway image request routed"
     );
 
+    context.bind_activity(&request_model, provider, &route_id);
     let log_context = request_logging_enabled
         .then(|| {
             insert_initial_image_log(
@@ -337,19 +339,23 @@ pub async fn handle_responses_compact(
             .into_response();
     }
 
-    let ctx = GatewayContext::extract(&headers, envelope.prompt_cache_key.as_deref());
+    let ctx =
+        GatewayContext::extract(&headers, envelope.prompt_cache_key.as_deref()).with_state(&state);
     let routing_now = Instant::now();
     let route_started = Instant::now();
     let (provider, route_id) = {
         let mut routing = state.ai_gateway_routing.lock().await;
         routing.evict_stale(routing_now);
-        match resolve_provider_with_state_for_type(
+        match super::router::resolve_provider_with_state_matching(
             &envelope.model,
             ctx.session_id.as_deref(),
             &gw_config,
             &mut routing,
             routing_now,
-            &ProviderType::OpenAiResponses,
+            |p| {
+                !p.is_client_reserved()
+                    && (p.provider_type.is_openai() || p.tiangong_builtin.is_some())
+            },
         ) {
             Ok(result) => result,
             Err(error) => {
@@ -374,6 +380,7 @@ pub async fn handle_responses_compact(
             }
         }
     };
+    ctx.bind_activity(&envelope.model, provider, &route_id);
     let route_ms = request_log::elapsed_ms(route_started);
     let log_context = request_logging_enabled
         .then(|| {
@@ -408,15 +415,27 @@ pub async fn handle_responses_compact(
     );
 
     let http_client = crate::outbound_http::get();
-    let result = openai_responses::passthrough_compact(
-        &http_client,
-        &ctx,
-        raw_body,
-        &upstream_model,
-        provider,
-        log_context.clone(),
-    )
-    .await;
+    let result = if provider.tiangong_builtin.is_some() {
+        super::providers::tiangong_compact::handle(
+            &http_client,
+            &ctx,
+            raw_body,
+            &upstream_model,
+            provider,
+            log_context.clone(),
+        )
+        .await
+    } else {
+        openai_responses::passthrough_compact(
+            &http_client,
+            &ctx,
+            raw_body,
+            &upstream_model,
+            provider,
+            log_context.clone(),
+        )
+        .await
+    };
     let outcome = classify_outcome(&result);
     record_routing_outcome(&state, &route_id, outcome).await;
     match result {
@@ -437,6 +456,29 @@ pub async fn handle_responses(
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
+    handle_responses_scoped(state, headers, body, None, None).await
+}
+
+pub(super) async fn handle_responses_scoped(
+    state: SharedState,
+    headers: HeaderMap,
+    body: Bytes,
+    scope: Option<(crate::desktop::clients::ClientId, String)>,
+    original: Option<serde_json::Value>,
+) -> Response {
+    handle_responses_pinned(state, headers, body, scope, original, None).await
+}
+
+/// A local-assistance task fixes its chosen ordinary provider for every turn.
+/// Only the authenticated task endpoint supplies a pin; public headers cannot.
+pub(crate) async fn handle_responses_pinned(
+    state: SharedState,
+    headers: HeaderMap,
+    body: Bytes,
+    scope: Option<(crate::desktop::clients::ClientId, String)>,
+    original: Option<serde_json::Value>,
+    pin: Option<(String,String)>,
+) -> Response {
     let started_at = Instant::now();
     let created_at_ms = request_log::now_ms();
     let config = state.config.lock().await;
@@ -470,7 +512,13 @@ pub async fn handle_responses(
 
     // 2. 提取上下文
     let body_cache_key = envelope.prompt_cache_key.as_deref();
-    let ctx = GatewayContext::extract(&headers, body_cache_key);
+    let mut ctx = GatewayContext::extract(&headers, body_cache_key).with_state(&state);
+    if let Some((client, entry)) = &scope {
+        ctx.prompt_cache_key = format!("{}:{entry}:{}", client.key(), ctx.prompt_cache_key);
+        ctx.session_id = ctx
+            .session_id
+            .map(|s| format!("{}:{entry}:{s}", client.key()));
+    }
 
     // 3. 路由到 provider（状态感知：熔断健康 + 会话粘性 + 权重优先级）
     let routing_now = Instant::now();
@@ -478,13 +526,34 @@ pub async fn handle_responses(
     let (provider, route_id) = {
         let mut routing = state.ai_gateway_routing.lock().await;
         routing.evict_stale(routing_now);
-        match resolve_provider_with_state(
-            &envelope.model,
-            ctx.session_id.as_deref(),
-            &gw_config,
-            &mut routing,
-            routing_now,
-        ) {
+        let resolved = if let Some((client, entry)) = &scope {
+            super::router::resolve_desktop_provider_with_state(
+                *client,
+                entry,
+                &envelope.model,
+                &headers,
+                ctx.session_id.as_deref(),
+                &gw_config,
+                &mut routing,
+                routing_now,
+            )
+        } else if let Some((pin,fingerprint)) = &pin {
+            super::router::resolve_provider_with_state_matching(
+                &envelope.model, ctx.session_id.as_deref(), &gw_config,
+                &mut routing, routing_now,
+                |p| !p.is_client_reserved() && super::config::provider_route_id(p) == *pin &&
+                    crate::local_assistance::settings::source_fingerprint(p).ok().as_ref()==Some(fingerprint),
+            )
+        } else {
+            resolve_provider_with_state(
+                &envelope.model,
+                ctx.session_id.as_deref(),
+                &gw_config,
+                &mut routing,
+                routing_now,
+            )
+        };
+        match resolved {
             Ok((provider, route_id)) => (provider, route_id),
             Err(e) => {
                 drop(routing);
@@ -496,7 +565,7 @@ pub async fn handle_responses(
                             &headers,
                             &envelope,
                             None,
-                            &raw_body,
+                            original.as_ref().unwrap_or(&raw_body),
                             started_at,
                             created_at_ms,
                             request_log_details_enabled,
@@ -508,6 +577,7 @@ pub async fn handle_responses(
             }
         }
     };
+    ctx.bind_activity(&envelope.model, provider, &route_id);
     let route_ms = request_log::elapsed_ms(route_started);
 
     let log_context = request_logging_enabled
@@ -518,7 +588,7 @@ pub async fn handle_responses(
                 &headers,
                 &envelope,
                 Some(provider),
-                &raw_body,
+                original.as_ref().unwrap_or(&raw_body),
                 started_at,
                 created_at_ms,
                 request_log_details_enabled,
@@ -527,6 +597,7 @@ pub async fn handle_responses(
         .flatten();
 
     // Preserve request_json as the Codex input; mutations below belong in upstream_request_json.
+    crate::desktop::models::apply_request_defaults(&mut raw_body, provider, true);
     filter_image_generation_tools(&mut raw_body, filter_image_generation_tool);
 
     info!(
@@ -722,9 +793,10 @@ pub async fn handle_gmclaw_entry_chat_completions(
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum ChatClient {
+pub(super) enum ChatClient {
     WorkBuddy,
     GmClaw,
+    Desktop(crate::desktop::clients::ClientId),
 }
 
 impl ChatClient {
@@ -732,11 +804,12 @@ impl ChatClient {
         match self {
             Self::WorkBuddy => "workbuddy",
             Self::GmClaw => "gmclaw",
+            Self::Desktop(client) => client.key(),
         }
     }
 }
 
-async fn handle_client_chat_completions(
+pub(super) async fn handle_client_chat_completions(
     state: SharedState,
     headers: HeaderMap,
     body: Bytes,
@@ -747,6 +820,7 @@ async fn handle_client_chat_completions(
         let valid = match chat_client {
             ChatClient::WorkBuddy => super::config::is_valid_workbuddy_entry_id(entry_id),
             ChatClient::GmClaw => super::config::is_valid_gmclaw_entry_id(entry_id),
+            ChatClient::Desktop(_) => uuid::Uuid::parse_str(entry_id).is_ok(),
         };
         if !valid {
             return GatewayError::bad_request("无效的接入条目 / Invalid client entry")
@@ -813,6 +887,7 @@ async fn handle_client_chat_completions(
                 .get(match chat_client {
                     ChatClient::WorkBuddy => "x-workbuddy-session-id",
                     ChatClient::GmClaw => "x-gmclaw-session-id",
+                    ChatClient::Desktop(_) => "x-tiancai-session-id",
                 })
                 .and_then(|value| value.to_str().ok())
                 .map(str::trim)
@@ -821,7 +896,7 @@ async fn handle_client_chat_completions(
         })
         .or(configured_cache_key)
         .unwrap_or_else(|| format!("{namespace}:{model}"));
-    let ctx = GatewayContext::extract(&headers, Some(&cache_key));
+    let ctx = GatewayContext::extract(&headers, Some(&cache_key)).with_state(&state);
     let envelope = GatewayRequestEnvelope {
         model: model.clone(),
         stream,
@@ -871,6 +946,16 @@ async fn handle_client_chat_completions(
                 &mut routing,
                 routing_now,
             ),
+            ChatClient::Desktop(client) => super::router::resolve_desktop_provider_with_state(
+                client,
+                client_entry.as_deref().unwrap_or(""),
+                &model,
+                &headers,
+                routing_session_id.as_deref(),
+                &gw_config,
+                &mut routing,
+                routing_now,
+            ),
         };
         match resolved {
             Ok(result) => result,
@@ -896,6 +981,7 @@ async fn handle_client_chat_completions(
             }
         }
     };
+    ctx.bind_activity(&model, provider, &route_id);
     let route_ms = request_log::elapsed_ms(route_started);
     let log_context = request_logging_enabled
         .then(|| {
@@ -913,6 +999,7 @@ async fn handle_client_chat_completions(
         })
         .flatten();
 
+    crate::desktop::models::apply_request_defaults(&mut raw_chat, provider, false);
     let upstream_model = provider
         .resolve_upstream_model(&model)
         .unwrap_or(model.as_str())
@@ -1187,7 +1274,7 @@ fn client_responses_to_chat(
     Ok(workbuddy::responses_to_chat(value, model))
 }
 
-fn decode_request_body(headers: &HeaderMap, body: Bytes) -> Result<Bytes, GatewayError> {
+pub(super) fn decode_request_body(headers: &HeaderMap, body: Bytes) -> Result<Bytes, GatewayError> {
     let mut encodings = Vec::new();
     for value in headers.get_all(CONTENT_ENCODING) {
         let value = value
@@ -1616,12 +1703,15 @@ pub(super) fn insert_initial_log(
         response_json: None,
     };
     match store.insert_record(&record) {
-        Ok(log_id) => Some(RequestLogContext {
-            store: store.clone(),
-            log_id,
-            started_at,
-            details_enabled,
-        }),
+        Ok(log_id) => {
+            ctx.bind_log_identity(store, log_id);
+            Some(RequestLogContext {
+                store: store.clone(),
+                log_id,
+                started_at,
+                details_enabled,
+            })
+        }
         Err(err) => {
             request_log::log_insert_error(err);
             None
@@ -1669,12 +1759,15 @@ fn insert_initial_image_log(
         response_json: None,
     };
     match store.insert_record(&record) {
-        Ok(log_id) => Some(RequestLogContext {
-            store: store.clone(),
-            log_id,
-            started_at,
-            details_enabled,
-        }),
+        Ok(log_id) => {
+            ctx.bind_log_identity(store, log_id);
+            Some(RequestLogContext {
+                store: store.clone(),
+                log_id,
+                started_at,
+                details_enabled,
+            })
+        }
         Err(error) => {
             request_log::log_insert_error(error);
             None
@@ -1721,12 +1814,15 @@ fn insert_initial_alpha_search_log(
         response_json: None,
     };
     match store.insert_record(&record) {
-        Ok(log_id) => Some(RequestLogContext {
-            store: store.clone(),
-            log_id,
-            started_at,
-            details_enabled,
-        }),
+        Ok(log_id) => {
+            ctx.bind_log_identity(store, log_id);
+            Some(RequestLogContext {
+                store: store.clone(),
+                log_id,
+                started_at,
+                details_enabled,
+            })
+        }
         Err(error) => {
             request_log::log_insert_error(error);
             None

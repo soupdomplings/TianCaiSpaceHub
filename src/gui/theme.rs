@@ -17,8 +17,43 @@
 use std::cell::RefCell;
 
 use wxdragon::appearance::{Appearance, is_system_dark_mode};
-use wxdragon::font::{Font, FontWeight};
+use wxdragon::font::{Font, FontFamily, FontWeight};
 use wxdragon::prelude::Colour;
+thread_local! {static MOTION:std::cell::Cell<bool>=const{std::cell::Cell::new(true)};}
+pub(super) fn motion_enabled() -> bool {
+    MOTION.with(|v| v.get())
+}
+pub(super) fn set_motion_enabled(enabled: bool) {
+    MOTION.with(|v| v.set(enabled));
+}
+pub(super) fn load_motion_preference() {
+    let reduce = super::daemon_config_path()
+        .and_then(|p| {
+            crate::desktop::transaction::read(
+                &crate::desktop::state_root(&p).join("appearance.json"),
+            )
+            .ok()
+            .flatten()
+        })
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+        .and_then(|v| v["reduceMotion"].as_bool());
+    #[cfg(windows)]
+    let system = {
+        let mut enabled = 1i32;
+        unsafe {
+            windows_sys::Win32::UI::WindowsAndMessaging::SystemParametersInfoW(
+                0x1042,
+                0,
+                (&mut enabled as *mut i32).cast(),
+                0,
+            );
+        }
+        enabled != 0
+    };
+    #[cfg(not(windows))]
+    let system = true;
+    set_motion_enabled(reduce.map(|v| !v).unwrap_or(system));
+}
 
 /// User-facing theme preference. Persisted in config as a code string, mirroring
 /// the `GuiLocale` pattern used for language.
@@ -81,6 +116,13 @@ pub(super) const SPACE_MD: i32 = 12;
 pub(super) const SPACE_LG: i32 = 16;
 pub(super) const SPACE_XL: i32 = 24;
 
+/// Shared desktop geometry, in DIP (convert once at the window boundary).
+pub(super) const PAGE_GUTTER: i32 = 20;
+pub(super) const PANEL_INSET: i32 = 16;
+pub(super) const CONTROL_HEIGHT: i32 = 34;
+pub(super) const BUTTON_RADIUS: i32 = 7;
+pub(super) const SURFACE_RADIUS: i32 = 12;
+
 /// Corner radius for cards and buttons.
 pub(super) const RADIUS: f64 = 8.0;
 
@@ -92,6 +134,8 @@ pub(super) const RADIUS: f64 = 8.0;
 /// DPI-independent in wxWidgets, so fixed values still scale with the display.
 #[derive(Clone, Copy)]
 pub(super) enum TextRole {
+    PageTitle,
+    Metric,
     /// Section / card titles.
     Title,
     /// Primary body text.
@@ -103,6 +147,8 @@ pub(super) enum TextRole {
 impl TextRole {
     fn point_size(self) -> i32 {
         match self {
+            TextRole::PageTitle => 16,
+            TextRole::Metric => 20,
             TextRole::Title => 12,
             TextRole::Body => 10,
             TextRole::Caption => 9,
@@ -110,7 +156,10 @@ impl TextRole {
     }
 
     fn bold(self) -> bool {
-        matches!(self, TextRole::Title)
+        matches!(
+            self,
+            TextRole::PageTitle | TextRole::Metric | TextRole::Title
+        )
     }
 }
 
@@ -121,11 +170,29 @@ impl TextRole {
 /// a wxWidgets assert (`GetFractionalPointSize: invalid font`). The builder goes
 /// through `wxFont`'s real constructor, so the result is always valid.
 pub(super) fn font(role: TextRole) -> Font {
-    let mut builder = Font::builder().with_point_size(role.point_size());
+    let mut builder = Font::builder()
+        .with_family(FontFamily::Swiss)
+        .with_point_size(role.point_size());
+    #[cfg(windows)]
+    {
+        builder = builder.with_face_name("Microsoft YaHei UI");
+    }
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder.with_face_name("PingFang SC");
+    }
     if role.bold() {
         builder = builder.with_weight(FontWeight::Bold);
     }
-    builder.build().unwrap_or_default()
+    builder
+        .build()
+        .or_else(|| {
+            Font::builder()
+                .with_family(FontFamily::Swiss)
+                .with_point_size(role.point_size())
+                .build()
+        })
+        .expect("a valid system UI font is required")
 }
 
 // ---------------------------------------------------------------------------
@@ -204,28 +271,28 @@ impl Theme {
         Self {
             is_dark: false,
 
-            bg_app: Colour::rgb(237, 240, 245),
+            bg_app: Colour::rgb(246, 248, 250),
             bg_card: Colour::rgb(255, 255, 255),
-            bg_card_alt: Colour::rgb(248, 250, 252),
-            bg_muted: Colour::rgb(238, 241, 245),
+            bg_card_alt: Colour::rgb(241, 245, 248),
+            bg_muted: Colour::rgb(231, 244, 243),
             table_row: Colour::rgb(255, 255, 255),
-            table_row_alt: Colour::rgb(244, 247, 251),
+            table_row_alt: Colour::rgb(248, 250, 252),
 
-            border: Colour::rgb(208, 214, 222),
-            divider: Colour::rgb(150, 159, 172),
+            border: Colour::rgb(204, 215, 224),
+            divider: Colour::rgb(229, 235, 240),
 
-            ink_primary: Colour::rgb(23, 28, 36),
-            ink_secondary: Colour::rgb(82, 91, 105),
-            ink_muted: Colour::rgb(124, 133, 146),
+            ink_primary: Colour::rgb(30, 41, 54),
+            ink_secondary: Colour::rgb(78, 96, 113),
+            ink_muted: Colour::rgb(96, 112, 126),
 
-            accent: Colour::rgb(36, 99, 235),
-            accent_hover: Colour::rgb(29, 84, 204),
+            accent: Colour::rgb(7, 118, 124),
+            accent_hover: Colour::rgb(6, 100, 108),
             on_accent: Colour::rgb(255, 255, 255),
 
-            ok: Colour::rgb(28, 127, 89),
-            warn: Colour::rgb(169, 104, 24),
+            ok: Colour::rgb(26, 119, 83),
+            warn: Colour::rgb(150, 90, 18),
             error: Colour::rgb(192, 58, 58),
-            info: Colour::rgb(36, 99, 235),
+            info: Colour::rgb(7, 118, 124),
 
             warn_soft: Colour::rgb(252, 245, 230),
             error_soft: Colour::rgb(252, 238, 238),
@@ -249,22 +316,22 @@ impl Theme {
         Self {
             is_dark: true,
 
-            bg_app: Colour::rgb(24, 26, 31),
-            bg_card: Colour::rgb(33, 36, 43),
-            bg_card_alt: Colour::rgb(39, 43, 51),
-            bg_muted: Colour::rgb(30, 33, 39),
-            table_row: Colour::rgb(28, 31, 37),
-            table_row_alt: Colour::rgb(34, 37, 44),
+            bg_app: Colour::rgb(19, 25, 32),
+            bg_card: Colour::rgb(25, 33, 42),
+            bg_card_alt: Colour::rgb(32, 42, 53),
+            bg_muted: Colour::rgb(28, 58, 62),
+            table_row: Colour::rgb(25, 33, 42),
+            table_row_alt: Colour::rgb(29, 38, 48),
 
-            border: Colour::rgb(48, 53, 62),
-            divider: Colour::rgb(64, 70, 82),
+            border: Colour::rgb(57, 72, 86),
+            divider: Colour::rgb(40, 52, 65),
 
-            ink_primary: Colour::rgb(232, 235, 240),
-            ink_secondary: Colour::rgb(178, 186, 198),
-            ink_muted: Colour::rgb(132, 140, 152),
+            ink_primary: Colour::rgb(231, 237, 243),
+            ink_secondary: Colour::rgb(175, 190, 203),
+            ink_muted: Colour::rgb(148, 165, 181),
 
-            accent: Colour::rgb(94, 158, 255),
-            accent_hover: Colour::rgb(122, 176, 255),
+            accent: Colour::rgb(76, 199, 197),
+            accent_hover: Colour::rgb(110, 220, 217),
             on_accent: Colour::rgb(16, 20, 28),
 
             ok: Colour::rgb(72, 196, 148),
@@ -322,4 +389,66 @@ pub(super) fn init(mode: ThemeMode) {
 /// Snapshot of the currently active theme.
 pub(super) fn theme() -> Theme {
     ACTIVE.with(|cell| *cell.borrow())
+}
+
+#[cfg(test)]
+mod contrast_tests {
+    use super::*;
+
+    fn contrast(a: Colour, b: Colour) -> f64 {
+        let luminance = |c: Colour| {
+            let linear = |v: u8| {
+                let v = f64::from(v) / 255.;
+                if v <= 0.04045 {
+                    v / 12.92
+                } else {
+                    ((v + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * linear(c.r) + 0.7152 * linear(c.g) + 0.0722 * linear(c.b)
+        };
+        let (a, b) = (luminance(a), luminance(b));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    #[test]
+    fn normal_and_secondary_labels_stay_readable_on_all_product_surfaces() {
+        for t in [Theme::light(), Theme::dark()] {
+            for background in [
+                t.bg_app,
+                t.bg_card,
+                t.bg_card_alt,
+                t.bg_muted,
+                t.table_row,
+                t.table_row_alt,
+            ] {
+                for foreground in [t.ink_primary, t.ink_secondary, t.ink_muted, t.accent] {
+                    assert!(
+                        contrast(foreground, background) >= 4.5,
+                        "dark={} text={foreground:?} background={background:?}",
+                        t.is_dark
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn primary_actions_and_error_warning_text_keep_readable_contrast() {
+        for t in [Theme::light(), Theme::dark()] {
+            for (fg, bg) in [
+                (t.on_accent, t.accent),
+                (t.on_accent, t.accent_hover),
+                (t.error, t.error_soft),
+                (t.warn, t.warn_soft),
+                (t.ok, t.bg_card),
+            ] {
+                assert!(
+                    contrast(fg, bg) >= 4.5,
+                    "dark={} text={fg:?} background={bg:?}",
+                    t.is_dark
+                );
+            }
+        }
+    }
 }

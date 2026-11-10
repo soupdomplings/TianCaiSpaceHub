@@ -1,0 +1,83 @@
+<svg xmlns='http://www.w3.org/2000/svg' width='1280' height='840' viewBox='0 0 1280 840' font-family='Microsoft YaHei UI,Segoe UI,Arial,sans-serif'>
+<rect x='0' y='0' width='1280' height='840' rx='0' fill='#F4F6F8' stroke='none'/>
+<rect x='0' y='0' width='1280' height='36' rx='0' fill='#172B36' stroke='none'/>
+<text x='20' y='22' font-size='11' font-weight='400' fill='#FFFFFF'>界面方案 02   ·   静态布局示意 / 非运行截图   ·   合成数据</text>
+<text x='927' y='21' font-size='10' font-weight='400' fill='#D5E4E8'>详细页面、深浅色和错误场景见同目录 index.html</text>
+<rect x='0' y='36' width='214' height='804' rx='0' fill='#FFFFFF' stroke='none'/>
+<rect x='213' y='36' width='1' height='804' rx='0' fill='#E2E8ED' stroke='none'/>
+<rect x='24' y='61' width='35' height='35' rx='9' fill='#087F83' stroke='none'/>
+<text x='35' y='90' font-size='24' font-weight='600' fill='#FFFFFF'>T</text>
+<text x='71' y='76' font-size='17' font-weight='600' fill='#172B36'>天才空间</text>
+<text x='71' y='93' font-size='10' font-weight='400' fill='#586B78'>TianCaiSpaceHub</text>
+<text x='28' y='191' font-size='10' font-weight='400' fill='#71828E'>客 户 端</text>
+<text x='28' y='358' font-size='10' font-weight='400' fill='#71828E'>共 用 能 力</text>
+<rect x='29' y='140' width='12' height='12' rx='3' fill='#71828E' stroke='none'/>
+<text x='56' y='149' font-size='12' font-weight='400' fill='#586B78'>状态概览</text>
+<rect x='29' y='217' width='12' height='12' rx='3' fill='#71828E' stroke='none'/>
+<text x='56' y='226' font-size='12' font-weight='400' fill='#586B78'>ChatGPT(Codex)</text>
+<rect x='29' y='261' width='12' height='12' rx='3' fill='#71828E' stroke='none'/>
+<text x='56' y='270' font-size='12' font-weight='400' fill='#586B78'>WorkBuddy</text>
+<rect x='29' y='305' width='12' height='12' rx='3' fill='#71828E' stroke='none'/>
+<text x='56' y='314' font-size='12' font-weight='400' fill='#586B78'>天工 Work</text>
+<rect x='29' y='384' width='12' height='12' rx='3' fill='#71828E' stroke='none'/>
+<text x='56' y='393' font-size='12' font-weight='400' fill='#586B78'>模型与渠道</text>
+<rect x='29' y='426' width='12' height='12' rx='3' fill='#71828E' stroke='none'/>
+<text x='56' y='435' font-size='12' font-weight='400' fill='#586B78'>Skill 管理</text>
+<rect x='14' y='454' width='186' height='40' rx='7' fill='#E8F5F3' stroke='none'/>
+<rect x='29' y='468' width='12' height='12' rx='3' fill='#087F83' stroke='none'/>
+<text x='56' y='477' font-size='12' font-weight='600' fill='#087F83'>MCP 管理</text>
+<rect x='29' y='510' width='12' height='12' rx='3' fill='#71828E' stroke='none'/>
+<text x='56' y='519' font-size='12' font-weight='400' fill='#586B78'>聊天连接</text>
+<rect x='29' y='552' width='12' height='12' rx='3' fill='#71828E' stroke='none'/>
+<text x='56' y='561' font-size='12' font-weight='400' fill='#586B78'>活动记录</text>
+<rect x='29' y='728' width='12' height='12' rx='3' fill='#71828E' stroke='none'/>
+<text x='56' y='737' font-size='12' font-weight='400' fill='#586B78'>设置</text>
+<rect x='29' y='772' width='12' height='12' rx='3' fill='#71828E' stroke='none'/>
+<text x='56' y='781' font-size='12' font-weight='400' fill='#586B78'>帮助</text>
+<rect x='214' y='36' width='1066' height='57' rx='0' fill='#FFFFFF' stroke='none'/>
+<rect x='214' y='92' width='1066' height='1' rx='0' fill='#E2E8ED' stroke='none'/>
+<text x='248' y='71' font-size='12' font-weight='400' fill='#586B78'>工作台 / MCP 管理 / Dumpling-MCP</text>
+<rect x='1101' y='63' width='6' height='6' rx='3' fill='#207457' stroke='none'/>
+<text x='1116' y='68' font-size='11' font-weight='400' fill='#586B78'>本机服务运行中</text>
+<rect x='214' y='813' width='1066' height='27' rx='0' fill='#FFFFFF' stroke='none'/>
+<rect x='214' y='812' width='1066' height='1' rx='0' fill='#E2E8ED' stroke='none'/>
+<text x='248' y='832' font-size='10' font-weight='400' fill='#71828E'>静态评审图 · 保存、登录、启动、检测均未执行</text>
+<text x='1142' y='832' font-size='10' font-weight='400' fill='#71828E'>基线 v0.4.30-13</text>
+<text x='248' y='129' font-size='10' font-weight='600' fill='#087F83'>MCP MANAGER</text>
+<text x='248' y='170' font-size='28' font-weight='600' fill='#172B36'>Dumpling-MCP</text>
+<text x='248' y='199' font-size='13' font-weight='400' fill='#586B78'>MCP 管理中的专用来源：保留环境认证与三端受管连接。</text>
+<rect x='1142' y='144' width='105' height='36' rx='6' fill='#FFFFFF' stroke='#E2E8ED'/>
+<text x='1157' y='166' font-size='12' font-weight='600' fill='#172B36'>配置说明</text>
+<rect x='246' y='234' width='236' height='546' rx='10' fill='#FFFFFF' stroke='#E2E8ED'/>
+<rect x='254' y='242' width='220' height='89' rx='7' fill='#E8F5F3' stroke='none'/>
+<text x='271' y='275' font-size='14' font-weight='600' fill='#087F83'>产品环境 · 示例</text>
+<text x='271' y='304' font-size='11' font-weight='400' fill='#586B78'>已授权 · 同一真实身份</text>
+<text x='271' y='369' font-size='13' font-weight='400' fill='#586B78'>+ 添加环境</text>
+<rect x='500' y='234' width='747' height='546' rx='10' fill='#FFFFFF' stroke='#E2E8ED'/>
+<text x='527' y='277' font-size='19' font-weight='600' fill='#172B36'>产品环境 · 示例</text>
+<rect x='1150' y='253' width='72' height='25' rx='4' fill='#EAF6EF' stroke='none'/>
+<text x='1160' y='269' font-size='10' font-weight='400' fill='#207457'>已授权</text>
+<text x='527' y='305' font-size='12' font-weight='400' fill='#586B78'>环境已保存，认证结果按服务端身份核对</text>
+<text x='527' y='355' font-size='12' font-weight='400' fill='#586B78'>客户端</text>
+<rect x='586' y='330' width='222' height='36' rx='6' fill='#FFFFFF' stroke='#E2E8ED'/>
+<text x='601' y='353' font-size='13' font-weight='400' fill='#172B36'>ChatGPT(Codex)    ⌄</text>
+<rect x='818' y='330' width='128' height='36' rx='6' fill='#087F83' stroke='#087F83'/>
+<text x='833' y='352' font-size='12' font-weight='600' fill='#FFFFFF'>连接并检测</text>
+<text x='527' y='406' font-size='12' font-weight='400' fill='#586B78'>客户端配置</text>
+<text x='690' y='407' font-size='13' font-weight='600' fill='#172B36'>已写入受管连接</text>
+<rect x='525' y='427' width='697' height='1' rx='0' fill='#E2E8ED' stroke='none'/>
+<text x='527' y='459' font-size='12' font-weight='400' fill='#586B78'>本机桥检测</text>
+<text x='690' y='460' font-size='13' font-weight='600' fill='#172B36'>检测通过</text>
+<rect x='525' y='480' width='697' height='1' rx='0' fill='#E2E8ED' stroke='none'/>
+<text x='527' y='512' font-size='12' font-weight='400' fill='#586B78'>工具目录</text>
+<text x='690' y='513' font-size='13' font-weight='600' fill='#172B36'>6 个模块 · 24 个工具（合成）</text>
+<rect x='525' y='533' width='697' height='1' rx='0' fill='#E2E8ED' stroke='none'/>
+<text x='527' y='565' font-size='12' font-weight='400' fill='#586B78'>实际工具调用</text>
+<text x='690' y='566' font-size='13' font-weight='600' fill='#172B36'>尚未验证</text>
+<rect x='525' y='586' width='697' height='1' rx='0' fill='#E2E8ED' stroke='none'/>
+<text x='527' y='631' font-size='14' font-weight='600' fill='#172B36'>连接内容概览</text>
+<text x='527' y='658' font-size='12' font-weight='400' fill='#586B78'>少量用途摘要；目录超限时显示“已连通、数量未知”。</text>
+<rect x='525' y='685' width='697' height='1' rx='0' fill='#E2E8ED' stroke='none'/>
+<text x='527' y='718' font-size='12' font-weight='400' fill='#586B78'>› 当前客户端维护：断开 / 撤销</text>
+<text x='527' y='755' font-size='12' font-weight='400' fill='#586B78'>› 环境资料管理：编辑 / 删除整套环境</text>
+</svg>

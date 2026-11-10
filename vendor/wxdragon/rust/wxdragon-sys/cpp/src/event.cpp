@@ -792,6 +792,16 @@ wxd_CommandEvent_GetString(const wxd_Event_t* event, char* buffer, size_t buffer
 {
     if (!event)
         return -1;
+#if wxdUSE_WEBVIEW
+    // wxWebViewEvent keeps navigation URLs separately from GetString().
+    // Script messages and script results must retain their original payload.
+    if (auto* webEvent = wxDynamicCast((wxEvent*)event, wxWebViewEvent)) {
+        const auto type = webEvent->GetEventType();
+        if (type == wxEVT_WEBVIEW_NAVIGATING || type == wxEVT_WEBVIEW_NAVIGATED ||
+            type == wxEVT_WEBVIEW_LOADED || type == wxEVT_WEBVIEW_NEWWINDOW)
+            return (int)wxd_cpp_utils::copy_wxstring_to_buffer(webEvent->GetURL(), buffer, buffer_len);
+    }
+#endif
     wxCommandEvent* cmdEvent = wxDynamicCast((wxEvent*)event, wxCommandEvent);
     if (!cmdEvent)
         return -1; // Return -1 if not a command event

@@ -184,6 +184,7 @@ jobs:
           iconutil -c icns "$ICONSET" -o "$RESOURCES/AppIcon.icns"
           cp packaging/brand/*.png "$RESOURCES/brand/"
           cp docs/hub-external-import.md "$RESOURCES/WEB-IMPORT.md"
+          cp THIRD_PARTY_NOTICES.md "$RESOURCES/THIRD_PARTY_NOTICES.md"
           cp "target/release/TianCaiSpaceHub" "$MACOS/$EXECUTABLE_NAME"
           chmod +x "$MACOS/$EXECUTABLE_NAME"
           lipo "$MACOS/$EXECUTABLE_NAME" -verify_arch arm64 x86_64

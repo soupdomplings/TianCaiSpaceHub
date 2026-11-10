@@ -99,6 +99,35 @@ wxd_Choice_GetCount(wxd_Choice_t* choice)
     return ch->GetCount();
 }
 
+WXD_EXPORTED void wxd_Choice_Popup(wxd_Choice_t* choice, wxd_Window_t* anchor)
+{
+    auto* ch = reinterpret_cast<wxChoice*>(choice);
+    auto* window = reinterpret_cast<wxWindow*>(anchor);
+    if (!ch || !window || !window->IsEnabled() || !ch->GetCount()) return;
+    wxMenu menu;
+    for (unsigned int i = 0; i < ch->GetCount(); ++i) {
+        // wxMenu's mnemonic syntax must not alter literal model/channel names.
+        auto label = ch->GetString(i); label.Replace("&", "&&");
+        if (label.empty()) label = " ";
+        auto* item = menu.AppendCheckItem(wxID_HIGHEST + 1 + i, label);
+        item->Check(static_cast<int>(i) == ch->GetSelection());
+    }
+    int selected = window->GetPopupMenuSelectionFromUser(menu, 0, window->GetClientSize().y);
+    int index = selected - wxID_HIGHEST - 1;
+    if (index >= 0 && static_cast<unsigned int>(index) < ch->GetCount() && index != ch->GetSelection()) {
+        wxd_Choice_SelectAndNotify(choice, index);
+    }
+}
+
+WXD_EXPORTED void wxd_Choice_SelectAndNotify(wxd_Choice_t* choice, unsigned int index) {
+    auto* ch = reinterpret_cast<wxChoice*>(choice);
+    if (!ch || !ch->IsEnabled() || index >= ch->GetCount() || static_cast<int>(index) == ch->GetSelection()) return;
+    ch->SetSelection(index);
+    wxCommandEvent event(wxEVT_CHOICE, ch->GetId());
+    event.SetEventObject(ch); event.SetInt(index); event.SetString(ch->GetString(index));
+    ch->GetEventHandler()->ProcessEvent(event);
+}
+
 // Note: No explicit Destroy function needed. Choice is a child control,
 // destroyed when its parent window is destroyed.
 

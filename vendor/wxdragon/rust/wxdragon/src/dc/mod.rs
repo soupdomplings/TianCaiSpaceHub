@@ -288,13 +288,19 @@ impl Point {
 
 impl From<Point> for wxdragon_sys::wxd_Point {
     fn from(point: Point) -> Self {
-        wxdragon_sys::wxd_Point { x: point.x, y: point.y }
+        wxdragon_sys::wxd_Point {
+            x: point.x,
+            y: point.y,
+        }
     }
 }
 
 impl From<wxdragon_sys::wxd_Point> for Point {
     fn from(point: wxdragon_sys::wxd_Point) -> Self {
-        Point { x: point.x, y: point.y }
+        Point {
+            x: point.x,
+            y: point.y,
+        }
     }
 }
 
@@ -309,7 +315,12 @@ pub struct Rect {
 
 impl Rect {
     pub fn new(x: i32, y: i32, width: i32, height: i32) -> Self {
-        Self { x, y, width, height }
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
     }
 }
 
@@ -348,6 +359,36 @@ pub use memory_dc::MemoryDC;
 pub use paint_dc::PaintDC;
 pub use screen_dc::ScreenDC;
 pub use window_dc::WindowDC;
+
+/// Antialiased adapter. Drop it before the borrowed source DC is blitted/read.
+pub struct GraphicsDC<'a> {
+    ptr: *mut wxdragon_sys::wxd_DC_t,
+    source: &'a dyn DeviceContext,
+}
+impl<'a> GraphicsDC<'a> {
+    pub fn new(source: &'a dyn DeviceContext) -> Self {
+        Self {
+            ptr: unsafe { wxdragon_sys::wxd_GCDC_Create(source.dc_ptr()) },
+            source,
+        }
+    }
+}
+impl DeviceContext for GraphicsDC<'_> {
+    fn dc_ptr(&self) -> *mut wxdragon_sys::wxd_DC_t {
+        if self.ptr.is_null() {
+            self.source.dc_ptr()
+        } else {
+            self.ptr
+        }
+    }
+}
+impl Drop for GraphicsDC<'_> {
+    fn drop(&mut self) {
+        if !self.ptr.is_null() {
+            unsafe { wxdragon_sys::wxd_DC_Destroy(self.ptr) };
+        }
+    }
+}
 
 /// A generic device context that can wrap any raw DC pointer.
 pub struct GenericDC {
@@ -586,7 +627,9 @@ pub trait DeviceContext {
 
     /// Draw a bitmap at the specified position
     fn draw_bitmap(&self, bitmap: &Bitmap, x: i32, y: i32, transparent: bool) {
-        unsafe { wxdragon_sys::wxd_DC_DrawBitmap(self.dc_ptr(), bitmap.as_const_ptr(), x, y, transparent) };
+        unsafe {
+            wxdragon_sys::wxd_DC_DrawBitmap(self.dc_ptr(), bitmap.as_const_ptr(), x, y, transparent)
+        };
     }
 
     /// Get the size of the device context
@@ -603,7 +646,14 @@ pub trait DeviceContext {
         if let Ok(c_text) = CString::new(text) {
             let mut width = 0;
             let mut height = 0;
-            unsafe { wxdragon_sys::wxd_DC_GetTextExtent(self.dc_ptr(), c_text.as_ptr(), &mut width, &mut height) };
+            unsafe {
+                wxdragon_sys::wxd_DC_GetTextExtent(
+                    self.dc_ptr(),
+                    c_text.as_ptr(),
+                    &mut width,
+                    &mut height,
+                )
+            };
             (width, height)
         } else {
             (0, 0)
@@ -623,12 +673,19 @@ pub trait DeviceContext {
     }
 
     /// Draw a polygon using the specified points
-    fn draw_polygon(&self, points: &[Point], x_offset: i32, y_offset: i32, fill_mode: PolygonFillMode) {
+    fn draw_polygon(
+        &self,
+        points: &[Point],
+        x_offset: i32,
+        y_offset: i32,
+        fill_mode: PolygonFillMode,
+    ) {
         if points.is_empty() {
             return;
         }
 
-        let mut ffi_points: Vec<wxdragon_sys::wxd_Point> = points.iter().map(|p| (*p).into()).collect();
+        let mut ffi_points: Vec<wxdragon_sys::wxd_Point> =
+            points.iter().map(|p| (*p).into()).collect();
 
         unsafe {
             wxdragon_sys::wxd_DC_DrawPolygon(
@@ -643,8 +700,26 @@ pub trait DeviceContext {
     }
 
     /// Draw an elliptic arc
-    fn draw_elliptic_arc(&self, x: i32, y: i32, width: i32, height: i32, start_angle: f64, end_angle: f64) {
-        unsafe { wxdragon_sys::wxd_DC_DrawEllipticArc(self.dc_ptr(), x, y, width, height, start_angle, end_angle) };
+    fn draw_elliptic_arc(
+        &self,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        start_angle: f64,
+        end_angle: f64,
+    ) {
+        unsafe {
+            wxdragon_sys::wxd_DC_DrawEllipticArc(
+                self.dc_ptr(),
+                x,
+                y,
+                width,
+                height,
+                start_angle,
+                end_angle,
+            )
+        };
     }
 
     /// Draw multiple connected lines
@@ -653,7 +728,8 @@ pub trait DeviceContext {
             return;
         }
 
-        let mut ffi_points: Vec<wxdragon_sys::wxd_Point> = points.iter().map(|p| (*p).into()).collect();
+        let mut ffi_points: Vec<wxdragon_sys::wxd_Point> =
+            points.iter().map(|p| (*p).into()).collect();
 
         unsafe {
             wxdragon_sys::wxd_DC_DrawLines(
@@ -679,16 +755,25 @@ pub trait DeviceContext {
             return;
         }
 
-        let mut ffi_points: Vec<wxdragon_sys::wxd_Point> = points.iter().map(|p| (*p).into()).collect();
+        let mut ffi_points: Vec<wxdragon_sys::wxd_Point> =
+            points.iter().map(|p| (*p).into()).collect();
 
-        unsafe { wxdragon_sys::wxd_DC_DrawSpline(self.dc_ptr(), ffi_points.len() as i32, ffi_points.as_mut_ptr()) };
+        unsafe {
+            wxdragon_sys::wxd_DC_DrawSpline(
+                self.dc_ptr(),
+                ffi_points.len() as i32,
+                ffi_points.as_mut_ptr(),
+            )
+        };
     }
 
     /// Draw rotated text at the specified position
     fn draw_rotated_text(&self, text: &str, x: i32, y: i32, angle: f64) {
         use std::ffi::CString;
         if let Ok(c_text) = CString::new(text) {
-            unsafe { wxdragon_sys::wxd_DC_DrawRotatedText(self.dc_ptr(), c_text.as_ptr(), x, y, angle) };
+            unsafe {
+                wxdragon_sys::wxd_DC_DrawRotatedText(self.dc_ptr(), c_text.as_ptr(), x, y, angle)
+            };
         }
     }
 
@@ -696,7 +781,15 @@ pub trait DeviceContext {
     fn draw_label(&self, text: &str, rect: Rect, alignment: TextAlignment, index_accel: i32) {
         use std::ffi::CString;
         if let Ok(c_text) = CString::new(text) {
-            unsafe { wxdragon_sys::wxd_DC_DrawLabel(self.dc_ptr(), c_text.as_ptr(), rect.into(), alignment.bits(), index_accel) };
+            unsafe {
+                wxdragon_sys::wxd_DC_DrawLabel(
+                    self.dc_ptr(),
+                    c_text.as_ptr(),
+                    rect.into(),
+                    alignment.bits(),
+                    index_accel,
+                )
+            };
         }
     }
 
@@ -748,10 +841,15 @@ pub trait DeviceContext {
             return;
         }
 
-        let mut ffi_points: Vec<wxdragon_sys::wxd_Point> = points.iter().map(|p| (*p).into()).collect();
+        let mut ffi_points: Vec<wxdragon_sys::wxd_Point> =
+            points.iter().map(|p| (*p).into()).collect();
 
         unsafe {
-            wxdragon_sys::wxd_DC_SetClippingRegionFromPoints(self.dc_ptr(), ffi_points.len() as i32, ffi_points.as_mut_ptr())
+            wxdragon_sys::wxd_DC_SetClippingRegionFromPoints(
+                self.dc_ptr(),
+                ffi_points.len() as i32,
+                ffi_points.as_mut_ptr(),
+            )
         };
     }
 
@@ -762,7 +860,15 @@ pub trait DeviceContext {
         let mut width = 0;
         let mut height = 0;
 
-        unsafe { wxdragon_sys::wxd_DC_GetClippingBox(self.dc_ptr(), &mut x, &mut y, &mut width, &mut height) };
+        unsafe {
+            wxdragon_sys::wxd_DC_GetClippingBox(
+                self.dc_ptr(),
+                &mut x,
+                &mut y,
+                &mut width,
+                &mut height,
+            )
+        };
 
         Rect::new(x, y, width, height)
     }
@@ -956,7 +1062,13 @@ pub trait DeviceContext {
     }
 
     /// Fill a rectangle with a linear gradient
-    fn gradient_fill_linear(&self, rect: Rect, initial_colour: Colour, dest_colour: Colour, direction: GradientDirection) {
+    fn gradient_fill_linear(
+        &self,
+        rect: Rect,
+        initial_colour: Colour,
+        dest_colour: Colour,
+        direction: GradientDirection,
+    ) {
         unsafe {
             wxdragon_sys::wxd_DC_GradientFillLinear(
                 self.dc_ptr(),
@@ -969,7 +1081,13 @@ pub trait DeviceContext {
     }
 
     /// Fill a rectangle with a concentric gradient
-    fn gradient_fill_concentric(&self, rect: Rect, initial_colour: Colour, dest_colour: Colour, circle_center: Point) {
+    fn gradient_fill_concentric(
+        &self,
+        rect: Rect,
+        initial_colour: Colour,
+        dest_colour: Colour,
+        circle_center: Point,
+    ) {
         unsafe {
             wxdragon_sys::wxd_DC_GradientFillConcentric(
                 self.dc_ptr(),
@@ -983,7 +1101,9 @@ pub trait DeviceContext {
 
     /// Flood fill starting from a point
     fn flood_fill(&self, x: i32, y: i32, colour: Colour, style: FloodFillMode) -> bool {
-        unsafe { wxdragon_sys::wxd_DC_FloodFill(self.dc_ptr(), x, y, colour.into(), style.to_raw()) }
+        unsafe {
+            wxdragon_sys::wxd_DC_FloodFill(self.dc_ptr(), x, y, colour.into(), style.to_raw())
+        }
     }
 
     /// Set the logical function for drawing operations

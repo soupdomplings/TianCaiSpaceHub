@@ -1,0 +1,95 @@
+<svg xmlns='http://www.w3.org/2000/svg' width='1280' height='840' viewBox='0 0 1280 840' font-family='Microsoft YaHei UI,Segoe UI,Arial,sans-serif'>
+<rect x='0' y='0' width='1280' height='840' rx='0' fill='#F4F6F8' stroke='none'/>
+<rect x='0' y='0' width='1280' height='36' rx='0' fill='#172B36' stroke='none'/>
+<text x='20' y='22' font-size='11' font-weight='400' fill='#FFFFFF'>界面方案 02   ·   静态布局示意 / 非运行截图   ·   合成数据</text>
+<text x='927' y='21' font-size='10' font-weight='400' fill='#D5E4E8'>详细页面、深浅色和错误场景见同目录 index.html</text>
+<rect x='0' y='36' width='214' height='804' rx='0' fill='#FFFFFF' stroke='none'/>
+<rect x='213' y='36' width='1' height='804' rx='0' fill='#E2E8ED' stroke='none'/>
+<rect x='24' y='61' width='35' height='35' rx='9' fill='#087F83' stroke='none'/>
+<text x='35' y='90' font-size='24' font-weight='600' fill='#FFFFFF'>T</text>
+<text x='71' y='76' font-size='17' font-weight='600' fill='#172B36'>天才空间</text>
+<text x='71' y='93' font-size='10' font-weight='400' fill='#586B78'>TianCaiSpaceHub</text>
+<text x='28' y='191' font-size='10' font-weight='400' fill='#71828E'>客 户 端</text>
+<text x='28' y='358' font-size='10' font-weight='400' fill='#71828E'>共 用 能 力</text>
+<rect x='29' y='140' width='12' height='12' rx='3' fill='#71828E' stroke='none'/>
+<text x='56' y='149' font-size='12' font-weight='400' fill='#586B78'>状态概览</text>
+<rect x='14' y='203' width='186' height='40' rx='7' fill='#E8F5F3' stroke='none'/>
+<rect x='29' y='217' width='12' height='12' rx='3' fill='#087F83' stroke='none'/>
+<text x='56' y='226' font-size='12' font-weight='600' fill='#087F83'>ChatGPT(Codex)</text>
+<rect x='29' y='261' width='12' height='12' rx='3' fill='#71828E' stroke='none'/>
+<text x='56' y='270' font-size='12' font-weight='400' fill='#586B78'>WorkBuddy</text>
+<rect x='29' y='305' width='12' height='12' rx='3' fill='#71828E' stroke='none'/>
+<text x='56' y='314' font-size='12' font-weight='400' fill='#586B78'>天工 Work</text>
+<rect x='29' y='384' width='12' height='12' rx='3' fill='#71828E' stroke='none'/>
+<text x='56' y='393' font-size='12' font-weight='400' fill='#586B78'>模型与渠道</text>
+<rect x='29' y='426' width='12' height='12' rx='3' fill='#71828E' stroke='none'/>
+<text x='56' y='435' font-size='12' font-weight='400' fill='#586B78'>Skill 管理</text>
+<rect x='29' y='468' width='12' height='12' rx='3' fill='#71828E' stroke='none'/>
+<text x='56' y='477' font-size='12' font-weight='400' fill='#586B78'>MCP 管理</text>
+<rect x='29' y='510' width='12' height='12' rx='3' fill='#71828E' stroke='none'/>
+<text x='56' y='519' font-size='12' font-weight='400' fill='#586B78'>聊天连接</text>
+<rect x='29' y='552' width='12' height='12' rx='3' fill='#71828E' stroke='none'/>
+<text x='56' y='561' font-size='12' font-weight='400' fill='#586B78'>活动记录</text>
+<rect x='29' y='728' width='12' height='12' rx='3' fill='#71828E' stroke='none'/>
+<text x='56' y='737' font-size='12' font-weight='400' fill='#586B78'>设置</text>
+<rect x='29' y='772' width='12' height='12' rx='3' fill='#71828E' stroke='none'/>
+<text x='56' y='781' font-size='12' font-weight='400' fill='#586B78'>帮助</text>
+<rect x='214' y='36' width='1066' height='57' rx='0' fill='#FFFFFF' stroke='none'/>
+<rect x='214' y='92' width='1066' height='1' rx='0' fill='#E2E8ED' stroke='none'/>
+<text x='248' y='71' font-size='12' font-weight='400' fill='#586B78'>客户端 / ChatGPT(Codex) / 接入设置</text>
+<rect x='1101' y='63' width='6' height='6' rx='3' fill='#207457' stroke='none'/>
+<text x='1116' y='68' font-size='11' font-weight='400' fill='#586B78'>本机服务运行中</text>
+<rect x='214' y='813' width='1066' height='27' rx='0' fill='#FFFFFF' stroke='none'/>
+<rect x='214' y='812' width='1066' height='1' rx='0' fill='#E2E8ED' stroke='none'/>
+<text x='248' y='832' font-size='10' font-weight='400' fill='#71828E'>静态评审图 · 保存、登录、启动、检测均未执行</text>
+<text x='1142' y='832' font-size='10' font-weight='400' fill='#71828E'>基线 v0.4.30-13</text>
+<text x='248' y='129' font-size='10' font-weight='600' fill='#087F83'>CLIENT WORKSPACE</text>
+<text x='248' y='170' font-size='28' font-weight='600' fill='#172B36'>ChatGPT(Codex)</text>
+<text x='248' y='199' font-size='13' font-weight='400' fill='#586B78'>模型、接入设置、Skill / MCP、历史与维护各有明确入口。</text>
+<rect x='1092' y='144' width='155' height='36' rx='6' fill='#FFFFFF' stroke='#E2E8ED'/>
+<text x='1107' y='166' font-size='12' font-weight='600' fill='#172B36'>打开 Codex  →</text>
+<text x='248' y='243' font-size='13' font-weight='400' fill='#586B78'>状态与使用</text>
+<text x='366' y='243' font-size='13' font-weight='400' fill='#586B78'>模型</text>
+<text x='436' y='243' font-size='13' font-weight='600' fill='#087F83'>接入设置</text>
+<text x='547' y='243' font-size='13' font-weight='400' fill='#586B78'>Skill 与 MCP</text>
+<text x='676' y='243' font-size='13' font-weight='400' fill='#586B78'>历史与维护</text>
+<rect x='246' y='261' width='1001' height='1' rx='0' fill='#E2E8ED' stroke='none'/>
+<rect x='434' y='260' width='55' height='2' rx='0' fill='#087F83' stroke='none'/>
+<rect x='246' y='286' width='610' height='325' rx='10' fill='#FFFFFF' stroke='#E2E8ED'/>
+<text x='271' y='325' font-size='17' font-weight='600' fill='#172B36'>受管接入配置</text>
+<rect x='735' y='305' width='96' height='25' rx='4' fill='#EAF6EF' stroke='none'/>
+<text x='745' y='321' font-size='10' font-weight='400' fill='#207457'>配置已保存</text>
+<text x='272' y='366' font-size='13' font-weight='400' fill='#586B78'>示例：已是最新，无需重复写入。</text>
+<rect x='270' y='387' width='560' height='1' rx='0' fill='#E2E8ED' stroke='none'/>
+<text x='272' y='423' font-size='13' font-weight='600' fill='#172B36'>初始化 / 更新</text>
+<text x='272' y='450' font-size='12' font-weight='400' fill='#586B78'>只补受管接入与缺少的模型控制配置。</text>
+<text x='272' y='476' font-size='12' font-weight='400' fill='#586B78'>保留当前模型、强度、速度选择及退出预检。</text>
+<rect x='270' y='501' width='560' height='52' rx='6' fill='#F4F6F8' stroke='none'/>
+<text x='285' y='526' font-size='12' font-weight='400' fill='#586B78'>MAX / ULTRA / Fast：配置、显示和上游能力分别判断。</text>
+<text x='285' y='545' font-size='11' font-weight='400' fill='#586B78'>不新增强制可用开关。</text>
+<rect x='270' y='566' width='195' height='36' rx='6' fill='#FFFFFF' stroke='#E2E8ED'/>
+<text x='285' y='588' font-size='12' font-weight='600' fill='#172B36'>查看初始化 / 更新范围</text>
+<rect x='874' y='286' width='373' height='325' rx='10' fill='#FFFFFF' stroke='#E2E8ED'/>
+<text x='899' y='325' font-size='17' font-weight='600' fill='#172B36'>模型连接设置</text>
+<text x='899' y='369' font-size='14' font-weight='600' fill='#172B36'>允许 WebSocket</text>
+<rect x='1187' y='355' width='17' height='17' rx='3' fill='#FFFFFF' stroke='#71828E'/>
+<text x='899' y='398' font-size='12' font-weight='400' fill='#586B78'>仅保存这一项，不夹带初始化或登录。</text>
+<rect x='897' y='425' width='327' height='1' rx='0' fill='#E2E8ED' stroke='none'/>
+<text x='899' y='461' font-size='12' font-weight='400' fill='#586B78'>本机连接方式</text>
+<text x='899' y='492' font-size='13' font-weight='400' fill='#172B36'>标准连接（合成）</text>
+<text x='899' y='526' font-size='11' font-weight='400' fill='#586B78'>本机模式与出站代理在全局设置。</text>
+<rect x='1062' y='566' width='160' height='36' rx='6' fill='#087F83' stroke='#087F83'/>
+<text x='1077' y='588' font-size='12' font-weight='600' fill='#FFFFFF'>预览并保存此项</text>
+<rect x='246' y='628' width='1001' height='151' rx='10' fill='#FFFFFF' stroke='#E2E8ED'/>
+<text x='271' y='664' font-size='16' font-weight='600' fill='#172B36'>执行通道与相关入口</text>
+<text x='272' y='698' font-size='12' font-weight='600' fill='#172B36'>App</text>
+<rect x='309' y='680' width='102' height='25' rx='4' fill='#EAF6EF' stroke='none'/>
+<text x='319' y='696' font-size='10' font-weight='400' fill='#207457'>已观察到连接</text>
+<text x='465' y='698' font-size='12' font-weight='600' fill='#172B36'>VS Code / CLI</text>
+<rect x='574' y='680' width='109' height='25' rx='4' fill='#F4F6F8' stroke='none'/>
+<text x='584' y='696' font-size='10' font-weight='400' fill='#586B78'>未观察到连接</text>
+<rect x='270' y='725' width='952' height='1' rx='0' fill='#E2E8ED' stroke='none'/>
+<text x='272' y='758' font-size='12' font-weight='400' fill='#087F83'>可见模型  → 模型页</text>
+<text x='512' y='758' font-size='12' font-weight='400' fill='#087F83'>账号登录 / 用量 → 模型来源</text>
+<text x='840' y='758' font-size='12' font-weight='400' fill='#087F83'>受管恢复 / 修复 / 历史 → 历史与维护</text>
+</svg>

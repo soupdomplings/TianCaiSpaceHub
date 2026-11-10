@@ -1,3 +1,5 @@
+use crate::gui::controls::Button;
+use crate::gui::controls::{Choice, TextCtrl};
 use std::{
     cell::{Cell, RefCell},
     collections::BTreeMap,
@@ -27,8 +29,8 @@ use windows_sys::Win32::{
 
 use crate::ai_gateway::config::{
     DEFAULT_PROVIDER_TIMEOUT_SECS, ProviderConfig, ProviderType, ZaiAccessMode,
-    is_gmclaw_provider_name, is_workbuddy_provider_name, provider_api_root,
-    provider_display_base_url,
+    is_gmclaw_provider_name, is_workbuddy_provider_name, provider_base_url_with_v1,
+    provider_display_base_url, provider_endpoint,
 };
 use crate::config::{AppConfig, LocalConnectionMode, OutboundProxyConfig, OutboundProxyMode};
 use crate::diagnostics_export::{
@@ -61,10 +63,6 @@ const UPDATE_RELEASE_PAGE_URL: &str =
     "https://github.com/soupdomplings/TianCaiSpaceHub/releases/latest";
 const DASHBOARD_REFRESH_INTERVAL_MS: i32 = 10_000;
 const REQUEST_LOG_REFRESH_INTERVAL_MS: i32 = 5_000;
-const CODEX_TAB_INDEX: i32 = 0;
-const WORKBUDDY_TAB_INDEX: i32 = 1;
-const GMCLAW_TAB_INDEX: i32 = 2;
-const REQUEST_LOG_TAB_INDEX: i32 = 5;
 /// Poll interval for the short-lived "fetch models" dialog timer. This timer
 /// only runs while that modal dialog is open, so it does not affect idle CPU.
 const DIALOG_RESULT_POLL_MS: i32 = 150;
@@ -106,10 +104,11 @@ type ModelMappingModel = Rc<RefCell<CustomDataViewVirtualListModel>>;
 
 #[derive(Clone)]
 struct DumplingMcpPage {
-    notebook: Notebook,
+    shell: shell::Shell,
     tab: nvwa::NvwaTab,
-    icon: Option<i32>,
     visible: Rc<Cell<bool>>,
+    resources: resources::ResourceUi,
+    checkbox: CheckBox,
 }
 
 #[derive(Clone, Copy)]
@@ -137,6 +136,7 @@ enum GuiMessage {
     WorkBuddy(WorkBuddyActionResult),
     GmClaw(gmclaw::GmClawActionResult),
     Nvwa(nvwa::NvwaActionResult),
+    Resources(resources::ResourceEvent),
     DashboardUpdate,
     DiagnosticsExport,
 }
@@ -160,24 +160,56 @@ mod ai_gateway;
 mod api;
 mod browser;
 mod chatgpt;
+mod client_header;
 mod client_overview;
+mod clients;
+mod codex_model_catalog;
+mod codex_models;
 mod codex_tab;
+mod controls;
 mod daemon;
+mod dialog_job;
 mod external_import;
 mod gmclaw;
 mod im_accounts;
+mod local_assistance;
+mod mcp_editor;
+mod model_fields;
+mod model_list;
+#[cfg(all(test, windows))]
+mod native_model_review;
 mod nvwa;
 mod onboarding;
+mod overview;
+mod preferences;
 mod provider;
+mod provider_form;
+mod request_browser;
 mod request_log_detail;
 mod request_logs;
+mod request_view;
+mod resource_detail;
+mod resource_gallery;
+mod resources;
+mod runtime_scene;
 mod session_history;
+mod shell;
+mod skill_market;
+mod squad;
+mod squad_account;
+mod squad_browser;
+mod squad_form;
+mod squad_login;
+mod squad_view;
 pub(crate) mod startup_repair;
 mod text;
 mod theme;
+mod tiangong_models;
 mod tray;
 #[cfg(test)]
 mod update;
+mod usage_view;
+mod visual;
 mod widgets;
 mod workbuddy;
 
@@ -215,10 +247,10 @@ use self::text::{GuiLocale, GuiText};
 use self::theme::ThemeMode;
 use self::widgets::{
     ClientTabIconKind, ImStatusPanel, LucideIconKind, ProviderLogoKind, StateTone, StatusIconKind,
-    StatusPanel, app_icon_bitmap, apply_dataview_theme, apply_notebook_theme, card_section,
-    centered_status_panel, client_tab_icon_bitmap, dataview_table_style, dumpling_mcp_icon_bitmap,
-    im_status_panel, lucide_icon_bitmap, provider_logo_bitmap, set_disabled_status_panel,
-    set_im_channel_row, set_status_panel, status_panel, table_cell_attr, text_field_row,
+    StatusPanel, app_icon_bitmap, apply_dataview_theme, card_section, centered_status_panel,
+    client_tab_icon_bitmap, dataview_table_style, dumpling_mcp_icon_bitmap, im_status_panel,
+    lucide_icon_bitmap, provider_logo_bitmap, set_disabled_status_panel, set_im_channel_row,
+    set_status_panel, status_panel, table_cell_attr,
 };
 use self::workbuddy::WorkBuddyActionResult;
 
@@ -449,7 +481,11 @@ fn build_ui(
         .build();
     // Never let the window shrink below a floor where the primary buttons stop
     // fitting, but never force it larger than the screen work area either.
-    frame.set_min_size(min_frame_size(frame_size));
+    let frame_scale = visual::scale(&frame);
+    let frame_size = frame_size_at_scale(frame_scale, screen_work_area_size());
+    frame.set_size(frame_size);
+    frame.set_min_size(min_frame_size(frame_size, frame_scale));
+    frame.set_font(&theme::font(theme::TextRole::Body));
     app.set_top_window(&frame);
     frame.set_icon(&app_icon_bitmap(48));
     let quitting = Rc::new(AtomicBool::new(false));
@@ -465,12 +501,6 @@ fn build_ui(
         });
     }
     frame.set_background_color(app_theme.bg_app);
-    let _status_bar = StatusBar::builder(&frame)
-        .with_fields_count(1)
-        .with_status_widths(vec![-1])
-        .add_initial_text(0, &text.version())
-        .build();
-
     let root = Panel::builder(&frame).build();
     root.set_background_color(app_theme.bg_app);
     // wxMSW omits wxFULL_REPAINT_ON_RESIZE by default, so a resize only repaints
@@ -585,18 +615,31 @@ fn build_ui(
         SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Top | SizerFlag::Bottom,
         6,
     );
-    root_sizer.add(
-        &status_box,
-        0,
-        SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Top,
-        14,
+    // The old overview controls remain private consumers of the existing
+    // diagnostic state while each page moves to its own graphical overview.
+    status_box.hide();
+    let shell = shell::Shell::new(&root, &frame);
+    theme::load_motion_preference();
+    let notebook = shell.book;
+    let overview_ui = overview::Overview::new(&shell, frame, api.clone(), text);
+    let squad_ui = squad::SquadPage::new(&shell, frame, api.clone());
+    let client_pages = crate::desktop::clients::ClientId::ALL
+        .into_iter()
+        .map(|id| clients::ClientPage::new(&shell, id, frame, api.clone()))
+        .collect::<Vec<_>>();
+
+    let codex_tab = codex_tab::create_with_settings(
+        &client_pages[0].model_host,
+        text,
+        Some(&client_pages[0].settings_host),
+        Some((client_pages[0].launch, client_pages[0].reload)),
     );
-
-    let notebook = Notebook::builder(&root).build();
-    apply_notebook_theme(&notebook);
-    let tab_icons = create_main_tab_icons(&notebook);
-
-    let codex_tab = codex_tab::create(&notebook, text);
+    client_pages[0].attach_model(&codex_tab.page);
+    codex_tab::bind_model_list(&codex_tab, &client_pages[0]);
+    {
+        let tab = codex_tab.clone();
+        client_pages[0].on_model_focus(move |model| codex_tab::focus_model(&tab, model));
+    }
     enable_full_repaint_on_resize(&codex_tab.page);
 
     // --- AI Gateway Tab ---
@@ -662,7 +705,7 @@ fn build_ui(
                 };
                 match col {
                     0 => row_data.enabled.into(),
-                    1 => row_data.name.clone().into(),
+                    1 => row_data.display_name.clone().into(),
                     2 => provider_logo_variant(row_data),
                     3 => provider_protocol_display(
                         &row_data.provider_type,
@@ -671,7 +714,13 @@ fn build_ui(
                     .into(),
                     4 => row_data.base_url.clone().into(),
                     5 => row_data.weight.to_string().into(),
-                    6 => provider_scope_display(&row_data.name, text).into(),
+                    6 => {
+                        if row_data.scope_label.is_empty() {
+                            provider_scope_display(&row_data.name, text).into()
+                        } else {
+                            row_data.scope_label.clone().into()
+                        }
+                    }
                     _ => String::new().into(),
                 }
             },
@@ -776,6 +825,17 @@ fn build_ui(
         .with_label(text.ai_gw_delete_channel())
         .build();
     let ai_gw_list_actions = BoxSizer::builder(Orientation::Horizontal).build();
+    let ai_gw_scope = Choice::builder(&ai_gw_list_box)
+        .with_choices(vec![
+            "普通模型渠道".into(),
+            "WorkBuddy 专用".into(),
+            "天工 Work 专用".into(),
+            "其他客户端专用".into(),
+            "全部渠道".into(),
+        ])
+        .with_selection(Some(0))
+        .build();
+    ai_gw_list_actions.add(&ai_gw_scope, 0, SizerFlag::Right, 12);
     ai_gw_list_actions.add_stretch_spacer(1);
     ai_gw_list_actions.add(&ai_gw_new_button, 0, SizerFlag::Right, 8);
     ai_gw_list_actions.add(&ai_gw_edit_button, 0, SizerFlag::Right, 8);
@@ -1043,7 +1103,9 @@ fn build_ui(
     request_log_cleanup_status.show(false);
     request_log_cleanup_status.set_min_size(Size::new(220, 24));
     request_log_cleanup_status.set_foreground_color(theme::theme().error);
-    let request_log_toolbar = BoxSizer::builder(Orientation::Horizontal).build();
+    let request_log_toolbar = WrapSizer::builder(Orientation::Horizontal)
+        .with_flags(WrapSizerFlag::RemoveLeadingSpaces)
+        .build();
     request_log_toolbar.add(&request_log_hint, 0, SizerFlag::AlignCenterVertical, 0);
     request_log_toolbar.add(
         &request_log_disabled_hint,
@@ -1051,7 +1113,6 @@ fn build_ui(
         SizerFlag::AlignCenterVertical,
         0,
     );
-    request_log_toolbar.add_stretch_spacer(1);
     request_log_toolbar.add(
         &request_log_cleanup_status,
         0,
@@ -1193,47 +1254,86 @@ fn build_ui(
         10,
     );
     request_logs_page.set_sizer(request_logs_sizer, true);
+    request_log_list.hide();
+    request_log_hint.hide();
+    let request_browser = request_browser::RequestBrowser::new(
+        &request_logs_page,
+        frame,
+        api.clone(),
+        text,
+        Default::default(),
+    );
+    if let Some(sizer) = request_logs_page.get_sizer() {
+        sizer.add(&request_browser.page, 1, SizerFlag::Expand, 0);
+    }
 
     // --- WorkBuddy Tab ---
-    let workbuddy_tab = workbuddy::create(&notebook, text);
+    let workbuddy_tab = workbuddy::create_with_settings(
+        &client_pages[1].model_host,
+        text,
+        Some(&client_pages[1].settings_host),
+        Some((client_pages[1].launch, client_pages[1].reload)),
+    );
+    client_pages[1].attach_model(&workbuddy_tab.page);
     enable_full_repaint_on_resize(&workbuddy_tab.page);
-    let gmclaw_tab = gmclaw::create(&notebook, text);
+    let gmclaw_tab = gmclaw::create_with_settings(
+        &client_pages[2].model_host,
+        text,
+        Some(&client_pages[2].settings_host),
+        Some((client_pages[2].launch, client_pages[2].reload)),
+    );
+    client_pages[2].attach_model(&gmclaw_tab.page);
     enable_full_repaint_on_resize(&gmclaw_tab.page);
     let nvwa_tab = nvwa::create(&notebook, text);
     enable_full_repaint_on_resize(&nvwa_tab.page);
 
-    notebook.add_page(&codex_tab.page, text.codex_tab(), true, tab_icons[0]);
-    notebook.add_page(
-        &workbuddy_tab.page,
-        text.workbuddy_tab(),
-        false,
-        tab_icons[4],
-    );
-    notebook.add_page(
-        &gmclaw_tab.page,
-        match text.locale {
-            GuiLocale::ZhCn => "天工 Work 接入",
-            GuiLocale::EnUs => "GMClaw Integration",
-        },
-        false,
-        tab_icons[5],
-    );
-    notebook.add_page(&ai_gw_page, text.ai_gateway_tab(), false, tab_icons[1]);
-    notebook.add_page(&feishu_page, text.chat_tab(), false, tab_icons[2]);
-    notebook.add_page(
-        &request_logs_page,
-        text.request_logs_tab(),
-        false,
-        tab_icons[3],
-    );
-    if dumpling_mcp_visible.get() {
-        notebook.add_page(&nvwa_tab.page, "Dumpling-MCP", false, tab_icons[6]);
-    } else {
-        nvwa_tab.page.show(false);
+    use shell::PageId;
+    shell.register(PageId::Sources, &ai_gw_page);
+    shell.register(PageId::Chat, &feishu_page);
+    shell.register(PageId::Logs, &request_logs_page);
+    shell.register(PageId::Dumpling, &nvwa_tab.page);
+    let resource_ui = resources::ResourceUi::new(&shell, frame, api.clone(), gui_tx.clone());
+    let diagnostics = {
+        let tx = gui_tx.clone();
+        let result = diagnostics_export_result.clone();
+        Rc::new(move || {
+            if let Some(output_path) = prompt_diagnostics_export_path(&frame, text) {
+                export_connection_diagnostics_async(text, tx.clone(), result.clone(), output_path);
+            }
+        })
+    };
+    let dumpling_checkbox =
+        preferences::create(&shell, frame, api.clone(), text, &resource_ui, diagnostics);
+    let dumpling_page = DumplingMcpPage {
+        shell: shell.clone(),
+        tab: nvwa_tab.clone(),
+        visible: dumpling_mcp_visible.clone(),
+        resources: resource_ui.clone(),
+        checkbox: dumpling_checkbox,
+    };
+    {
+        let page = dumpling_page.clone();
+        let tx = gui_tx.clone();
+        dumpling_checkbox.on_toggled(move |_| toggle_dumpling_mcp_page(&frame, text, &page, &tx));
+    }
+    for (id, client) in crate::desktop::clients::ClientId::ALL
+        .into_iter()
+        .zip(&client_pages)
+    {
+        resource_ui.mount_client(
+            &client.skills_host,
+            id,
+            crate::desktop::resources::ResourceKind::Skill,
+        );
+        resource_ui.mount_client(
+            &client.mcp_host,
+            id,
+            crate::desktop::resources::ResourceKind::Mcp,
+        );
     }
 
     root_sizer.add(
-        &notebook,
+        &shell.panel,
         1,
         SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Top | SizerFlag::Bottom,
         8,
@@ -1258,6 +1358,7 @@ fn build_ui(
     }
 
     let handles = UiHandles {
+        shell: shell.clone(),
         text,
         client_overview,
         service_status,
@@ -1278,6 +1379,7 @@ fn build_ui(
         codex_tab,
         ai_gw_provider_list,
         ai_gw_provider_rows,
+        ai_gw_scope,
         ai_gw_provider_model,
         pending_ai_gw_channel_toggle,
         ai_gw_filter_image_generation,
@@ -1294,6 +1396,25 @@ fn build_ui(
 
     let daemon_child: Rc<RefCell<Option<Child>>> = Rc::new(RefCell::new(None));
     let dashboard_refresh = DashboardRefresh::new(gui_tx.clone());
+    {
+        let handles = handles.clone();
+        let dashboard_refresh = dashboard_refresh.clone();
+        ai_gw_scope.on_selection_changed(move |_| {
+            handles.shell.clear_source_focus();
+            if let Ok(snapshot) = dashboard_refresh.last_snapshot.lock() {
+                refresh_ai_gw_provider_list(
+                    &handles,
+                    snapshot.as_ref().and_then(|s| s.ai_gateway.as_ref()),
+                );
+            }
+        });
+    }
+    {
+        let (api, refresh) = (api.clone(), dashboard_refresh.clone());
+        client_pages[0].reload.on_click(move |_| {
+            force_dashboard_refresh(&api, &refresh);
+        });
+    }
     show_dashboard_starting(&handles);
 
     let codex_action_in_flight = Arc::new(AtomicBool::new(false));
@@ -1306,11 +1427,42 @@ fn build_ui(
         &codex_action_in_flight,
     );
 
+    {
+        let tab = handles.codex_tab.clone();
+        client_pages[0].on_model_saved(move || codex_tab::invalidate_visible_models(&tab));
+    }
     workbuddy::bind_actions(&workbuddy_tab, &api, &frame, text, &gui_tx);
     gmclaw::bind_actions(&gmclaw_tab, &api, &frame, text, &gui_tx);
+    {
+        let tab = workbuddy_tab.clone();
+        client_pages[1].on_model_add(move || workbuddy::begin_model_draft(&tab));
+        let tab = gmclaw_tab.clone();
+        client_pages[2].on_model_add(move || gmclaw::begin_model_draft(&tab, text));
+    }
+    {
+        let (tab, api, tx) = (workbuddy_tab.clone(), api.clone(), gui_tx.clone());
+        client_pages[1].on_model_refresh(move |rebase| {
+            workbuddy::refresh_configuration(&tab, &api, &tx, false, rebase)
+        });
+    }
+    {
+        let (tab, api, tx) = (gmclaw_tab.clone(), api.clone(), gui_tx.clone());
+        client_pages[2]
+            .on_model_refresh(move |rebase| gmclaw::refresh(&tab, &api, text, &tx, false, rebase));
+    }
+    {
+        let (api, refresh) = (api.clone(), dashboard_refresh.clone());
+        let tab = handles.codex_tab.clone();
+        client_pages[0].on_model_refresh(move |rebase| {
+            if rebase {
+                codex_tab::reload_visible_models(&tab);
+            }
+            force_dashboard_refresh(&api, &refresh);
+        });
+    }
     nvwa::bind_actions(&nvwa_tab, &frame, text, &gui_tx);
 
-    install_system_menu(
+    bind_system_commands(
         &frame,
         &gui_timers,
         text,
@@ -1318,12 +1470,7 @@ fn build_ui(
         quitting.clone(),
         gui_tx.clone(),
         diagnostics_export_result.clone(),
-        DumplingMcpPage {
-            notebook,
-            tab: nvwa_tab.clone(),
-            icon: tab_icons[6],
-            visible: dumpling_mcp_visible.clone(),
-        },
+        dumpling_page,
     );
 
     bind_service_connection_settings(&frame, &handles);
@@ -1670,7 +1817,7 @@ fn build_ui(
     let request_log_detail_in_flight = Arc::new(AtomicBool::new(false));
     let request_log_clear_result: RequestLogClearResultStore = Arc::new(Mutex::new(None));
     let request_log_clear_in_flight = Arc::new(AtomicBool::new(false));
-    let request_logs_active = Rc::new(Cell::new(notebook.selection() == REQUEST_LOG_TAB_INDEX));
+    let request_logs_active = Rc::new(Cell::new(shell.current() == PageId::Logs));
     let request_log_timer_store: FrameTimerStore = Rc::new(RefCell::new(None));
     let request_log_cleanup_animation_frame = Rc::new(Cell::new(0_usize));
     let request_log_cleanup_timer_store: FrameTimerStore = Rc::new(RefCell::new(None));
@@ -1698,8 +1845,38 @@ fn build_ui(
         let request_log_timer_store = request_log_timer_store.clone();
         let handles = handles.clone();
         let dashboard_refresh = dashboard_refresh.clone();
-        notebook.on_page_changed(move |event| {
-            let page = event.get_selection().unwrap_or(-1);
+        let resource_ui = resource_ui.clone();
+        let overview_ui = overview_ui.clone();
+        let request_browser = request_browser.clone();
+        let client_pages = client_pages.clone();
+        let squad_ui = squad_ui.clone();
+        let source_navigation = shell.clone();
+        shell.on_changed(move |page| {
+            if let Some(route) = source_navigation.take_source_focus() {
+                if let Some(snapshot) = cached_dashboard_snapshot(&dashboard_refresh) {
+                    if let Some(provider) = snapshot.ai_gateway.as_ref().and_then(|c| {
+                        c.providers
+                            .iter()
+                            .find(|p| crate::ai_gateway::config::provider_route_id(p) == route)
+                    }) {
+                        if let Some(index) = handles
+                            .ai_gw_provider_rows
+                            .borrow()
+                            .iter()
+                            .position(|r| r.name == provider.name)
+                        {
+                            handles.ai_gw_provider_list.select_row(index);
+                        }
+                    }
+                }
+            }
+            overview_ui.enter(page);
+            squad_ui.enter(page);
+            request_browser.enter(page == PageId::Logs);
+            resource_ui.enter(page);
+            for client in &client_pages {
+                client.enter(page);
+            }
             if handles.client_overview.select_page(page) {
                 if let Some(snapshot) = cached_dashboard_snapshot(&dashboard_refresh) {
                     update_dashboard(
@@ -1712,7 +1889,9 @@ fn build_ui(
                 }
                 schedule_dashboard_refresh(&api, &dashboard_refresh);
             }
-            let active = page == REQUEST_LOG_TAB_INDEX;
+            // The visible whole-database browser owns list polling. The legacy
+            // detail and recording controls remain, without a hidden 200-row poll.
+            let active = false;
             request_logs_active.set(active);
             if active {
                 if !request_log_clear_in_flight.load(Ordering::SeqCst) {
@@ -1723,6 +1902,7 @@ fn build_ui(
                 stop_request_log_timer(&request_log_timer_store);
             }
         });
+        shell.navigate(PageId::Overview);
     }
     {
         let api = api.clone();
@@ -1833,6 +2013,7 @@ fn build_ui(
         let request_log_clear_in_flight = request_log_clear_in_flight.clone();
         let request_log_cleanup_timer_store = request_log_cleanup_timer_store.clone();
         let request_logs_active = request_logs_active.clone();
+        let request_browser = request_browser.clone();
         request_log_timer.on_tick(move |_| {
             apply_pending_request_logs(&handles, &request_log_result);
             apply_pending_request_log_detail(&frame, &handles, &request_log_detail_result);
@@ -1844,9 +2025,11 @@ fn build_ui(
                 &request_log_cleanup_status,
                 &request_log_cleanup_timer_store,
                 &request_log_clear_result,
-            ) && request_logs_active.get()
-            {
-                force_request_log_refresh(&api, &request_log_result, &request_log_in_flight);
+            ) {
+                request_browser.refresh();
+                if request_logs_active.get() {
+                    force_request_log_refresh(&api, &request_log_result, &request_log_in_flight);
+                }
             }
             if request_logs_active.get() && !request_log_clear_in_flight.load(Ordering::SeqCst) {
                 schedule_request_log_refresh(&api, &request_log_result, &request_log_in_flight);
@@ -1903,6 +2086,8 @@ fn build_ui(
         let gmclaw_tab = gmclaw_tab.clone();
         let nvwa_tab = nvwa_tab.clone();
         let dumpling_mcp_visible = dumpling_mcp_visible.clone();
+        let resource_ui = resource_ui.clone();
+        let request_browser = request_browser.clone();
         frame.on_idle(move |event| {
             // Kick off any toggles queued from the data views.
             process_pending_im_toggle(
@@ -1937,9 +2122,11 @@ fn build_ui(
                 &request_log_cleanup_status,
                 &request_log_cleanup_timer_store,
                 &request_log_clear_result,
-            ) && request_logs_active.get()
-            {
-                force_request_log_refresh(&api, &request_log_result, &request_log_in_flight);
+            ) {
+                request_browser.refresh();
+                if request_logs_active.get() {
+                    force_request_log_refresh(&api, &request_log_result, &request_log_in_flight);
+                }
             }
             apply_pending_diagnostics_export(&frame, handles.text, &diagnostics_export_result);
 
@@ -1951,6 +2138,7 @@ fn build_ui(
                     Ok(message) => {
                         processed += 1;
                         match message {
+                            GuiMessage::Resources(result) => resource_ui.apply(result),
                             GuiMessage::CodexAction(result) => {
                                 codex_tab::apply_pending_action(
                                     &api,
@@ -2124,10 +2312,6 @@ fn build_ui(
     }
 
     frame.centre();
-    // Use the complete desktop work area on every launch. This keeps the
-    // model controls and action buttons reachable without requiring a manual
-    // resize after each start, while still respecting the OS taskbar area.
-    frame.maximize(true);
     frame.show(true);
     external_import::install(app, &frame, &api, &gui_timers, inbox, initial);
 }
@@ -2158,13 +2342,20 @@ const MIN_FRAME_HEIGHT: i32 = 560;
 /// scaled laptops this keeps the bottom action row (e.g. "save models") inside
 /// the first screen instead of below a scrollbar the user has to discover.
 fn initial_frame_size() -> Size {
-    let preferred = Size::new(PREFERRED_FRAME_WIDTH, PREFERRED_FRAME_HEIGHT);
-    match screen_work_area_size() {
+    frame_size_at_scale(1., screen_work_area_size())
+}
+
+/// Convert the intended logical size once, then clamp physical pixels to the
+/// physical work area. The frame is still hidden while its native DPI is read.
+fn frame_size_at_scale(scale: f64, work_area: Option<(i32, i32)>) -> Size {
+    let dip = |v: i32| (v as f64 * scale).round() as i32;
+    let preferred = Size::new(dip(PREFERRED_FRAME_WIDTH), dip(PREFERRED_FRAME_HEIGHT));
+    match work_area {
         Some((work_w, work_h)) => {
             // Leave a small margin so the title bar and window borders stay on
             // screen even when the reported work area is flush with the frame.
-            let max_w = (work_w - 32).max(MIN_FRAME_WIDTH);
-            let max_h = (work_h - 48).max(MIN_FRAME_HEIGHT);
+            let max_w = (work_w - dip(32)).max(1);
+            let max_h = (work_h - dip(48)).max(1);
             Size::new(preferred.width.min(max_w), preferred.height.min(max_h))
         }
         None => preferred,
@@ -2173,10 +2364,10 @@ fn initial_frame_size() -> Size {
 
 /// Never let `set_min_size` demand more than the screen can show; otherwise the
 /// floor itself would force off-screen content on very small displays.
-fn min_frame_size(frame_size: Size) -> Size {
+fn min_frame_size(frame_size: Size, scale: f64) -> Size {
     Size::new(
-        MIN_FRAME_WIDTH.min(frame_size.width),
-        MIN_FRAME_HEIGHT.min(frame_size.height),
+        ((MIN_FRAME_WIDTH as f64 * scale).round() as i32).min(frame_size.width),
+        ((MIN_FRAME_HEIGHT as f64 * scale).round() as i32).min(frame_size.height),
     )
 }
 
@@ -2318,53 +2509,26 @@ fn save_dumpling_mcp_visibility(visible: bool) -> Result<(), String> {
 
 fn toggle_dumpling_mcp_page(
     frame: &Frame,
-    text: GuiText,
+    _text: GuiText,
     page: &DumplingMcpPage,
     gui_tx: &tokio_mpsc::UnboundedSender<GuiMessage>,
 ) {
-    let previous = page.visible.get();
-    let visible = !previous;
-    let result = save_dumpling_mcp_visibility(visible).and_then(|()| {
-        let changed = if visible {
-            page.notebook.add_page(&page.tab.page, "Dumpling-MCP", true, page.icon)
-        } else {
-            // RemovePage detaches without destroying the page. In-flight GUI
-            // results retain valid controls, and showing it again keeps the form.
-            let index = (0..page.notebook.get_page_count()).find(|&index| {
-                page.notebook.get_page(index).is_some_and(|window| {
-                    window.get_handle() == page.tab.page.get_handle()
-                })
-            });
-            index.is_some_and(|index| {
-                if page.notebook.selection() == index as i32 {
-                    page.notebook.set_selection(CODEX_TAB_INDEX as usize);
-                }
-                page.notebook.remove_page(index)
-            })
-        };
-        if !changed {
-            let restored = save_dumpling_mcp_visibility(previous).is_ok();
-            return Err(if text.locale == GuiLocale::ZhCn {
-                if restored { "页签显示未能更新，请重新打开 Hub 后重试。" }
-                else { "页签显示未能更新，显示偏好也未能还原；请重新打开 Hub 后核对帮助菜单。" }
-            } else if restored {
-                "Could not update the tab. Reopen Hub and try again."
-            } else {
-                "Could not update the tab or restore its preference. Reopen Hub and check the Help menu."
-            }.to_owned());
-        }
-        page.tab.page.show(visible);
+    let visible = !page.visible.get();
+    let result = save_dumpling_mcp_visibility(visible).map(|()| {
         page.visible.set(visible);
-        page.notebook.layout();
-        frame.layout();
+        page.resources.set_dumpling_visible(visible);
         if visible {
+            page.shell.navigate(shell::PageId::Dumpling);
             nvwa::refresh_if_needed(&page.tab, gui_tx);
+        } else if page.shell.current() == shell::PageId::Dumpling {
+            page.shell.navigate(shell::PageId::Mcp);
         }
-        Ok(())
+        frame.layout();
     });
     if let Some(menu) = frame.get_menu_bar() {
         menu.check_item(ID_MENU_SHOW_DUMPLING_MCP, page.visible.get());
     }
+    page.checkbox.set_value(page.visible.get());
     if let Err(error) = result {
         show_error(frame, &error);
     }
@@ -2521,7 +2685,7 @@ fn normalize_gui_config_paths(config: &mut AppConfig, config_path: &Path) {
     }
 }
 
-fn install_system_menu(
+fn bind_system_commands(
     frame: &Frame,
     gui_timers: &GuiTimers,
     text: GuiText,
@@ -2531,136 +2695,8 @@ fn install_system_menu(
     diagnostics_export_result: DiagnosticsExportResultStore,
     dumpling: DumplingMcpPage,
 ) {
-    let file_menu = Menu::builder();
-    #[cfg(any(windows, target_os = "macos"))]
-    let file_menu = file_menu.append_item(
-        ID_MENU_REGISTER_IMPORT,
-        if text.locale == GuiLocale::ZhCn {
-            "注册网页导入…"
-        } else {
-            "Register web import…"
-        },
-        "Windows / macOS",
-    );
-    #[cfg(windows)]
-    let file_menu = file_menu.append_item(
-        ID_MENU_UNREGISTER_IMPORT,
-        if text.locale == GuiLocale::ZhCn {
-            "解除网页导入注册"
-        } else {
-            "Unregister web import"
-        },
-        "Windows",
-    );
-    let file_menu = file_menu
-        .append_separator()
-        .append_item(
-            ID_MENU_CLOSE_WINDOW,
-            text.close_window(),
-            text.close_window_help(),
-        )
-        .append_item(ID_MENU_MINIMIZE, text.minimize(), text.minimize_help())
-        .append_separator()
-        .append_item(ID_MENU_QUIT, text.quit(), text.quit_help())
-        .build();
-    let language_menu = Menu::builder()
-        .append_radio_item(
-            ID_MENU_LANGUAGE_ZH_CN,
-            text.language_zh_cn(),
-            text.language_restart_message(),
-        )
-        .append_radio_item(
-            ID_MENU_LANGUAGE_EN_US,
-            text.language_en_us(),
-            text.language_restart_message(),
-        )
-        .build();
-    language_menu.check_item(ID_MENU_LANGUAGE_ZH_CN, text.locale == GuiLocale::ZhCn);
-    language_menu.check_item(ID_MENU_LANGUAGE_EN_US, text.locale == GuiLocale::EnUs);
-    let theme_mode = load_gui_theme();
-    let theme_menu = Menu::builder()
-        .append_radio_item(
-            ID_MENU_THEME_SYSTEM,
-            text.theme_system(),
-            text.theme_restart_message(),
-        )
-        .append_radio_item(
-            ID_MENU_THEME_LIGHT,
-            text.theme_light(),
-            text.theme_restart_message(),
-        )
-        .append_radio_item(
-            ID_MENU_THEME_DARK,
-            text.theme_dark(),
-            text.theme_restart_message(),
-        )
-        .build();
-    theme_menu.check_item(ID_MENU_THEME_SYSTEM, theme_mode == ThemeMode::System);
-    theme_menu.check_item(ID_MENU_THEME_LIGHT, theme_mode == ThemeMode::Light);
-    theme_menu.check_item(ID_MENU_THEME_DARK, theme_mode == ThemeMode::Dark);
-    let outbound_proxy = load_outbound_proxy_config();
-    let network_menu = Menu::builder()
-        .append_radio_item(
-            ID_MENU_PROXY_SYSTEM,
-            text.outbound_proxy_system(),
-            text.outbound_proxy_system_help(),
-        )
-        .append_radio_item(
-            ID_MENU_PROXY_DIRECT,
-            text.outbound_proxy_direct(),
-            text.outbound_proxy_direct_help(),
-        )
-        .append_radio_item(
-            ID_MENU_PROXY_CUSTOM,
-            text.outbound_proxy_custom(),
-            text.outbound_proxy_custom_help(),
-        )
-        .build();
-    network_menu.check_item(
-        ID_MENU_PROXY_SYSTEM,
-        outbound_proxy.mode == OutboundProxyMode::System,
-    );
-    network_menu.check_item(
-        ID_MENU_PROXY_DIRECT,
-        outbound_proxy.mode == OutboundProxyMode::Direct,
-    );
-    network_menu.check_item(
-        ID_MENU_PROXY_CUSTOM,
-        outbound_proxy.mode == OutboundProxyMode::Custom,
-    );
-    let help_menu = Menu::builder()
-        .append_check_item(
-            ID_MENU_SHOW_DUMPLING_MCP,
-            if text.locale == GuiLocale::ZhCn {
-                "显示 Dumpling-MCP"
-            } else {
-                "Show Dumpling-MCP"
-            },
-            if text.locale == GuiLocale::ZhCn {
-                "勾选后显示 MCP 配置页签"
-            } else {
-                "Show the MCP configuration tab when checked"
-            },
-        )
-        .append_separator()
-        .append_item(
-            ID_MENU_EXPORT_CONNECTION_DIAGNOSTICS,
-            text.export_connection_diagnostics(),
-            text.export_connection_diagnostics_help(),
-        )
-        .append_separator()
-        .append_item(ID_ABOUT, text.about(), "About TianCaiSpaceHub")
-        .build();
-    help_menu.check_item(ID_MENU_SHOW_DUMPLING_MCP, dumpling.visible.get());
-    let menu_bar = MenuBar::builder()
-        .append(file_menu, text.file_menu())
-        .append(language_menu, text.language_menu())
-        .append(theme_menu, text.theme_menu())
-        .append(network_menu, text.network_menu())
-        .append(help_menu, text.help_menu())
-        .build();
-    frame.set_menu_bar(menu_bar);
-
+    // The desktop shell owns navigation. Do not attach a legacy menu bar:
+    // appearance/network live in Settings; diagnostics and About live in Help.
     let frame = *frame;
     let gui_timers = gui_timers.clone();
     frame.on_menu_selected(move |event| match event.get_id() {
@@ -2721,7 +2757,7 @@ fn ai_gw_service_option(
 ) -> RadioButton {
     let row_panel = Panel::builder(parent).build();
     row_panel.set_background_color(theme::theme().bg_card_alt);
-    row_panel.set_min_size(Size::new(0, 46));
+    row_panel.set_min_size(visual::dip_size(&row_panel, 0, 46));
 
     let row = BoxSizer::builder(Orientation::Horizontal).build();
     row.add_spacer(12);
@@ -2814,8 +2850,8 @@ fn start_ai_gw_provider_save(
 /// bounds without mixing native pixels and logical coordinates.
 fn ai_gw_channel_dialog_size(parent: &Frame, preferred: Size) -> Size {
     let parent_size = parent.get_client_size();
-    let mut width = preferred.width;
-    let mut height = preferred.height;
+    let mut width = parent.from_dip(preferred.width);
+    let mut height = parent.from_dip(preferred.height);
     if parent_size.width > 0 {
         width = width.min((parent_size.width - 24).max(1));
     }
@@ -2835,13 +2871,19 @@ fn show_ai_gw_channel_dialog(
     api: &ApiClient,
     initial: Option<&ProviderConfig>,
 ) -> Option<ProviderConfig> {
+    if initial.is_some_and(|p| p.tiangong_builtin.is_some()) {
+        tiangong_models::show(parent, api);
+        return None;
+    }
     if initial.is_some_and(|p| p.provider_type == ProviderType::ChatGptResponses) {
         return chatgpt::show_channel_dialog(parent, text, api.clone(), initial);
     }
     const CHATGPT_DIALOG: i32 = 19028;
     let dialog_size = ai_gw_channel_dialog_size(parent, Size::new(1120, 760));
-    let stacked = dialog_size.width < 1100;
-    let minimum_width = (if stacked { 720 } else { 1100 }).min(dialog_size.width);
+    let stacked = dialog_size.width < parent.from_dip(1020);
+    let minimum_width = parent
+        .from_dip(if stacked { 640 } else { 1020 })
+        .min(dialog_size.width);
     let dialog = Dialog::builder(parent, text.ai_gw_channel_editor())
         .with_style(DialogStyle::DefaultDialogStyle | DialogStyle::ResizeBorder)
         .with_size(dialog_size.width, dialog_size.height)
@@ -2894,7 +2936,11 @@ fn show_ai_gw_channel_dialog(
 
     let service_panel = Panel::builder(&panel).build();
     service_panel.set_background_color(theme::theme().bg_card);
-    service_panel.set_min_size(Size::new(300, -1));
+    service_panel.set_min_size(visual::dip_size(
+        &service_panel,
+        if stacked { 0 } else { 260 },
+        -1,
+    ));
     let service_sizer = BoxSizer::builder(Orientation::Vertical).build();
     let service_title = StaticText::builder(&service_panel)
         .with_label(text.ai_gw_provider_service())
@@ -3083,65 +3129,39 @@ fn show_ai_gw_channel_dialog(
         coding_plan: zai_coding_plan_radio,
     };
 
-    let grid = FlexGridSizer::builder(0, 2)
-        .with_vgap(12)
-        .with_hgap(14)
-        .build();
-    grid.add_growable_col(1, 1);
-
-    let type_input = text_field_row(
+    let provider_fields = provider_form::ProviderFields::new(
         &form_panel,
-        &grid,
-        text.ai_gw_api_protocol(),
+        [
+            text.ai_gw_api_protocol(),
+            text.ai_gw_provider_name(),
+            text.ai_gw_col_base_url(),
+            text.ai_gw_models_url(),
+            text.ai_gw_col_api_key(),
+            text.ai_gw_weight(),
+        ],
         text.provider_type_openai_responses(),
+        text.ai_gw_chat_disable_reasoning(),
+        text.ai_gw_models_url_help(),
     );
-    type_input.set_editable(false);
-    let chat_reasoning_spacer = StaticText::builder(&form_panel).with_label("").build();
-    grid.add(&chat_reasoning_spacer, 0, SizerFlag::Right, 0);
-    let chat_disable_reasoning = CheckBox::builder(&form_panel)
-        .with_label(text.ai_gw_chat_disable_reasoning())
-        .with_value(initial.is_some_and(|provider| provider.chat_disable_reasoning))
-        .build();
+    let grid = provider_fields.grid;
+    let [
+        type_input,
+        name_input,
+        base_url_input,
+        models_url_input,
+        key_input,
+        weight_input,
+    ] = provider_fields.inputs;
+    let chat_disable_reasoning = provider_fields.chat_disable_reasoning;
+    chat_disable_reasoning
+        .set_value(initial.is_some_and(|provider| provider.chat_disable_reasoning));
     chat_disable_reasoning.set_tooltip(text.ai_gw_chat_disable_reasoning_help());
-    chat_disable_reasoning.set_foreground_color(theme::theme().ink_primary);
     chat_disable_reasoning.enable(
         initial.is_some_and(|provider| provider.provider_type == ProviderType::ChatCompletions),
     );
-    grid.add(&chat_disable_reasoning, 0, SizerFlag::Expand, 0);
-    let name_input = text_field_row(&form_panel, &grid, text.ai_gw_provider_name(), "");
     if let Some(provider) = initial.filter(|provider| provider.is_client_reserved()) {
         name_input.enable(false);
         name_input.set_tooltip(provider_scope_help(&provider.name, text));
-    }
-    let base_url_input = text_field_row(&form_panel, &grid, text.ai_gw_col_base_url(), "");
-    let models_url_input = text_field_row(&form_panel, &grid, text.ai_gw_models_url(), "");
-    models_url_input.set_tooltip(text.ai_gw_models_url_help());
-    let models_url_help_spacer = StaticText::builder(&form_panel).with_label("").build();
-    grid.add(&models_url_help_spacer, 0, SizerFlag::Right, 0);
-    let models_url_help = StaticText::builder(&form_panel)
-        .with_label(text.ai_gw_models_url_help())
-        .build();
-    models_url_help.set_foreground_color(theme::theme().ink_muted);
-    models_url_help.wrap(if stacked {
-        (minimum_width - 260).clamp(220, 540)
-    } else {
-        540
-    });
-    grid.add(&models_url_help, 0, SizerFlag::Expand, 0);
-    let key_input = text_field_row(&form_panel, &grid, text.ai_gw_col_api_key(), "");
-    let weight_input = text_field_row(&form_panel, &grid, text.ai_gw_weight(), "100");
-    if stacked {
-        let field_width = (minimum_width - 240).clamp(240, 420);
-        for input in [
-            type_input,
-            name_input,
-            base_url_input,
-            models_url_input,
-            key_input,
-            weight_input,
-        ] {
-            input.set_min_size(Size::new(field_width, 30));
-        }
     }
 
     form_sizer.add_sizer(
@@ -3856,6 +3876,7 @@ fn show_ai_gw_channel_dialog(
         let validate_save = validate_save.clone();
         let model_mapping_rows = model_mapping_rows.clone();
         let model_mapping_model = model_mapping_model.clone();
+        let current_ai_gw_provider_template = current_ai_gw_provider_template.clone();
         fetch_models_timer.on_tick(move |_| {
             if fetch_models_closed.load(Ordering::SeqCst) {
                 return;
@@ -3879,6 +3900,11 @@ fn show_ai_gw_channel_dialog(
                     if models.is_empty() {
                         show_error(&dialog, text.ai_gw_models_empty());
                     } else {
+                        let mut template = current_ai_gw_provider_template.borrow_mut();
+                        template.base_url =
+                            strip_nul(&base_url_input.get_value()).trim().to_string();
+                        template.confirm_base_url(&normalized_base_url);
+                        drop(template);
                         base_url_input.change_value(&normalized_base_url);
                         let existing_aliases =
                             model_mapping_aliases_by_upstream(&model_mapping_rows);
@@ -4006,6 +4032,7 @@ fn show_ai_gw_channel_dialog(
                 .unwrap_or(100)
                 .max(1);
             Some(ProviderConfig {
+                desktop_binding: initial.and_then(|p| p.desktop_binding.clone()),
                 import_source: initial.and_then(|p| p.import_source.clone()),
                 gmclaw_parameters: initial.and_then(|p| p.gmclaw_parameters.clone()),
                 name,
@@ -4016,9 +4043,11 @@ fn show_ai_gw_channel_dialog(
                 compatibility,
                 zai_access_mode,
                 base_url: template.base_url,
+                base_url_repair_origin: template.base_url_repair_origin,
                 models_url,
                 api_key: strip_nul(&key_input.get_value()).trim().to_string(),
                 chatgpt_auth_id: None,
+                tiangong_builtin: initial.and_then(|p| p.tiangong_builtin.clone()),
                 model_aliases,
                 models,
                 prompt_cache_retention: initial
@@ -4403,9 +4432,7 @@ fn normalize_provider_models_url(mut provider: ProviderConfig) -> ProviderConfig
 
 fn is_default_models_url_for_base(base_url: &str, models_url: &str) -> bool {
     let normalized = models_url.trim().trim_end_matches('/');
-    let raw = base_url.trim().trim_end_matches('/');
-    let root = provider_api_root(raw);
-    normalized == format!("{raw}/models") || normalized == format!("{root}/v1/models")
+    normalized == provider_endpoint(base_url, "/models")
 }
 
 fn known_models_urls_for_provider(provider: &ProviderConfig) -> Vec<String> {
@@ -4465,21 +4492,6 @@ fn normalize_optional_url(value: Option<&str>) -> Option<String> {
 fn is_http_url(value: &str) -> bool {
     Url::parse(value)
         .is_ok_and(|url| matches!(url.scheme(), "http" | "https") && url.host_str().is_some())
-}
-
-fn has_api_version_suffix(value: &str) -> bool {
-    let Ok(url) = Url::parse(value) else {
-        return false;
-    };
-    url.path()
-        .trim_end_matches('/')
-        .rsplit('/')
-        .next()
-        .is_some_and(|segment| {
-            segment.len() > 1
-                && segment.starts_with('v')
-                && segment[1..].chars().all(|ch| ch.is_ascii_digit())
-        })
 }
 
 fn set_ai_gw_dialog_provider_type(
@@ -5096,15 +5108,34 @@ mod model_mapping_tests {
         // On a tiny window the floor must shrink with it, otherwise the min-size
         // constraint would itself force off-screen content.
         let tiny = Size::new(640, 400);
-        let floor = min_frame_size(tiny);
+        let floor = min_frame_size(tiny, 1.);
         assert!(floor.width <= tiny.width);
         assert!(floor.height <= tiny.height);
 
         // On a roomy window the floor stays at the usable minimums.
         let roomy = Size::new(1600, 1000);
-        let floor = min_frame_size(roomy);
+        let floor = min_frame_size(roomy, 1.);
         assert_eq!(floor.width, MIN_FRAME_WIDTH);
         assert_eq!(floor.height, MIN_FRAME_HEIGHT);
+    }
+
+    #[test]
+    fn high_dpi_frame_keeps_logical_width_when_screen_has_room() {
+        let size = frame_size_at_scale(1.5, Some((2560, 1400)));
+        assert_eq!((size.width, size.height), (1770, 1140));
+        let floor = min_frame_size(size, 1.5);
+        assert_eq!((floor.width, floor.height), (1350, 840));
+    }
+
+    #[test]
+    fn scaled_frame_and_minimum_stay_inside_small_work_area() {
+        for (scale, work) in [(1.25, (1366, 728)), (1.5, (1366, 728)), (2., (1920, 1040))] {
+            let size = frame_size_at_scale(scale, Some(work));
+            let floor = min_frame_size(size, scale);
+            assert!(size.width < work.0 && size.height < work.1);
+            assert!(floor.width <= size.width && floor.height <= size.height);
+            assert!(size.width > 0 && size.height > 0);
+        }
     }
 
     #[test]
@@ -5352,6 +5383,7 @@ fn fetch_remote_models(
             }
         };
         let status = response.status();
+        let redirected = response.url().as_str() != candidate.url;
         let body = match response.text() {
             Ok(body) => body,
             Err(err) => {
@@ -5375,7 +5407,15 @@ fn fetch_remote_models(
                     errors.push(format!("{}: response contains no models", candidate.url));
                     continue;
                 }
-                return Ok((models, candidate.normalized_base_url));
+                let normalized = if redirected
+                    && provider_base_url_with_v1(base_url).as_deref()
+                        == Some(candidate.normalized_base_url.as_str())
+                {
+                    provider_display_base_url(base_url)
+                } else {
+                    candidate.normalized_base_url
+                };
+                return Ok((models, normalized));
             }
             Err(err) => errors.push(format!(
                 "{}: response is not JSON ({err}): {}",
@@ -5384,12 +5424,106 @@ fn fetch_remote_models(
             )),
         }
     }
-    Err(errors.join("; "))
+    Err(errors
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| "Invalid model-list URL".to_string()))
 }
 
 struct ModelListCandidate {
     url: String,
     normalized_base_url: String,
+}
+
+#[cfg(test)]
+mod model_url_repair_tests {
+    use super::*;
+    use std::io::{Read, Write};
+
+    fn catalog_server(statuses: Vec<u16>) -> (String, std::thread::JoinHandle<Vec<String>>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let thread = std::thread::spawn(move || {
+            let mut paths = Vec::new();
+            for status in statuses {
+                let (mut connection, _) = listener.accept().unwrap();
+                connection
+                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
+                let mut request = Vec::new();
+                let mut bytes = [0; 1024];
+                while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                    let read = connection.read(&mut bytes).unwrap();
+                    if read == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&bytes[..read]);
+                }
+                paths.push(
+                    String::from_utf8_lossy(&request)
+                        .lines()
+                        .next()
+                        .unwrap()
+                        .to_string(),
+                );
+                let body = if status == 200 {
+                    r#"{"data":[{"id":"test-model"}]}"#
+                } else {
+                    "original-catalog-error"
+                };
+                write!(connection, "HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            }
+            paths
+        });
+        (url, thread)
+    }
+
+    #[test]
+    fn discovery_uses_original_then_v1_and_returns_only_verified_base() {
+        let (url, server) = catalog_server(vec![404, 200]);
+        let (models, corrected) = fetch_remote_models(&url, None, &[], "synthetic-key", 3).unwrap();
+        assert_eq!(models, ["test-model"]);
+        assert_eq!(corrected, format!("{url}/v1"));
+        assert_eq!(
+            server.join().unwrap(),
+            ["GET /models HTTP/1.1", "GET /v1/models HTTP/1.1"]
+        );
+        let (url, server) = catalog_server(vec![200]);
+        let (_, retained) = fetch_remote_models(&url, None, &[], "synthetic-key", 3).unwrap();
+        assert_eq!(retained, url);
+        assert_eq!(server.join().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn discovery_failure_keeps_the_original_error() {
+        let (url, server) = catalog_server(vec![404, 401]);
+        let error = fetch_remote_models(&url, None, &[], "synthetic-key", 3).unwrap_err();
+        assert!(error.starts_with(&format!("{url}/models: HTTP 404")));
+        assert!(!error.contains("HTTP 401"));
+        assert_eq!(server.join().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn explicit_catalog_success_does_not_guess_the_conversation_base() {
+        let provider = normalize_provider_models_url(ProviderConfig {
+            base_url: "https://example.invalid/proxy".into(),
+            models_url: Some("https://example.invalid/proxy/v1/models".into()),
+            ..Default::default()
+        });
+        assert!(provider.models_url.is_some());
+        let candidates = model_list_candidates(
+            "https://example.invalid/proxy",
+            Some("https://catalog.invalid/v1/models"),
+            &[],
+        );
+        assert_eq!(
+            candidates[0].normalized_base_url,
+            "https://example.invalid/proxy"
+        );
+        let candidates = model_list_candidates("https://example.invalid/v2", None, &[]);
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].url, "https://example.invalid/v2/models");
+    }
 }
 
 fn model_list_candidates(
@@ -5429,13 +5563,16 @@ fn model_list_candidates(
         return candidates;
     }
 
-    let root = provider_api_root(raw);
-    push_model_list_candidate(&mut candidates, format!("{raw}/models"), raw.to_string());
-    if !has_api_version_suffix(raw) {
+    push_model_list_candidate(
+        &mut candidates,
+        provider_endpoint(raw, "/models"),
+        raw.to_string(),
+    );
+    if let Some(corrected) = provider_base_url_with_v1(raw) {
         push_model_list_candidate(
             &mut candidates,
-            format!("{root}/v1/models"),
-            provider_display_base_url(&root),
+            provider_endpoint(&corrected, "/models"),
+            corrected,
         );
     }
     candidates
@@ -5461,8 +5598,13 @@ fn push_configured_model_list_candidates(
         format!("{configured}/models"),
         normalized_base_url.clone(),
     );
-    let root = provider_api_root(configured);
-    push_model_list_candidate(candidates, format!("{root}/v1/models"), normalized_base_url);
+    if let Some(corrected) = provider_base_url_with_v1(configured) {
+        push_model_list_candidate(
+            candidates,
+            provider_endpoint(&corrected, "/models"),
+            normalized_base_url,
+        );
+    }
 }
 
 fn push_model_list_candidate(
@@ -5676,6 +5818,7 @@ fn handle_local_connection_selected(frame: &Frame, text: GuiText, mode: LocalCon
 
 #[derive(Clone)]
 struct UiHandles {
+    shell: shell::Shell,
     text: GuiText,
     client_overview: client_overview::ClientOverviewUi,
     service_status: StatusPanel,
@@ -5697,6 +5840,7 @@ struct UiHandles {
     // AI Gateway fields
     ai_gw_provider_list: DataViewCtrl,
     ai_gw_provider_rows: AiGwProviderRows,
+    ai_gw_scope: Choice,
     ai_gw_provider_model: AiGwProviderModel,
     pending_ai_gw_channel_toggle: PendingAiGwChannelToggle,
     ai_gw_filter_image_generation: CheckBox,
@@ -6154,6 +6298,21 @@ fn show_dashboard_startup_error(handles: &UiHandles, detail: &str) {
 
 fn update_dashboard(handles: &UiHandles, snapshot: &DashboardSnapshot, daemon_starting: bool) {
     let text = handles.text;
+    handles.shell.service.set_label(if snapshot.service_online {
+        "本机服务 · 运行中"
+    } else if daemon_starting {
+        "本机服务 · 启动中"
+    } else {
+        "本机服务 · 未运行"
+    });
+    handles
+        .shell
+        .service
+        .set_foreground_color(if snapshot.service_online {
+            theme::theme().ok
+        } else {
+            theme::theme().ink_muted
+        });
     refresh_service_settings_button(handles, snapshot);
     if !snapshot.service_online {
         if daemon_starting {

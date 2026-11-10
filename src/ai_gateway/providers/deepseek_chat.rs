@@ -9,9 +9,10 @@ use axum::{
 use serde_json::Value;
 use tracing::{debug, error};
 
-use crate::ai_gateway::config::{ProviderConfig, provider_api_root};
+use crate::ai_gateway::config::{ProviderConfig, provider_endpoint};
 use crate::ai_gateway::context::{GatewayContext, apply_upstream_headers};
 use crate::ai_gateway::error::GatewayError;
+use crate::ai_gateway::gmclaw_stream;
 use crate::ai_gateway::model::GatewayRequest;
 use crate::ai_gateway::request_log::{
     self, RequestLogContext, RequestLogUpdate, ResponsesSseLogStream, UpstreamSseCaptureStream,
@@ -21,10 +22,7 @@ use crate::ai_gateway::transform::chat_to_responses::convert_chat_response_with_
 use crate::ai_gateway::transform::responses_stream::ChatSseToResponsesSse;
 use crate::ai_gateway::transform::responses_to_chat::build_chat_request_with_tool_names;
 
-use super::{
-    apply_total_request_timeout, ensure_success_response, execute_stream_start,
-    execute_upstream_request,
-};
+use super::{apply_total_request_timeout, ensure_success_response, execute_context_request};
 
 /// DeepSeek Chat Completions 出站处理。
 pub async fn handle(
@@ -53,10 +51,29 @@ pub async fn handle(
 
     super::apply_chat_reasoning_override(&mut chat_body, provider);
 
-    let url = format!(
-        "{}/v1/chat/completions",
-        provider_api_root(&provider.base_url)
-    );
+    let native = crate::desktop::tiangong_models::parameters_for_provider(provider);
+    let collect_stream = !request.stream
+        && (native.as_ref().is_some_and(|p| p.stream)
+            || (native.is_none()
+                && openai_chat
+                && crate::desktop::models::prefers_upstream_stream(provider)));
+    let unary_to_stream = request.stream && native.as_ref().is_some_and(|p| !p.stream);
+    if let Some(native) = &native {
+        chat_body["stream"] = native.stream.into();
+        if !native.stream {
+            chat_body.as_object_mut().unwrap().remove("stream_options");
+        }
+    }
+    let deadline = (collect_stream || native.is_some())
+        .then(|| gmclaw_stream::deadline(provider.timeout_secs));
+    let deadline_context = deadline.map(|d| ctx.clone().with_deadline(d));
+    let ctx = deadline_context.as_ref().unwrap_or(ctx);
+    if collect_stream {
+        chat_body["stream"] = true.into();
+        chat_body["stream_options"] = serde_json::json!({"include_usage":true});
+    }
+
+    let url = provider_endpoint(&provider.base_url, "/v1/chat/completions");
 
     debug!(url = %url, stream = request.stream, "proxying to deepseek chat");
 
@@ -65,9 +82,12 @@ pub async fn handle(
         .post(&url)
         .header("content-type", "application/json")
         .header("authorization", format!("Bearer {}", provider.api_key));
-    let req_builder =
-        apply_total_request_timeout(req_builder, provider.timeout_secs, request.stream)
-            .json(&chat_body);
+    let req_builder = apply_total_request_timeout(
+        req_builder,
+        provider.timeout_secs,
+        request.stream || collect_stream,
+    )
+    .json(&chat_body);
     let upstream_req = apply_upstream_headers(req_builder, &ctx.upstream_headers)
         .build()
         .map_err(|e| {
@@ -102,29 +122,70 @@ pub async fn handle(
         }
     }
 
-    let upstream_resp = if request.stream {
-        execute_stream_start(
-            client,
-            upstream_req,
-            provider.timeout_secs,
-            "deepseek upstream request failed",
-        )
-        .await?
-    } else {
-        execute_upstream_request(
-            client,
-            upstream_req,
-            provider.timeout_secs,
-            "deepseek upstream request failed",
-        )
-        .await?
-    };
+    let upstream_resp = execute_context_request(
+        client,
+        upstream_req,
+        provider,
+        ctx,
+        "deepseek upstream request failed",
+    )
+    .await?;
 
     request_log::record_upstream_response_headers(log_context.as_ref(), upstream_resp.headers());
     let upstream_resp = ensure_success_response(&provider.name, upstream_resp).await?;
 
     // 3. 流式 vs 非流式
-    if request.stream {
+    if collect_stream {
+        let headers = upstream_resp.headers().clone();
+        let value = if let Some(log) = log_context.clone() {
+            gmclaw_stream::collect(
+                UpstreamSseCaptureStream::new(upstream_resp.bytes_stream(), log),
+                &headers,
+                gmclaw_stream::Protocol::Chat,
+                &provider.name,
+                deadline.unwrap(),
+            )
+            .await?
+        } else {
+            gmclaw_stream::collect(
+                upstream_resp.bytes_stream(),
+                &headers,
+                gmclaw_stream::Protocol::Chat,
+                &provider.name,
+                deadline.unwrap(),
+            )
+            .await?
+        };
+        handle_chat_json(value, response_model, tool_name_map, log_context)
+    } else if unary_to_stream {
+        let headers = upstream_resp.headers().clone();
+        let value = gmclaw_stream::collect(
+            upstream_resp.bytes_stream(),
+            &headers,
+            gmclaw_stream::Protocol::Chat,
+            &provider.name,
+            deadline.unwrap(),
+        )
+        .await?;
+        let chunks = super::chat_json_stream::chunks(&value)?
+            .into_iter()
+            .map(Ok::<_, std::io::Error>);
+        let stream = ChatSseToResponsesSse::new_with_tool_names(
+            futures_util::stream::iter(chunks),
+            response_model.to_string(),
+            tool_name_map,
+        );
+        let body = if let Some(log) = log_context {
+            Body::from_stream(ResponsesSseLogStream::new(stream, log))
+        } else {
+            Body::from_stream(stream)
+        };
+        Ok(Response::builder()
+            .header("content-type", "text/event-stream")
+            .header("cache-control", "no-cache")
+            .body(body)
+            .unwrap())
+    } else if request.stream {
         handle_stream(upstream_resp, response_model, tool_name_map, log_context).await
     } else {
         handle_non_stream(upstream_resp, response_model, tool_name_map, log_context).await
@@ -141,7 +202,14 @@ async fn handle_non_stream(
     let chat_resp: serde_json::Value = resp.json().await.map_err(|e| {
         GatewayError::upstream(StatusCode::BAD_GATEWAY, format!("parse upstream json: {e}"))
     })?;
-
+    handle_chat_json(chat_resp, model, tool_name_map, log_context)
+}
+fn handle_chat_json(
+    chat_resp: Value,
+    model: &str,
+    tool_name_map: ToolNameMap,
+    log_context: Option<RequestLogContext>,
+) -> Result<Response<Body>, GatewayError> {
     let response_obj = convert_chat_response_with_tool_names(&chat_resp, model, &tool_name_map)
         .map_err(|e| {
             GatewayError::upstream(StatusCode::BAD_GATEWAY, format!("transform error: {e}"))

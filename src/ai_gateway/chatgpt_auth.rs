@@ -670,11 +670,7 @@ pub fn endpoint(provider: &ProviderConfig, api_path: &str) -> String {
             api_path.strip_prefix("/v1").unwrap_or(api_path)
         )
     } else {
-        format!(
-            "{}{}",
-            super::config::provider_api_root(&provider.base_url),
-            api_path
-        )
+        super::config::provider_endpoint(&provider.base_url, api_path)
     }
 }
 

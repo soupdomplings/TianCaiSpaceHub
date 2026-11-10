@@ -1,5 +1,17 @@
 # 仓库文档与分支清理记录
 
+## 2026-11-10 · 角色指令、文件归类与开发缓存清理
+
+用户明确要求管理会话编写自身指令、按需拆分职责、整理文件、清理开发垃圾并提交 GitHub。本轮保留唯一 `main`、`1.0.16` 版本及累计 v13/V1 开发；纯流程整理不升版本。源码提交和推送已获本轮授权，Actions、标签及 Release 未包含在该授权内，实际提交结果另记。
+
+- 根 [AGENTS.md](../../AGENTS.md) 统一共同规则，按角色读取 [管理](agents/management.md)、[开发](agents/development.md)、[打包](agents/packaging.md) 指令；明确文件写入责任、精简交接、已完成会话归档和每批一份测试包。已完成的四个多余开发/排查会话已归档，唯一打包会话保留到交付完成。
+- `.gitignore` 补齐禁止读取/提交的 `zhenduan/`、`docs/.obsidian/`，以及脚本缓存、系统杂物和本机站点参考资料规则。`docs/tiancaispace/` 的 ZIP 与解压源码保留原位，只提交 [资料说明](../tiancaispace/README.md)；Hub 配套补丁继续在 `integrations/` 维护。
+- 实际删除 **19 个文件，共 251,126 字节**：`.build-tools/ci-review-python/` 下两处 `__pycache__` 的 18 个 Python 字节码文件，以及 0 字节的 `.build-tools/executor-command-tests.rmeta`；两处空缓存目录一并移除。均为可再生成的开发临时内容，没有清空工具链。
+- 产品源码、必需的 WebStorm bridge JAR、品牌资源、设计图/原型及有效文档保留入库。`target/` 当前构建、全部历史测试包、`outputs/` 历史本地分发物、用户配置和运行状态保留原位且不提交，不运行产品或安装器。
+- 提交检查只规范 `integrations/webstorm/src/space/tiancai/hub/Bridge.java` 的末尾空行和 `packaging/brand/LICENSE.vscode-codicons` 的一处尾随空格，不改行为或许可文字。已生成 MSI 保持，构建时 907 项输入清单保留原始记录，不为文本空白和流程文档再次构建或测试。
+
+回滚流程或忽略规则可从 Git 恢复对应文档及 `.gitignore`；已清理字节码由 Python 按需再生成，空测试元数据由原检查按需生成。提交前已审阅 406 份有效改动的范围，58 份 Markdown 的 1,875 处本地链接及暂存差异空白检查通过；一次敏感信息静态检查仅命中 `example.invalid` 的合成凭据脱敏测试，未发现需排除的真实凭据。产品验证与最终唯一测试包见 [V1.0.16 统一交付](../releases/v1.0.16.md)；真实安装和 Windows/macOS 使用体验仍待用户验收。
+
 ## 2026-10-08 · NVWA v5 开发前基线对齐与本机资料保留
 
 用户授权完整开发 `0.4.30-5` NVWA MCP 后，按唯一 `main` 约定对齐已交付主线。最终基线为 `8d1ccea7…`，包含 `v0.4.30-4` 产品、macOS CI 修复及发布后核验文档；旧 checkout、旧标签产品或混合未提交文件不作为新开发基线。操作前核对本地和 live 远端分支均仅 `main`，没有建立版本/release/临时开发分支，也未删除用户仓库其他内容。

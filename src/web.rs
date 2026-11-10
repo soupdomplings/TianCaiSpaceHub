@@ -21,11 +21,14 @@ use crate::{
 };
 
 mod codex_app;
+mod desktop;
+mod desktop_models;
 mod gmclaw_bridge;
 mod im_api;
 mod oauth;
 mod onboarding;
 pub(crate) mod plugins;
+mod squad;
 mod workbuddy_launch;
 
 pub async fn start_bridge_if_ready(state: &SharedState, event_message: &'static str) -> bool {
@@ -188,8 +191,19 @@ pub fn router(state: SharedState) -> Router {
         .route("/api/wecom/bot", get(im_api::wecom_bot_status))
         .route("/api/events", get(events))
         .merge(plugins::router())
+        .merge(desktop::router())
+        .merge(crate::local_assistance::web::router())
+        .merge(crate::desktop::mcp_bridge::router())
+        .merge(desktop_models::router())
+        .merge(squad::router())
         .merge(remote_control_backend::router())
-        .nest("/ai-gateway", crate::ai_gateway::router())
+        .nest(
+            "/ai-gateway",
+            crate::ai_gateway::router().layer(middleware::from_fn_with_state(
+                state.clone(),
+                crate::desktop::activity::track,
+            )),
+        )
         .layer(middleware::from_fn(access_log))
         .with_state(state)
 }

@@ -20,6 +20,7 @@ widget_style_enum!(
     doc: "Style flags for TextCtrl widget.",
     variants: {
         Default: 0, "Default style (single line, editable, left-aligned).",
+        BorderNone: ffi::WXD_BORDER_NONE, "No native frame (for padded composition).",
         MultiLine: ffi::WXD_TE_MULTILINE, "Multi-line text control.",
         Password: ffi::WXD_TE_PASSWORD, "Password entry control (displays characters as asterisks).",
         ReadOnly: ffi::WXD_TE_READONLY, "Read-only text control.",
@@ -123,7 +124,10 @@ impl TextCtrl {
     /// This is for backwards compatibility with widgets that compose TextCtrl.
     /// The parent_ptr parameter is ignored (kept for API compatibility).
     #[allow(dead_code)]
-    pub(crate) fn new_from_composition(_window: Window, _parent_ptr: *mut ffi::wxd_Window_t) -> Self {
+    pub(crate) fn new_from_composition(
+        _window: Window,
+        _parent_ptr: *mut ffi::wxd_Window_t,
+    ) -> Self {
         // Use the window's pointer to create a new WindowHandle
         Self {
             handle: WindowHandle::new(_window.as_ptr()),
@@ -131,7 +135,14 @@ impl TextCtrl {
     }
 
     /// Internal implementation used by the builder.
-    fn new_impl(parent_ptr: *mut ffi::wxd_Window_t, id: Id, value: &str, pos: Point, size: Size, style: i64) -> Self {
+    fn new_impl(
+        parent_ptr: *mut ffi::wxd_Window_t,
+        id: Id,
+        value: &str,
+        pos: Point,
+        size: Size,
+        style: i64,
+    ) -> Self {
         let c_value = CString::new(value).unwrap_or_default();
 
         let ptr = unsafe {
@@ -174,7 +185,8 @@ impl TextCtrl {
                 return String::new();
             }
         }
-        let byte_slice = unsafe { std::slice::from_raw_parts(buffer.as_ptr() as *const u8, len as usize) };
+        let byte_slice =
+            unsafe { std::slice::from_raw_parts(buffer.as_ptr() as *const u8, len as usize) };
         String::from_utf8_lossy(byte_slice).to_string()
     }
 
@@ -189,6 +201,16 @@ impl TextCtrl {
         unsafe { ffi::wxd_TextCtrl_SetValue(ptr, c_value.as_ptr()) };
     }
 
+    /// Displays an empty-field hint without changing the editable value.
+    pub fn set_hint(&self, hint: &str) -> bool {
+        let ptr = self.textctrl_ptr();
+        if ptr.is_null() {
+            return false;
+        }
+        let hint = CString::new(hint).unwrap_or_default();
+        unsafe { ffi::wxd_TextCtrl_SetHint(ptr, hint.as_ptr()) }
+    }
+
     /// Gets the current text value of the control.
     /// Returns empty string if the control has been destroyed.
     pub fn get_value(&self) -> String {
@@ -196,7 +218,9 @@ impl TextCtrl {
         if ptr.is_null() {
             return String::new();
         }
-        unsafe { Self::read_string_with_retry(|buf, len| ffi::wxd_TextCtrl_GetValue(ptr, buf, len)) }
+        unsafe {
+            Self::read_string_with_retry(|buf, len| ffi::wxd_TextCtrl_GetValue(ptr, buf, len))
+        }
     }
 
     /// Appends text to the end of the control.
@@ -315,7 +339,11 @@ impl TextCtrl {
         if ptr.is_null() {
             return String::new();
         }
-        unsafe { Self::read_string_with_retry(|buf, len| ffi::wxd_TextCtrl_GetLineText(ptr, line_no, buf, len)) }
+        unsafe {
+            Self::read_string_with_retry(|buf, len| {
+                ffi::wxd_TextCtrl_GetLineText(ptr, line_no, buf, len)
+            })
+        }
     }
 
     /// Returns whether the text control has been modified by the user since the last
@@ -473,7 +501,11 @@ impl TextCtrl {
         if ptr.is_null() {
             return String::new();
         }
-        unsafe { Self::read_string_with_retry(|buf, len| ffi::wxd_TextCtrl_GetStringSelection(ptr, buf, len)) }
+        unsafe {
+            Self::read_string_with_retry(|buf, len| {
+                ffi::wxd_TextCtrl_GetStringSelection(ptr, buf, len)
+            })
+        }
     }
 
     /// Sets the insertion point to the end of the text control.

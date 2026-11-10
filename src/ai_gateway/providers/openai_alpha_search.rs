@@ -128,6 +128,7 @@ pub async fn passthrough(
         client,
         request,
         provider,
+        ctx,
         "upstream alpha search request failed",
     )
     .await?;

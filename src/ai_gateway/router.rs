@@ -7,6 +7,42 @@ use super::config::{
 use super::error::GatewayError;
 use super::routing_state::GatewayRoutingState;
 
+pub fn resolve_desktop_provider_with_state<'a>(
+    client: crate::desktop::clients::ClientId,
+    entry: &str,
+    model: &str,
+    headers: &axum::http::HeaderMap,
+    session: Option<&str>,
+    config: &'a AiGatewayConfig,
+    state: &mut GatewayRoutingState,
+    now: Instant,
+) -> Result<(&'a ProviderConfig, String), GatewayError> {
+    let name = crate::desktop::models::name(client, entry)
+        .map_err(|_| GatewayError::bad_request("客户端模型身份无效"))?;
+    let provider = config
+        .providers
+        .iter()
+        .find(|p| p.name == name)
+        .ok_or_else(|| GatewayError::invalid_model(model))?;
+    let binding = provider
+        .desktop_binding
+        .as_ref()
+        .ok_or_else(|| GatewayError::bad_request("客户端模型缺少受管身份"))?;
+    let key = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .or_else(|| headers.get("x-api-key").and_then(|v| v.to_str().ok()));
+    if binding.client != client || binding.id != entry || key != Some(binding.local_token.as_str())
+    {
+        return Err(GatewayError::upstream(
+            axum::http::StatusCode::UNAUTHORIZED,
+            "客户端接入凭据不匹配，请在 Hub 重新配置此模型",
+        ));
+    }
+    resolve_provider_with_state_matching(model, session, config, state, now, |p| p.name == name)
+}
+
 /// 根据 model 名选择 provider（无状态版本），找不到则返回错误。
 pub fn resolve_provider<'a>(
     model: &str,
@@ -116,7 +152,7 @@ pub fn resolve_gmclaw_entry_provider_with_state<'a>(
     })
 }
 
-fn resolve_provider_with_state_matching<'a>(
+pub(super) fn resolve_provider_with_state_matching<'a>(
     model: &str,
     session_id: Option<&str>,
     config: &'a AiGatewayConfig,

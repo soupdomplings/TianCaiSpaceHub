@@ -208,7 +208,7 @@ fn hrw_hash_u64(session_id: &str, provider: &ProviderConfig) -> u64 {
 
 pub(crate) fn provider_route_id(provider: &ProviderConfig) -> String {
     let name = provider.name.trim();
-    let base_url = provider.base_url.trim();
+    let base_url = provider.identity_base_url();
     format!(
         "{}\0{}\0{}",
         name,
@@ -237,8 +237,7 @@ impl ProviderType {
 
 /// 将 provider Base URL 规范成 API 根地址。
 ///
-/// UI 允许用户填 `https://api.example.com` 或 `https://api.example.com/v1`；
-/// 出站请求统一在这里去掉末尾 `/v1`，再拼具体路径。
+/// 仅供需要根地址的兼容逻辑使用；普通出站由 `provider_endpoint` 保留配置路径。
 pub fn provider_api_root(base_url: &str) -> String {
     let base = base_url.trim().trim_end_matches('/');
     if base.to_ascii_lowercase().ends_with("/v1") {
@@ -250,14 +249,60 @@ pub fn provider_api_root(base_url: &str) -> String {
 
 /// 将 provider Base URL 规范成 UI/配置展示用地址。
 ///
-/// 目前支持的上游协议都使用 `/v1`，所以保存时统一展示为带 `/v1`。
+/// 保留用户选择的 API 根路径；只有实际请求确认后才补 `/v1`。
 pub fn provider_display_base_url(base_url: &str) -> String {
-    let root = provider_api_root(base_url);
-    if root.is_empty() {
-        String::new()
-    } else {
-        format!("{root}/v1")
+    base_url.trim().trim_end_matches('/').to_string()
+}
+
+/// 在配置的 Base URL 后追加操作路径，不猜测 API 版本。
+pub fn provider_endpoint(base_url: &str, api_path: &str) -> String {
+    let base = provider_display_base_url(base_url);
+    let suffix = api_path
+        .strip_prefix("/v1/")
+        .unwrap_or(api_path)
+        .trim_start_matches('/');
+    if let Ok(mut url) = url::Url::parse(&base) {
+        url.set_path(&format!("{}/{suffix}", url.path().trim_end_matches('/')));
+        return url.to_string();
     }
+    format!("{base}/{suffix}")
+}
+
+/// 仅为没有显式 API 版本的普通地址生成一个同源候选。
+pub fn provider_base_url_with_v1(base_url: &str) -> Option<String> {
+    let base = provider_display_base_url(base_url);
+    let url = url::Url::parse(&base).ok()?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || url.path().split('/').any(|segment| {
+            let segment = segment.to_ascii_lowercase();
+            segment
+                .strip_prefix('v')
+                .is_some_and(|tail| tail.as_bytes().first().is_some_and(u8::is_ascii_digit))
+        })
+        || [
+            "responses",
+            "messages",
+            "completions",
+            "models",
+            "generations",
+            "edits",
+        ]
+        .contains(
+            &url.path()
+                .trim_end_matches('/')
+                .rsplit('/')
+                .next()
+                .unwrap_or(""),
+        )
+    {
+        return None;
+    }
+    Some(format!("{base}/v1"))
 }
 
 /// 智谱 Anthropic 渠道使用的服务类型。
@@ -287,6 +332,8 @@ impl ZaiAccessMode {
 #[serde(default, rename_all = "camelCase")]
 pub struct ProviderConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub desktop_binding: Option<crate::desktop::models::Binding>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub import_source: Option<crate::external_import::ImportSource>,
     /// provider 名称标识（如 "openai"、"deepseek"）。
     pub name: String,
@@ -308,6 +355,9 @@ pub struct ProviderConfig {
     pub zai_access_mode: ZaiAccessMode,
     /// 上游 API base URL。
     pub base_url: String,
+    /// 已验证的 `/v1` 自动修正来源，仅用于保持路由与会话身份。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_url_repair_origin: Option<String>,
     /// 可选的模型列表 API URL。为空时 GUI 按 base_url 推导 `/models`。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub models_url: Option<String>,
@@ -316,6 +366,9 @@ pub struct ProviderConfig {
     /// Reference to credentials stored separately by CodexHub.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub chatgpt_auth_id: Option<String>,
+    /// TianGong built-in identity and OS-protected user authorization reference.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tiangong_builtin: Option<crate::desktop::tiangong_models::BuiltinBinding>,
     /// 该 provider 支持的 model 列表（精确匹配用）。
     pub models: Vec<String>,
     /// Codex 侧 model 到上游 provider model 的映射。
@@ -336,6 +389,7 @@ impl Default for ProviderConfig {
     fn default() -> Self {
         Self {
             import_source: None,
+            desktop_binding: None,
             name: String::new(),
             enabled: true,
             provider_type: ProviderType::OpenAiResponses,
@@ -344,9 +398,11 @@ impl Default for ProviderConfig {
             gmclaw_parameters: None,
             zai_access_mode: ZaiAccessMode::default(),
             base_url: String::new(),
+            base_url_repair_origin: None,
             models_url: None,
             api_key: String::new(),
             chatgpt_auth_id: None,
+            tiangong_builtin: None,
             models: Vec::new(),
             model_aliases: BTreeMap::new(),
             prompt_cache_retention: None,
@@ -357,6 +413,26 @@ impl Default for ProviderConfig {
 }
 
 impl ProviderConfig {
+    pub(crate) fn identity_base_url(&self) -> &str {
+        if let Some(origin) = &self.base_url_repair_origin
+            && provider_base_url_with_v1(origin).as_deref() == Some(self.base_url.trim())
+        {
+            return origin.trim();
+        }
+        self.base_url.trim()
+    }
+
+    /// Apply only the candidate that has actually succeeded. Keep the old
+    /// identity so an automatic path repair does not invalidate tool history.
+    pub(crate) fn confirm_base_url(&mut self, corrected: &str) -> bool {
+        if provider_base_url_with_v1(&self.base_url).as_deref() != Some(corrected) {
+            return false;
+        }
+        self.base_url_repair_origin = Some(self.identity_base_url().to_string());
+        self.base_url = corrected.to_string();
+        true
+    }
+
     pub fn is_workbuddy(&self) -> bool {
         is_workbuddy_provider_name(&self.name)
     }
@@ -366,7 +442,9 @@ impl ProviderConfig {
     }
 
     pub fn is_client_reserved(&self) -> bool {
-        self.is_workbuddy() || self.is_gmclaw()
+        self.is_workbuddy()
+            || self.is_gmclaw()
+            || self.name.starts_with(crate::desktop::models::PREFIX)
     }
 
     pub fn effective_weight(&self) -> u32 {
@@ -984,10 +1062,10 @@ mod tests {
     }
 
     #[test]
-    fn test_provider_display_base_url_uses_v1() {
+    fn test_provider_display_base_url_preserves_unverified_path() {
         assert_eq!(
             provider_display_base_url("https://api.deepseek.com"),
-            "https://api.deepseek.com/v1"
+            "https://api.deepseek.com"
         );
         assert_eq!(
             provider_display_base_url("https://api.deepseek.com/v1"),
