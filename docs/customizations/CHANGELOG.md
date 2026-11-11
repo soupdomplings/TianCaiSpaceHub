@@ -1,14 +1,14 @@
 # 二开变更记录
 
-## V1.0.25 集成检查完成 · 2026-11-11 · 搭档、导入与统一反馈
+## V1.0.25 本地测试交付 · 2026-11-11 · 搭档、导入与统一反馈
 
 关联 TC-016/018/023，基线唯一 `main` / `eaf1dd9`，保留 V24 包身份。本批统一一个测试包，不启动用户实际客户端、安装器或真实模型调用。
 
 - ZCode 首屏探针优先读取页面 `modulepreload` / `script` 地址，计时记录仅作回退，修复条目缺失时登录页已出现仍等待超时的情况；不改变模型配置和现有启动保护。
 - 搭档回复裁切、Ctrl+Enter 清空、去掉可见滚动条但保留滚动，以及模型/渠道及时刷新和专用客户端模型名称显示在本批一并处理，最终行为和验证状态见 [V25 交付](../releases/v1.0.25.md)。
 - 成功/失败统一右上绿勾/红叉小提示，取消关闭到托盘提醒；导入分区、主按钮和启用/旧别名选项改直白文案，完成反馈不再堆在底部，保留批量结果表。
-- 搭档直接查询当前账户实际扣费、Token 与本机请求，复用原能力，默认简短自然回复；四套性格按用户新方向重写，仅供审核，未接入设置。见 [统计](assistant-usage.md)、[草案](genius-buddy-personalities-draft.md) 和 [反馈](../development/operation-feedback.md)。
-- Windows GUI 编译、31 个不同 Rust 定向用例及 10 项 Node 检查通过；最后导入文案/显示收口增量编译与唯一包身份见 V25 交付。真实启动、界面、账户及 macOS 待用户验收。
+- 搭档直接查询当前账户实际扣费、Token 与本机请求，复用原能力，默认简短自然回复；性格按用户最新决定保留干练搭档、软萌猫娘、温柔女友三套，允许自然使用少量 emoji，仅供审核，未接入设置。见 [统计](assistant-usage.md)、[草案](genius-buddy-personalities-draft.md) 和 [反馈](../development/operation-feedback.md)。
+- Windows GUI/release、31 个不同 Rust 定向用例及 10 项 Node 检查通过；唯一 MSI `210620` 的版本、升级及六项载荷核验通过，源提交与包身份见 V25 交付。真实启动、界面、账户及 macOS 待用户验收。
 
 维护与回滚见 [客户端](desktop-client-adapters.md)、[搭档](genius-buddy.md) 和 [视觉](../development/desktop-visual-system.md)。
 

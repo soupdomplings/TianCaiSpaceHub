@@ -1,6 +1,6 @@
 # TianCaiSpaceHub 文档总入口
 
-2026-11-11 本批追加：[统一操作反馈](development/operation-feedback.md) 将操作结果集中为右上小浮窗并取消关闭到托盘提醒；[搭档用量查询](customizations/assistant-usage.md) 复用当前账户扣费、Token 和本机请求能力。[四套性格草案](customizations/genius-buddy-personalities-draft.md) 供用户编辑审核，暂未接入产品。
+2026-11-11 本批追加：[统一操作反馈](development/operation-feedback.md) 将操作结果集中为右上小浮窗并取消关闭到托盘提醒；[搭档用量查询](customizations/assistant-usage.md) 复用当前账户扣费、Token 和本机请求能力。[三套性格草案](customizations/genius-buddy-personalities-draft.md) 保留干练搭档、软萌猫娘、温柔女友，允许自然使用少量 emoji，供用户编辑审核，暂未接入产品。Windows GUI/release、31 项 Rust、10 项 Node 和唯一 MSI `210620` 核验通过，源提交 `8c3b3ed` 已推送；包身份及实机待验范围见 [V25 交付](releases/v1.0.25.md)。
 
 2026-11-11 **V1.0.25 用户反馈修复**：ZCode 启动探针处理资源计时条目缺失时的 HTTP 409；同批处理搭档回复裁切、Ctrl+Enter 发送残留、可见滚动条，以及助手保存后的模型/渠道刷新和专用客户端模型名称显示。实现见 [客户端](customizations/desktop-client-adapters.md)、[搭档](customizations/genius-buddy.md) 和 [视觉](development/desktop-visual-system.md)；本批检查、唯一新包和实机待验范围见 [V25 交付](releases/v1.0.25.md)。下列历史结果保留原版本归属。
 

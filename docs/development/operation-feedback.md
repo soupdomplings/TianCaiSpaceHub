@@ -45,4 +45,6 @@ V1.0.25 本轮明确迁移以下入口，不用页面文字、状态值或字符
 
 本任务已完成定向 `rustfmt` 与 `git diff --check`，没有运行实际 Hub、客户端、Server、安装器、真实模型或交互验收。统一 GUI 测试目标编译和非交互检查交管理会话执行，不把 V24 的界面检查当作本轮验证。
 
+管理会话最终完成 Windows GUI 测试目标增量编译、release 构建及提示摘要纯用例，均通过；唯一 V25 MSI 的版本、升级及六项载荷核验通过。整体 31 项定向 Rust、10 项 Node 及包身份见 [V25 交付](../releases/v1.0.25.md)。没有执行本节后述 ignored 提示/确认夹具，不据此宣称缩放、鼠标或托盘实机通过。
+
 纯非交互定向用例：`gui::feedback::tests::feedback_summary_is_short_and_keeps_full_details_separate`，覆盖简短摘要与完整详情的分离。另有显式忽略的隐藏原生组件夹具 `gui::feedback::tests::native_feedback_keeps_notices_and_confirmation_actions_inside_their_owner`（`--ignored --exact --test-threads=1`），覆盖浅深主题、提示计时、右侧边界及主题确认/详情固定动作；可经 `TIANCAI_NATIVE_REVIEW_DIR` 捕获合成组件，不连接后台、不显示实际产品或模态窗。本轮未执行该夹具；真实缩放、鼠标交互、托盘行为及 macOS 待用户验收。

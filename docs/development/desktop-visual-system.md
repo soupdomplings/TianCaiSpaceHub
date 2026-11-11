@@ -16,6 +16,8 @@ WorkBuddy、天工的启动、保存、删除和撤销结果接入统一成功�
 
 新增定向用例：`gui::configuration_refresh::tests::repeated_invalidations_merge_and_explicit_rebase_is_not_lost`、`gui::ai_gateway::display_tests::dedicated_channels_display_real_models_and_keep_internal_identity`。原隐藏合成夹具 `gui::native_model_review::native_existing_model_lists_keep_complete_unsaved_drafts_and_original_revisions` 增加两端已存条目编辑遇到外部新增／删除、显式更新及旧 revision 保留检查，沿用完整草稿和跨端副本断言，不调用实际服务。开发阶段 `rustfmt --check`、定向 `git diff --check` 已通过；GUI 编译、用例执行和唯一测试包由管理会话统一登记到 [V25 交付](../releases/v1.0.25.md)。此处不将源码就绪写作实机通过，真实助手保存后的显示、交互延迟、Windows 缩放和 macOS 待用户验收。
 
+本批管理会话已完成 Windows GUI/release 构建，新增刷新合并和真实模型名称两项纯用例均通过，唯一 MSI 静态核验通过；整体 31 项 Rust 结果见 [V25 交付](../releases/v1.0.25.md)。扩展的原生模型编辑夹具本批未运行，原 V24 结果保持历史归属，不将源码断言当作新执行结果。
+
 ## V1.0.24 导航与模型同步
 
 左栏固定展示五个可见客户端，不再维护最近三个位置、更多或收起，旧 `recent-clients.json` 留在本机但不读取/写入。Nav、Tab、Segment 的逻辑选中立即切换，原生按钮自持 160 ms 颜色/指示线过渡；不移动按钮边界，不延后业务动作，可从当前值反向。普通按钮不套用该动画，减少动画设置直接取终态；隐藏或销毁停止计时。入口为 `controls.rs` 和 vendor `button.cpp`。

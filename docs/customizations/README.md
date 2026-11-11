@@ -1,6 +1,6 @@
 # 二开功能总表
 
-V1.0.25 追加：[统一操作反馈](../development/operation-feedback.md) 与导入文案简化；[搭档统计查询](assistant-usage.md) 直接读取当前小分队账户用量、实际扣费及本机请求，回复简短自然。[性格草案](genius-buddy-personalities-draft.md) 待用户审核，产品尚无性格开关。
+V1.0.25 追加：[统一操作反馈](../development/operation-feedback.md) 与导入文案简化；[搭档统计查询](assistant-usage.md) 直接读取当前小分队账户用量、实际扣费及本机请求，回复简短自然。[性格草案](genius-buddy-personalities-draft.md) 按用户最新决定保留干练搭档、软萌猫娘、温柔女友三套，允许自然使用少量 emoji，待用户审核，产品尚无性格开关。Windows GUI/release、31 项 Rust、10 项 Node 和唯一 MSI `210620` 核验通过，源提交 `8c3b3ed` 已推送；包身份与实机待验范围见 [V25 交付](../releases/v1.0.25.md)。
 
 2026-11-11 **TC-016/018/023 V1.0.25 用户反馈修复**：ZCode 首屏脚本发现不再依赖资源计时缓冲区；搭档正文裁切、快捷发送残留和可见滚动条，以及保存后模型/渠道刷新、专用客户端模型名称显示纳入同批。维护入口见 [客户端](desktop-client-adapters.md)、[搭档](genius-buddy.md)、[视觉](../development/desktop-visual-system.md)；实现、必要检查、唯一包和待用户验收状态统一见 [V25 交付](../releases/v1.0.25.md)。
 
