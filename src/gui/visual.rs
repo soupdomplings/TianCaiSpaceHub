@@ -42,6 +42,7 @@ pub(super) enum Icon {
     WindowRestore,
     WindowClose,
     Calendar,
+    Trash,
 }
 impl Icon {
     pub fn client(id: ClientId) -> Self {
@@ -87,6 +88,7 @@ impl Icon {
             Icon::WindowRestore,
             Icon::WindowClose,
             Icon::Calendar,
+            Icon::Trash,
         ];
         ALL.get(code as usize).copied().unwrap_or(Self::None)
     }
@@ -443,6 +445,13 @@ impl<'a> Canvas<'a> {
             Icon::WindowClose => {
                 path(&[(4, 4), (20, 20)]);
                 path(&[(20, 4), (4, 20)]);
+            }
+            Icon::Trash => {
+                path(&[(3, 6), (21, 6)]);
+                path(&[(8, 6), (8, 3), (16, 3), (16, 6)]);
+                path(&[(5, 6), (6, 21), (18, 21), (19, 6)]);
+                path(&[(10, 10), (10, 17)]);
+                path(&[(14, 10), (14, 17)]);
             }
             Icon::Back => {
                 path(&[(12, 5), (5, 12), (12, 19)]);

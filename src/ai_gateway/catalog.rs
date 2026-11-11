@@ -95,7 +95,6 @@ pub(crate) fn codex_compatibility_version() -> String {
         .expect("official GPT catalog must include a minimum Codex version")
 }
 
-#[cfg(test)]
 pub fn configured_models_response(config: &AiGatewayConfig) -> Value {
     build_configured_models_response(config)
 }

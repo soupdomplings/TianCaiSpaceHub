@@ -79,11 +79,11 @@ pub(super) async fn catalog(state: &SharedState, id: &str, headers: &HeaderMap) 
     let inner = state.assistant.inner.lock().await;
     let bridge = inner.bridge.as_ref().context("天才搭档会话未启动")?;
     bridge.authorize(id, headers)?;
-    Ok(inner
+    inner
         .config
         .as_ref()
         .context("管理员模型尚未就绪")?
-        .catalog())
+        .catalog()
 }
 pub(super) fn filter_tools(body: &mut Value) {
     let names = tools::definitions()

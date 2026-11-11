@@ -67,21 +67,14 @@ pub(super) fn configuration(
     full_access: bool,
     writable: bool,
 ) -> Result<String> {
-    let mut value = toml::Table::new();
-    value.insert("model".into(), model.into());
-    if let Some(effort) = effort {
-        value.insert("model_reasoning_effort".into(), effort.into());
-    }
-    value.insert("model_provider".into(), "tiancai_assistance".into());
-    value.insert(
-        "approval_policy".into(),
-        approval_policy(full_access).into(),
-    );
-    value.insert(
-        "sandbox_mode".into(),
-        sandbox_mode(full_access, writable).into(),
-    );
-    value.insert("web_search".into(), "disabled".into());
+    let mut value = codex_configuration(
+        model,
+        effort,
+        "tiancai_assistance",
+        cwd,
+        approval_policy(full_access),
+        sandbox_mode(full_access, writable),
+    )?;
     value.insert(
         "features".into(),
         toml::Value::try_from(
@@ -92,6 +85,30 @@ pub(super) fn configuration(
         "windows".into(),
         toml::Value::try_from(json!({"sandbox":"unelevated"}))?,
     );
+    value.insert("model_providers".into(),toml::Value::try_from(json!({"tiancai_assistance":{
+        "name":"TianCaiSpaceHub local assistance","wire_api":"responses","requires_openai_auth":false,
+        "base_url":format!("http://127.0.0.1:{port}/api/local-assistance/model/{id}"),
+        "experimental_bearer_token":token,"supports_websockets":false,
+        "http_headers":{"x-openai-actor-authorization":"Bearer codexhub"}}}))?);
+    Ok(toml::to_string(&value)?)
+}
+pub(crate) fn codex_configuration(
+    model: &str,
+    effort: Option<&str>,
+    provider: &str,
+    cwd: &Path,
+    approval: &str,
+    sandbox: &str,
+) -> Result<toml::Table> {
+    let mut value = toml::Table::new();
+    value.insert("model".into(), model.into());
+    if let Some(effort) = effort {
+        value.insert("model_reasoning_effort".into(), effort.into());
+    }
+    value.insert("model_provider".into(), provider.into());
+    value.insert("approval_policy".into(), approval.into());
+    value.insert("sandbox_mode".into(), sandbox.into());
+    value.insert("web_search".into(), "disabled".into());
     value.insert(
         "history".into(),
         toml::Value::try_from(json!({"persistence":"none"}))?,
@@ -103,12 +120,7 @@ pub(super) fn configuration(
         toml::Value::try_from(json!({"trust_level":"untrusted"}))?,
     );
     value.insert("projects".into(), projects.into());
-    value.insert("model_providers".into(),toml::Value::try_from(json!({"tiancai_assistance":{
-        "name":"TianCaiSpaceHub local assistance","wire_api":"responses","requires_openai_auth":false,
-        "base_url":format!("http://127.0.0.1:{port}/api/local-assistance/model/{id}"),
-        "experimental_bearer_token":token,"supports_websockets":false,
-        "http_headers":{"x-openai-actor-authorization":"Bearer codexhub"}}}))?);
-    Ok(toml::to_string(&value)?)
+    Ok(value)
 }
 fn approval_policy(full_access: bool) -> &'static str {
     if full_access { "never" } else { "on-request" }

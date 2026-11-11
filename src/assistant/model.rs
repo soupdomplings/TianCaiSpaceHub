@@ -1,4 +1,4 @@
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -112,29 +112,87 @@ impl Configuration {
         );
         Ok(config)
     }
-    pub(crate) fn catalog(&self) -> Value {
-        json!({"models":[{
-            "slug":self.model.id,"display_name":self.model.label.as_deref().unwrap_or(&self.model.id),
+    pub(crate) fn catalog(&self) -> Result<Value> {
+        let mut catalog = crate::ai_gateway::catalog::configured_models_response(
+            &crate::ai_gateway::config::AiGatewayConfig {
+                codex_visible_models: vec![self.model.id.clone()],
+                ..Default::default()
+            },
+        );
+        let model = catalog["models"]
+            .as_array_mut()
+            .and_then(|models| models.first_mut())
+            .and_then(Value::as_object_mut)
+            .context("管理员模型未包含在当前 Hub Codex 能力目录中，请核对模型 ID 或更新 Hub")?;
+        // Keep the same Codex capability schema as the rest of Hub, with only
+        // the administrator's parameters and this assistant's tool scope changed.
+        let overrides = json!({
+            "display_name":self.model.label.as_deref().unwrap_or(&self.model.id),
             "description":"天才小分队管理员配置的天才搭档模型",
             "default_reasoning_level":self.model.default_reasoning_effort,
             "supported_reasoning_levels":self.model.reasoning_efforts.iter().map(|effort|json!({"effort":effort,"description":effort})).collect::<Vec<_>>(),
-            "shell_type":"disabled","visibility":"list","supported_in_api":true,"priority":0,
+            "shell_type":"disabled",
             "base_instructions":"你是天才搭档，只用 Hub 提供的工具协助用户管理配置。",
-            "availability_nux":null,"upgrade":null,
+            "model_messages":null,"tool_mode":null,"multi_agent_version":null,"node_repl_disabled":true,
+            "prefer_websockets":false,"use_responses_lite":false,
             "supports_reasoning_summaries":self.model.supports_reasoning,
-            "supports_reasoning_summary_parameter":self.model.supports_reasoning,"support_verbosity":false,
-            "default_verbosity":null,"apply_patch_tool_type":null,"web_search_tool_type":"text",
-            "truncation_policy":{"mode":"tokens","limit":10000},
+            "supports_reasoning_summary_parameter":self.model.supports_reasoning,
+            "apply_patch_tool_type":null,"supports_search_tool":false,
             "supports_parallel_tool_calls":false,"context_window":self.model.context_window,
+            "max_context_window":self.model.context_window,
+            "auto_compact_token_limit":((self.model.context_window as f64 * 0.8) as u64),
             "effective_context_window_percent":95,"experimental_supported_tools":[],
-            "input_modalities":["text"]
-        }]})
+            "input_modalities":["text"],"supports_image_detail_original":false
+        });
+        model.extend(overrides.as_object().unwrap().clone());
+        Ok(catalog)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn catalog_reuses_codex_capabilities_with_admin_parameters_and_scoped_tools() {
+        for id in ["gpt-6.1-sol", "gpt-6.1-sol-fixture"] {
+            let config = Configuration::parse(json!({"enabled":true,"name":"天才搭档",
+                "model":{"id":id,"contextWindow":128000,"reasoningEfforts":["medium"],
+                    "defaultReasoningEffort":"medium","supportsReasoning":true},
+                "api":{"baseUrl":"https://models.example/v1","apiKey":"fixture-key"}}))
+            .unwrap();
+            let expected = crate::ai_gateway::catalog::configured_models_response(
+                &crate::ai_gateway::config::AiGatewayConfig {
+                    codex_visible_models: vec![id.into()],
+                    ..Default::default()
+                },
+            );
+            let catalog = config.catalog().unwrap();
+            let model = &catalog["models"][0];
+            assert_eq!(catalog["models"].as_array().unwrap().len(), 1);
+            assert_eq!(model["slug"], id);
+            for key in ["comp_hash", "minimal_client_version", "truncation_policy"] {
+                assert_eq!(model[key], expected["models"][0][key], "{id}: {key}");
+            }
+            assert_eq!(model["context_window"], 128000);
+            assert_eq!(model["max_context_window"], 128000);
+            assert_eq!(model["auto_compact_token_limit"], 102400);
+            assert_eq!(model["default_reasoning_level"], "medium");
+            assert_eq!(
+                model["supported_reasoning_levels"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                1
+            );
+            assert_eq!(model["shell_type"], "disabled");
+            assert_eq!(model["node_repl_disabled"], true);
+            assert_eq!(model["model_messages"], Value::Null);
+            assert_eq!(model["tool_mode"], Value::Null);
+            assert_eq!(model["apply_patch_tool_type"], Value::Null);
+            assert_eq!(model["prefer_websockets"], false);
+            assert_eq!(model["use_responses_lite"], false);
+        }
+    }
     #[test]
     fn config_uses_ordinary_api_without_remote_tools_compact_or_billing_fields() {
         let valid = json!({"enabled":true,"name":"天才搭档","model":{"id":"fixture","label":null,

@@ -223,11 +223,15 @@ pub(crate) async fn shutdown_and_cleanup(state: &SharedState) {
     }
 }
 async fn finish(state: &SharedState, status: &'static str, detail: impl Into<String>) {
+    let detail = detail.into();
     let mut inner = state.assistant.inner.lock().await;
     inner.running = false;
-    inner.detail = detail.into();
+    inner.detail = detail.clone();
     for message in inner.messages.iter_mut().filter(|m| m.status == "running") {
         message.status = status;
+        if status == "error" && message.role == "assistant" && message.text.trim().is_empty() {
+            message.text = detail.clone();
+        }
     }
 }
 async fn close_worker(state: &SharedState, worker: &mut Option<worker::Worker>) -> Result<()> {

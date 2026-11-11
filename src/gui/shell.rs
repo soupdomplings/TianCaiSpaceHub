@@ -109,6 +109,7 @@ pub(super) struct Shell {
     pub service: Button,
     pub account: Button,
     pub assistant_launcher: Button,
+    pub assistant_host: Panel,
     assistant_footer: Panel,
     title: StaticText,
     back: Button,
@@ -404,6 +405,7 @@ impl Shell {
             content.from_dip(theme::PAGE_GUTTER),
         );
         let book = SimpleBook::builder(&content).build();
+        book.add_style(WindowStyle::ClipSiblings);
         book.set_background_color(t.bg_app);
         column.add(
             &book,
@@ -418,10 +420,9 @@ impl Shell {
         let footer = BoxSizer::builder(Orientation::Horizontal).build();
         footer.add_stretch_spacer(1);
         let assistant_launcher = Button::builder(&assistant_footer)
-            .with_label("天才搭档")
             .with_icon(Icon::Chat)
             .with_kind(ButtonKind::Primary)
-            .with_size(Size::new(136, 42))
+            .with_size(Size::new(44, 44))
             .build();
         assistant_launcher.set_name("assistant-floating-chat");
         assistant_launcher.set_tooltip("打开天才搭档，继续本次对话");
@@ -443,6 +444,7 @@ impl Shell {
             service,
             account,
             assistant_launcher,
+            assistant_host: content,
             assistant_footer,
             title,
             back,
@@ -519,8 +521,24 @@ impl Shell {
         self.assistant_launcher.show(ready);
         if self.assistant_footer.is_shown() != ready {
             self.assistant_footer.show(ready);
-            self.panel.layout();
+            self.assistant_host.layout();
         }
+    }
+    /// Bounds of the client-area overlay. The title bar, rail and launcher
+    /// remain outside the chat so native window controls stay reachable.
+    pub fn assistant_overlay_area(&self) -> Rect {
+        let size = self.assistant_host.get_client_size();
+        let inset = self.assistant_host.from_dip(theme::PAGE_GUTTER);
+        let top = self.assistant_host.from_dip(56);
+        let bottom = size.height
+            - self.assistant_footer.get_best_size().height
+            - self.assistant_host.from_dip(theme::SPACE_SM);
+        Rect::new(
+            inset,
+            top,
+            (size.width - inset * 2).max(1),
+            (bottom - top).max(1),
+        )
     }
     pub fn set_dumpling_visible(&self, visible: bool) {
         if let Some((_, button)) = self

@@ -1,4 +1,4 @@
-﻿use std::time::Duration;
+use std::time::Duration;
 
 use anyhow::{Result, anyhow};
 use serde_json::{Value, json};
@@ -407,7 +407,7 @@ pub struct ThreadStartOptions {
 }
 
 impl ThreadStartOptions {
-    fn to_params(&self) -> Value {
+    pub(crate) fn to_params(&self) -> Value {
         let mut params = serde_json::Map::new();
         if let Some(cwd) = non_empty(self.cwd.as_deref()) {
             params.insert("cwd".to_string(), json!(cwd));
@@ -756,10 +756,7 @@ pub async fn start_turn_for_client(
         state,
         client_key,
         "turn/start",
-        json!({
-            "threadId": thread_id,
-            "input": turn_input_items(text, attachments),
-        }),
+        turn_start_params(thread_id, text, attachments),
     )
     .await?;
     let turn_id = response
@@ -970,6 +967,17 @@ pub(super) fn route_remote_client_key_matches(route_client_key: &str, client_key
     route_client_key == client_key
 }
 
+pub(crate) fn turn_start_params(
+    thread_id: &str,
+    text: &str,
+    attachments: &[InboundAttachment],
+) -> Value {
+    json!({
+        "threadId": thread_id,
+        "input": turn_input_items(text, attachments),
+    })
+}
+
 fn turn_input_items(text: &str, attachments: &[InboundAttachment]) -> Vec<Value> {
     let mut items = Vec::new();
     let trimmed = text.trim();
@@ -1010,4 +1018,47 @@ fn turn_input_items(text: &str, attachments: &[InboundAttachment]) -> Vec<Value>
         }));
     }
     items
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shared_codex_request_builders_keep_settings_on_thread_and_inputs_on_turn() {
+        let params = ThreadStartOptions {
+            cwd: Some(" /fixture/work ".into()),
+            model_provider: Some(" fixture-provider ".into()),
+            model: Some(" fixture-model ".into()),
+            reasoning_effort: Some(" medium ".into()),
+            permissions: Some(" read-only ".into()),
+            approval_policy: Some(" never ".into()),
+            ..Default::default()
+        }
+        .to_params();
+        assert_eq!(
+            params,
+            json!({"cwd":"/fixture/work","runtimeWorkspaceRoots":["/fixture/work"],
+            "modelProvider":"fixture-provider","model":"fixture-model","config":{"model_reasoning_effort":"medium"},
+            "permissions":"read-only","approvalPolicy":"never"})
+        );
+        let attachment = InboundAttachment {
+            kind: "image".into(),
+            name: None,
+            mime_type: None,
+            text_hint: None,
+            local_path: Some(" /fixture/image.png ".into()),
+        };
+        assert_eq!(
+            turn_start_params("thread-fixture", " 请继续 ", &[attachment]),
+            json!({
+            "threadId":"thread-fixture","input":[{"type":"text","text":"请继续","text_elements":[]},
+                {"type":"localImage","path":"/fixture/image.png"}]})
+        );
+        assert_eq!(
+            turn_start_params("thread-fixture", " ", &[]),
+            json!({
+            "threadId":"thread-fixture","input":[{"type":"text","text":"","text_elements":[]}]})
+        );
+    }
 }

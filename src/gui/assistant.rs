@@ -18,7 +18,9 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use wxdragon::{prelude::*, timer::Timer};
+use wxdragon::{
+    dc::GraphicsDC, prelude::*, timer::Timer, widgets::textctrl::TextCtrl as MessageText,
+};
 
 #[derive(Clone)]
 enum Action {
@@ -59,6 +61,224 @@ fn runtime_ready(state: &Value) -> bool {
         .unwrap_or_else(|| state["runtime"]["ready"] == true)
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ChatMessage {
+    id: String,
+    role: String,
+    text: String,
+}
+
+fn chat_messages(state: &Value) -> Vec<ChatMessage> {
+    state["messages"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .enumerate()
+        .filter_map(|(index, item)| {
+            let text = item["text"].as_str().unwrap_or_default();
+            (!text.is_empty()).then(|| ChatMessage {
+                id: item["id"]
+                    .as_str()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| index.to_string()),
+                role: item["role"].as_str().unwrap_or("assistant").to_owned(),
+                text: text.to_owned(),
+            })
+        })
+        .collect()
+}
+
+/// A message remains a native selectable editor, but each turn has its own
+/// bubble. Updating a streaming turn does not replace earlier selections.
+struct MessageCard {
+    message: ChatMessage,
+    row: Panel,
+    bubble: Panel,
+    body: MessageText,
+    caption: Option<StaticText>,
+    layout_width: Cell<i32>,
+}
+
+impl MessageCard {
+    fn new(parent: &ScrolledWindow, message: ChatMessage) -> Self {
+        let t = theme::theme();
+        let user = message.role == "user";
+        let background = if user { t.accent } else { t.bg_card_alt };
+        let foreground = if user { t.on_accent } else { t.ink_primary };
+        let row = Panel::builder(parent).build();
+        row.set_background_color(t.bg_card);
+        let bubble = Panel::builder(&row).build();
+        paint_chat_surface(bubble, background, None);
+        let content = BoxSizer::builder(Orientation::Vertical).build();
+        let caption = match message.role.as_str() {
+            "tool" => Some("操作结果"),
+            "system" => Some("提示"),
+            _ => None,
+        }
+        .map(|text| {
+            let caption = label(&bubble, text, theme::TextRole::Caption);
+            caption.set_background_color(background);
+            caption.set_foreground_color(t.ink_secondary);
+            content.add(
+                &caption,
+                0,
+                SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Top,
+                bubble.from_dip(12),
+            );
+            caption
+        });
+        let body = MessageText::builder(&bubble)
+            .with_value(&message.text)
+            .with_style(
+                TextCtrlStyle::MultiLine
+                    | TextCtrlStyle::ReadOnly
+                    | TextCtrlStyle::BorderNone
+                    | TextCtrlStyle::NoVScroll
+                    | TextCtrlStyle::CharWrap,
+            )
+            .build();
+        body.set_name(if user { "你的消息" } else { "回复内容" });
+        body.set_font(&theme::font(theme::TextRole::Body));
+        body.set_background_color(background);
+        body.set_foreground_color(foreground);
+        content.add(
+            &body,
+            0,
+            SizerFlag::Expand | SizerFlag::All,
+            bubble.from_dip(12),
+        );
+        bubble.set_sizer(content, false);
+        let line = BoxSizer::builder(Orientation::Horizontal).build();
+        if user {
+            line.add_stretch_spacer(1);
+        }
+        line.add(&bubble, 0, SizerFlag::default(), 0);
+        if !user {
+            line.add_stretch_spacer(1);
+        }
+        row.set_sizer(line, false);
+        let transcript = *parent;
+        body.on_mouse_wheel(move |event| {
+            if let WindowEventData::General(wheel) = &event {
+                let delta = wheel.get_wheel_delta();
+                let rotation = wheel.get_wheel_rotation();
+                if delta != 0 && rotation != 0 {
+                    let lines = (rotation / delta * 3).abs().max(1) * rotation.signum();
+                    let position = transcript.view_start();
+                    transcript.scroll_coords(-1, (position.y - lines).max(0));
+                    return;
+                }
+            }
+            event.skip(true);
+        });
+        Self {
+            message,
+            row,
+            bubble,
+            body,
+            caption,
+            layout_width: Cell::new(0),
+        }
+    }
+
+    fn update(&mut self, message: ChatMessage) {
+        if self.message.text != message.text {
+            let selection = self.body.get_selection();
+            self.body.change_value(&message.text);
+            self.body.set_selection(selection.0, selection.1);
+            self.layout_width.set(0);
+        }
+        self.message = message;
+    }
+
+    fn layout(&self, width: i32) {
+        if self.layout_width.replace(width) == width {
+            return;
+        }
+        let padding = self.row.from_dip(24);
+        let max_width = (width - self.row.from_dip(40)).max(1);
+        let text_width = self
+            .message
+            .text
+            .lines()
+            .map(|line| self.body.get_text_extent(line).width)
+            .max()
+            .unwrap_or(0);
+        let bubble_width = (text_width + padding)
+            .max(self.row.from_dip(92))
+            .min(max_width);
+        let body_width = (bubble_width - padding).max(1);
+        self.body
+            .set_size(Size::new(body_width, self.body.get_char_height()));
+        // wxMSW reports the wrapped display lines after the width is applied.
+        // The measured bound also keeps the text readable on other wx ports.
+        let measured_lines = self
+            .message
+            .text
+            .split('\n')
+            .map(|line| (self.body.get_text_extent(line).width + body_width - 1) / body_width)
+            .map(|lines| lines.max(1))
+            .sum::<i32>();
+        let lines = self.body.get_number_of_lines().max(measured_lines).max(1);
+        let height = lines * self.body.get_char_height().max(1) + self.body.from_dip(6);
+        self.body.set_min_size(Size::new(body_width, height));
+        let caption_height = self
+            .caption
+            .map(|caption| {
+                caption.wrap(body_width);
+                caption.get_best_size().height + self.bubble.from_dip(12)
+            })
+            .unwrap_or(0);
+        let bubble_height = height + padding + caption_height;
+        self.bubble
+            .set_min_size(Size::new(bubble_width, bubble_height));
+        self.row.set_min_size(Size::new(-1, bubble_height));
+        self.row.layout();
+        self.bubble.layout();
+    }
+}
+
+fn paint_chat_surface(panel: Panel, fill: Colour, border: Option<Colour>) {
+    panel.set_background_color(fill);
+    panel.set_background_style(BackgroundStyle::Paint);
+    visual::redraw_on_resize(panel);
+    panel.on_paint(move |_| {
+        let base = AutoBufferedPaintDC::new(&panel);
+        let dc = GraphicsDC::new(&base);
+        let scale = visual::scale(&panel);
+        let c = visual::Canvas::new(&dc, scale);
+        let size = panel.get_client_size();
+        c.clear(
+            panel
+                .get_parent()
+                .map(|p| p.get_background_color())
+                .unwrap_or(theme::theme().bg_app),
+        );
+        c.rounded(
+            Rect::new(
+                0,
+                0,
+                (size.width as f64 / scale) as i32,
+                (size.height as f64 / scale) as i32,
+            ),
+            theme::SURFACE_RADIUS,
+            fill,
+            border,
+        );
+    });
+}
+
+fn fit_chat(area: Rect, preferred: Size) -> Rect {
+    let width = preferred.width.min(area.width).max(1);
+    let height = preferred.height.min(area.height).max(1);
+    Rect::new(
+        area.x + area.width - width,
+        area.y + area.height - height,
+        width,
+        height,
+    )
+}
+
 #[derive(Clone)]
 pub(super) struct AssistantUi {
     pub page: Panel,
@@ -76,9 +296,12 @@ pub(super) struct AssistantUi {
     uninstall: Button,
     open: Button,
     clean: Button,
-    chat: Frame,
+    chat: Panel,
     chat_status: StaticText,
-    transcript: TextCtrl,
+    transcript: ScrolledWindow,
+    welcome: Panel,
+    welcome_text: StaticText,
+    cards: Rc<RefCell<Vec<MessageCard>>>,
     input: TextCtrl,
     send: Button,
     stop: Button,
@@ -89,7 +312,6 @@ pub(super) struct AssistantUi {
     approve: Button,
     reject: Button,
     credential: Button,
-    last_text: Rc<RefCell<String>>,
     state: Rc<RefCell<Value>>,
     inbox: Inbox,
     fetching: Arc<AtomicBool>,
@@ -97,7 +319,6 @@ pub(super) struct AssistantUi {
     timer: Rc<RefCell<Option<Timer<Panel>>>>,
     last_poll: Rc<Cell<Instant>>,
     active: Rc<Cell<bool>>,
-    positioned: Rc<Cell<bool>>,
     navigated: Rc<RefCell<Option<String>>>,
     installation_offer: Rc<RefCell<InstallationOffer>>,
     installation_prompt_open: Rc<Cell<bool>>,
@@ -212,55 +433,91 @@ impl AssistantUi {
         page.set_sizer(outer, true);
         shell.register(PageId::Assistant, &page);
 
-        let size = super::ai_gw_channel_dialog_size(parent, Size::new(400, 560));
-        let chat = Frame::builder()
-            .with_parent(parent)
-            .with_title("天才搭档")
-            .with_size(size)
-            .with_style(
-                FrameStyle::Caption
-                    | FrameStyle::ResizeBorder
-                    | FrameStyle::SystemMenu
-                    | FrameStyle::CloseBox
-                    | FrameStyle::ToolWindow
-                    | FrameStyle::NoTaskbar,
-            )
-            .build();
-        chat.set_background_color(t.bg_card);
+        // A normal child of the content panel is clipped by Hub and follows
+        // its minimize/tray lifecycle. It is deliberately outside the sizer.
+        let chat = Panel::builder(&shell.assistant_host).build();
+        chat.add_style(WindowStyle::ClipChildren | WindowStyle::ClipSiblings);
+        chat.set_name("对话浮层");
+        chat.hide();
+        paint_chat_surface(chat, t.bg_card, Some(t.divider));
         chat.set_font(&theme::font(theme::TextRole::Body));
-        chat.set_min_size(visual::dip_size(&chat, 360, 440));
-        let root = Panel::builder(&chat).build();
-        root.set_background_color(t.bg_card);
+        let root = chat;
         let col = BoxSizer::builder(Orientation::Vertical).build();
         let bar = BoxSizer::builder(Orientation::Horizontal).build();
-        let heading = label(&root, "天才搭档", theme::TextRole::Title);
-        let collapse = Button::builder(&root)
-            .with_label("收起")
+        let chat_status = label(&root, "正在连接…", theme::TextRole::Caption);
+        chat_status.set_foreground_color(t.ink_secondary);
+        let clear = Button::builder(&root)
+            .with_icon(visual::Icon::Trash)
             .with_kind(ButtonKind::Ghost)
+            .with_size(Size::new(32, 32))
             .build();
-        collapse.set_tooltip("收起窗口，保留当前对话");
-        bar.add(&heading, 1, SizerFlag::AlignCenterVertical, 0);
+        clear.set_name("清空本次对话");
+        clear.set_tooltip("清空本次对话；正在执行的任务会先停止");
+        let collapse = Button::builder(&root)
+            .with_icon(visual::Icon::WindowMinimize)
+            .with_kind(ButtonKind::Ghost)
+            .with_size(Size::new(32, 32))
+            .build();
+        collapse.set_name("收起对话");
+        collapse.set_tooltip("收起对话，保留消息和未发送内容（Esc）");
+        bar.add(&chat_status, 1, SizerFlag::AlignCenterVertical, 0);
+        bar.add(
+            &clear,
+            0,
+            SizerFlag::AlignCenterVertical | SizerFlag::Right,
+            root.from_dip(4),
+        );
         bar.add(&collapse, 0, SizerFlag::AlignCenterVertical, 0);
         col.add_sizer(
             &bar,
             0,
             SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Top,
-            root.from_dip(16),
+            root.from_dip(12),
         );
-        let chat_status = label(&root, "正在读取状态…", theme::TextRole::Caption);
-        chat_status.set_foreground_color(t.ink_secondary);
-        col.add(
-            &chat_status,
-            0,
-            SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Top,
-            root.from_dip(16),
-        );
-        let transcript = TextCtrl::builder(&root)
-            .with_style(TextCtrlStyle::MultiLine | TextCtrlStyle::ReadOnly)
+        let transcript = ScrolledWindow::builder(&root)
+            .with_style(ScrolledWindowStyle::VScroll)
             .build();
         transcript.set_name("assistant-conversation");
         transcript.set_background_color(t.bg_card);
-        transcript.set_foreground_color(t.ink_primary);
+        transcript.set_scroll_rate(0, root.from_dip(8));
+        let welcome = Panel::builder(&transcript).build();
+        welcome.set_background_color(t.bg_card);
+        let intro = BoxSizer::builder(Orientation::Vertical).build();
+        let welcome_title = label(&welcome, "想先处理什么？", theme::TextRole::Title);
+        intro.add(&welcome_title, 0, SizerFlag::Bottom, root.from_dip(8));
+        let welcome_text = label(
+            &welcome,
+            "可以检查模型、调整配置，也可以了解常用功能。",
+            theme::TextRole::Body,
+        );
+        welcome_text.set_foreground_color(t.ink_secondary);
+        intro.add(
+            &welcome_text,
+            0,
+            SizerFlag::Expand | SizerFlag::Bottom,
+            root.from_dip(20),
+        );
+        let mut suggestions = Vec::new();
+        for (text, prompt) in [
+            ("查看当前模型配置", "帮我查看当前模型和渠道配置。"),
+            ("了解 Hub 的常用功能", "介绍一下 Hub 的常用功能和使用方法。"),
+        ] {
+            let button = Button::builder(&welcome)
+                .with_label(text)
+                .with_kind(ButtonKind::Secondary)
+                .build();
+            intro.add(&button, 0, SizerFlag::Bottom, root.from_dip(8));
+            suggestions.push((button, prompt));
+        }
+        welcome.set_sizer(intro, false);
+        let messages = BoxSizer::builder(Orientation::Vertical).build();
+        messages.add(
+            &welcome,
+            0,
+            SizerFlag::Expand | SizerFlag::Top,
+            root.from_dip(24),
+        );
+        transcript.set_sizer(messages, false);
         col.add(
             &transcript,
             1,
@@ -306,20 +563,13 @@ impl AssistantUi {
             SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Bottom,
             root.from_dip(16),
         );
-        let input_label = label(&root, "告诉搭档要做什么", theme::TextRole::Caption);
-        input_label.set_foreground_color(t.ink_secondary);
-        col.add(
-            &input_label,
-            0,
-            SizerFlag::Left | SizerFlag::Right,
-            root.from_dip(16),
-        );
         let input = TextCtrl::builder(&root)
             .with_style(TextCtrlStyle::MultiLine)
-            .with_size(Size::new(-1, root.from_dip(76)))
+            .with_size(Size::new(-1, 68))
             .build();
         input.set_name("assistant-message-input");
-        input.set_hint("例如：帮我把这个模型配置到天工。Ctrl+Enter 发送");
+        input.set_tooltip("输入消息，Ctrl+Enter 发送；Esc 收起对话");
+        input.set_hint("输入消息…");
         col.add(
             &input,
             0,
@@ -327,10 +577,8 @@ impl AssistantUi {
             root.from_dip(12),
         );
         let row = BoxSizer::builder(Orientation::Horizontal).build();
-        let clear = Button::builder(&root)
-            .with_label("清空")
-            .with_kind(ButtonKind::Ghost)
-            .build();
+        let shortcut = label(&root, "Ctrl+Enter 发送", theme::TextRole::Caption);
+        shortcut.set_foreground_color(t.ink_muted);
         let stop = Button::builder(&root)
             .with_label("停止")
             .with_kind(ButtonKind::Secondary)
@@ -339,9 +587,9 @@ impl AssistantUi {
             .with_label("发送")
             .with_kind(ButtonKind::Primary)
             .build();
-        row.add(&clear, 0, SizerFlag::Right, root.from_dip(8));
+        row.add(&shortcut, 0, SizerFlag::AlignCenterVertical, 0);
         row.add_stretch_spacer(1);
-        row.add(&stop, 0, SizerFlag::Right, root.from_dip(8));
+        row.add(&stop, 0, SizerFlag::default(), 0);
         row.add(&send, 0, SizerFlag::default(), 0);
         col.add_sizer(
             &row,
@@ -350,9 +598,6 @@ impl AssistantUi {
             root.from_dip(12),
         );
         root.set_sizer(col, false);
-        let frame_col = BoxSizer::builder(Orientation::Vertical).build();
-        frame_col.add(&root, 1, SizerFlag::Expand, 0);
-        chat.set_sizer(frame_col, false);
 
         let ui = Self {
             page,
@@ -373,6 +618,9 @@ impl AssistantUi {
             chat,
             chat_status,
             transcript,
+            welcome,
+            welcome_text,
+            cards: Default::default(),
             input,
             send,
             stop,
@@ -383,7 +631,6 @@ impl AssistantUi {
             approve,
             reject,
             credential,
-            last_text: Default::default(),
             state: Default::default(),
             inbox: Default::default(),
             fetching: Default::default(),
@@ -391,7 +638,6 @@ impl AssistantUi {
             timer: Default::default(),
             last_poll: Rc::new(Cell::new(Instant::now() - Duration::from_secs(30))),
             active: Default::default(),
-            positioned: Default::default(),
             navigated: Default::default(),
             installation_offer: Default::default(),
             installation_prompt_open: Default::default(),
@@ -406,9 +652,24 @@ impl AssistantUi {
         });
         let nav = shell.clone();
         login.on_click(move |_| nav.navigate(PageId::Squad));
-        for button in [shell.assistant_launcher, open] {
+        let u = ui.clone();
+        shell.assistant_launcher.on_click(move |_| {
+            if u.chat.is_shown() {
+                u.collapse();
+            } else {
+                u.show_chat();
+            }
+        });
+        let u = ui.clone();
+        open.on_click(move |_| u.show_chat());
+        for (button, prompt) in suggestions {
             let u = ui.clone();
-            button.on_click(move |_| u.show_chat());
+            button.on_click(move |_| {
+                u.input.set_value(prompt);
+                u.input.set_insertion_point_end();
+                u.input.set_focus();
+            });
+            ui.bind_collapse_key(&button);
         }
         let u = ui.clone();
         prepare.on_click(move |_| u.confirm_install());
@@ -422,6 +683,10 @@ impl AssistantUi {
                 u.send_message();
             } else if matches!(&event, WindowEventData::Keyboard(key) if key.get_key_code() == Some(27)) {
                 u.collapse();
+            } else if matches!(&event, WindowEventData::Keyboard(key) if key.get_key_code() == Some(9) && !key.shift_down())
+                && !u.send.is_enabled() && !u.stop.is_enabled()
+            {
+                if u.clear.is_enabled() { u.clear.set_focus(); } else { collapse.set_focus(); }
             } else {
                 event.skip(true);
             }
@@ -449,13 +714,29 @@ impl AssistantUi {
         credential.on_click(move |_| u.enter_credential());
         let u = ui.clone();
         collapse.on_click(move |_| u.collapse());
-        let u = ui.clone();
-        chat.on_close(move |event| {
-            if let WindowEventData::General(event) = event {
-                event.veto();
-            }
-            u.collapse();
-        });
+        for button in [collapse, clear, stop, send, approve, reject, credential] {
+            let u = ui.clone();
+            button.on_key_down(move |event| {
+                if matches!(&event, WindowEventData::Keyboard(key) if key.get_key_code() == Some(27)) {
+                    u.collapse();
+                } else if matches!(&event, WindowEventData::Keyboard(key) if key.get_key_code() == Some(9) && key.shift_down())
+                    && (button.handle_ptr() == clear.handle_ptr()
+                        || (button.handle_ptr() == collapse.handle_ptr() && !u.clear.is_enabled()))
+                {
+                    if u.stop.is_shown() && u.stop.is_enabled() { u.stop.set_focus(); }
+                    else if u.send.is_shown() && u.send.is_enabled() { u.send.set_focus(); }
+                    else { u.input.set_focus(); }
+                } else if matches!(&event, WindowEventData::Keyboard(key) if key.get_key_code() == Some(9) && !key.shift_down())
+                    && (button.handle_ptr() == send.handle_ptr() || button.handle_ptr() == stop.handle_ptr())
+                {
+                    if u.clear.is_enabled() { u.clear.set_focus(); } else { collapse.set_focus(); }
+                } else {
+                    event.skip(true);
+                }
+            });
+        }
+        ui.bind_collapse_key(&chat);
+        ui.bind_collapse_key(&transcript);
         let u = ui.clone();
         page.on_size(move |event| {
             let width =
@@ -469,12 +750,12 @@ impl AssistantUi {
         });
         let u = ui.clone();
         chat.on_size(move |event| {
-            let width = (u.chat.get_client_size().width - u.chat.from_dip(32)).max(120);
-            u.chat_status.wrap(width);
-            u.pending_text.wrap(width);
-            u.pending_scroll.layout();
-            u.pending_scroll.fit_inside();
-            root.layout();
+            u.layout_chat();
+            event.skip(true);
+        });
+        let u = ui.clone();
+        shell.assistant_host.on_size(move |event| {
+            u.position_chat();
             event.skip(true);
         });
         if monitor {
@@ -485,6 +766,7 @@ impl AssistantUi {
             ui.timer.borrow_mut().replace(timer);
             ui.fetch();
         }
+        ui.position_chat();
         ui
     }
 
@@ -497,6 +779,9 @@ impl AssistantUi {
             }
             self.fetch();
         }
+        if self.chat.is_shown() {
+            self.position_chat();
+        }
     }
 
     fn show_chat(&self) {
@@ -505,15 +790,7 @@ impl AssistantUi {
             return;
         }
         drop(state);
-        if !self.positioned.replace(true) {
-            let parent = self.parent.get_client_size();
-            let size = self.chat.get_size();
-            let p = self.parent.client_to_screen(Point::new(
-                (parent.width - size.width - self.parent.from_dip(20)).max(0),
-                (parent.height - size.height - self.parent.from_dip(16)).max(0),
-            ));
-            self.chat.move_window(p.x, p.y);
-        }
+        self.position_chat();
         self.chat.show(true);
         self.chat.raise();
         self.input.set_focus();
@@ -525,6 +802,139 @@ impl AssistantUi {
         if self.parent.is_shown() && self.shell.assistant_launcher.is_shown() {
             self.shell.assistant_launcher.set_focus();
         }
+    }
+
+    fn bind_collapse_key(&self, widget: &impl WindowEvents) {
+        let u = self.clone();
+        widget.on_key_down(move |event| {
+            if matches!(&event, WindowEventData::Keyboard(key) if key.get_key_code() == Some(27)) {
+                u.collapse();
+            } else {
+                event.skip(true);
+            }
+        });
+    }
+
+    fn position_chat(&self) {
+        let bounds = fit_chat(
+            self.shell.assistant_overlay_area(),
+            visual::dip_size(&self.chat, 420, 560),
+        );
+        let position = self.chat.get_position();
+        let size = self.chat.get_size();
+        if position.x != bounds.x
+            || position.y != bounds.y
+            || size.width != bounds.width
+            || size.height != bounds.height
+        {
+            self.chat
+                .set_size_with_pos(bounds.x, bounds.y, bounds.width, bounds.height);
+        }
+        if self.chat.is_shown() {
+            self.chat.raise();
+        }
+    }
+
+    fn at_latest_message(&self) -> bool {
+        let scroll = self.transcript.view_start();
+        let (_, unit) = self.transcript.get_scroll_pixels_per_unit();
+        scroll.y * unit.max(1) + self.transcript.get_client_size().height
+            >= self.transcript.get_virtual_size().height - self.transcript.from_dip(20)
+    }
+
+    fn layout_chat(&self) {
+        self.layout_chat_preserving(self.at_latest_message(), self.transcript.view_start());
+    }
+
+    fn layout_chat_preserving(&self, follow: bool, scroll: Point) {
+        let width = (self.chat.get_client_size().width - self.chat.from_dip(32)).max(1);
+        self.welcome_text.wrap(width);
+        self.welcome.layout();
+        self.pending_text.wrap(width);
+        let pending_height = (self.chat.get_client_size().height / 6)
+            .clamp(self.chat.from_dip(48), self.chat.from_dip(96));
+        self.pending_scroll
+            .set_min_size(Size::new(-1, pending_height));
+        self.pending_scroll
+            .set_max_size(Size::new(-1, pending_height));
+        self.chat.layout();
+        self.pending_scroll.layout();
+        self.pending_scroll.fit_inside();
+        let width = (self.transcript.get_client_size().width - self.transcript.from_dip(8)).max(1);
+        for card in self.cards.borrow().iter() {
+            card.layout(width);
+        }
+        self.transcript.layout();
+        self.transcript.fit_inside();
+        if follow {
+            let (_, unit) = self.transcript.get_scroll_pixels_per_unit();
+            self.transcript
+                .scroll_coords(-1, self.transcript.get_virtual_size().height / unit.max(1));
+        } else {
+            self.transcript.scroll_point(scroll);
+        }
+    }
+
+    fn sync_messages(&self, state: &Value) {
+        let messages = chat_messages(state);
+        if self
+            .cards
+            .borrow()
+            .iter()
+            .map(|card| &card.message)
+            .eq(messages.iter())
+        {
+            return;
+        }
+        let follow = self.at_latest_message();
+        let scroll = self.transcript.view_start();
+        self.transcript.freeze();
+        let mut cards = self.cards.borrow_mut();
+        let retained = cards
+            .iter()
+            .zip(&messages)
+            .take_while(|(card, message)| {
+                card.message.id == message.id && card.message.role == message.role
+            })
+            .count();
+        let structure_changed = retained != cards.len() || retained != messages.len();
+        for card in cards.drain(retained..) {
+            card.row.destroy();
+        }
+        for (index, message) in messages.into_iter().enumerate() {
+            if let Some(card) = cards.get_mut(index) {
+                card.update(message);
+            } else {
+                let card = MessageCard::new(&self.transcript, message);
+                self.bind_collapse_key(&card.body);
+                cards.push(card);
+            }
+        }
+        if structure_changed {
+            self.welcome.show(cards.is_empty());
+            let column = BoxSizer::builder(Orientation::Vertical).build();
+            // Releasing the old sizer first detaches retained native children.
+            // A window cannot be added to two wxSizers at the same time.
+            self.transcript.set_sizer(column, true);
+            column.add(
+                &self.welcome,
+                0,
+                SizerFlag::Expand | SizerFlag::Top,
+                self.chat.from_dip(24),
+            );
+            for card in cards.iter() {
+                column.add(
+                    &card.row,
+                    0,
+                    SizerFlag::Expand | SizerFlag::Bottom,
+                    self.chat.from_dip(12),
+                );
+            }
+            column.add_spacer(self.chat.from_dip(8));
+        }
+        drop(cards);
+        self.layout_chat_preserving(follow, scroll);
+        self.transcript.thaw();
     }
 
     fn fetch(&self) {
@@ -695,7 +1105,8 @@ impl AssistantUi {
                 Err(error) => {
                     self.detail.set_label(&error);
                     self.detail.set_foreground_color(theme::theme().error);
-                    self.chat_status.set_label(&error);
+                    self.chat_status.set_label("暂时无法完成，请重试");
+                    self.chat_status.set_tooltip(&error);
                     self.chat_status.set_foreground_color(theme::theme().error);
                     // Restore the saved switch after a failed settings request.
                     self.enabled
@@ -709,9 +1120,6 @@ impl AssistantUi {
             }
         }
         self.update_buttons();
-        if self.chat.is_shown() && (!self.parent.is_shown() || self.parent.is_iconized()) {
-            self.chat.show(false);
-        }
         let seconds = if self.active.get()
             || self.chat.is_shown()
             || self.state.borrow()["running"] == true
@@ -778,42 +1186,22 @@ impl AssistantUi {
         self.detail
             .set_foreground_color(theme::theme().ink_secondary);
         self.chat_status.set_label(if value["running"] == true {
-            "正在处理… · 收起后继续运行"
+            "正在处理…"
+        } else if !ready {
+            "运行端尚未就绪"
+        } else if !logged_in {
+            "请先登录小分队账户"
+        } else if value["modelServiceReady"] != true {
+            "模型服务尚未就绪"
+        } else if value["cleanupPending"] == true {
+            "正在清理临时内容…"
         } else {
-            detail.lines().next().unwrap_or(detail)
+            "可以开始对话"
         });
         self.chat_status.set_tooltip(detail);
         self.chat_status
             .set_foreground_color(theme::theme().ink_secondary);
-        let mut text = String::new();
-        if let Some(messages) = value["messages"].as_array() {
-            for message in messages {
-                let role = match message["role"].as_str() {
-                    Some("user") => "你",
-                    Some("tool") => "配置操作",
-                    Some("system") => "提示",
-                    _ => "天才搭档",
-                };
-                let content = message["text"].as_str().unwrap_or("");
-                if !content.is_empty() {
-                    text.push_str(&format!("{role}\n{content}\n\n"));
-                }
-            }
-        }
-        if text.is_empty() {
-            text = "你好，我是天才搭档。可以帮你配置模型、渠道及客户端，也可以介绍 Hub 和天才小分队的用法。\n\n".into();
-        }
-        if *self.last_text.borrow() != text {
-            let (start, end) = self.transcript.get_selection();
-            let at_end = end.max(start) as usize >= self.last_text.borrow().chars().count();
-            self.transcript.change_value(&text);
-            if at_end {
-                self.transcript.set_insertion_point_end();
-            } else {
-                self.transcript.set_selection(start, end);
-            }
-            *self.last_text.borrow_mut() = text;
-        }
+        self.sync_messages(&value);
         let deletion = &value["pendingDeletion"];
         let credential = &value["pendingCredential"];
         let has_deletion = deletion.is_object();
@@ -870,11 +1258,6 @@ impl AssistantUi {
             self.chat.show(false);
         }
         *self.state.borrow_mut() = value;
-        let width = (self.chat.get_client_size().width - self.chat.from_dip(32)).max(120);
-        self.chat_status.wrap(width);
-        self.pending_text.wrap(width);
-        self.pending_scroll.layout();
-        self.pending_scroll.fit_inside();
         let page_width = (self.page.get_client_size().width - self.page.from_dip(30))
             .max(self.page.from_dip(240));
         for text in [
@@ -889,7 +1272,8 @@ impl AssistantUi {
         self.page_scroll.layout();
         self.page_scroll.fit_inside();
         self.page.layout();
-        self.chat.layout();
+        self.position_chat();
+        self.layout_chat();
         self.update_buttons();
         self.apply_navigation();
     }
@@ -919,11 +1303,17 @@ impl AssistantUi {
                 && !busy,
         );
         self.stop.enable(running && !busy);
+        let actions_changed = self.stop.is_shown() != running;
+        self.stop.show(running);
+        self.send.show(!running);
         self.clear.enable(!busy);
         self.approve.enable(!busy);
         self.reject.enable(!busy);
         self.credential.enable(!busy);
         self.enabled.enable(value.get("enabled").is_some() && !busy);
+        if actions_changed {
+            self.layout_chat();
+        }
     }
 
     fn apply_navigation(&self) {
@@ -952,7 +1342,6 @@ impl AssistantUi {
                 return;
             }
             *self.navigated.borrow_mut() = Some(id.to_string());
-            self.collapse();
             self.shell.navigate(page);
             self.post("navigation/ack", json!({"id":id}), Action::Navigate);
         }
@@ -1053,6 +1442,32 @@ fn label(parent: &impl WxWidget, text: &str, role: theme::TextRole) -> StaticTex
 }
 
 #[cfg(test)]
+mod layout_tests {
+    use super::*;
+
+    #[test]
+    fn floating_chat_fits_normal_small_and_scaled_content_areas() {
+        for (area, preferred) in [
+            (Rect::new(20, 56, 940, 710), Size::new(420, 560)),
+            (Rect::new(20, 56, 660, 390), Size::new(420, 560)),
+            (Rect::new(20, 56, 300, 270), Size::new(420, 560)),
+            (Rect::new(30, 84, 990, 585), Size::new(630, 840)),
+        ] {
+            let chat = fit_chat(area, preferred);
+            assert!(chat.x >= area.x && chat.y >= area.y);
+            assert_eq!(chat.x + chat.width, area.x + area.width);
+            assert_eq!(chat.y + chat.height, area.y + area.height);
+            assert!(chat.width > 0 && chat.width <= preferred.width);
+            assert!(chat.height > 0 && chat.height <= preferred.height);
+        }
+        assert_eq!(
+            fit_chat(Rect::new(20, 56, 300, 270), Size::new(420, 560)),
+            Rect::new(20, 56, 300, 270)
+        );
+    }
+}
+
+#[cfg(test)]
 mod installation_tests {
     use super::*;
 
@@ -1102,7 +1517,7 @@ mod installation_tests {
 
 #[cfg(all(test, windows))]
 #[test]
-fn assistant_readiness_account_switch_and_pending_actions_fit_the_native_small_window() {
+fn assistant_account_switch_and_pending_actions_fit_the_hub_overlay() {
     wxdragon::app::render_offscreen(|| {
         for (mode,suffix) in [(theme::ThemeMode::Light,"light"),(theme::ThemeMode::Dark,"dark")] {
             theme::init(mode);
@@ -1119,11 +1534,21 @@ fn assistant_readiness_account_switch_and_pending_actions_fit_the_native_small_w
             let outer=BoxSizer::builder(Orientation::Vertical).build();
             outer.add(&host,1,SizerFlag::Expand,0);
             parent.set_sizer(outer,false);
+            // The hidden parent never receives the normal first-show layout.
+            // Allocate each containing panel before sizing its child overlay.
+            parent.layout();
+            host.layout();
+            shell.panel.layout();
+            shell.assistant_host.layout();
+            ui.position_chat();
+            ui.layout_chat();
             shell.navigate(PageId::Assistant);
             let mut state=json!({"conversationId":"fixture-a","enabled":false,"runtimeReady":true,"loggedIn":true,"modelServiceReady":true,
                 "runtime":{"installed":true,"canUninstall":true},"model":{"id":"fixture-model","label":"管理员模型（合成）"},"messages":[],"running":false,"detail":"合成状态，无真实调用"});
             ui.apply(state.clone());
             assert!(!shell.assistant_launcher.is_shown());
+            assert!(shell.assistant_launcher.get_label().is_empty());
+            assert_eq!(ui.chat.get_parent().unwrap().handle_ptr(),shell.assistant_host.handle_ptr());
             assert!(ui.uninstall.is_enabled());
             state["enabled"]=true.into();state["runtime"]["canUninstall"]=false.into();state["running"]=true.into();
             state["messages"]=json!([{"id":"u1","role":"user","text":"帮我调整模型配置"},{"id":"a1","role":"assistant","text":"请确认以下删除操作"}]);
@@ -1132,22 +1557,29 @@ fn assistant_readiness_account_switch_and_pending_actions_fit_the_native_small_w
             assert!(shell.assistant_launcher.is_shown());
             assert!(ui.stop.is_enabled());assert!(!ui.send.is_enabled());
             assert!(!ui.uninstall.is_enabled());assert!(ui.approve.is_shown());
-            ui.chat.layout();
+            ui.position_chat();ui.layout_chat();
             let size=ui.chat.get_client_size();
             for control in [&ui.input as &dyn WxWidget,&ui.send,&ui.stop,&ui.clear] {
+                if !control.is_shown() {continue;}
                 let screen=control.client_to_screen(Point::new(0,0));
                 let p=ui.chat.screen_to_client(screen);let control_size=control.get_size();
                 assert!(p.x>=0 && p.y>=0 && p.x+control_size.width<=size.width+1 && p.y+control_size.height<=size.height+1,"assistant action clipped: {p:?} {control_size:?} in {size:?}");
             }
-            assert!(ui.transcript.get_value().contains("帮我调整模型配置"));
+            assert!(ui.cards.borrow().iter().any(|card|card.body.get_value().contains("帮我调整模型配置")));
+            let first=ui.cards.borrow()[0].body;
+            first.set_selection(0,2);
+            state["messages"][1]["text"]="请确认以下删除操作，确认后继续。".into();
+            ui.apply(state.clone());
+            assert_eq!(ui.cards.borrow()[0].body.handle_ptr(),first.handle_ptr());
+            assert_eq!(first.get_selection(),(0,2));
             ui.input.set_value("旧账户尚未发送的草稿");
             state["conversationId"]="fixture-b".into();state["messages"]=json!([]);state["pendingDeletion"]=Value::Null;state["running"]=false.into();
             ui.apply(state);
             assert!(ui.input.get_value().is_empty());
-            assert!(!ui.transcript.get_value().contains("帮我调整模型配置"));
+            assert!(ui.cards.borrow().is_empty());
             assert!(!ui.chat.is_shown() && !parent.is_shown());
             super::native_model_review::capture(&ui.chat,&format!("assistant-chat-{suffix}"));
-            ui.chat.destroy();parent.destroy();
+            parent.destroy();
         }
     }).unwrap();
 }

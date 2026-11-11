@@ -13,6 +13,72 @@ enum Pending {
     Turn,
     Interrupt,
 }
+impl Pending {
+    fn method(&self) -> &'static str {
+        match self {
+            Self::Initialize => "initialize",
+            Self::Thread => "thread/start",
+            Self::Turn => "turn/start",
+            Self::Interrupt => "turn/interrupt",
+        }
+    }
+}
+fn server_error_detail(stage: &str, error: &Value) -> String {
+    let info = error.get("codexErrorInfo").or_else(|| {
+        error
+            .get("data")
+            .and_then(|data| data.get("codexErrorInfo"))
+    });
+    let http_status = info.and_then(|info| {
+        [
+            "httpConnectionFailed",
+            "responseStreamConnectionFailed",
+            "responseStreamDisconnected",
+        ]
+        .iter()
+        .find_map(|name| info[*name]["httpStatusCode"].as_u64())
+    });
+    let message = error["message"]
+        .as_str()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let reason = if message.contains("readonly access is no longer supported") {
+        "Server 不再接受旧的只读权限参数，请更新 Hub"
+    } else if let Some(status) = http_status {
+        match status {
+            400 | 422 => "管理员模型服务拒绝请求参数",
+            401 => "管理员模型凭据无效或已过期，请重新获取配置",
+            403 => "管理员模型服务拒绝访问，请核对服务权限",
+            404 => "管理员模型接口不存在，请核对服务地址和模型 ID",
+            408 | 504 => "管理员模型服务响应超时",
+            429 => "管理员模型服务达到调用限制，请稍后再试",
+            500..=599 => "管理员模型服务暂时不可用",
+            _ => "管理员模型服务请求失败",
+        }
+    } else {
+        match info.and_then(Value::as_str) {
+            Some("contextWindowExceeded") => "模型上下文已满，请清空对话后重试",
+            Some("usageLimitExceeded") => "管理员模型服务达到使用限制",
+            Some("unauthorized") => "模型服务鉴权失败，请重新获取管理员配置",
+            Some("badRequest") => "模型服务拒绝请求参数",
+            Some("sandboxError") => "Server 无法建立当前只读权限环境",
+            _ if matches!(error["code"].as_i64(), Some(-32600 | -32602)) => {
+                "Server 不接受当前请求参数，请更新 Hub 与共享运行包"
+            }
+            _ => "天才搭档 Server 执行失败，请重试",
+        }
+    };
+    // Protocol messages may contain upstream bodies, URLs or credentials. Show
+    // the structured failure and stage without copying that private text.
+    let mut context = vec![stage.to_owned()];
+    if let Some(code) = error["code"].as_i64() {
+        context.push(format!("RPC {code}"));
+    }
+    if let Some(status) = http_status {
+        context.push(format!("HTTP {status}"));
+    }
+    format!("{reason}（{}）", context.join("，"))
+}
 pub(super) struct Worker {
     pub epoch: String,
     child: Option<Child>,
@@ -27,6 +93,7 @@ pub(super) struct Worker {
     thread: Option<String>,
     active: Option<String>,
     stopping: Option<Instant>,
+    turn_error: Option<String>,
     pending: HashMap<u64, (Pending, Instant)>,
     sequence: u64,
 }
@@ -182,9 +249,14 @@ fn configuration(
     token: &str,
 ) -> Result<String> {
     let model = &config.model;
-    let mut value = toml::Table::new();
-    value.insert("model".into(), model.id.clone().into());
-    value.insert("model_provider".into(), "tiancai_buddy".into());
+    let mut value = crate::local_assistance::codex_configuration(
+        &model.id,
+        model.default_reasoning_effort.as_deref(),
+        "tiancai_buddy",
+        &dir.join("work"),
+        "never",
+        "read-only",
+    )?;
     value.insert(
         "model_catalog_json".into(),
         dir.join("models.json")
@@ -200,12 +272,6 @@ fn configuration(
         "model_auto_compact_token_limit".into(),
         ((model.context_window as f64 * 0.8) as i64).into(),
     );
-    if let Some(effort) = &model.default_reasoning_effort {
-        value.insert("model_reasoning_effort".into(), effort.clone().into());
-    }
-    value.insert("approval_policy".into(), "never".into());
-    value.insert("sandbox_mode".into(), "read-only".into());
-    value.insert("web_search".into(), "disabled".into());
     value.insert("project_doc_max_bytes".into(), 0.into());
     value.insert("features".into(),toml::Value::try_from(json!({"shell_tool":false,"view_image":false,
         "multi_agent":false,"apps":false,"plugins":false,"remote_plugin":false,"remote_control":false,
@@ -223,17 +289,8 @@ fn configuration(
         toml::Value::try_from(json!({"generate_memories":false,"use_memories":false}))?,
     );
     value.insert(
-        "history".into(),
-        toml::Value::try_from(json!({"persistence":"none"}))?,
-    );
-    value.insert(
         "shell_environment_policy".into(),
         toml::Value::try_from(json!({"inherit":"none"}))?,
-    );
-    let cwd = dir.join("work").to_string_lossy().into_owned();
-    value.insert(
-        "projects".into(),
-        toml::Value::try_from(json!({cwd:{"trust_level":"untrusted"}}))?,
     );
     value.insert(
         "model_providers".into(),
@@ -274,7 +331,7 @@ impl Worker {
         )?;
         crate::desktop::transaction::atomic_write(
             &directory.join("models.json"),
-            &serde_json::to_vec(&config.catalog())?,
+            &serde_json::to_vec(&config.catalog()?)?,
         )?;
         let mut command = Command::new(&ready.program);
         command
@@ -372,6 +429,7 @@ impl Worker {
             thread: None,
             active: None,
             stopping: None,
+            turn_error: None,
             pending: HashMap::new(),
             sequence: 0,
         };
@@ -439,13 +497,12 @@ impl Worker {
     }
     pub(super) async fn turn(&mut self, text: &str) -> Result<()> {
         ensure!(self.ready(), "天才搭档会话正在准备");
-        let mut params = json!({"threadId":self.thread,"model":self.config.model.id,
-            "input":[{"type":"text","text":text}],"approvalPolicy":"never",
-            "sandboxPolicy":{"type":"readOnly","access":{"type":"restricted","includePlatformDefaults":false,
-                "readableRoots":[self.directory.join("work")]}}});
-        if let Some(effort) = &self.config.model.default_reasoning_effort {
-            params["effort"] = effort.clone().into();
-        }
+        self.turn_error = None;
+        let params = crate::remote_control_backend::turn_start_params(
+            self.thread.as_deref().context("天才搭档会话尚未就绪")?,
+            text,
+            &[],
+        );
         self.request("turn/start", params, Pending::Turn).await
     }
     pub(super) async fn interrupt(&mut self) -> Result<()> {
@@ -507,18 +564,28 @@ impl Worker {
                 .as_u64()
                 .and_then(|id| self.pending.remove(&id))
             {
-                ensure!(
-                    message.get("error").is_none(),
-                    "天才搭档 Server 请求未完成：{}",
-                    message["error"]["message"].as_str().unwrap_or("协议不兼容")
-                );
+                if let Some(error) = message.get("error") {
+                    bail!(server_error_detail(kind.method(), error));
+                }
                 match kind {
                     Pending::Initialize => {
                         self.wire(json!({"method":"initialized","params":{}}))
                             .await?;
-                        self.request("thread/start",json!({"cwd":self.directory.join("work"),"model":self.config.model.id,
-                            "modelProvider":"tiancai_buddy","approvalPolicy":"never","sandbox":"read-only","ephemeral":true,
-                            "dynamicTools":tools::definitions(),"developerInstructions":"你是天才搭档，帮助用户管理天才空间 Hub 的渠道、模型与客户端配置。只使用 Hub 动态工具；不得执行 shell、读取任意文件、联网、创建其他代理或通过原生工具改配置。先读取现状，仅修改用户要求的内容。删除必须等待 Hub 真人批量确认。密钥只用 Hub 凭据表单取得引用，禁止让用户在聊天中粘贴明文。修改客户端参数前先读取能力。不启动客户端、安装器或真实模型测试。用中文简洁说明实际结果；不把未做的检查说成通过。"}),Pending::Thread).await?;
+                        let mut params = crate::remote_control_backend::ThreadStartOptions {
+                            cwd: Some(self.directory.join("work").to_string_lossy().into_owned()),
+                            model: Some(self.config.model.id.clone()),
+                            model_provider: Some("tiancai_buddy".into()),
+                            reasoning_effort: self.config.model.default_reasoning_effort.clone(),
+                            approval_policy: Some("never".into()),
+                            ..Default::default()
+                        }
+                        .to_params();
+                        params["sandbox"] = "read-only".into();
+                        params["ephemeral"] = true.into();
+                        params["dynamicTools"] = tools::definitions().into();
+                        params["developerInstructions"] = "你是天才搭档，帮助用户管理天才空间 Hub 的渠道、模型与客户端配置。只使用 Hub 动态工具；不得执行 shell、读取任意文件、联网、创建其他代理或通过原生工具改配置。先读取现状，仅修改用户要求的内容。删除必须等待 Hub 真人批量确认。密钥只用 Hub 凭据表单取得引用，禁止让用户在聊天中粘贴明文。修改客户端参数前先读取能力。不启动客户端、安装器或真实模型测试。用中文简洁说明实际结果；不把未做的检查说成通过。".into();
+                        self.request("thread/start", params, Pending::Thread)
+                            .await?;
                     }
                     Pending::Thread => {
                         self.thread = Some(
@@ -620,6 +687,16 @@ impl Worker {
                     }
                 }
             }
+            "error" => {
+                let detail = server_error_detail("模型请求", &params["error"]);
+                state.assistant.inner.lock().await.detail =
+                    if params["willRetry"].as_bool() == Some(true) {
+                        format!("{detail}；Server 正在继续处理")
+                    } else {
+                        detail.clone()
+                    };
+                self.turn_error = Some(detail);
+            }
             "turn/completed" => {
                 let turn = &params["turn"];
                 if turn["id"].as_str() != self.active.as_deref() {
@@ -631,14 +708,19 @@ impl Worker {
                     _ => "error",
                 };
                 let detail = if status == "completed" {
-                    "回复完成"
+                    "回复完成".to_owned()
                 } else if status == "stopped" {
-                    "已停止"
+                    "已停止".to_owned()
+                } else if !turn["error"].is_null() {
+                    server_error_detail("本轮执行", &turn["error"])
                 } else {
-                    "本轮未完成，请重试"
+                    self.turn_error
+                        .take()
+                        .unwrap_or_else(|| "本轮未完成，请重试".into())
                 };
                 self.active = None;
                 self.stopping = None;
+                self.turn_error = None;
                 for tool in self.tools.drain(..) {
                     tool.abort();
                 }
@@ -730,13 +812,21 @@ mod tests {
         assert_eq!(value["features"]["view_image"].as_bool(), Some(false));
         assert_eq!(value["web_search"].as_str(), Some("disabled"));
         assert_eq!(value["approval_policy"].as_str(), Some("never"));
+        assert_eq!(value["sandbox_mode"].as_str(), Some("read-only"));
+        assert_eq!(value["history"]["persistence"].as_str(), Some("none"));
+        assert_eq!(value["model_provider"].as_str(), Some("tiancai_buddy"));
+        assert_eq!(value["model_providers"].as_table().unwrap().len(), 1);
+        assert_eq!(value["model_reasoning_effort"].as_str(), Some("medium"));
         assert_eq!(
             value["model_providers"]["tiancai_buddy"]["capabilities"]["remote_compaction"].as_str(),
             Some("unsupported")
         );
-        assert_eq!(config.catalog()["models"][0]["shell_type"], "disabled");
         assert_eq!(
-            config.catalog()["models"][0]["apply_patch_tool_type"],
+            config.catalog().unwrap()["models"][0]["shell_type"],
+            "disabled"
+        );
+        assert_eq!(
+            config.catalog().unwrap()["models"][0]["apply_patch_tool_type"],
             Value::Null
         );
         assert!(
@@ -748,6 +838,40 @@ mod tests {
             !toml::to_string(&value)
                 .unwrap()
                 .contains("fixture-admin-key")
+        );
+    }
+    #[test]
+    fn server_failure_details_preserve_stage_and_codes_without_private_text() {
+        let retired = server_error_detail(
+            "turn/start",
+            &json!({"code":-32600,
+            "message":"invalid request:readOnly access is no longer supported use permissionProfile for restricted reads"}),
+        );
+        assert!(retired.contains("只读权限参数"));
+        assert!(retired.contains("turn/start"));
+        assert!(retired.contains("RPC -32600"));
+        let failed = server_error_detail(
+            "本轮执行",
+            &json!({
+            "message":"https://models.example/?token=fixture-private-token Authorization: fixture-private-key",
+            "additionalDetails":"private response body",
+            "codexErrorInfo":{"httpConnectionFailed":{"httpStatusCode":401}}}),
+        );
+        assert!(failed.contains("HTTP 401") && failed.contains("凭据无效"));
+        for private in [
+            "fixture-private-token",
+            "fixture-private-key",
+            "models.example",
+            "private response body",
+        ] {
+            assert!(!failed.contains(private));
+        }
+        assert!(
+            server_error_detail(
+                "本轮执行",
+                &json!({"codexErrorInfo":"contextWindowExceeded"})
+            )
+            .contains("上下文已满")
         );
     }
     #[tokio::test]
@@ -789,6 +913,7 @@ mod tests {
             thread: None,
             active: None,
             stopping: None,
+            turn_error: None,
             pending: HashMap::new(),
             sequence: 0,
         };
@@ -809,6 +934,14 @@ mod tests {
         let start = frame(&mut reader).await;
         assert_eq!(start["method"], "thread/start");
         assert_eq!(start["params"]["ephemeral"], true);
+        assert_eq!(start["params"]["sandbox"], "read-only");
+        assert_eq!(start["params"]["approvalPolicy"], "never");
+        assert_eq!(start["params"]["modelProvider"], "tiancai_buddy");
+        assert_eq!(start["params"]["model"], "fixture-model");
+        assert_eq!(
+            start["params"]["config"]["model_reasoning_effort"],
+            "medium"
+        );
         assert_eq!(
             start["params"]["dynamicTools"].as_array().unwrap().len(),
             tools::definitions().len()
@@ -825,6 +958,17 @@ mod tests {
             let request = frame(&mut reader).await;
             assert_eq!(request["method"], "turn/start");
             assert_eq!(request["params"]["threadId"], "one-thread");
+            assert_eq!(
+                request["params"],
+                crate::remote_control_backend::turn_start_params(
+                    "one-thread",
+                    "请说明操作入口",
+                    &[]
+                )
+            );
+            for field in ["sandboxPolicy", "approvalPolicy", "model", "effort"] {
+                assert!(request["params"].get(field).is_none());
+            }
             worker
                 .event(
                     &state,
@@ -887,6 +1031,53 @@ mod tests {
                 .unwrap();
             assert!(worker.ready());
         }
+        worker.turn("测试失败提示").await.unwrap();
+        let request = frame(&mut reader).await;
+        worker
+            .event(
+                &state,
+                Ok(json!({"id":request["id"],"result":{"turn":{"id":"failed-turn"}}})),
+            )
+            .await
+            .unwrap();
+        {
+            let mut inner = state.assistant.inner.lock().await;
+            inner.running = true;
+            inner.messages = vec![
+                Message {
+                    id: "empty".into(),
+                    role: "assistant",
+                    text: String::new(),
+                    status: "running",
+                },
+                Message {
+                    id: "partial".into(),
+                    role: "assistant",
+                    text: "已有回复".into(),
+                    status: "running",
+                },
+            ];
+        }
+        worker.event(&state, Ok(json!({"method":"error","params":{"threadId":"one-thread","turnId":"failed-turn",
+            "willRetry":true,"error":{"codexErrorInfo":{"httpConnectionFailed":{"httpStatusCode":503}},
+                "message":"fixture-private-key"}}}))).await.unwrap();
+        assert!(state.assistant.inner.lock().await.running);
+        assert!(worker.has_active_turn());
+        assert_eq!(worker.sequence, request["id"].as_u64().unwrap());
+        worker.event(&state, Ok(json!({"method":"turn/completed","params":{"threadId":"one-thread",
+            "turn":{"id":"failed-turn","status":"failed","error":{
+                "message":"fixture-private-key","codexErrorInfo":{"httpConnectionFailed":{"httpStatusCode":401}}}}}}))).await.unwrap();
+        {
+            let inner = state.assistant.inner.lock().await;
+            assert!(!inner.running);
+            assert!(inner.detail.contains("HTTP 401"));
+            assert_eq!(inner.messages[0].text, inner.detail);
+            assert_eq!(inner.messages[0].status, "error");
+            assert_eq!(inner.messages[1].text, "已有回复");
+            assert!(!inner.detail.contains("fixture-private-key"));
+        }
+        assert!(worker.ready());
+        assert_eq!(worker.thread.as_deref(), Some("one-thread"));
         squad.assistant_test_identity("generation-two").unwrap();
         assert!(worker.event(&state,Ok(json!({"method":"item/tool/call","id":"old-account",
             "params":{"threadId":"one-thread","turnId":"turn-two","tool":"hub_help","arguments":{}}}))).await.is_err());

@@ -38,6 +38,8 @@ mod status;
 mod utils;
 mod websocket;
 
+pub(crate) use session_api::turn_start_params;
+
 use client_state::*;
 #[cfg(test)]
 use diagnostics::record_remote_app_pong;

@@ -14,6 +14,8 @@ mod tests;
 pub mod web;
 mod worker;
 
+pub(crate) use worker::codex_configuration;
+
 use crate::app_state::SharedState;
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
