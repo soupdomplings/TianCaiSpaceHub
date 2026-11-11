@@ -88,6 +88,7 @@ pub(super) struct GmClawTab {
     save_button: Button,
     restore_button: Button,
     start_button: Button,
+    normal_start_button: Button,
     state: Rc<RefCell<SelectionState>>,
     in_flight: Arc<AtomicBool>,
     draft: Rc<RefCell<Option<ModelDraft>>>,
@@ -350,6 +351,15 @@ pub(super) fn create_with_settings(
             .with_label(tr(text, "启动天工 Work", "Start TianGong Work"))
             .build()
     });
+    start_button.set_label(tr(text, "增强启动", "Enhanced start"));
+    start_button.set_tooltip(tr(
+        text,
+        "使用已保存的外部模型直接进入本地工作区；首次请先退出正在运行的天工。",
+        "Enter the local workspace with saved external models. Close a normally running TianGong first.",
+    ));
+    let normal_start_button = Button::builder(maintenance)
+        .with_label(tr(text, "普通启动天工 Work", "Start TianGong normally"))
+        .build();
     let reload_button = header_actions.map(|a| a.1).unwrap_or_else(|| {
         Button::builder(maintenance)
             .with_label(tr(text, "重新读取", "Reload"))
@@ -367,9 +377,14 @@ pub(super) fn create_with_settings(
         .build();
     let utilities = BoxSizer::builder(Orientation::Vertical).build();
     let maintenance_buttons = if header_actions.is_some() {
-        vec![&restore_button]
+        vec![&normal_start_button, &restore_button]
     } else {
-        vec![&start_button, &reload_button, &restore_button]
+        vec![
+            &start_button,
+            &normal_start_button,
+            &reload_button,
+            &restore_button,
+        ]
     };
     for button in maintenance_buttons {
         utilities.add(button, 0, SizerFlag::Left | SizerFlag::Top, 18);
@@ -463,6 +478,7 @@ pub(super) fn create_with_settings(
         save_button,
         restore_button,
         start_button,
+        normal_start_button,
         state: Rc::new(RefCell::new(SelectionState {
             reasoning_efforts: vec!["auto"],
             ..SelectionState::default()
@@ -629,28 +645,45 @@ pub(super) fn bind_actions(
             }
         });
     }
-    let start_tab = tab.clone();
-    let start_api = api.clone();
-    let start_tx = gui_tx.clone();
-    tab.start_button.on_click(move |_| {
-        if !begin_action(
-            &start_tab,
-            tr(
-                text,
-                "正在启动并连接天工 Work…",
-                "Starting and connecting TianGong Work…",
-            ),
-        ) {
-            return;
-        }
-        let api = start_api.clone();
-        let tx = start_tx.clone();
-        thread::spawn(move || {
-            let result = api.start_gmclaw_desktop();
-            let _ = tx.send(super::GuiMessage::GmClaw(GmClawActionResult::Start(result)));
-            wxdragon::wake_up_idle();
+    for (button, enhanced) in [(tab.start_button, true), (tab.normal_start_button, false)] {
+        let start_tab = tab.clone();
+        let start_api = api.clone();
+        let start_tx = gui_tx.clone();
+        button.on_click(move |_| {
+            if !begin_action(
+                &start_tab,
+                if enhanced {
+                    tr(
+                        text,
+                        "正在准备天工外部模型工作区…",
+                        "Preparing TianGong external-model workspace…",
+                    )
+                } else {
+                    tr(
+                        text,
+                        "正在启动并连接天工 Work…",
+                        "Starting and connecting TianGong Work…",
+                    )
+                },
+            ) {
+                return;
+            }
+            let preferred = start_tab.state.borrow().status.as_ref().and_then(|status| {
+                status
+                    .entries
+                    .iter()
+                    .find(|entry| Some(&entry.entry_id) == status.selected_entry_id.as_ref())
+                    .map(|entry| entry.model_id.clone())
+            });
+            let api = start_api.clone();
+            let tx = start_tx.clone();
+            thread::spawn(move || {
+                let result = api.start_gmclaw_desktop(enhanced, preferred);
+                let _ = tx.send(super::GuiMessage::GmClaw(GmClawActionResult::Start(result)));
+                wxdragon::wake_up_idle();
+            });
         });
-    });
+    }
     {
         let action_tab = tab.clone();
         let action_api = api.clone();
@@ -868,16 +901,12 @@ pub(super) fn apply_result(
 ) {
     // Keep the model action busy until its result reaches the GUI thread.
     tab.in_flight.store(false, Ordering::SeqCst);
+    let start_feedback = match &result {
+        GmClawActionResult::Start(Ok(detail) | Err(detail)) => Some(detail.clone()),
+        _ => None,
+    };
     match result {
-        GmClawActionResult::Start(Ok(detail)) => tab.status.set_label(&detail),
-        GmClawActionResult::Start(Err(error)) => {
-            tab.status.set_label(tr(
-                text,
-                "启动或连接未完成。",
-                "Startup or connection did not complete.",
-            ));
-            show_error(frame, &error);
-        }
+        GmClawActionResult::Start(_) => {}
         GmClawActionResult::Refresh(Ok((providers, status, builtins)), rebase) => {
             tab.account.apply(builtins);
             if rebase || tab.draft.borrow().is_none() {
@@ -942,6 +971,9 @@ pub(super) fn apply_result(
         }
     }
     update_controls(tab);
+    if let Some(detail) = start_feedback {
+        tab.status.set_label(&detail);
+    }
     tab.status.wrap(920);
     tab.page.layout();
     tab.editor_scroll.fit_inside();
@@ -1495,6 +1527,7 @@ fn update_controls(tab: &GmClawTab) {
         parent.layout();
     }
     tab.start_button.enable(!busy);
+    tab.normal_start_button.enable(!busy);
     tab.entry.enable(ready);
     if builtin {
         tab.entry.enable(!busy);

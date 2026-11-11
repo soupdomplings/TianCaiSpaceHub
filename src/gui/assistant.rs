@@ -30,9 +30,34 @@ enum Action {
     Stop,
     Clear,
     Confirm,
+    Credential,
     Navigate,
 }
 type Inbox = Arc<Mutex<Vec<(Action, Result<Value, String>)>>>;
+
+/// An explicit enable or module visit may offer installation once. Status
+/// polling itself never requests consent and cannot repeat a declined offer.
+#[derive(Default)]
+struct InstallationOffer {
+    pending: bool,
+}
+impl InstallationOffer {
+    fn request(&mut self) {
+        self.pending = true;
+    }
+    fn after_status(&mut self, state: &Value, busy: bool, visible: bool) -> bool {
+        if !self.pending || busy || !visible || !state["enabled"].is_boolean() {
+            return false;
+        }
+        self.pending = false;
+        state["enabled"] == true && !runtime_ready(state)
+    }
+}
+fn runtime_ready(state: &Value) -> bool {
+    state["runtimeReady"]
+        .as_bool()
+        .unwrap_or_else(|| state["runtime"]["ready"] == true)
+}
 
 #[derive(Clone)]
 pub(super) struct AssistantUi {
@@ -74,6 +99,8 @@ pub(super) struct AssistantUi {
     active: Rc<Cell<bool>>,
     positioned: Rc<Cell<bool>>,
     navigated: Rc<RefCell<Option<String>>>,
+    installation_offer: Rc<RefCell<InstallationOffer>>,
+    installation_prompt_open: Rc<Cell<bool>>,
 }
 
 impl AssistantUi {
@@ -366,6 +393,8 @@ impl AssistantUi {
             active: Default::default(),
             positioned: Default::default(),
             navigated: Default::default(),
+            installation_offer: Default::default(),
+            installation_prompt_open: Default::default(),
         };
         let u = ui.clone();
         enabled.on_toggled(move |_| {
@@ -460,15 +489,19 @@ impl AssistantUi {
     }
 
     pub fn enter(&self, page: PageId) {
-        self.active.set(page == PageId::Assistant);
-        if page == PageId::Assistant {
+        let entering = page == PageId::Assistant;
+        let was_active = self.active.replace(entering);
+        if entering {
+            if !was_active {
+                self.installation_offer.borrow_mut().request();
+            }
             self.fetch();
         }
     }
 
     fn show_chat(&self) {
         let state = self.state.borrow();
-        if state["enabled"] != true || state["runtimeReady"] != true {
+        if state["enabled"] != true || !runtime_ready(&state) {
             return;
         }
         drop(state);
@@ -529,18 +562,12 @@ impl AssistantUi {
             return;
         }
         self.update_buttons();
-        let (api, inbox, flag, path) = (
-            self.api.clone(),
-            self.inbox.clone(),
-            self.acting.clone(),
-            path.to_string(),
-        );
+        let (api, inbox, path) = (self.api.clone(), self.inbox.clone(), path.to_string());
         std::thread::spawn(move || {
             let result = api.desktop_post(&path, &body);
             if let Ok(mut slot) = inbox.lock() {
                 slot.push((action, result));
             }
-            flag.store(false, Ordering::SeqCst);
             wxdragon::wake_up_idle();
         });
     }
@@ -549,7 +576,7 @@ impl AssistantUi {
         let state = self.state.borrow();
         if state["running"] == true
             || state["enabled"] != true
-            || state["runtimeReady"] != true
+            || !runtime_ready(&state)
             || state["loggedIn"] != true
             || state["modelServiceReady"] != true
             || state["cleanupPending"] == true
@@ -566,22 +593,38 @@ impl AssistantUi {
     }
 
     fn confirm_install(&self) {
-        if self.state.borrow()["enabled"] != true || self.acting.load(Ordering::SeqCst) {
+        if self.state.borrow()["enabled"] != true
+            || runtime_ready(&self.state.borrow())
+            || self.acting.load(Ordering::SeqCst)
+            || self.installation_prompt_open.replace(true)
+        {
             return;
         }
+        self.installation_offer.borrow_mut().pending = false;
         let prompt = MessageDialog::builder(&self.parent,
             "将从已有兼容程序准备共享的天才搭档 Server；本机没有可用来源时，从官方下载安装。\n\n天才搭档和天工协助共用这一份运行端，安装后长期保留。现在准备？",
             "安装天才搭档 Server")
             .with_style(MessageDialogStyle::YesNo | MessageDialogStyle::IconQuestion).build();
         let accepted = prompt.show_modal() == ID_YES;
         prompt.destroy();
+        self.installation_prompt_open.set(false);
         if accepted {
             self.detail.set_label("正在准备天才搭档 Server…");
+            self.detail
+                .set_foreground_color(theme::theme().ink_secondary);
             self.post_path(
                 "/api/desktop/assistance/prepare",
                 json!({"confirmed":true}),
                 Action::Prepare,
             );
+        } else {
+            self.detail.set_label(
+                "已取消准备；天才搭档 Server 尚未就绪。需要时点击“准备天才搭档 Server”。",
+            );
+            self.detail
+                .set_foreground_color(theme::theme().ink_secondary);
+            self.page_scroll.layout();
+            self.page_scroll.fit_inside();
         }
     }
 
@@ -613,6 +656,14 @@ impl AssistantUi {
             .map(|mut slot| std::mem::take(&mut *slot))
             .unwrap_or_default();
         for (action, result) in results {
+            if !matches!(action, Action::Status) {
+                // Only the UI consumer releases this flag. Releasing it in the
+                // worker races an enable response against its consent prompt.
+                self.acting.store(false, Ordering::SeqCst);
+            }
+            if matches!(action, Action::Settings(true)) {
+                self.installation_offer.borrow_mut().request();
+            }
             match result {
                 Ok(value) => {
                     if let Action::Send(text) = &action {
@@ -628,10 +679,17 @@ impl AssistantUi {
                     } else {
                         self.last_poll.set(Instant::now() - Duration::from_secs(30));
                     }
-                    if matches!(action, Action::Settings(true))
-                        && self.state.borrow()["runtimeNeedsPreparation"] == true
-                    {
-                        self.confirm_install();
+                    if matches!(action, Action::Status | Action::Settings(_)) {
+                        let offer = self.installation_offer.borrow_mut().after_status(
+                            &self.state.borrow(),
+                            self.acting.load(Ordering::SeqCst),
+                            self.active.get()
+                                && self.parent.is_shown()
+                                && !self.parent.is_iconized(),
+                        );
+                        if offer {
+                            self.confirm_install();
+                        }
                     }
                 }
                 Err(error) => {
@@ -642,6 +700,11 @@ impl AssistantUi {
                     // Restore the saved switch after a failed settings request.
                     self.enabled
                         .set_value(self.state.borrow()["enabled"] == true);
+                    if matches!(action, Action::Settings(true)) {
+                        // The setting may have saved before its status read
+                        // failed. Check saved readiness before offering setup.
+                        self.fetch();
+                    }
                 }
             }
         }
@@ -664,7 +727,7 @@ impl AssistantUi {
 
     fn apply(&self, value: Value) {
         let enabled = value["enabled"] == true;
-        let ready = value["runtimeReady"] == true;
+        let ready = runtime_ready(&value);
         let logged_in = value["loggedIn"] == true;
         let old = self.state.borrow();
         if (old["loggedIn"] == true && !logged_in)
@@ -702,9 +765,15 @@ impl AssistantUi {
             } else {
                 "模型服务 · 尚未配置或管理员未启用".into()
             });
-        let detail = value["detail"]
-            .as_str()
-            .unwrap_or("请启用天才搭档后准备运行端");
+        let detail = if enabled && !ready {
+            value["runtime"]["detail"]
+                .as_str()
+                .unwrap_or("天才搭档 Server 尚未就绪，请确认准备运行端；取消不会下载或安装。")
+        } else {
+            value["detail"]
+                .as_str()
+                .unwrap_or("请启用天才搭档后准备运行端")
+        };
         self.detail.set_label(detail);
         self.detail
             .set_foreground_color(theme::theme().ink_secondary);
@@ -829,10 +898,11 @@ impl AssistantUi {
         let value = self.state.borrow();
         let busy = self.acting.load(Ordering::SeqCst);
         let running = value["running"] == true;
-        let ready = value["enabled"] == true && value["runtimeReady"] == true;
+        let installed_ready = runtime_ready(&value);
+        let ready = value["enabled"] == true && installed_ready;
         self.prepare
-            .enable(value["enabled"] == true && !busy && value["runtimeReady"] != true);
-        self.prepare.show(value["runtimeReady"] != true);
+            .enable(value["enabled"] == true && !busy && !installed_ready);
+        self.prepare.show(!installed_ready);
         self.uninstall
             .show(value["runtime"]["installed"] == true || value["installed"] == true);
         self.uninstall.enable(
@@ -969,7 +1039,7 @@ impl AssistantUi {
             self.post(
                 "credential",
                 json!({"nonce":nonce,"cancelled":true}),
-                Action::Status,
+                Action::Credential,
             );
         }
     }
@@ -980,6 +1050,54 @@ fn label(parent: &impl WxWidget, text: &str, role: theme::TextRole) -> StaticTex
     label.set_font(&theme::font(role));
     label.set_foreground_color(theme::theme().ink_primary);
     label
+}
+
+#[cfg(test)]
+mod installation_tests {
+    use super::*;
+
+    #[test]
+    fn disabled_or_ready_server_does_not_offer_installation() {
+        for state in [
+            json!({"enabled":false,"runtimeReady":false}),
+            json!({"enabled":true,"runtimeReady":true}),
+            json!({"enabled":true,"runtime":{"ready":true}}),
+        ] {
+            let mut offer = InstallationOffer::default();
+            offer.request();
+            assert!(!offer.after_status(&state, false, true));
+        }
+    }
+
+    #[test]
+    fn missing_server_keeps_offer_until_idle_visible_and_then_only_once() {
+        let state = json!({"enabled":true,"runtimeReady":false,"runtimeNeedsPreparation":true});
+        let mut offer = InstallationOffer::default();
+        assert!(!offer.after_status(&state, false, true));
+        offer.request();
+        assert!(!offer.after_status(&Value::Null, false, true));
+        assert!(!offer.after_status(&state, true, true));
+        assert!(!offer.after_status(&state, false, false));
+        assert!(offer.after_status(&state, false, true));
+        for _ in 0..4 {
+            assert!(!offer.after_status(&state, false, true));
+        }
+        // Another explicit enable or visit permits a new human decision.
+        offer.request();
+        assert!(offer.after_status(&state, false, true));
+    }
+
+    #[test]
+    fn nested_readiness_or_missing_preparation_flag_can_still_offer_setup() {
+        for state in [
+            json!({"enabled":true,"runtime":{"ready":false,"needsPreparation":true}}),
+            json!({"enabled":true,"runtimeReady":false}),
+        ] {
+            let mut offer = InstallationOffer::default();
+            offer.request();
+            assert!(offer.after_status(&state, false, true));
+        }
+    }
 }
 
 #[cfg(all(test, windows))]

@@ -389,7 +389,11 @@ impl ApiClient {
         self.post_json_with_timeout("/api/config", config, GUI_CONFIG_TIMEOUT)
     }
 
-    pub(super) fn start_gmclaw_desktop(&self) -> Result<String, String> {
+    pub(super) fn start_gmclaw_desktop(
+        &self,
+        enhanced: bool,
+        model_id: Option<String>,
+    ) -> Result<String, String> {
         let config = self.get_app_config()?;
         let revision = config
             .revision
@@ -397,8 +401,8 @@ impl ApiClient {
             .ok_or_else(|| "无法读取最新配置版本，请刷新后重试".to_string())?;
         let status: crate::gmclaw_runtime::GmClawRuntimeStatus = self.post_json_with_timeout(
             "/api/gmclaw/runtime/start",
-            &serde_json::json!({"expectedRevision": revision}),
-            Duration::from_secs(45),
+            &serde_json::json!({"expectedRevision": revision,"enhanced":enhanced,"modelId":model_id}),
+            Duration::from_secs(if enhanced { 90 } else { 45 }),
         )?;
         use crate::gmclaw_runtime::GmClawConnectionState;
         match status.state {

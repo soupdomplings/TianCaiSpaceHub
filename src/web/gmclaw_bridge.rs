@@ -8,13 +8,17 @@ use crate::{app_state::SharedState, config::AppConfig};
 #[serde(rename_all = "camelCase")]
 pub(super) struct StartRequest {
     expected_revision: String,
+    #[serde(default)]
+    enhanced: bool,
+    #[serde(default)]
+    model_id: Option<String>,
 }
 
 pub(super) async fn start(
     State(state): State<SharedState>,
     Json(request): Json<StartRequest>,
 ) -> axum::response::Response {
-    match prepare_and_start(&state, &request.expected_revision).await {
+    match prepare_and_start(&state, &request).await {
         Ok(status) => Json(status).into_response(),
         Err(error) => (
             StatusCode::CONFLICT,
@@ -28,7 +32,7 @@ pub(super) async fn start(
 /// bridge fields, without changing any IM sender's executor or current session.
 async fn prepare_and_start(
     state: &SharedState,
-    expected_revision: &str,
+    request: &StartRequest,
 ) -> anyhow::Result<crate::gmclaw_runtime::GmClawRuntimeStatus> {
     use anyhow::{Context, ensure};
 
@@ -41,9 +45,22 @@ async fn prepare_and_start(
     crate::normalize_config_paths(&mut config, &state.config_path);
     *current = config.clone();
     ensure!(
-        !expected_revision.is_empty() && config.revision.as_deref() == Some(expected_revision),
+        !request.expected_revision.is_empty()
+            && config.revision.as_deref() == Some(request.expected_revision.as_str()),
         "配置已变化，请刷新后重新启动天工"
     );
+    let workspace: Option<crate::gmclaw_runtime::WorkspaceOptions> = if request.enhanced {
+        let snapshot = config.clone();
+        let preferred = request.model_id.clone();
+        Some(
+            tokio::task::spawn_blocking(move || {
+                crate::gmclaw_runtime::workspace_options(&snapshot, preferred.as_deref())
+            })
+            .await??,
+        )
+    } else {
+        None
+    };
     let needs_save =
         !config.gmclaw_bridge.enabled || config.gmclaw_bridge.auth_token.trim().is_empty();
     config.gmclaw_bridge.enabled = true;
@@ -90,9 +107,16 @@ async fn prepare_and_start(
     };
     // Shared with /tg: serialized startup, process/port checks and bounded
     // readiness wait. An already-running desktop is never restarted.
-    let status =
+    let mut status =
         crate::gmclaw_runtime::launch(&config.gmclaw_bridge, executable, validate_before_spawn)
             .await?;
+    if let Some(options) = workspace
+        && status.state == crate::gmclaw_runtime::GmClawConnectionState::Connected
+    {
+        crate::gmclaw_runtime::enhance_workspace(options).await?;
+        status.detail =
+            "天工外部模型增强工作区已就绪，可直接使用已配置模型；官方资源仍按需登录".into();
+    }
 
     let mut current = state.config.lock().await;
     let mut latest = AppConfig::load_or_default(&state.config_path)
@@ -106,4 +130,23 @@ async fn prepare_and_start(
         "启动检查期间配置已变化，请刷新查看当前连接状态"
     );
     Ok(status)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_start_payload_keeps_the_ordinary_launch_path() {
+        let ordinary: StartRequest =
+            serde_json::from_value(json!({"expectedRevision":"fixture"})).unwrap();
+        assert!(!ordinary.enhanced);
+        assert!(ordinary.model_id.is_none());
+        let enhanced: StartRequest = serde_json::from_value(json!({
+            "expectedRevision":"fixture","enhanced":true,"modelId":"tiancaispacehub"
+        }))
+        .unwrap();
+        assert!(enhanced.enhanced);
+        assert_eq!(enhanced.model_id.as_deref(), Some("tiancaispacehub"));
+    }
 }

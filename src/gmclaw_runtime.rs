@@ -31,6 +31,8 @@ use crate::{
 
 mod credentials;
 mod display;
+mod workspace;
+pub(crate) use workspace::{WorkspaceOptions, enhance_workspace, workspace_options};
 #[cfg(windows)]
 mod windows_start;
 

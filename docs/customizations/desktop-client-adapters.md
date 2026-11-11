@@ -2,7 +2,9 @@
 
 ## Harness 模型不可见与“待核对”修正（未发布）
 
-日期：2026-11-11；关联 TC-018。开发基线为 `main` / `16f1118` 加 V1.0.19 后累计工作区，功能已提交于 `6b86df5`。状态：已实现，Windows GUI 测试目标离线编译及本专题 7 项合成回归通过，纳入 [V1.0.20 统一测试交付](../releases/v1.0.20.md)，真实客户端待用户实机验收；未正式发布。
+日期：2026-11-11；关联 TC-018。开发基线为 `main` / `16f1118` 加 V1.0.19 后累计工作区，功能已提交于 `6b86df5`。状态：已实现，Windows GUI 测试目标离线编译及本专题 7 项合成回归通过，纳入 [V1.0.20 统一测试交付](../releases/v1.0.20.md)；本次 Harness 模型修复的用户反馈见下，其他范围待实机验收，未正式发布。
+
+用户于 2026-11-11 反馈 V1.0.20 的 DeepSeek 问题已解决，仅登记该次 Harness 模型实测通过。本次修复在共享 `models.rs` 中的新分支均限定 `ClientId::DeepSeekHarness`，VS Code 的 `chatLanguageModels.json`、ZCode 新旧配置、WebStorm Bridge/ACP 及 ChatGPT/WorkBuddy/天工专用 writer 保持各自格式；共享保存/恢复事务未改写。其他端的配置与事务离线结果沿原交付归属复用，不能据此宣称七端全部实机通过。跨端的页内操作反馈影响见 [视觉规范](../development/desktop-visual-system.md)。
 
 用户反馈保存 `gpt-6.1-sol` 后长期显示“待核对”，Harness 内也没有该模型。只读核对本机 Harness `0.2.2-rc.1` 的安装资源，确认以下互相独立的原因，未读取用户凭据、历史或真实配置：
 

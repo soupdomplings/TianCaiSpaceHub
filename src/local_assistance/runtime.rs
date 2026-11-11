@@ -279,14 +279,17 @@ fn inspect_source(program: PathBuf, expected_target: &str) -> Result<Source> {
     }
     ensure!(
         parent.join(native("codex-code-mode-host")).is_file(),
-        "已有 CLI 缺少 Code Mode 组件"
+        "已有运行程序缺少 Code Mode 组件，无法准备天才搭档 Server"
     );
-    ensure!(flat_rg(parent).is_some(), "已有 CLI 缺少配套搜索组件");
+    ensure!(
+        flat_rg(parent).is_some(),
+        "已有运行程序缺少配套搜索组件，无法准备天才搭档 Server"
+    );
     #[cfg(windows)]
     for name in ["codex-command-runner", "codex-windows-sandbox-setup"] {
         ensure!(
             parent.join(native(name)).is_file(),
-            "已有 CLI 缺少 {name} 组件"
+            "已有运行程序缺少 {name} 组件，无法准备天才搭档 Server"
         );
     }
     let version = super::brand::version(&program).unwrap_or_else(|| "existing-cli".into());
@@ -304,7 +307,7 @@ fn validate_program_architecture(program: &Path) -> Result<()> {
         .context("已有程序格式不完整")?;
     #[cfg(windows)]
     {
-        ensure!(&header[..2] == b"MZ", "已有程序不是原生 Windows CLI");
+        ensure!(&header[..2] == b"MZ", "已有程序不是原生 Windows 运行程序");
         let offset = u32::from_le_bytes(header[60..64].try_into()?);
         input.seek(SeekFrom::Start(u64::from(offset)))?;
         let mut coff = [0u8; 6];
@@ -318,7 +321,7 @@ fn validate_program_architecture(program: &Path) -> Result<()> {
                 } else {
                     0x8664
                 },
-            "已有 CLI 架构与本机不兼容"
+            "已有运行程序架构与本机不兼容"
         );
     }
     #[cfg(target_os = "macos")]
@@ -340,7 +343,7 @@ fn validate_program_architecture(program: &Path) -> Result<()> {
                 input.read_exact(&mut row)?;
                 found |= u32::from_be_bytes(row[..4].try_into()?) == expected;
             }
-            ensure!(found, "已有 CLI 架构与本机不兼容");
+            ensure!(found, "已有运行程序架构与本机不兼容");
         } else {
             ensure!(
                 matches!(magic, 0xcffaedfe | 0xfeedfacf),
@@ -351,41 +354,58 @@ fn validate_program_architecture(program: &Path) -> Result<()> {
             } else {
                 u32::from_be_bytes(header[4..8].try_into()?)
             };
-            ensure!(machine == expected, "已有 CLI 架构与本机不兼容");
+            ensure!(machine == expected, "已有运行程序架构与本机不兼容");
         }
     }
     Ok(())
 }
 fn flat_rg(parent: &Path) -> Option<PathBuf> {
     [
-        parent.join(native("rg")),
-        parent.join("../path").join(native("rg")),
-        parent.join("codex-path").join(native("rg")),
+        Some(parent.join(native("rg"))),
+        parent.parent().map(|p| p.join("path").join(native("rg"))),
+        Some(parent.join("codex-path").join(native("rg"))),
     ]
     .into_iter()
+    .flatten()
     .find(|p| p.is_file())
 }
-fn find_source(config_path: &Path, selected: Option<&Path>) -> Result<Option<Source>> {
-    let target = target()?;
+fn select_source(
+    selected: Option<&Path>,
+    target: &str,
+    discover: impl FnOnce() -> Result<Vec<PathBuf>>,
+) -> Result<Option<Source>> {
     if let Some(selected) = selected {
-        return inspect_source(super::binary::resolve(Some(selected))?, target).map(Some);
-    }
-    let mut candidates = Vec::new();
-    if let Some(bytes) =
-        transaction::read(&super::settings::root(config_path).join("runtime/current.json"))?
-        && let Ok(marker) = serde_json::from_slice::<Value>(&bytes)
-        && let Some(relative) = marker["program"].as_str().filter(|s| safe_relative(s))
-    {
-        candidates.push(
-            super::settings::root(config_path)
-                .join("runtime")
-                .join(relative),
+        ensure!(
+            selected.is_absolute(),
+            "天才搭档 Server 来源必须使用完整路径"
         );
+        // A saved Store-version path can disappear after an upgrade. It is a
+        // source preference, not an execution path; rediscover only on confirmed preparation.
+        if selected.try_exists()? {
+            return inspect_source(super::binary::resolve(Some(selected))?, target).map(Some);
+        }
     }
-    candidates.extend(super::binary::available());
-    Ok(candidates
+    Ok(discover()?
         .into_iter()
         .find_map(|p| inspect_source(p, target).ok()))
+}
+fn find_source(config_path: &Path, selected: Option<&Path>) -> Result<Option<Source>> {
+    select_source(selected, target()?, || {
+        let mut candidates = Vec::new();
+        if let Some(bytes) =
+            transaction::read(&super::settings::root(config_path).join("runtime/current.json"))?
+            && let Ok(marker) = serde_json::from_slice::<Value>(&bytes)
+            && let Some(relative) = marker["program"].as_str().filter(|s| safe_relative(s))
+        {
+            candidates.push(
+                super::settings::root(config_path)
+                    .join("runtime")
+                    .join(relative),
+            );
+        }
+        candidates.extend(super::binary::available());
+        Ok(candidates)
+    })
 }
 #[derive(Debug)]
 struct Package {
@@ -396,7 +416,7 @@ struct Package {
 fn select_release(value: &Value, target: &str) -> Result<Package> {
     let tag = value["tag_name"]
         .as_str()
-        .context("官方未返回 Codex CLI 版本")?;
+        .context("官方未返回天才搭档 Server 运行程序版本")?;
     ensure!(
         tag.starts_with("rust-v")
             && tag
@@ -755,7 +775,7 @@ fn install_source(root: &Path, target: &str, source: &Source) -> Result<ReadyRun
                 std::fs::copy(&from, stage.path().join("codex-resources").join(&name))?;
             }
         }
-        let rg = flat_rg(parent).context("已有 CLI 的搜索组件已移除")?;
+        let rg = flat_rg(parent).context("已有运行程序的搜索组件已移除")?;
         transaction::reject_links(&rg)?;
         std::fs::copy(rg, stage.path().join("codex-path").join(native("rg")))?;
         let mut manifest = json!({"layoutVersion":1,"target":target,"entrypoint":format!("bin/{}",executable()),
@@ -943,6 +963,51 @@ mod tests {
         program
     }
     #[test]
+    fn removed_saved_source_rediscovers_but_existing_invalid_source_remains_explicit() {
+        let temp = tempfile::tempdir().unwrap();
+        let program = fixture(&temp.path().join("current-package"), "fixture", false);
+        let removed = temp
+            .path()
+            .join("previous-store-package/resources")
+            .join(executable());
+        let source = select_source(Some(&removed), "fixture", || Ok(vec![program.clone()]))
+            .unwrap()
+            .unwrap();
+        assert_eq!(source.program, program);
+        assert!(!removed.exists());
+        let invalid = temp.path().join(executable());
+        std::fs::write(&invalid, b"incompatible existing program").unwrap();
+        assert!(
+            select_source(Some(&invalid), "fixture", || panic!(
+                "must retain explicit source error"
+            ))
+            .is_err()
+        );
+        assert!(
+            select_source(Some(Path::new("relative-codex")), "fixture", || panic!(
+                "must reject relative path"
+            ))
+            .is_err()
+        );
+    }
+    #[test]
+    fn previous_npm_search_component_is_returned_without_parent_traversal() {
+        let temp = tempfile::tempdir().unwrap();
+        let parent = temp.path().join("vendor/codex");
+        let search = temp.path().join("vendor/path").join(native("rg"));
+        std::fs::create_dir_all(&parent).unwrap();
+        std::fs::create_dir_all(search.parent().unwrap()).unwrap();
+        std::fs::write(&search, b"fixture search; never executed").unwrap();
+        let found = flat_rg(&parent).unwrap();
+        assert_eq!(found, search);
+        assert!(
+            !found
+                .components()
+                .any(|c| matches!(c, Component::ParentDir))
+        );
+        transaction::reject_links(&found).unwrap();
+    }
+    #[test]
     fn legacy_manifest_and_branded_copy_keep_companion_discovery_and_original() {
         let temp = tempfile::tempdir().unwrap();
         let source = temp.path().join("source");
@@ -998,6 +1063,15 @@ mod tests {
         let proxy = OutboundProxyConfig::default();
         assert!(
             prepare(&config, Some(&program), &proxy, false)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("本人")
+        );
+        assert!(!root(&config).exists());
+        let removed = temp.path().join("removed-store-package").join(executable());
+        assert!(
+            prepare(&config, Some(&removed), &proxy, false)
                 .await
                 .unwrap_err()
                 .to_string()

@@ -1,5 +1,7 @@
 # 二开功能总表
 
+2026-11-11 **TC-011/012/016/023 V1.0.21 天工增强启动与 Server 修复**：右上显式增强启动，使用已保存的外部模型初始化本地工作区，官方登录失效后保留外部对话；接入设置保留普通启动，旧启动 API 和 `/tg` 不切换模式。搭档共享 Server 修复失效来源路径、桌面/新版 npm 发现及缺少时的安装提醒；确认后准备，取消不下载。实现与回滚见 [天工模型](gmclaw.md#外部模型免登录增强启动v1021)、[天才搭档](genius-buddy.md)，最终检查和唯一包见 [V21 交付](../releases/v1.0.21.md)。DeepSeek V1.0.20 模型修复已有本次用户通过反馈，其他客户端配置格式及专用 writer 保持，实机验收按各端分别登记。
+
 2026-11-11 **TC-016/018/019 V1.0.20 统一测试交付**：Harness 补桌面 Profile、原生参数及旧设置导入识别，修正模型不可见和长期“待核对”；客户端与账户高频执行改原位置反馈。详见 [客户端适配](desktop-client-adapters.md#harness-模型不可见与待核对修正未发布)、[视觉规范](../development/desktop-visual-system.md) 和 [账户专题](tiancai-squad-account.md)；本批 14 项不同离线用例及 GUI 测试目标编译通过，Windows release、唯一 MSI 和静态核验结果见 [V20 交付](../releases/v1.0.20.md)。真实客户端及 macOS 待用户验收；天工外部模型免登录增强启动仍为评估。
 
 2026-11-11 **TC-016/018 V1.0.19 Harness 状态与四端启动修正**：修复带空格的 Harness 主进程漏报，并参考 Magpie 补齐四端共用的 Windows 安装登记发现；VS Code 启动复用便携/产品身份/版本/Scoop 解析，ZCode/WebStorm 补已登记的自定义目录。Harness 模型导入后直接启动，不增加登录前提。离线编译及 32 个不同定向用例通过，四端核对、许可、兼容见 [客户端适配](desktop-client-adapters.md#deepseek-harness-状态与四端启动修正)。唯一新 Windows MSI `113557` 已生成，release、版本/升级及六项载荷核验通过，见 [V19 交付](../releases/v1.0.19.md)；旧 V1.0.18 包保留，真实客户端及 macOS 待用户验收。
