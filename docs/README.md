@@ -1,6 +1,6 @@
 # TianCaiSpaceHub 文档总入口
 
-2026-11-11 **V1.0.19 后续修复，尚未打包**：Harness 模型不可见与正常设置迁移误报“待核对”修正，客户端及账户常用操作精简多余进度弹层；必要验证由本轮集成登记，不覆盖既有包或将下文 V19 检查当作本次结果。见 [模型兼容](customizations/desktop-client-adapters.md#harness-模型不可见与待核对修正未发布)、[操作反馈](development/desktop-visual-system.md)、[变更记录](customizations/CHANGELOG.md)。天工免登录增强启动仅评估，未实施。
+2026-11-11 **V1.0.20 统一测试交付**：Harness 模型不可见与正常设置迁移误报“待核对”修正，客户端及账户常用操作精简多余进度弹层；沿用本批 14 项不同离线用例及 GUI 测试目标编译，Windows release、唯一 MSI 和静态核验结果见 [V20 交付](releases/v1.0.20.md)。实现见 [模型兼容](customizations/desktop-client-adapters.md#harness-模型不可见与待核对修正未发布)、[操作反馈](development/desktop-visual-system.md)、[变更记录](customizations/CHANGELOG.md)。真实界面、Harness 加载及 macOS 待用户验收；天工免登录增强启动仅评估，未实施，历史包保持原身份。
 
 2026-11-11 当前 **V1.0.19 四端启动修复测试交付**：Harness 已打开状态与自定义目录启动修正，VS Code 复用便携/版本/Scoop 发现，ZCode/WebStorm 补已登记安装目录；模型导入后 Harness 直接启动，无需额外登录。离线编译及 32 个不同定向用例通过，Windows release 与唯一新 MSI `113557` 已生成，版本、升级及六项载荷核验通过，见 [V19 交付](releases/v1.0.19.md)；实现与兼容见 [客户端适配](customizations/desktop-client-adapters.md#deepseek-harness-状态与四端启动修正)。保留 V1.0.18 累计功能和原包，真实客户端与 macOS 待用户验收；下文旧交付保持各自归属。
 

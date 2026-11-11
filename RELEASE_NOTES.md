@@ -1,9 +1,9 @@
-TianCaiSpaceHub V1.0.19：Harness 状态与四端启动修复（2026-11-11）
+TianCaiSpaceHub V1.0.20：Harness 模型兼容与操作反馈精简（2026-11-11）
 
-修复 DeepSeek Harness 已打开但 Hub 显示“未打开”的问题，识别带空格的桌面主程序名；启动器按安装登记定位桌面程序，支持自定义盘符和目录，保留旧 CLI 入口。模型成功导入后可直接启动客户端，无需额外账号登录；本机 Harness 0.2.2-rc.1 的欢迎页凭据规则已静态核对，既有模型 Profile 和凭据引用格式保持。
+修复 DeepSeek Harness 保存模型后客户端不可见、长期显示“待核对”的问题：补齐桌面 Profile，按原生格式写入思考参数，并识别旧设置的正常导入迁移。此前写错 Profile 或参数的模型需要在新版 Hub 中重新保存，必要时按提示明确替换；保留用户手动配置和其他 Profile。
 
-参考固定 Magpie 提交补齐四端共用 Windows 安装发现。VS Code 支持 PATH 的 code.cmd/code 入口，复用便携版、产品身份、版本目录和 Scoop 解析；ZCode、WebStorm 补齐已登记的自定义安装位置，WebStorm 支持用户 Programs 和 JetBrains 版本目录。AI Assistant Bridge 与 ACP 组件仍沿各自适配路线。
+客户端启动、保存、恢复/移除模型等高频操作改为页内异步反馈；小分队高频操作及已有订单核对沿当前页面显示结果。剩余通用进度窗口精简重复标题和盲目重试，错误显示具体原因。删除、覆盖与财务操作保留必要确认，部分旧入口仍保留进度窗口。
 
-保留 V1.0.18 天才搭档、共享 Server、新版 Ultra/Fast 等累计开发；不迁移或覆盖用户客户端配置。32 个不同定向离线用例已通过，未变化的 V1.0.18 检查沿用原归属，不重复累计。Windows release 与唯一新 MSI 的实际构建、静态核验和包身份见 [V1.0.19 交付](docs/releases/v1.0.19.md)，实现及配置兼容见 [客户端适配](docs/customizations/desktop-client-adapters.md#deepseek-harness-状态与四端启动修正)。
+保留 V1.0.19 四端启动修复以及此前天才搭档、共享 Server、新版 Ultra/Fast 等累计功能。天工外部模型免登录增强启动仅完成评估，本版未实施。
 
-实际安装、四端打开/模型选择/调用及 macOS 待用户验收；未运行产品、客户端或安装器，未提交、推送、触发 Actions、创建标签或 Release。历史 V1.0.18 包保留原身份。
+14 项不同定向离线用例及 Windows GUI 测试目标编译已通过；Windows release、唯一 MSI 身份与静态核验见 [V1.0.20 交付](docs/releases/v1.0.20.md)。实际安装、Harness 加载、界面交互和 macOS 待用户验收；未启动产品、客户端或安装器，不发起真实模型、登录或支付调用。历史测试包保持原身份，本次不触发 GitHub Actions、标签或 Release。
