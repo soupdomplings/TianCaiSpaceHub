@@ -1,6 +1,6 @@
 # TianCaiSpaceHub 文档总入口
 
-2026-11-11 **V1.0.26 集成中**：[搭档](customizations/genius-buddy.md) 接入三套已审核性格、完全访问、Hub 内半宽最大化、选择／填写追问、专用模型删除及导航回执；[操作反馈](development/operation-feedback.md) 与[小分队](customizations/tiancai-squad-account.md) 处理空提示、倒计时、首屏布局和闪烁等待窗。本批追加模块／页签、公共弹窗及提示收放的[轻量动态](development/desktop-visual-system.md)，数据加载动态单独在页内提示。[ZCode](customizations/desktop-client-adapters.md) 补登录服务加载时的探针与本 Hub 连接重试；[WorkBuddy 模型分享](customizations/workbuddy-builtin-sharing-assessment.md) 仅静态评估。源码、必要检查、唯一测试包和实机待验范围见 [V26 交付](releases/v1.0.26.md)，以下 V25 草案和检查保留当时状态。
+2026-11-11 **V1.0.26 测试交付**：[搭档](customizations/genius-buddy.md) 接入三套已审核性格、完全访问、Hub 内半宽最大化、选择／填写追问、专用模型删除及导航回执；[操作反馈](development/operation-feedback.md) 与[小分队](customizations/tiancai-squad-account.md) 处理空提示、倒计时、首屏布局和闪烁等待窗。本批追加模块／页签、公共弹窗及提示收放的[轻量动态](development/desktop-visual-system.md)，数据加载动态单独在页内提示。[ZCode](customizations/desktop-client-adapters.md) 补登录服务加载时的探针与本 Hub 连接重试；[WorkBuddy 模型分享](customizations/workbuddy-builtin-sharing-assessment.md) 仅静态评估。源码、必要检查、唯一测试包和实机待验范围见 [V26 交付](releases/v1.0.26.md)，以下 V25 草案和检查保留当时状态。 Windows GUI/release、57 项不同 Rust、12 项 Node 和唯一 MSI `230102` 核验通过，产品源码 `eac0ea2` 已推送；实机待用户验收。
 
 2026-11-11 本批追加：[统一操作反馈](development/operation-feedback.md) 将操作结果集中为右上小浮窗并取消关闭到托盘提醒；[搭档用量查询](customizations/assistant-usage.md) 复用当前账户扣费、Token 和本机请求能力。[三套性格草案](customizations/genius-buddy-personalities-draft.md) 保留干练搭档、软萌猫娘、温柔女友，允许自然使用少量 emoji，供用户编辑审核，暂未接入产品。Windows GUI/release、31 项 Rust、10 项 Node 和唯一 MSI `210620` 核验通过，源提交 `8c3b3ed` 已推送；包身份及实机待验范围见 [V25 交付](releases/v1.0.25.md)。
 

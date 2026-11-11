@@ -12,7 +12,7 @@
 
 首次打开面板只读已有模型／参数／分享状态；原生接入、个人登录、身份测试和跨端分享均由显式按钮进入原服务和完整表单。未点击不登录、不接入、不新增分享，尚未接入时提供原生接入按钮。实际分享仍沿原 revision、参数同步、凭据保护和目标 writer。日常自动同步移除后，用户需在此面板主动接入／读取；已保存模型继续使用原档案。
 
-实现为 `src/assistant/personality.rs::opens_tiangong_share`、运行期可见状态、`src/gui/assistant.rs` 和 `src/gui/tiangong_models.rs::show_builtin_share`；日常页移除范围是 `src/gui/gmclaw.rs`。无需配置／凭据迁移，回退 UI 不应顺带启停或重写已有分享。新增隐藏状态夹具 `hidden_builtin_share_panel_reads_state_without_preparing_or_changing_existing_shares`，格式和差异检查已完成，编译／离线执行由管理会话统一登记；真实服务、用户界面及 macOS 待验收。下列旧操作保留历史版本归属，当前入口以上述收纳为准。
+实现为 `src/assistant/personality.rs::opens_tiangong_share`、运行期可见状态、`src/gui/assistant.rs` 和 `src/gui/tiangong_models.rs::show_builtin_share`；日常页移除范围是 `src/gui/gmclaw.rs`。无需配置／凭据迁移，回退 UI 不应顺带启停或重写已有分享。新增隐藏状态夹具 `hidden_builtin_share_panel_reads_state_without_preparing_or_changing_existing_shares`，已随最终 Windows GUI 测试目标编译并由管理会话执行通过；[V26 交付](../releases/v1.0.26.md) 记录唯一包，真实服务、用户界面及 macOS 待验收。下列旧操作保留历史版本归属，当前入口以上述收纳为准。
 
 1. 进入 **天工 Work → 模型**，只读发现两个内置模型并导入来源参数。原生方式不要求个人登录，不发额外的账号核验请求；已有有效个人会话则使用其个人 ID，没有时不附带个人 ID。模型仍携带已安装天工适配所需的模型认证，能否使用由服务端决定。
 2. 需要关联个人账号时，点击 **天工登录**，读取天工已有登录，或在 Hub 输入账号密码登录一次。显式登录仍核验身份，密码不保存；登录 token 与模型认证分开。普通页面无需个人 PAT。

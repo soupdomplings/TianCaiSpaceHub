@@ -25,6 +25,8 @@
 
 新增纯路径用例 `gui::motion::tests::interrupted_position_path_continues_from_current_point_and_finishes_latest_target`；两项隐藏原生夹具 `hidden_native_motion_skips_timers_and_reduced_motion_uses_final_state`、`hidden_page_switches_keep_latest_target_and_new_notice_cancels_pending_exit` 检查私有 Timer、隐藏/减少动画终态、连续页签最终选择及旧提示退出被替换。三项均在 `gui::motion::tests`，隐藏夹具不显示 Frame、不发键鼠输入、不调用真实服务。开发阶段仅定向格式化和差异检查，编译、定向执行和唯一包由管理会话统一记录；真实 Windows 动态观感、DPI/多屏和 macOS 待用户验收，没有扩展 Linux。
 
+管理会话已完成最终 Windows GUI 测试目标编译及上述三项用例，均通过；退出过程中被外部定位打断时仍结束隐藏，入场被打断则保留实际位置和可见性，两分支沿原隐藏夹具补验。整体 57 个不同 Rust 用例及最终构建、包身份以 [V26 交付](../releases/v1.0.26.md) 为准。
+
 ## V1.0.25 助手保存后的列表刷新与专用渠道名称
 
 用户反馈搭档已报告新增 WorkBuddy 模型，但 Hub 需要多次切换页面才显示，同时模型、渠道页面感觉迟滞。本轮复用已有配置 `revision`：助手状态返回 `configurationRevision`，界面在首次取得有效值及后续变化时通知客户端页和概览刷新；缺少该字段时忽略，不创建额外计数、哈希或磁盘扫描。当前可见客户端立即读取通用列表和对应原生列表，隐藏页只标记待更新，下一次进入先消费已完成响应再请求最新状态，不必靠反复导航释放旧的忙碌状态。
