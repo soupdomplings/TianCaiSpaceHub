@@ -1,10 +1,27 @@
 //! Account-scoped organization workbench; all writes retain server permissions.
-use super::super::controls::Button;
+use super::super::{
+    controls::{Button, ButtonKind},
+    squad_dialog::SquadDialog,
+};
 use super::*;
 use crate::gui::controls::TextCtrl;
 
 use super::super::squad_view::organization_data::{Section, sections};
 type OrgSlot = Arc<Mutex<Option<(u64, Result<Value, String>)>>>;
+
+// These complete workbench views supply their own heading, scroll area and footer.
+fn workspace_dialog(frame: &Frame, title: &str, preferred: Size) -> Dialog {
+    let size = super::super::ai_gw_channel_dialog_size(frame, preferred);
+    let dialog = Dialog::builder(frame, title)
+        .with_size(size.width, size.height)
+        .with_style(DialogStyle::DefaultDialogStyle | DialogStyle::ResizeBorder)
+        .build();
+    dialog.set_background_color(theme::theme().bg_app);
+    dialog.set_foreground_color(theme::theme().ink_primary);
+    dialog.set_font(&theme::font(theme::TextRole::Body));
+    dialog
+}
+
 #[derive(Clone)]
 struct Workspace {
     frame: Frame,
@@ -43,13 +60,7 @@ pub(super) fn show(
     money: crate::desktop::squad_money::Money,
 ) {
     let title = format!("{} · 组织工作台", unit["name"].as_str().unwrap_or("组织"));
-    let size = super::super::ai_gw_channel_dialog_size(frame, Size::new(1120, 740));
-    let dialog = Dialog::builder(frame, &title)
-        .with_size(size.width, size.height)
-        .with_style(DialogStyle::DefaultDialogStyle | DialogStyle::ResizeBorder)
-        .build();
-    dialog.set_background_color(theme::theme().bg_app);
-    dialog.set_font(&theme::font(theme::TextRole::Body));
+    let dialog = workspace_dialog(frame, &title, Size::new(1120, 740));
     let entries = sections(menu);
     if entries.is_empty() {
         dialog.destroy();
@@ -100,7 +111,7 @@ pub(super) fn show(
         &view.panel,
         1,
         SizerFlag::Expand | SizerFlag::All,
-        dialog.from_dip(20),
+        dialog.from_dip(theme::PAGE_GUTTER),
     );
     dialog.set_sizer(outer, false);
     let ui = Workspace {
@@ -204,6 +215,7 @@ pub(super) fn show(
     });
     timer.start(100, false);
     ui.load();
+    dialog.centre();
     dialog.show_modal();
     timer.stop();
     dialog.destroy();
@@ -776,20 +788,14 @@ fn statement(frame: &Frame, api: ApiClient, unit: &Value, row: &Value) {
     }
 }
 fn edit_allocation(frame: &Frame, api: ApiClient, path: &str, data: &Value) {
-    let size = super::super::ai_gw_channel_dialog_size(frame, Size::new(840, 700));
-    let dialog = Dialog::builder(frame, "成员额度分配")
-        .with_size(size.width, size.height)
-        .with_style(DialogStyle::DefaultDialogStyle | DialogStyle::ResizeBorder)
-        .build();
-    dialog.set_background_color(theme::theme().bg_app);
-    dialog.set_font(&theme::font(theme::TextRole::Body));
+    let dialog = workspace_dialog(frame, "成员额度分配", Size::new(840, 700));
     let view = super::super::squad_view::allocation::Allocation::new(&dialog, data);
     let col = BoxSizer::builder(Orientation::Vertical).build();
     col.add(
         &view.panel,
         1,
         SizerFlag::Expand | SizerFlag::All,
-        dialog.from_dip(22),
+        dialog.from_dip(theme::PAGE_GUTTER),
     );
     dialog.set_sizer(col, false);
     view.back.on_click(move |_| dialog.end_modal(ID_CANCEL));
@@ -800,6 +806,7 @@ fn edit_allocation(frame: &Frame, api: ApiClient, path: &str, data: &Value) {
             json!({"method":"PUT","path":path,"body":v.body()?}),
         ))
     });
+    dialog.centre();
     dialog.show_modal();
     drop(job);
     dialog.destroy();
@@ -912,23 +919,18 @@ fn member(
         super::super::show_error(frame, "成员身份不完整，请重新读取");
         return;
     }
-    let size = super::super::ai_gw_channel_dialog_size(frame, Size::new(820, 660));
-    let dialog = Dialog::builder(frame, "成员详情")
-        .with_size(size.width, size.height)
-        .with_style(DialogStyle::DefaultDialogStyle | DialogStyle::ResizeBorder)
-        .build();
-    dialog.set_background_color(theme::theme().bg_app);
-    dialog.set_font(&theme::font(theme::TextRole::Body));
+    let dialog = workspace_dialog(frame, "成员详情", Size::new(820, 660));
     let view = super::super::squad_view::member::Member::new(&dialog, row, manage, editable);
     let col = BoxSizer::builder(Orientation::Vertical).build();
     col.add(
         &view.panel,
         1,
         SizerFlag::Expand | SizerFlag::All,
-        dialog.from_dip(22),
+        dialog.from_dip(theme::PAGE_GUTTER),
     );
     dialog.set_sizer(col, false);
     view.back.on_click(move |_| dialog.end_modal(ID_CANCEL));
+    dialog.centre();
     if !editable {
         dialog.show_modal();
         dialog.destroy();
@@ -1083,25 +1085,31 @@ fn reorder_departments(frame: &Frame, api: ApiClient, prefix: &str, rows: &[Valu
         return;
     }
     let items = Rc::new(RefCell::new(rows.to_vec()));
-    let size = super::super::ai_gw_channel_dialog_size(frame, Size::new(540, 460));
-    let dialog = Dialog::builder(frame, "部门排序")
-        .with_size(size.width, size.height)
-        .with_style(DialogStyle::DefaultDialogStyle | DialogStyle::ResizeBorder)
-        .build();
-    let column = BoxSizer::builder(Orientation::Vertical).build();
-    let list = ListBox::builder(&dialog)
+    let chrome = SquadDialog::new(
+        frame,
+        "部门排序",
+        "选择部门，调整顺序后保存。",
+        Size::new(580, 500),
+    );
+    let dialog = chrome.dialog;
+    let (card, column) = chrome.section("部门顺序");
+    let list = ListBox::builder(&card)
         .with_choices(
             rows.iter()
                 .map(|r| r["name"].as_str().unwrap_or("部门").into())
                 .collect(),
         )
         .build();
+    list.set_background_color(theme::theme().bg_card);
+    list.set_foreground_color(theme::theme().ink_primary);
+    list.set_font(&theme::font(theme::TextRole::Body));
+    list.set_min_size(Size::new(0, list.from_dip(200)));
     list.set_selection(0, true);
-    column.add(&list, 1, SizerFlag::Expand | SizerFlag::All, 16);
+    column.add(&list, 1, SizerFlag::Expand, 0);
     let controls = BoxSizer::builder(Orientation::Horizontal).build();
     for (label, delta) in [("上移", -1isize), ("下移", 1)] {
-        let button = Button::builder(&dialog).with_label(label).build();
-        controls.add(&button, 0, SizerFlag::Right, 8);
+        let button = Button::builder(&card).with_label(label).build();
+        controls.add(&button, 0, SizerFlag::Right, card.from_dip(8));
         let items = items.clone();
         button.on_click(move |_| {
             let Some(index) = list.get_selection().map(|n| n as usize) else {
@@ -1120,12 +1128,26 @@ fn reorder_departments(frame: &Frame, api: ApiClient, prefix: &str, rows: &[Valu
             list.set_selection(target as u32, true);
         });
     }
-    let save = Button::builder(&dialog).with_label("保存排序").build();
-    controls.add(&save, 0, SizerFlag::default(), 0);
-    column.add_sizer(&controls, 0, SizerFlag::All, 16);
-    let status = StaticText::builder(&dialog).build();
-    column.add(&status, 0, SizerFlag::Expand | SizerFlag::All, 16);
-    dialog.set_sizer(column, true);
+    column.add_sizer(
+        &controls,
+        0,
+        SizerFlag::Expand | SizerFlag::Top,
+        card.from_dip(12),
+    );
+    let back = Button::builder(&dialog)
+        .with_label("返回")
+        .with_kind(ButtonKind::Ghost)
+        .build();
+    back.on_click(move |_| dialog.end_modal(ID_CANCEL));
+    chrome
+        .actions
+        .add(&back, 0, SizerFlag::Right, dialog.from_dip(8));
+    let save = Button::builder(&dialog)
+        .with_label("保存排序")
+        .with_kind(ButtonKind::Primary)
+        .build();
+    chrome.actions.add(&save, 0, SizerFlag::default(), 0);
+    let status = chrome.status;
     let path = format!("{prefix}/departments/reorder");
     let job = dialog_job::bind(dialog, save, status, api, move || {
         Ok((
@@ -1133,6 +1155,7 @@ fn reorder_departments(frame: &Frame, api: ApiClient, prefix: &str, rows: &[Valu
             json!({"method":"PUT","path":path,"body":{"ordered_ids":items.borrow().iter().map(|r|r["id"].clone()).collect::<Vec<_>>()}}),
         ))
     });
+    chrome.finish();
     dialog.show_modal();
     drop(job);
     dialog.destroy();

@@ -89,7 +89,7 @@ pub(crate) async fn assistant_configuration_operation(
     let bytes = axum::body::to_bytes(response.into_body(), 4 * 1024 * 1024).await?;
     let result: Value = serde_json::from_slice(&bytes)?;
     anyhow::ensure!(
-        status.is_success() && result.get("error").is_none(),
+        status.is_success() && result.get("error").is_none_or(Value::is_null),
         "{}",
         result["error"]
             .as_str()

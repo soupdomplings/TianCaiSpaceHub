@@ -6,6 +6,9 @@
 #include <wx/control.h>
 #include <wx/weakref.h>
 #include <wx/textctrl.h>
+#include <wx/timer.h>
+#include <chrono>
+#include <algorithm>
 #if wxUSE_ACCESSIBILITY
 #include <wx/access.h>
 #endif
@@ -13,12 +16,19 @@
 // Native focus/command semantics, with application-owned painting. Never cast
 // this wxControl to wxButton; Rust exposes it as a separate widget type.
 class WxdActionButton : public wxControl {
+    wxTimer selectionTimer;
+    std::chrono::steady_clock::time_point selectionStart;
+    double selectionFrom = 0, selectionTo = 0;
 public:
     uint32_t presentation = 0;
     bool hover = false, pressed = false, keyboard = false;
     WxdActionButton(wxWindow* parent, wxWindowID id, const wxString& label)
-        : wxControl(parent, id, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE) {
+        : wxControl(parent, id, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE), selectionTimer(this) {
         SetLabel(label); SetName(label); SetBackgroundStyle(wxBG_STYLE_PAINT);
+        Bind(wxEVT_TIMER, [this](wxTimerEvent&) {
+            if (!IsShownOnScreen() || SelectionProgress() == selectionTo) selectionTimer.Stop();
+            Refresh(false);
+        }, selectionTimer.GetId());
         Bind(wxEVT_ENTER_WINDOW, [this](wxMouseEvent& e) { hover = true; Refresh(false); e.Skip(); });
         Bind(wxEVT_LEAVE_WINDOW, [this](wxMouseEvent& e) { hover = false; Refresh(false); e.Skip(); });
         Bind(wxEVT_LEFT_DOWN, [this](wxMouseEvent& e) {
@@ -46,6 +56,30 @@ public:
     bool AcceptsFocusFromKeyboard() const override { return true; }
     wxSize DoGetBestSize() const override { return FromDIP(wxSize(96, 36)); }
     void SetLabel(const wxString& label) override { wxControl::SetLabel(label); SetName(label); Refresh(false); }
+    double SelectionProgress() const {
+        if (!selectionTimer.IsRunning()) return selectionTo;
+        const double elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - selectionStart).count();
+        const double t = std::min(1.0, elapsed / 160.0);
+        const double remaining = 1.0 - t;
+        return selectionFrom + (selectionTo - selectionFrom) * (1.0 - remaining * remaining * remaining);
+    }
+    void SetPresentation(uint32_t value) {
+        const double current = SelectionProgress();
+        const bool changed = ((presentation ^ value) & 0x10000) != 0;
+        presentation = value;
+        const unsigned kind = value & 0xff;
+        const bool animate = (value & 0x20000) && (kind == 3 || kind == 4 || kind == 7) && IsShownOnScreen();
+        if (changed || !animate) {
+            selectionTimer.Stop();
+            selectionFrom = current;
+            selectionTo = (value & 0x10000) ? 1.0 : 0.0;
+            if (changed && animate && selectionFrom != selectionTo) {
+                selectionStart = std::chrono::steady_clock::now();
+                selectionTimer.Start(16);
+            }
+        }
+        Refresh(false);
+    }
     void Click() {
         if (!IsEnabled()) return;
         wxCommandEvent event(wxEVT_BUTTON, GetId()); event.SetEventObject(this); event.SetString(GetLabel());
@@ -79,7 +113,7 @@ extern "C" wxd_Window_t* wxd_ActionButton_Create(wxd_Window_t* parent, wxd_Id id
     return reinterpret_cast<wxd_Window_t*>(new WxdActionButton(reinterpret_cast<wxWindow*>(parent), id, wxString::FromUTF8(label ? label : "")));
 }
 extern "C" void wxd_ActionButton_SetPresentation(wxd_Window_t* button, uint32_t value) {
-    if (button) { auto* c = static_cast<WxdActionButton*>(reinterpret_cast<wxWindow*>(button)); c->presentation = value; c->Refresh(false); }
+    if (button) static_cast<WxdActionButton*>(reinterpret_cast<wxWindow*>(button))->SetPresentation(value);
 }
 extern "C" uint32_t wxd_ActionButton_GetPresentation(wxd_Window_t* button) {
     return button ? static_cast<WxdActionButton*>(reinterpret_cast<wxWindow*>(button))->presentation : 0;
@@ -87,7 +121,8 @@ extern "C" uint32_t wxd_ActionButton_GetPresentation(wxd_Window_t* button) {
 extern "C" uint32_t wxd_ActionButton_GetState(wxd_Window_t* button) {
     if (!button) return 0;
     auto* c = static_cast<WxdActionButton*>(reinterpret_cast<wxWindow*>(button));
-    return (c->hover ? 1 : 0) | (c->pressed ? 2 : 0) | (c->HasFocus() ? 4 : 0) | (c->IsEnabled() ? 8 : 0);
+    return (c->hover ? 1 : 0) | (c->pressed ? 2 : 0) | (c->HasFocus() ? 4 : 0) | (c->IsEnabled() ? 8 : 0)
+        | 0x10000 | (static_cast<uint32_t>(c->SelectionProgress() * 255 + 0.5) << 8);
 }
 extern "C" void wxd_ActionButton_SetDefault(wxd_Window_t* button) {
     if (!button) return;

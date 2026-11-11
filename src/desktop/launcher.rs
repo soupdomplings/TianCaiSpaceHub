@@ -8,6 +8,22 @@ use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 #[cfg(windows)]
 mod windows;
+mod zcode_workspace;
+
+/// Preserve ordinary launchers; only saved ZCode external models opt into the
+/// local renderer startup adapter. No adapter is installed on the client disk.
+pub async fn open_with_config(
+    config_path: &Path,
+    config: crate::config::AppConfig,
+    client: ClientId,
+    enhanced: bool,
+) -> Result<Value> {
+    if cfg!(windows) && client == ClientId::ZCode && enhanced {
+        return zcode_workspace::open(config_path, config).await;
+    }
+    let path = config_path.to_owned();
+    tokio::task::spawn_blocking(move || open(&path, client)).await?
+}
 
 fn supported(client: ClientId) -> Result<()> {
     ensure!(

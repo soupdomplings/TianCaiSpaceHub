@@ -437,18 +437,19 @@ impl ListCtrl {
             if needed_len <= 0 {
                 return String::new();
             }
-            let mut buffer: Vec<u8> = Vec::with_capacity(needed_len as usize);
+            // The C++ helper reports UTF-8 bytes without the terminating NUL.
+            let mut buffer = vec![0u8; needed_len as usize + 1];
             let actual_len = ffi::wxd_ListCtrl_GetItemText(
                 ptr,
                 index as c_longlong,
                 col,
                 buffer.as_mut_ptr() as *mut i8,
-                needed_len as i32,
+                buffer.len() as i32,
             );
             if actual_len <= 0 {
                 return String::new();
             }
-            buffer.set_len(actual_len as usize);
+            buffer.truncate(actual_len as usize);
             String::from_utf8_lossy(&buffer).into_owned()
         }
     }

@@ -57,7 +57,9 @@ impl Button {
     }
     pub fn set_selected(&self, selected: bool) {
         self.native.set_presentation(
-            (self.native.presentation() & !0x10000) | if selected { 0x10000 } else { 0 },
+            (self.native.presentation() & !0x30000)
+                | if selected { 0x10000 } else { 0 }
+                | if theme::motion_enabled() { 0x20000 } else { 0 },
         );
     }
     pub fn selected(&self) -> bool {
@@ -79,6 +81,77 @@ impl WxEvtHandler for Button {
 }
 impl WindowEvents for Button {}
 impl ButtonEvents for Button {}
+
+#[cfg(all(test, windows))]
+mod motion_tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    #[ignore = "isolated offscreen native menu motion fixture"]
+    fn menu_selection_motion_is_interruptible_and_reduced_motion_is_immediate() {
+        wxdragon::app::render_offscreen(|| {
+            theme::init(theme::ThemeMode::Light);
+            let prior = theme::motion_enabled();
+            theme::set_motion_enabled(true);
+            let frame = Frame::builder()
+                .with_title("synthetic menu motion")
+                .with_position(Point::new(-2400, -1800))
+                .with_size(Size::new(320, 160))
+                .build();
+            let panel = Panel::builder(&frame).build();
+            let column = BoxSizer::builder(Orientation::Vertical).build();
+            let mut buttons = Vec::new();
+            for kind in [ButtonKind::Nav, ButtonKind::Tab] {
+                let button = Button::builder(&panel)
+                    .with_label("合成菜单")
+                    .with_kind(kind)
+                    .build();
+                column.add(&button, 0, SizerFlag::Expand, 0);
+                buttons.push(button);
+            }
+            panel.set_sizer(column, true);
+            let outer = BoxSizer::builder(Orientation::Vertical).build();
+            outer.add(&panel, 1, SizerFlag::Expand, 0);
+            frame.set_sizer(outer, true);
+            frame.show(true);
+            for button in buttons {
+                let state = || button.native.visual_state();
+                let set = |selected: bool, motion: bool| {
+                    theme::set_motion_enabled(motion);
+                    button.set_selected(selected);
+                };
+                let size = button.get_size();
+                set(true, true);
+                std::thread::sleep(Duration::from_millis(40));
+                let forward = (state() >> 8) & 0xff;
+                assert!(forward > 0 && forward < 255);
+                set(false, true);
+                let reversed = (state() >> 8) & 0xff;
+                assert!(
+                    forward.abs_diff(reversed) < 24,
+                    "reversal must start at the current colour"
+                );
+                std::thread::sleep(Duration::from_millis(35));
+                assert!(((state() >> 8) & 0xff) < reversed);
+                set(true, true);
+                std::thread::sleep(Duration::from_millis(180));
+                assert_eq!((state() >> 8) & 0xff, 255);
+                set(false, false);
+                assert_eq!((state() >> 8) & 0xff, 0);
+                assert_eq!(button.get_size(), size);
+            }
+            theme::set_motion_enabled(false);
+            let direct = Button::builder(&panel).with_kind(ButtonKind::Nav).build();
+            direct.set_selected(true);
+            assert!(direct.selected());
+            assert_eq!((direct.native.visual_state() >> 8) & 0xff, 255);
+            theme::set_motion_enabled(prior);
+            frame.destroy();
+        })
+        .unwrap();
+    }
+}
 pub(super) struct ButtonBuilder<'a> {
     parent: &'a dyn WxWidget,
     label: String,
@@ -194,6 +267,14 @@ pub(super) fn draw_button(
     let t = theme::theme();
     let kind = p & 0xff;
     let selected = p & 0x10000 != 0;
+    let transition = matches!(kind, 3 | 4 | 7);
+    let selection = if transition && state & 0x10000 != 0 {
+        ((state >> 8) & 0xff) as f64 / 255.0
+    } else if selected {
+        1.0
+    } else {
+        0.0
+    };
     let hover = state & 1 != 0;
     let pressed = state & 2 != 0;
     let focus = state & 4 != 0;
@@ -262,6 +343,28 @@ pub(super) fn draw_button(
     } else {
         foreground
     };
+    let blend = |from: Colour, to: Colour, amount: f64| {
+        let mix = |a: u8, b: u8| (a as f64 + (b as f64 - a as f64) * amount).round() as u8;
+        Colour::rgb(mix(from.r, to.r), mix(from.g, to.g), mix(from.b, to.b))
+    };
+    let fill = if transition && enabled {
+        blend(
+            if hover || pressed {
+                t.bg_card_alt
+            } else {
+                t.bg_card
+            },
+            t.bg_muted,
+            selection,
+        )
+    } else {
+        fill
+    };
+    let text = if transition && enabled {
+        blend(foreground, t.accent, selection)
+    } else {
+        text
+    };
     let rr = Rect::new(
         r.x + 1,
         r.y + 1,
@@ -272,12 +375,12 @@ pub(super) fn draw_button(
         && !((kind == ButtonKind::Ghost as u32
             || kind == ButtonKind::Nav as u32
             || kind == ButtonKind::CalendarDay as u32)
-            && !selected
+            && selection == 0.0
             && !hover
             && !focus
             && enabled)
     {
-        let background = if kind == ButtonKind::Nav as u32 && !selected && !hover {
+        let background = if kind == ButtonKind::Nav as u32 && selection == 0.0 && !hover {
             t.bg_card
         } else {
             fill
@@ -318,14 +421,14 @@ pub(super) fn draw_button(
             text,
             true,
         );
-        if selected {
+        if selection > 0.0 {
             c.font(13, true);
             let text_width = (c.dc.get_text_extent(label).0 as f64 / c.scale).ceil() as i32;
             let width = text_width.clamp(20, (r.width - 16).max(20));
             c.rounded(
                 Rect::new(r.x + (r.width - width) / 2, r.y + r.height - 3, width, 2),
                 1,
-                t.accent,
+                blend(t.bg_card, t.accent, selection),
                 None,
             );
         }
@@ -420,11 +523,11 @@ pub(super) fn draw_button(
             text,
             kind != ButtonKind::Nav as u32 && !has_icon,
         );
-        if kind == ButtonKind::Nav as u32 && selected {
+        if kind == ButtonKind::Nav as u32 && selection > 0.0 {
             c.rounded(
                 Rect::new(r.x + 2, r.y + 10, 3, (r.height - 20).max(8)),
                 2,
-                t.accent,
+                blend(fill, t.accent, selection),
                 None,
             );
         }

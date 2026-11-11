@@ -668,6 +668,9 @@ pub(super) fn bind_actions(
             ) {
                 return;
             }
+            start_tab
+                .start_button
+                .set_label(tr(text, "准备中…", "Preparing…"));
             let preferred = start_tab.state.borrow().status.as_ref().and_then(|status| {
                 status
                     .entries
@@ -906,7 +909,15 @@ pub(super) fn apply_result(
         _ => None,
     };
     match result {
-        GmClawActionResult::Start(_) => {}
+        GmClawActionResult::Start(result) => {
+            tab.start_button
+                .set_label(tr(text, "增强启动", "Enhanced start"));
+            if let Err(error) = result {
+                // This button is also available on the overview/settings tabs;
+                // the model editor's status label can be hidden there.
+                show_error(frame, &error);
+            }
+        }
         GmClawActionResult::Refresh(Ok((providers, status, builtins)), rebase) => {
             tab.account.apply(builtins);
             if rebase || tab.draft.borrow().is_none() {

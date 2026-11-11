@@ -1,7 +1,7 @@
 //!
 //! Safe wrapper for wxScrolledWindow.
 
-use crate::event::{MenuEvents, ScrollEvents, WindowEvents, WxEvtHandler};
+use crate::event::{Event, MenuEvents, ScrollEvents, WindowEvents, WxEvtHandler};
 use crate::geometry::{Point, Size};
 use crate::id::Id;
 use crate::window::{WindowHandle, WxWidget};
@@ -109,6 +109,15 @@ impl ScrolledWindow {
             return;
         }
         unsafe { ffi::wxd_ScrolledWindow_SetScrollRate(ptr, x_step, y_step) }
+    }
+
+    /// Route a child's vertical wheel event through the native scroll helper.
+    /// On true, the caller must consume the original event to avoid scrolling
+    /// twice. Ctrl+wheel and horizontal wheels retain their normal handling.
+    pub fn forward_mouse_wheel(&self, event: &Event) -> bool {
+        unsafe {
+            ffi::wxd_ScrolledWindow_ForwardMouseWheel(self.scrolled_window_ptr(), event._as_ptr())
+        }
     }
 
     /// Shows or hides scroll indicators without disabling scrolling.

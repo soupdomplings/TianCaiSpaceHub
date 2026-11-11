@@ -1,20 +1,91 @@
-use super::super::controls::Button;
+use super::super::{
+    controls::{Button, ButtonKind, paint_surface},
+    squad_dialog::{self, SquadDialog},
+};
 use super::*;
 
 pub(super) fn invoices(frame: &Frame, api: ApiClient, scope: Value) {
-    let size = super::super::ai_gw_channel_dialog_size(frame, Size::new(940, 650));
-    let dialog = Dialog::builder(frame, "发票与交付文件")
-        .with_size(size.width, size.height)
-        .with_style(DialogStyle::DefaultDialogStyle | DialogStyle::ResizeBorder)
+    let chrome = SquadDialog::new(
+        frame,
+        "发票与交付文件",
+        "查看可开票金额、申请进度和已交付文件。",
+        Size::new(960, 680),
+    );
+    let dialog = chrome.dialog;
+    let (overview, overview_fields) = chrome.section("开票概览");
+    let metrics = BoxSizer::builder(Orientation::Horizontal).build();
+    let amounts = ["可开票", "申请中", "已开票"].map(|label| {
+        let host = Panel::builder(&overview).build();
+        host.set_background_color(theme::theme().bg_card);
+        host.set_min_size(Size::new(0, -1));
+        let column = BoxSizer::builder(Orientation::Vertical).build();
+        let label = squad_dialog::note(&host, label);
+        column.add(
+            &label,
+            0,
+            SizerFlag::Expand | SizerFlag::Bottom,
+            host.from_dip(8),
+        );
+        let amount = StaticText::builder(&host)
+            .with_label("—")
+            .with_style(StaticTextStyle::EllipsizeEnd)
+            .build();
+        amount.set_min_size(Size::new(0, -1));
+        amount.set_font(&theme::font(theme::TextRole::Title));
+        amount.set_foreground_color(theme::theme().ink_primary);
+        column.add(&amount, 0, SizerFlag::Expand, 0);
+        host.set_sizer(column, false);
+        metrics.add(
+            &host,
+            1,
+            SizerFlag::Expand | SizerFlag::Right,
+            overview.from_dip(8),
+        );
+        amount
+    });
+    overview_fields.add_sizer(&metrics, 0, SizerFlag::Expand, 0);
+    let table_host = Panel::builder(&chrome.body).build();
+    paint_surface(table_host, theme::SURFACE_RADIUS);
+    let table_column = BoxSizer::builder(Orientation::Vertical).build();
+    let heading = squad_dialog::field_label(&table_host, "申请记录");
+    heading.set_font(&theme::font(theme::TextRole::Title));
+    table_column.add(
+        &heading,
+        0,
+        SizerFlag::Expand | SizerFlag::Bottom,
+        table_host.from_dip(12),
+    );
+    let controls = WrapSizer::builder(Orientation::Horizontal)
+        .with_flags(WrapSizerFlag::RemoveLeadingSpaces)
         .build();
-    dialog.set_background_color(theme::theme().bg_app);
-    dialog.set_font(&theme::font(theme::TextRole::Body));
-    let column = BoxSizer::builder(Orientation::Vertical).build();
-    let summary = StaticText::builder(&dialog).build();
-    column.add(&summary, 0, SizerFlag::Expand | SizerFlag::All, 16);
-    let table = ListCtrl::builder(&dialog)
+    let details = Button::builder(&table_host).with_label("查看详情").build();
+    let files = Button::builder(&table_host).with_label("交付文件").build();
+    let cancel = Button::builder(&table_host)
+        .with_label("撤销申请")
+        .with_kind(ButtonKind::Ghost)
+        .build();
+    let remove = Button::builder(&table_host)
+        .with_label("删除退回申请")
+        .with_kind(ButtonKind::Ghost)
+        .build();
+    for button in [details, files, cancel, remove] {
+        controls.add(
+            &button,
+            0,
+            SizerFlag::Right | SizerFlag::Bottom,
+            table_host.from_dip(8),
+        );
+    }
+    table_column.add_sizer(
+        &controls,
+        0,
+        SizerFlag::Expand | SizerFlag::Bottom,
+        table_host.from_dip(4),
+    );
+    let table = ListCtrl::builder(&table_host)
         .with_style(ListCtrlStyle::Report | ListCtrlStyle::SingleSel | ListCtrlStyle::BorderNone)
         .build();
+    table.set_min_size(Size::new(0, table.from_dip(180)));
     table.set_background_color(theme::theme().bg_card);
     table.set_foreground_color(theme::theme().ink_primary);
     table.set_font(&theme::font(theme::TextRole::Body));
@@ -41,36 +112,60 @@ pub(super) fn invoices(frame: &Frame, api: ApiClient, scope: Value) {
     .iter()
     .enumerate()
     {
-        table.insert_column(i as i64, label, ListColumnFormat::Left, *width);
+        table.insert_column(
+            i as i64,
+            label,
+            if i == 1 {
+                ListColumnFormat::Right
+            } else {
+                ListColumnFormat::Left
+            },
+            table.from_dip(*width),
+        );
     }
-    column.add(
-        &table,
-        1,
-        SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right,
-        16,
-    );
-    let controls = WrapSizer::builder(Orientation::Horizontal)
-        .with_flags(WrapSizerFlag::RemoveLeadingSpaces)
+    table_column.add(&table, 1, SizerFlag::Expand, 0);
+    let pagination = BoxSizer::builder(Orientation::Horizontal).build();
+    pagination.add_stretch_spacer(1);
+    let previous = Button::builder(&table_host)
+        .with_label("上一页")
+        .with_kind(ButtonKind::Ghost)
         .build();
-    let add = Button::builder(&dialog).with_label("申请开票").build();
-    let details = Button::builder(&dialog).with_label("查看详情").build();
-    let cancel = Button::builder(&dialog).with_label("撤销申请").build();
-    let remove = Button::builder(&dialog).with_label("删除退回申请").build();
-    let files = Button::builder(&dialog).with_label("交付文件").build();
-    let previous = Button::builder(&dialog).with_label("上一页").build();
-    let next = Button::builder(&dialog).with_label("下一页").build();
-    for b in [add, details, cancel, remove, files, previous, next] {
-        controls.add(&b, 0, SizerFlag::Right, 8);
-    }
-    column.add_sizer(&controls, 0, SizerFlag::Expand | SizerFlag::All, 16);
+    let next = Button::builder(&table_host)
+        .with_label("下一页")
+        .with_kind(ButtonKind::Ghost)
+        .build();
+    pagination.add(&previous, 0, SizerFlag::Right, table_host.from_dip(8));
+    pagination.add(&next, 0, SizerFlag::default(), 0);
+    table_column.add_sizer(
+        &pagination,
+        0,
+        SizerFlag::Expand | SizerFlag::Top,
+        table_host.from_dip(12),
+    );
+    let padding = BoxSizer::builder(Orientation::Vertical).build();
+    padding.add_sizer(
+        &table_column,
+        1,
+        SizerFlag::Expand | SizerFlag::All,
+        table_host.from_dip(theme::PANEL_INSET),
+    );
+    table_host.set_sizer(padding, false);
+    chrome.content.add(&table_host, 1, SizerFlag::Expand, 0);
     let close = Button::builder(&dialog)
         .with_label("返回")
         .with_icon(super::super::visual::Icon::Back)
         .with_kind(super::super::controls::ButtonKind::Ghost)
         .build();
     close.on_click(move |_| dialog.end_modal(ID_CANCEL));
-    column.add(&close, 0, SizerFlag::AlignRight | SizerFlag::All, 12);
-    dialog.set_sizer(column, true);
+    chrome
+        .actions
+        .add(&close, 0, SizerFlag::Right, dialog.from_dip(8));
+    let add = Button::builder(&dialog)
+        .with_label("申请开票")
+        .with_kind(ButtonKind::Primary)
+        .build();
+    chrome.actions.add(&add, 0, SizerFlag::default(), 0);
+    let status = chrome.status;
     let data: Rc<RefCell<Value>> = Default::default();
     let rows: Rc<RefCell<Vec<Value>>> = Default::default();
     let page = Rc::new(Cell::new(1usize));
@@ -111,12 +206,15 @@ pub(super) fn invoices(frame: &Frame, api: ApiClient, scope: Value) {
         let sources = value["sources"].as_array().cloned().unwrap_or_default();
         let sum =
             |key: &str| sources.iter().filter_map(|v| v[key].as_i64()).sum::<i64>() as f64 / 100.;
-        summary.set_label(&format!(
-            "可开票 {:.2} 元    申请中 {:.2} 元    已开票 {:.2} 元",
-            sum("available_cents"),
-            sum("pending_cents"),
-            sum("issued_cents")
-        ));
+        for (amount, key) in
+            amounts
+                .iter()
+                .zip(["available_cents", "pending_cents", "issued_cents"])
+        {
+            let text = crate::desktop::squad_money::cny(sum(key));
+            amount.set_label(&text);
+            amount.set_tooltip(&text);
+        }
         let items = value["applications"]
             .as_array()
             .cloned()
@@ -141,6 +239,7 @@ pub(super) fn invoices(frame: &Frame, api: ApiClient, scope: Value) {
         }
         previous.enable(p.get() > 1);
         next.enable(items.len() >= 50);
+        status.set_label(&format!("第 {} 页 · {} 条申请", p.get(), items.len()));
         *r.borrow_mut() = items;
         *d.borrow_mut() = value;
     });
@@ -216,6 +315,7 @@ pub(super) fn invoices(frame: &Frame, api: ApiClient, scope: Value) {
             l();
         });
     }
+    chrome.finish();
     load();
     dialog.show_modal();
     dialog.destroy();

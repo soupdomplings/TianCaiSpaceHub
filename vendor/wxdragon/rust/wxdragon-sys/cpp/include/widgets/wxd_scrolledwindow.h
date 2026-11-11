@@ -11,6 +11,10 @@ wxd_ScrolledWindow_Create(wxd_Window_t* parent, wxd_Id id, wxd_Point pos, wxd_Si
 WXD_EXPORTED void
 wxd_ScrolledWindow_SetScrollRate(wxd_ScrolledWindow_t* self, int xstep, int ystep);
 
+// Route one ordinary vertical wheel event from a child to this scroll helper.
+WXD_EXPORTED bool
+wxd_ScrolledWindow_ForwardMouseWheel(wxd_ScrolledWindow_t* self, wxd_Event_t* event);
+
 // Hides visual indicators without disabling wheel/keyboard/focus scrolling.
 WXD_EXPORTED void
 wxd_ScrolledWindow_ShowScrollIndicators(wxd_ScrolledWindow_t* self, bool show);

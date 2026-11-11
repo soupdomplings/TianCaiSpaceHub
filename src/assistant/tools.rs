@@ -24,6 +24,7 @@ pub(super) const WORK_GUIDE: &str = include_str!("guide.md");
 pub(crate) struct ToolState {
     generation: u64,
     credentials: HashMap<String, Credential>,
+    model_catalogs: Vec<ProviderConfig>,
     deletion: Option<Pending<bool>>,
     credential: Option<Pending<String>>,
     navigation: Option<Value>,
@@ -233,19 +234,31 @@ pub(crate) fn definitions() -> Vec<Value> {
     let mut definitions = vec![
         spec(
             "hub_read_configuration",
-            "读取 Hub 渠道、客户端目标、独立模型身份及有效参数。指定 client 可读取该端当前配置；修改前读取、保存后回读核对。凭据只返回引用和掩码。",
+            "读取 Hub 渠道、客户端目标、独立模型身份及有效参数。指定 client 可读取该端当前配置；client.readStatus=error仅表示原生配置读取失败，已返回的Hub渠道和目标仍有效，不能当作未安装或空配置。修改前读取、保存后回读核对。凭据只返回引用和掩码。",
             json!({"client":{"type":"string","enum":["codex","workbuddy","tiangong","vscode","zcode","deepseek-harness","webstorm"]}}),
             &[],
         ),
         spec(
+            "hub_resolve_model",
+            "为配置客户端解析已启用普通渠道中真实存在的模型/别名。先精确匹配，再查前缀；canConfigure=false时按candidates询问必要选择或说明不存在，不能向来源塞入用户输入猜测的模型ID。选定后用返回的channel和精确model调用hub_configure_client。",
+            json!({"model":{"type":"string"},"client":{"type":"string","enum":["codex","workbuddy","tiangong","vscode","zcode","deepseek-harness","webstorm"]}}),
+            &["model"],
+        ),
+        spec(
+            "hub_read_channel_models",
+            "读取实际上游模型目录以验证新模型ID，不发起推理。已有普通渠道传channel；新渠道先在本机凭据表单取得reference，再传settings与credentialReference。只返回真实models，目录证明留在本机会话；查询失败或ID不在目录时不要保存猜测ID。每个需要的新目录读取一次，不反复请求。",
+            json!({"channel":{"type":"string"},"settings":{"type":"object","properties":{"providerType":{"type":"string","enum":["open_ai_responses","deepseek_responses","kimi_responses","grok_responses","chat_completions","anthropic_messages"]},"baseUrl":{"type":"string"},"modelsUrl":{"type":["string","null"]},"compatibility":{"type":["string","null"]}},"additionalProperties":false},"credentialReference":{"type":"string"}}),
+            &[],
+        ),
+        spec(
             "hub_save_channel",
-            "添加或修改 ordinary=true 的普通渠道。name 同名修改、换名会新增；只传要改的字段并保留已有密钥。models/modelAliases 增补，删除走删除工具。保存后回读；不自动更新已有客户端副本。",
+            "添加或修改 ordinary=true 的普通渠道。name 同名修改、换名会新增；只传要改的字段并保留已有密钥。新增models或别名上游ID须来自同连接已声明真实模型、prepare或read_channel_models实际目录，不能用用户客户端配置请求猜测新上游名。删除走删除工具；保存普通渠道不等于已配置客户端，须另外configure并回读。",
             json!({"name":{"type":"string","description":"准确渠道名称，不是显示别名或重命名操作"},"settings":{"type":"object","properties":{"providerType":{"type":"string","enum":["open_ai_responses","deepseek_responses","kimi_responses","grok_responses","chat_completions","anthropic_messages"],"description":"上游API协议；普通OpenAI Responses为open_ai_responses"},"baseUrl":{"type":"string","description":"HTTP/HTTPS服务基址，凭据不能放在URL中"},"modelsUrl":{"type":["string","null"]},"compatibility":{"type":["string","null"]},"models":{"type":"array","items":{"type":"string"},"description":"上游接受的真实模型ID列表"},"modelAliases":{"type":"object","additionalProperties":{"type":"string"},"description":"Hub可见别名到上游真实模型ID的映射"},"weight":{"type":"integer","minimum":1,"description":"路由优先级；越高越优先，不是百分比"},"timeoutSecs":{"type":"integer","minimum":1,"maximum":86400},"enabled":{"type":"boolean"},"chatDisableReasoning":{"type":"boolean"},"zaiAccessMode":{"type":"string","enum":["api","coding_plan"]},"promptCacheRetention":{"type":["string","null"]}},"additionalProperties":false},"credentialReference":{"type":"string","description":"使用hub_request_credential或hub_squad_prepare_api_key返回的reference；省略保留原密钥"}}),
             &["name", "settings"],
         ),
         spec(
             "hub_add_model",
-            "给指定普通渠道添加模型或别名，可指定 upstreamModel；不探测或调用真实模型。",
+            "按用户明确要求给普通渠道添加模型/别名。upstreamModel须为该连接已有真实ID或prepare/read_channel_models验证目录中的ID；不能为配置客户端而凭空扩充来源。添加不代表配置客户端，不发起推理。",
             json!({"channel":{"type":"string"},"model":{"type":"string"},"upstreamModel":{"type":"string"}}),
             &["channel", "model"],
         ),
@@ -302,6 +315,7 @@ pub(super) async fn remember_import(
         "本次准备已停止，请重新选择密钥"
     );
     let provider = draft.provider;
+    tools.model_catalogs.push(provider.clone());
     let reference = format!("credential:{}", uuid::Uuid::new_v4());
     let mask = mask(&provider.api_key);
     let view = json!({"prepared":true,"keyId":draft.source.key_id.parse::<u64>().ok(),
@@ -503,7 +517,17 @@ fn codex_models_view(config: &AppConfig) -> Value {
     let entries = catalog["models"].as_array().into_iter().flatten().map(|model| {
         let id = model["slug"].as_str().unwrap_or_default();
         let fields = if codex_model_editable(id) { parameter_fields(ClientId::Codex, "") } else { vec![] };
+        let routes = config.ai_gateway.providers.iter()
+            .filter(|p|p.enabled && !p.is_client_reserved())
+            .filter_map(|p|p.resolve_upstream_model(id).map(|upstream|json!({
+                "providerRoute":provider_route_id(p),"channel":p.name,"upstreamModel":upstream})))
+            .collect::<Vec<_>>();
+        let selected = config.ai_gateway.codex_visible_models.iter().any(|visible|visible==id);
+        let route = (routes.len()==1).then(||&routes[0]);
         json!({"model":id,"label":model["display_name"],
+            "using":selected && !routes.is_empty(),"enabled":!routes.is_empty(),
+            "providerRoute":route.map(|r|&r["providerRoute"]),"channel":route.map(|r|&r["channel"]),
+            "upstreamModel":route.map(|r|&r["upstreamModel"]),"routes":routes,
             "parameters":{"contextWindow":model["context_window"],"maxContextWindow":model["max_context_window"],
                 "supportsImages":model["input_modalities"].as_array().is_some_and(|items|items.iter().any(|v|v=="image")),
                 "supportsReasoning":model["supports_reasoning_summaries"]},
@@ -512,6 +536,193 @@ fn codex_models_view(config: &AppConfig) -> Value {
             "parameterNote":if fields.is_empty(){"内置精确模型沿固定目录；如需独立能力覆盖，请使用动态别名"}else{"动态模型能力参数；不修改会话思考强度或Fast/Ultra开关"}})
     }).collect::<Vec<_>>();
     entries.into()
+}
+fn real_model_id(id: &str) -> bool {
+    !id.trim().is_empty() && !id.contains(['*', '?'])
+}
+async fn resolve_model(state: &SharedState, args: &Value) -> Result<Value> {
+    if let Some(client) = args["client"].as_str() {
+        models::client(client)?;
+    }
+    let requested = text(args, "model")?.trim();
+    let config = configuration(state).await?;
+    let mut candidates = Vec::new();
+    for provider in config
+        .ai_gateway
+        .providers
+        .iter()
+        .filter(|p| p.enabled && ordinary(p).is_ok())
+    {
+        let mut names = provider
+            .models
+            .iter()
+            .chain(provider.model_aliases.keys())
+            .collect::<Vec<_>>();
+        names.sort();
+        names.dedup();
+        for model in names {
+            let Some(upstream) = provider
+                .resolve_upstream_model(model)
+                .filter(|id| real_model_id(id))
+            else {
+                continue;
+            };
+            if !real_model_id(model) {
+                continue;
+            }
+            if model
+                .to_ascii_lowercase()
+                .starts_with(&requested.to_ascii_lowercase())
+            {
+                candidates.push(json!({"channel":provider.name,"model":model,"upstreamModel":upstream,"providerType":provider.provider_type}));
+            }
+        }
+    }
+    let exact = candidates
+        .iter()
+        .filter(|c| {
+            c["model"]
+                .as_str()
+                .is_some_and(|id| id.eq_ignore_ascii_case(requested))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let exact_match = !exact.is_empty();
+    if exact_match {
+        candidates = exact;
+    }
+    let unique = candidates.len() == 1;
+    Ok(
+        json!({"query":requested,"client":args["client"],"canConfigure":unique,
+        "match":if unique {if exact_match{"exact"}else{"prefix"}}else if candidates.is_empty(){"missing"}else{"ambiguous"},
+        "selection":if unique {Some(&candidates[0])}else{None},"candidates":candidates,
+        "message":if unique{"使用选定的精确model配置客户端，保存后回读"}else{"请用户选择真实候选或提供真实来源；不要自动新增猜测上游ID"}}),
+    )
+}
+fn same_model_endpoint(a: &ProviderConfig, b: &ProviderConfig) -> bool {
+    a.provider_type == b.provider_type
+        && a.base_url.trim_end_matches('/') == b.base_url.trim_end_matches('/')
+        && a.models_url == b.models_url
+        && a.compatibility == b.compatibility
+}
+fn same_model_connection(a: &ProviderConfig, b: &ProviderConfig) -> bool {
+    same_model_endpoint(a, b) && a.api_key == b.api_key
+}
+fn declares_upstream(provider: &ProviderConfig, model: &str) -> bool {
+    real_model_id(model)
+        && provider
+            .models
+            .iter()
+            .chain(provider.model_aliases.values())
+            .any(|id| id.eq_ignore_ascii_case(model))
+}
+async fn validate_new_models(
+    state: &SharedState,
+    config: &AppConfig,
+    old: Option<&ProviderConfig>,
+    provider: &ProviderConfig,
+) -> Result<()> {
+    let tools = state.assistant.tools.lock().await;
+    for model in provider
+        .models
+        .iter()
+        .chain(provider.model_aliases.values())
+    {
+        // Unchanged declarations are retained even on disabled channels. A new
+        // connection or newly declared ID needs evidence captured before this save.
+        let retained = old.is_some_and(|old| {
+            same_model_endpoint(old, provider)
+                && old
+                    .models
+                    .iter()
+                    .chain(old.model_aliases.values())
+                    .any(|id| id == model)
+        });
+        let known = config.ai_gateway.providers.iter().any(|source| {
+            source.enabled
+                && ordinary(source).is_ok()
+                && same_model_connection(source, provider)
+                && declares_upstream(source, model)
+        });
+        let fetched = tools.model_catalogs.iter().any(|source| {
+            same_model_connection(source, provider) && declares_upstream(source, model)
+        });
+        ensure!(
+            retained || known || fetched,
+            "无法验证上游模型ID {model}。请先用 hub_read_channel_models 读取该连接的真实目录，或核对用户提供的实际来源；未保存，不要把客户端配置请求中的名称新增到源渠道"
+        );
+    }
+    Ok(())
+}
+async fn read_channel_models(state: &SharedState, args: &Value) -> Result<Value> {
+    let config = configuration(state).await?;
+    let mut provider = if let Some(name) = args["channel"].as_str() {
+        ensure!(
+            args.get("settings").is_none() && args.get("credentialReference").is_none(),
+            "已有渠道仅传channel"
+        );
+        let provider = channel(&config, name)?.clone();
+        ordinary(&provider)?;
+        provider
+    } else {
+        let mut value = serde_json::to_value(ProviderConfig::default())?;
+        patch_object(
+            &mut value,
+            args.get("settings")
+                .context("请传channel或新渠道settings")?,
+            &["providerType", "baseUrl", "modelsUrl", "compatibility"],
+        )?;
+        let mut provider: ProviderConfig =
+            serde_json::from_value(value).context("模型目录连接参数无效")?;
+        let tools = state.assistant.tools.lock().await;
+        provider.api_key = tools
+            .credentials
+            .get(text(args, "credentialReference")?)
+            .context("凭据引用已失效，请重新输入")?
+            .secret
+            .clone();
+        provider
+    };
+    valid_url(&provider.base_url)?;
+    if let Some(url) = provider.models_url.as_deref().filter(|url| !url.is_empty()) {
+        valid_url(url)?;
+    }
+    let generation = generation(state).await;
+    // Query the full actual directory, rather than intersecting it with the
+    // models the assistant is trying to add. No inferred catalog is evidence.
+    provider.models.clear();
+    provider.model_aliases.clear();
+    let source = crate::external_import::ImportSource {
+        origin: String::new(),
+        key_id: String::new(),
+        site_name: String::new(),
+        key_name: String::new(),
+    };
+    let mut draft = crate::external_import::ImportDraft {
+        provider,
+        source,
+        model_warning: None,
+    };
+    let client = crate::external_import::client::build_client(
+        &config.outbound_proxy,
+        config.local_listen_port(),
+    )
+    .map_err(anyhow::Error::msg)?;
+    crate::external_import::client::fetch_models(&client,&mut draft).await
+        .map_err(|_|anyhow::anyhow!("无法读取该连接的真实模型目录，无法验证新模型ID；未保存。请核对实际模型列表接口或在模型与渠道页明确录入，不要猜测模型"))?;
+    super::ensure_current_account(state).await?;
+    let mut tools = state.assistant.tools.lock().await;
+    ensure!(
+        tools.generation == generation,
+        "目录读取已停止，未保留模型证明"
+    );
+    tools
+        .model_catalogs
+        .retain(|old| !same_model_connection(old, &draft.provider));
+    let result = json!({"read":true,"channel":args["channel"],"models":draft.provider.models,
+        "message":"仅验证真实上游目录，尚未修改渠道或客户端；按用户要求选择精确模型"});
+    tools.model_catalogs.push(draft.provider);
+    Ok(result)
 }
 fn annotate_native_entries(view: &mut Value, config: &AppConfig, client: ClientId) {
     if let Some(entries) = view["entries"].as_array_mut() {
@@ -567,16 +778,25 @@ async fn read_configuration(state: &SharedState, args: &Value) -> Result<Value> 
         "credentialReferences":public_status(state).await["credentialReferences"]});
     if let Some(client) = args["client"].as_str() {
         let client_id = models::client(client)?;
-        let mut native = match client {
-            "workbuddy" => api(state, "workbuddy_read", Value::Null).await?,
-            "tiangong" => api(state, "tiangong_read", Value::Null).await?,
-            "codex" => json!({"name":client_id.name(),"models":view["codexModels"]}),
-            _ => {
-                json!({"name":client_id.name(),"models":view["channels"].as_array().unwrap().iter().filter(|row|row["managedClient"]==client).collect::<Vec<_>>()})
+        let native = match client {
+            "workbuddy" => api(state, "workbuddy_read", Value::Null).await,
+            "tiangong" => api(state, "tiangong_read", Value::Null).await,
+            "codex" => Ok(json!({"name":client_id.name(),"models":view["codexModels"]})),
+            _ => Ok(
+                json!({"name":client_id.name(),"models":view["channels"].as_array().unwrap().iter().filter(|row|row["managedClient"]==client).collect::<Vec<_>>()}),
+            ),
+        };
+        view["client"] = match native {
+            Ok(mut native) => {
+                annotate_native_entries(&mut native, &config, client_id);
+                native["readStatus"] = "ready".into();
+                native
+            }
+            Err(error) => {
+                json!({"name":client_id.name(),"readStatus":"error","error":error.to_string(),
+                "message":"Hub渠道和目标已读取；此客户端原生配置未读到，不能视为未安装或空配置，修复前不要覆盖原文件"})
             }
         };
-        annotate_native_entries(&mut native, &config, client_id);
-        view["client"] = native;
     }
     redact(&mut view);
     Ok(view)
@@ -661,6 +881,7 @@ async fn save_channel(state: &SharedState, args: &Value) -> Result<Value> {
         provider.api_key = credential.secret.clone();
         provider.import_source = credential.source.clone();
     }
+    validate_new_models(state, &config, old.as_ref(), &provider).await?;
     if let Some(existing) = config
         .ai_gateway
         .providers
@@ -690,7 +911,7 @@ async fn configure_client(state: &SharedState, args: &Value) -> Result<Value> {
     let provider = channel(&config, text(args, "channel")?)?;
     let model = text(args, "model")?;
     ensure!(
-        provider.enabled && provider.matches_model(model),
+        provider.enabled && real_model_id(model) && provider.matches_model(model),
         "渠道未启用或没有此模型"
     );
     let library = Library::new(&state.config_path)?;
@@ -720,11 +941,104 @@ async fn configure_client(state: &SharedState, args: &Value) -> Result<Value> {
         base,
     )
     .await?;
-    let native = &result["status"];
-    let configured_model = native["model"].as_str().unwrap_or(model);
+    let latest = configuration(state).await?;
+    let source_upstream = provider
+        .resolve_upstream_model(model)
+        .context("来源模型已变化")?;
+    let (configured_model, entry_id, provider_route) = match target.client {
+        ClientId::Codex => {
+            let alias = result["status"]["model"]
+                .as_str()
+                .context("保存结果未返回 Codex 模型身份，请读取实际模型列表核对；不自动重试")?;
+            let copy = latest
+                .ai_gateway
+                .providers
+                .iter()
+                .find(|p| {
+                    p.enabled
+                        && p.name.starts_with("Codex · ")
+                        && p.resolve_upstream_model(alias) == Some(source_upstream)
+                })
+                .context("Codex 副本回读未确认，请读取实际模型列表核对；不自动重试")?;
+            ensure!(
+                latest
+                    .ai_gateway
+                    .codex_visible_models
+                    .iter()
+                    .any(|id| id == alias),
+                "Codex 副本未在可见模型中确认，请读取实际模型列表核对；不自动重试"
+            );
+            (alias.to_string(), Value::Null, provider_route_id(copy))
+        }
+        ClientId::WorkBuddy | ClientId::Tiangong => {
+            let entry = result["status"]["selectedEntryId"]
+                .as_str()
+                .context("保存结果未返回客户端条目身份，请读取配置核对；不自动重试")?;
+            let read = api(
+                state,
+                if target.client == ClientId::WorkBuddy {
+                    "workbuddy_read"
+                } else {
+                    "tiangong_read"
+                },
+                Value::Null,
+            )
+            .await?;
+            let row = read["entries"]
+                .as_array()
+                .and_then(|rows| rows.iter().find(|r| r["entryId"] == entry))
+                .context("客户端配置回读没有已保存条目，请核对；不自动重试")?;
+            let actual = if target.client == ClientId::WorkBuddy {
+                row["model"]["providerModel"].as_str()
+            } else {
+                row["model"]["modelName"].as_str()
+            };
+            ensure!(
+                row["configured"] == true && actual == Some(model),
+                "客户端配置回读尚未确认模型可用，请核对；不自动重试"
+            );
+            let name = if target.client == ClientId::WorkBuddy {
+                crate::ai_gateway::config::workbuddy_provider_name(entry)
+            } else {
+                crate::ai_gateway::config::gmclaw_provider_name(entry)
+            }
+            .context("客户端条目身份无效")?;
+            let copy = channel(&latest, &name)?;
+            ensure!(
+                copy.resolve_upstream_model(model) == Some(source_upstream),
+                "客户端副本来源模型尚未确认，请核对；不自动重试"
+            );
+            (
+                actual.unwrap().to_string(),
+                json!(entry),
+                provider_route_id(copy),
+            )
+        }
+        _ => {
+            let id = result["id"]
+                .as_str()
+                .context("保存结果未返回模型身份，请读取配置核对；不自动重试")?;
+            let copy = latest
+                .ai_gateway
+                .providers
+                .iter()
+                .find(|p| {
+                    p.desktop_binding
+                        .as_ref()
+                        .is_some_and(|b| b.id == id && b.target_id == target.id && b.model == model)
+                })
+                .context("已保存客户端副本尚未回读确认，请核对；不自动重试")?;
+            let binding = copy.desktop_binding.as_ref().unwrap();
+            ensure!(
+                models::using(binding, &target)?,
+                "客户端实际配置尚未确认使用此模型，请核对；不自动重试"
+            );
+            (binding.model.clone(), Value::Null, provider_route_id(copy))
+        }
+    };
     Ok(
-        json!({"saved":true,"targetId":target.id,"client":target.client,
-        "sourceModel":model,"model":configured_model,"entryId":native["selectedEntryId"],
+        json!({"saved":true,"using":true,"targetId":target.id,"client":target.client,
+        "sourceModel":model,"upstreamModel":source_upstream,"providerRoute":provider_route,"model":configured_model,"entryId":entry_id,
         "id":result["id"],"undo":result["undo"],
         "message":"已配置到客户端；新会话可读取新配置，尚未调用真实模型"}),
     )
@@ -1104,6 +1418,8 @@ pub(crate) async fn call(state: &SharedState, name: &str, args: Value) -> Result
     super::ensure_current_account(state).await?;
     let mut result = match name {
         "hub_read_configuration" => read_configuration(state, &args).await?,
+        "hub_resolve_model" => resolve_model(state, &args).await?,
+        "hub_read_channel_models" => read_channel_models(state, &args).await?,
         "hub_save_channel" => save_channel(state, &args).await?,
         "hub_add_model" => add_model(state, &args).await?,
         "hub_configure_client" => configure_client(state, &args).await?,
@@ -1156,6 +1472,9 @@ pub(crate) async fn call(state: &SharedState, name: &str, args: Value) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+    async fn api(state: &SharedState, operation: &str, body: Value) -> Result<Value> {
+        super::super::test_tool_scope(state, super::api(state, operation, body)).await
+    }
     async fn call(state: &SharedState, name: &str, args: Value) -> Result<Value> {
         super::super::test_tool_scope(state, super::call(state, name, args)).await
     }
@@ -1206,12 +1525,18 @@ mod tests {
     #[tokio::test]
     async fn configuration_tools_use_existing_writer_preserve_keys_and_unrelated_data() {
         let (_temp, state) = fixture();
-        call(&state,"hub_add_model",json!({"channel":"fixture-channel","model":"visible-new","upstreamModel":"upstream-new"})).await.unwrap();
+        call(
+            &state,
+            "hub_add_model",
+            json!({"channel":"fixture-channel","model":"visible-new","upstreamModel":"old-model"}),
+        )
+        .await
+        .unwrap();
         let config = AppConfig::load_or_default(&state.config_path).unwrap();
         let provider = channel(&config, "fixture-channel").unwrap();
         assert_eq!(provider.api_key, "fixture-private-key-not-for-model");
         assert!(provider.models.contains(&"old-model".into()));
-        assert_eq!(provider.model_aliases["visible-new"], "upstream-new");
+        assert_eq!(provider.model_aliases["visible-new"], "old-model");
         assert!(channel(&config, "keep-channel").is_ok());
         assert_eq!(config.ai_gateway.codex_visible_models, vec!["old-model"]);
         assert!(
@@ -1239,7 +1564,7 @@ mod tests {
         let (_temp, state) = fixture();
         call(&state,"hub_save_channel",json!({"name":"fixture-channel","settings":{
             "chatDisableReasoning":true,"zaiAccessMode":"coding_plan","promptCacheRetention":"1h","weight":3}})).await.unwrap();
-        call(&state,"hub_add_model",json!({"channel":"fixture-channel","model":"visible-alias","upstreamModel":"upstream-model"})).await.unwrap();
+        call(&state,"hub_add_model",json!({"channel":"fixture-channel","model":"visible-alias","upstreamModel":"old-model"})).await.unwrap();
         call(&state,"hub_set_model_parameters",json!({"client":"codex","model":"old-model","parameters":{
             "displayName":"独立模型","contextWindow":64000,"maxContextWindow":128000,"supportsImages":true}})).await.unwrap();
         let view = call(&state, "hub_read_configuration", json!({"client":"codex"}))
@@ -1255,7 +1580,7 @@ mod tests {
         assert_eq!(source["zaiAccessMode"], "coding_plan");
         assert_eq!(source["promptCacheRetention"], "1h");
         assert_eq!(source["weight"], 3);
-        assert_eq!(source["modelAliases"]["visible-alias"], "upstream-model");
+        assert_eq!(source["modelAliases"]["visible-alias"], "old-model");
         assert_eq!(source["credentialConfigured"], true);
         let model = &view["client"]["models"][0];
         assert_eq!(model["model"], "old-model");
@@ -1362,6 +1687,194 @@ mod tests {
                 .contains("fixture-private-key-not-for-model")
         );
     }
+    #[tokio::test]
+    async fn model_selection_rejects_unknown_ids_reports_prefix_choices_and_keeps_codex_copy_identity()
+     {
+        let (_temp, state) = fixture();
+        let mut config = AppConfig::load_or_default(&state.config_path).unwrap();
+        let source = &mut config.ai_gateway.providers[0];
+        source.models = vec!["gpt-6-astra".into(), "gpt-6-astra-fast".into()];
+        source
+            .model_aliases
+            .insert("gpt-6-a-preset".into(), "gpt-6-astra".into());
+        // Neither an unavailable source nor the fixed Codex capability catalog
+        // proves that a provider accepts an upstream ID.
+        config.ai_gateway.providers[1].enabled = false;
+        config.ai_gateway.providers[1].models = vec!["gpt-6.2".into()];
+        config.save(&state.config_path).unwrap();
+        let before = std::fs::read(&state.config_path).unwrap();
+        let missing = call(
+            &state,
+            "hub_resolve_model",
+            json!({"client":"codex","model":"gpt-6.2"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(missing["match"], "missing");
+        assert_eq!(missing["canConfigure"], false);
+        for (name, args) in [
+            (
+                "hub_add_model",
+                json!({"channel":"fixture-channel","model":"gpt-6.2"}),
+            ),
+            (
+                "hub_save_channel",
+                json!({"name":"fixture-channel","settings":{"models":["gpt-6.2"]}}),
+            ),
+            (
+                "hub_save_channel",
+                json!({"name":"fixture-channel","settings":{"modelAliases":{"gpt-6.2":"made-up-upstream"}}}),
+            ),
+        ] {
+            assert!(
+                call(&state, name, args)
+                    .await
+                    .unwrap_err()
+                    .to_string()
+                    .contains("无法验证")
+            );
+        }
+        assert_eq!(std::fs::read(&state.config_path).unwrap(), before);
+        let ambiguous = call(
+            &state,
+            "hub_resolve_model",
+            json!({"client":"workbuddy","model":"gpt-6-a"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(ambiguous["match"], "ambiguous");
+        assert_eq!(ambiguous["canConfigure"], false);
+        assert_eq!(ambiguous["candidates"].as_array().unwrap().len(), 3);
+        let selected = call(
+            &state,
+            "hub_resolve_model",
+            json!({"client":"codex","model":"gpt-6-a-preset"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(selected["selection"]["upstreamModel"], "gpt-6-astra");
+        assert_eq!(selected["canConfigure"], true);
+        let view = call(&state, "hub_read_configuration", json!({"client":"codex"}))
+            .await
+            .unwrap();
+        let target = view["targets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["client"] == "codex")
+            .unwrap();
+        let saved=call(&state,"hub_configure_client",json!({"targetId":target["targetId"],"channel":selected["selection"]["channel"],"model":selected["selection"]["model"]})).await.unwrap();
+        let alias = saved["model"].as_str().unwrap();
+        assert_ne!(alias, "gpt-6-a-preset");
+        let view = call(&state, "hub_read_configuration", json!({"client":"codex"}))
+            .await
+            .unwrap();
+        let copy = view["client"]["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["model"] == alias)
+            .unwrap();
+        assert_eq!(copy["using"], true);
+        assert_eq!(copy["enabled"], true);
+        assert_eq!(copy["upstreamModel"], "gpt-6-astra");
+        assert!(copy["channel"].as_str().unwrap().starts_with("Codex · "));
+        assert!(copy["providerRoute"].is_string());
+        let config = AppConfig::load_or_default(&state.config_path).unwrap();
+        assert_eq!(
+            config.ai_gateway.providers[0].models,
+            vec!["gpt-6-astra", "gpt-6-astra-fast"]
+        );
+        assert!(
+            !view
+                .to_string()
+                .contains("fixture-private-key-not-for-model")
+        );
+    }
+    #[tokio::test]
+    async fn new_external_channel_models_require_actual_directory_proof_bound_to_its_connection() {
+        use axum::routing::get;
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        let (_temp, state) = fixture();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let seen = calls.clone();
+        let app = Router::new().route(
+            "/v1/models",
+            get(move |headers: HeaderMap| {
+                let seen = seen.clone();
+                async move {
+                    assert_eq!(
+                        headers["authorization"],
+                        "Bearer synthetic-external-credential"
+                    );
+                    seen.fetch_add(1, Ordering::SeqCst);
+                    Json(json!({"data":[{"id":"gpt-6-astra"}]}))
+                }
+            }),
+        );
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let reply = credential(
+            State(state.clone()),
+            headers(),
+            Json(CredentialInput {
+                nonce: None,
+                label: None,
+                secret: "synthetic-external-credential".into(),
+                cancelled: false,
+            }),
+        )
+        .await;
+        let reference: Value =
+            serde_json::from_slice(&axum::body::to_bytes(reply.into_body(), 4096).await.unwrap())
+                .unwrap();
+        let connection = json!({"providerType":"open_ai_responses","baseUrl":format!("{base}/v1")});
+        let mut settings = connection.clone();
+        settings["models"] = json!(["gpt-6-astra"]);
+        let save_args = json!({"name":"new-external","settings":settings,"credentialReference":reference["reference"]});
+        let before = std::fs::read(&state.config_path).unwrap();
+        assert!(
+            call(&state, "hub_save_channel", save_args.clone())
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("无法验证")
+        );
+        assert_eq!(std::fs::read(&state.config_path).unwrap(), before);
+        let discovered = call(
+            &state,
+            "hub_read_channel_models",
+            json!({"settings":connection,"credentialReference":reference["reference"]}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(discovered["models"], json!(["gpt-6-astra"]));
+        assert!(
+            !discovered
+                .to_string()
+                .contains("synthetic-external-credential")
+        );
+        call(&state, "hub_save_channel", save_args).await.unwrap();
+        call(
+            &state,
+            "hub_add_model",
+            json!({"channel":"new-external","model":"friendly-gpt","upstreamModel":"gpt-6-astra"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        let before = std::fs::read(&state.config_path).unwrap();
+        assert!(call(&state,"hub_save_channel",json!({"name":"different-endpoint","settings":{"baseUrl":format!("{base}/other"),"models":["gpt-6-astra"]},"credentialReference":reference["reference"]})).await.is_err());
+        assert!(call(&state,"hub_read_channel_models",json!({"settings":{"baseUrl":format!("{base}/missing")},"credentialReference":reference["reference"]})).await.unwrap_err().to_string().contains("无法验证"));
+        assert_eq!(std::fs::read(&state.config_path).unwrap(), before);
+        server.abort();
+    }
     #[test]
     fn workbuddy_parameters_only_advertise_and_accept_fields_consumed_by_native_writer() {
         let row = json!({"model":{"upstreamDefaultReasoningEffort":"high", "supportsImages":true,
@@ -1379,6 +1892,274 @@ mod tests {
         assert!(
             workbuddy_parameter_patch(&row, &json!({"upstreamDefaultReasoningEffort":"ultra"}))
                 .is_err()
+        );
+    }
+    // Run native-path tests in their own process. Only the child receives the
+    // configuration overrides; parallel tests and the user's files stay untouched.
+    fn isolated_native_test(name: &str) -> bool {
+        if std::env::var("TIANCAI_ASSISTANT_NATIVE_TEST").as_deref() == Ok(name) {
+            return false;
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                &format!("assistant::tools::tests::{name}"),
+                "--nocapture",
+            ])
+            .env("TIANCAI_ASSISTANT_NATIVE_TEST", name)
+            .env(
+                "WORKBUDDY_CONFIG_PATH",
+                temp.path().join("workbuddy/models.json"),
+            )
+            .env(
+                "GMCLAW_CONFIG_PATH",
+                temp.path().join("tiangong/electron-data.db"),
+            )
+            .env("DSH_HOME", temp.path().join("dsh"))
+            .env("ZCODE_HOME", temp.path().join("zcode"))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "isolated native tool case failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("test result: ok. 1 passed;"),
+            "isolated native tool case did not execute: {name}"
+        );
+        true
+    }
+    #[tokio::test]
+    async fn native_client_reads_accept_null_errors_and_keep_real_failures_visible() {
+        if isolated_native_test(
+            "native_client_reads_accept_null_errors_and_keep_real_failures_visible",
+        ) {
+            return;
+        }
+        let (_temp, state) = fixture();
+        let native = crate::workbuddy_config::config_path();
+        assert!(!native.exists());
+        let status = api(&state, "workbuddy_read", Value::Null).await.unwrap();
+        assert!(status["error"].is_null());
+        assert!(!native.parent().unwrap().exists());
+        let view = call(
+            &state,
+            "hub_read_configuration",
+            json!({"client":"workbuddy"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(view["client"]["readStatus"], "ready");
+        assert!(
+            view["targets"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|t| t["client"] == "workbuddy")
+        );
+
+        std::fs::create_dir_all(native.parent().unwrap()).unwrap();
+        std::fs::write(&native, b"{invalid-native-json").unwrap();
+        let error = api(&state, "workbuddy_read", Value::Null)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("JSON"));
+        let view = call(
+            &state,
+            "hub_read_configuration",
+            json!({"client":"workbuddy"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(view["client"]["readStatus"], "error");
+        assert!(view["client"]["error"].as_str().unwrap().contains("JSON"));
+        assert!(
+            view["client"].get("entries").is_none(),
+            "a failed read must not claim an empty native catalog"
+        );
+        assert!(
+            view["channels"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|c| c["channel"] == "fixture-channel")
+        );
+        assert!(
+            view["targets"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|t| t["client"] == "workbuddy")
+        );
+        assert_eq!(std::fs::read(&native).unwrap(), b"{invalid-native-json");
+
+        let database = crate::gmclaw_config::config_path();
+        std::fs::create_dir_all(database.parent().unwrap()).unwrap();
+        let connection = rusqlite::Connection::open(&database).unwrap();
+        connection.execute_batch("CREATE TABLE model_configs (model_id TEXT PRIMARY KEY,provider TEXT NOT NULL DEFAULT 'openai',base_url TEXT NOT NULL DEFAULT '',model_name TEXT NOT NULL DEFAULT '',api_key TEXT NOT NULL DEFAULT '',max_tokens INTEGER DEFAULT 128000,temperature REAL DEFAULT 0.7,is_active INTEGER NOT NULL DEFAULT 0,extra_params TEXT DEFAULT '{}',created_at TEXT NOT NULL DEFAULT (datetime('now')),updated_at TEXT NOT NULL DEFAULT (datetime('now')));").unwrap();
+        drop(connection);
+        let status = api(&state, "tiangong_read", Value::Null).await.unwrap();
+        assert!(status["error"].is_null());
+        let view = call(
+            &state,
+            "hub_read_configuration",
+            json!({"client":"tiangong"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(view["client"]["readStatus"], "ready");
+        std::fs::remove_file(&database).unwrap();
+        assert!(
+            api(&state, "tiangong_read", Value::Null)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("未找到")
+        );
+        let view = call(
+            &state,
+            "hub_read_configuration",
+            json!({"client":"tiangong"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(view["client"]["readStatus"], "error");
+        assert!(view["client"]["error"].as_str().unwrap().contains("未找到"));
+        assert!(
+            view["channels"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|c| c["channel"] == "fixture-channel")
+        );
+        assert!(!database.exists());
+    }
+    #[tokio::test]
+    async fn workbuddy_existing_gpt_alias_saves_native_identity_parameters_and_deletes_once() {
+        if isolated_native_test(
+            "workbuddy_existing_gpt_alias_saves_native_identity_parameters_and_deletes_once",
+        ) {
+            return;
+        }
+        let (_temp, state) = fixture();
+        let mut config = AppConfig::load_or_default(&state.config_path).unwrap();
+        config.ai_gateway.providers[0]
+            .models
+            .push("gpt-6-astra".into());
+        config.ai_gateway.providers[0]
+            .model_aliases
+            .insert("gpt-6-a".into(), "gpt-6-astra".into());
+        config.save(&state.config_path).unwrap();
+        let view = call(
+            &state,
+            "hub_read_configuration",
+            json!({"client":"workbuddy"}),
+        )
+        .await
+        .unwrap();
+        let target = view["targets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["client"] == "workbuddy")
+            .unwrap();
+        let copied = call(
+            &state,
+            "hub_configure_client",
+            json!({"targetId":target["targetId"],"channel":"fixture-channel","model":"gpt-6-a"}),
+        )
+        .await
+        .unwrap();
+        let entry = copied["entryId"].as_str().unwrap().to_owned();
+        let view = call(
+            &state,
+            "hub_read_configuration",
+            json!({"client":"workbuddy"}),
+        )
+        .await
+        .unwrap();
+        let row = view["client"]["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["entryId"] == entry)
+            .unwrap();
+        assert_eq!(row["model"]["providerModel"], "gpt-6-a");
+        assert_eq!(row["model"]["id"], format!("tiancaispacehub-{entry}"));
+        assert!(
+            row["model"]["reasoning"]["supportedEfforts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|e| e == "max")
+        );
+        call(&state,"hub_set_model_parameters",json!({"client":"workbuddy","entryId":entry,"parameters":{"upstreamDefaultReasoningEffort":"max"}})).await.unwrap();
+        let view = call(
+            &state,
+            "hub_read_configuration",
+            json!({"client":"workbuddy"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            view["client"]["entries"][0]["model"]["upstreamDefaultReasoningEffort"],
+            "max"
+        );
+        let config = AppConfig::load_or_default(&state.config_path).unwrap();
+        let dedicated = config
+            .ai_gateway
+            .providers
+            .iter()
+            .find(|p| p.name == format!("workbuddy:{entry}"))
+            .unwrap();
+        assert_eq!(
+            dedicated.resolve_upstream_model("gpt-6-a"),
+            Some("gpt-6-astra")
+        );
+        assert!(
+            !view
+                .to_string()
+                .contains("fixture-private-key-not-for-model")
+        );
+
+        let work = state.clone();
+        let deleted_entry = entry.clone();
+        let task = tokio::spawn(async move {
+            call(&work,"hub_delete_configurations",json!({"items":[{"kind":"client_model","client":"workbuddy","entryId":deleted_entry}]})).await
+        });
+        let nonce = pending_deletion(&state).await;
+        assert_eq!(
+            confirm(
+                State(state.clone()),
+                headers(),
+                Json(Confirmation {
+                    nonce,
+                    approved: true
+                })
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        assert_eq!(task.await.unwrap().unwrap()["results"][0]["deleted"], true);
+        let view = call(
+            &state,
+            "hub_read_configuration",
+            json!({"client":"workbuddy"}),
+        )
+        .await
+        .unwrap();
+        assert!(view["client"]["entries"].as_array().unwrap().is_empty());
+        assert!(
+            AppConfig::load_or_default(&state.config_path)
+                .unwrap()
+                .ai_gateway
+                .providers
+                .iter()
+                .any(|p| p.name == "fixture-channel")
         );
     }
     #[tokio::test]

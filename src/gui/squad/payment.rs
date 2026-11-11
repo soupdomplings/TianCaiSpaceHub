@@ -1,5 +1,8 @@
 //! Native checkout; verification continues an existing order, never creates a second one.
-use super::super::controls::Button;
+use super::super::{
+    controls::{Button, ButtonKind},
+    squad_dialog::{self, SquadDialog},
+};
 use super::*;
 use crate::gui::controls::{Choice, TextCtrl};
 use wxdragon::{
@@ -62,24 +65,28 @@ pub(super) fn with_base(frame: &Frame, api: ApiClient, base: Value) {
         super::super::show_info(frame, "当前没有可购买的充值或订阅方案");
         return;
     }
-    let size = super::super::ai_gw_channel_dialog_size(frame, Size::new(620, 500));
-    let dialog = Dialog::builder(frame, "充值 / 订阅")
-        .with_size(size.width, size.height)
-        .with_style(DialogStyle::DefaultDialogStyle | DialogStyle::ResizeBorder)
-        .build();
-    dialog.set_background_color(theme::theme().bg_app);
-    dialog.set_font(&theme::font(theme::TextRole::Body));
-    let column = BoxSizer::builder(Orientation::Vertical).build();
+    let chrome = SquadDialog::new(
+        frame,
+        match forced.as_str() {
+            "organization_settlement" => "组织结算",
+            "organization_prepayment" => "组织预存",
+            _ => "充值 / 订阅",
+        },
+        "选择支付方式，确认金额后创建订单。",
+        Size::new(680, 600),
+    );
+    let dialog = chrome.dialog;
+    let (card, fields) = chrome.section("订单内容");
     let grid = FlexGridSizer::builder(0, 2)
-        .with_vgap(14)
-        .with_hgap(16)
+        .with_vgap(card.from_dip(12))
+        .with_hgap(card.from_dip(16))
         .build();
     grid.add_growable_col(1, 1);
-    let kind = Choice::builder(&dialog)
+    let kind = Choice::builder(&card)
         .with_choices(types.iter().map(|(label, _)| label.to_string()).collect())
         .with_selection(Some(0))
         .build();
-    let method = Choice::builder(&dialog)
+    let method = Choice::builder(&card)
         .with_choices(
             methods
                 .iter()
@@ -93,15 +100,14 @@ pub(super) fn with_base(frame: &Frame, api: ApiClient, base: Value) {
         )
         .with_selection(Some(0))
         .build();
-    let plan = Choice::builder(&dialog)
+    let plan = Choice::builder(&card)
         .with_choices(
             plans
                 .iter()
                 .map(|p| {
                     format!(
-                        "{} · {} {} · {} 天",
+                        "{} · {} · {} 天",
                         p["name"].as_str().unwrap_or("订阅"),
-                        "",
                         crate::desktop::squad_money::Money::checkout(&checkout).usd(&p["price"]),
                         p["validity_days"]
                     )
@@ -110,7 +116,7 @@ pub(super) fn with_base(frame: &Frame, api: ApiClient, base: Value) {
         )
         .with_selection(Some(0))
         .build();
-    let amount = TextCtrl::builder(&dialog)
+    let amount = TextCtrl::builder(&card)
         .with_value(
             &base["amount"]
                 .as_f64()
@@ -118,37 +124,65 @@ pub(super) fn with_base(frame: &Frame, api: ApiClient, base: Value) {
                 .unwrap_or_default(),
         )
         .build();
-    super::super::clients::add_field(&dialog, &grid, "用途", &kind);
-    super::super::clients::add_field(&dialog, &grid, "支付方式", &method);
-    super::super::clients::add_field(&dialog, &grid, "订阅方案", &plan);
-    super::super::clients::add_field(&dialog, &grid, "金额", &amount);
-    column.add_sizer(&grid, 0, SizerFlag::Expand | SizerFlag::All, 20);
-    let summary = StaticText::builder(&dialog).build();
-    column.add(
+    super::super::clients::add_field(&card, &grid, "用途", &kind);
+    super::super::clients::add_field(&card, &grid, "支付方式", &method);
+    let plan_label = squad_dialog::field_label(&card, "订阅方案");
+    grid.add(&plan_label, 0, SizerFlag::AlignCenterVertical, 0);
+    grid.add(&plan, 1, SizerFlag::Expand, 0);
+    let amount_label = squad_dialog::field_label(&card, "金额（元）");
+    grid.add(&amount_label, 0, SizerFlag::AlignCenterVertical, 0);
+    grid.add(&amount, 1, SizerFlag::Expand, 0);
+    fields.add_sizer(&grid, 0, SizerFlag::Expand, 0);
+    let (preview, preview_fields) = chrome.section("预计支付");
+    let total = StaticText::builder(&preview).with_label("—").build();
+    total.set_font(&theme::font(theme::TextRole::Metric));
+    total.set_foreground_color(theme::theme().ink_primary);
+    preview_fields.add(&total, 0, SizerFlag::Expand, 0);
+    let summary = squad_dialog::note(&preview, "");
+    summary.set_min_size(Size::new(0, -1));
+    let quote_text = Rc::new(RefCell::new(String::new()));
+    preview_fields.add(
         &summary,
-        1,
-        SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right,
-        20,
+        0,
+        SizerFlag::Expand | SizerFlag::Top,
+        preview.from_dip(12),
     );
-    let status = StaticText::builder(&dialog).build();
-    column.add(&status, 0, SizerFlag::Expand | SizerFlag::All, 16);
+    let displayed_quote = quote_text.clone();
+    preview.on_size(move |event| {
+        summary.set_label(&displayed_quote.borrow());
+        summary.wrap((preview.get_client_size().width - preview.from_dip(32)).max(1));
+        event.skip(true);
+    });
+    let status = chrome.status;
+    let back = Button::builder(&dialog)
+        .with_label("返回")
+        .with_kind(ButtonKind::Ghost)
+        .build();
+    back.on_click(move |_| dialog.end_modal(ID_CANCEL));
+    chrome
+        .actions
+        .add(&back, 0, SizerFlag::Right, dialog.from_dip(8));
     let save = Button::builder(&dialog)
         .with_label("确认并创建订单")
+        .with_kind(ButtonKind::Primary)
         .build();
-    column.add(&save, 0, SizerFlag::AlignRight | SizerFlag::All, 16);
-    dialog.set_sizer(column, true);
+    chrome.actions.add(&save, 0, SizerFlag::default(), 0);
     let types = types.iter().map(|(_, v)| v.to_string()).collect::<Vec<_>>();
     let kinds = types.clone();
     let options = plans.clone();
     let limits = methods.clone();
     let info = checkout.clone();
+    let body = chrome.body;
     let update = Rc::new(move || {
         let order_kind = kinds
             .get(kind.get_selection().unwrap_or(0) as usize)
             .map(String::as_str)
             .unwrap_or("balance");
         let subscription = order_kind == "subscription";
-        plan.enable(subscription);
+        plan.show(subscription);
+        plan_label.show(subscription);
+        amount.show(!subscription);
+        amount_label.show(!subscription);
         amount.enable(!subscription && forced != "organization_settlement");
         let limit = &limits[method.get_selection().unwrap_or(0) as usize].1;
         let price = if subscription {
@@ -159,13 +193,14 @@ pub(super) fn with_base(frame: &Frame, api: ApiClient, base: Value) {
         } else {
             amount.get_value().parse::<f64>().unwrap_or(0.)
         };
-        match crate::desktop::squad_quote::quote(&info, limit, order_kind, price) {
+        let details = match crate::desktop::squad_quote::quote(&info, limit, order_kind, price) {
             Ok(q) => {
+                total.set_label(&crate::desktop::squad_money::cny(q.total));
                 let credit = q
                     .credited
                     .map(|n| {
                         format!(
-                            "\n预计到账 {}",
+                            "预计到账 {}\n",
                             crate::desktop::squad_money::Money::checkout(&info).usd(&json!(n))
                         )
                     })
@@ -174,18 +209,25 @@ pub(super) fn with_base(frame: &Frame, api: ApiClient, base: Value) {
                     .err()
                     .map(|e| format!("\n{e}"))
                     .unwrap_or_default();
-                summary.set_label(&format!(
-                    "预计支付 {}    手续费 {}{}{}",
-                    crate::desktop::squad_money::cny(q.total),
-                    crate::desktop::squad_money::cny(q.fee),
+                format!(
+                    "{}手续费 {}{}",
                     credit,
+                    crate::desktop::squad_money::cny(q.fee),
                     validation
-                ));
+                )
             }
-            Err(error) => summary.set_label(&error.to_string()),
-        }
-        summary.wrap(530);
+            Err(error) => {
+                total.set_label("—");
+                error.to_string()
+            }
+        };
+        summary.set_label(&details);
+        *quote_text.borrow_mut() = details;
+        summary.wrap((preview.get_client_size().width - preview.from_dip(32)).max(1));
+        card.layout();
+        preview.layout();
         dialog.layout();
+        body.fit_inside();
     });
     for c in [kind, method, plan] {
         let f = update.clone();
@@ -193,7 +235,6 @@ pub(super) fn with_base(frame: &Frame, api: ApiClient, base: Value) {
     }
     let f = update.clone();
     amount.on_text_changed(move |_| f());
-    update();
     let info = checkout;
     let job = dialog_job::bind(dialog, save, status, api.clone(), move || {
         let order_type = types[kind.get_selection().unwrap_or(0) as usize].clone();
@@ -229,6 +270,8 @@ pub(super) fn with_base(frame: &Frame, api: ApiClient, base: Value) {
             json!({"method":"POST","path":"/payment/orders","body":body}),
         ))
     });
+    chrome.finish();
+    update();
     let accepted = dialog.show_modal() == ID_OK;
     let result = job.result.borrow().clone();
     drop(job);
@@ -268,51 +311,73 @@ pub(super) fn continue_order(frame: &Frame, api: ApiClient, order: &Value) {
     .filter(|v| v["order_id"].as_u64() == Some(id)) else {
         return;
     };
-    let size = super::super::ai_gw_channel_dialog_size(frame, Size::new(620, 720));
-    let dialog = Dialog::builder(frame, "完成已有订单")
-        .with_size(size.width, size.height)
-        .with_style(DialogStyle::DefaultDialogStyle | DialogStyle::ResizeBorder)
-        .build();
-    dialog.set_background_color(theme::theme().bg_app);
-    dialog.set_font(&theme::font(theme::TextRole::Body));
-    let column = BoxSizer::builder(Orientation::Vertical).build();
-    let title = StaticText::builder(&dialog)
-        .with_label(&format!(
-            "订单 {}   {}",
-            merged["out_trade_no"].as_str().unwrap_or(""),
-            crate::desktop::squad_money::Money::default().currency(
-                &merged["pay_amount"],
-                merged["currency"].as_str().unwrap_or("CNY")
-            )
+    let chrome = SquadDialog::new(
+        frame,
+        "完成已有订单",
+        "继续付款后核对订单状态。",
+        Size::new(640, 720),
+    );
+    let dialog = chrome.dialog;
+    let (card, fields) = chrome.section("订单金额");
+    let total = StaticText::builder(&card)
+        .with_label(&crate::desktop::squad_money::Money::default().currency(
+            &merged["pay_amount"],
+            merged["currency"].as_str().unwrap_or("CNY"),
         ))
         .build();
-    title.set_font(&theme::font(theme::TextRole::Title));
-    column.add(&title, 0, SizerFlag::Expand | SizerFlag::All, 20);
+    total.set_font(&theme::font(theme::TextRole::Metric));
+    total.set_foreground_color(theme::theme().ink_primary);
+    fields.add(&total, 0, SizerFlag::Expand, 0);
+    let order_number = format!("订单号 {}", merged["out_trade_no"].as_str().unwrap_or("—"));
+    let number = squad_dialog::note(&card, &order_number);
+    number.set_min_size(Size::new(0, -1));
+    fields.add(
+        &number,
+        0,
+        SizerFlag::Expand | SizerFlag::Top,
+        card.from_dip(8),
+    );
+    card.on_size(move |event| {
+        number.set_label(&order_number);
+        number.wrap((card.get_client_size().width - card.from_dip(32)).max(1));
+        event.skip(true);
+    });
     if let Some(code) = merged["qr_code"].as_str().filter(|v| !v.is_empty()) {
         if let Some((bitmap, _)) = super::super::onboarding::qr_bitmap(code) {
-            let qr = StaticBitmap::builder(&dialog)
+            let (card, fields) = chrome.section("扫码付款");
+            let qr = StaticBitmap::builder(&card)
                 .with_bitmap(Some(bitmap))
                 .build();
-            column.add(&qr, 1, SizerFlag::AlignCentre | SizerFlag::All, 12);
+            fields.add(&qr, 0, SizerFlag::AlignCentre, 0);
         }
     }
-    let status = StaticText::builder(&dialog)
-        .with_label("付款后点击核对付款，订单结果以站点为准。")
+    let status = chrome.status;
+    status.set_label(verification_status(&merged));
+    let back = Button::builder(&dialog)
+        .with_label("返回")
+        .with_kind(ButtonKind::Ghost)
         .build();
-    column.add(&status, 1, SizerFlag::Expand | SizerFlag::All, 16);
-    let buttons = BoxSizer::builder(Orientation::Horizontal).build();
-    let open = Button::builder(&dialog).with_label("继续付款").build();
-    let verify = Button::builder(&dialog).with_label("核对付款").build();
-    buttons.add(&open, 0, SizerFlag::Right, 10);
-    buttons.add(&verify, 0, SizerFlag::default(), 0);
-    column.add_sizer(&buttons, 0, SizerFlag::AlignRight | SizerFlag::All, 16);
-    dialog.set_sizer(column, true);
+    back.on_click(move |_| dialog.end_modal(ID_CANCEL));
+    let open = Button::builder(&dialog)
+        .with_label("继续付款")
+        .with_kind(ButtonKind::Secondary)
+        .build();
+    let verify = Button::builder(&dialog)
+        .with_label("核对付款")
+        .with_kind(ButtonKind::Primary)
+        .build();
+    for button in [back, open] {
+        chrome
+            .actions
+            .add(&button, 0, SizerFlag::Right, dialog.from_dip(8));
+    }
+    chrome.actions.add(&verify, 0, SizerFlag::default(), 0);
     let resumable = ["pay_url", "qr_code", "client_secret", "resume_token"]
         .iter()
         .any(|k| merged[*k].as_str().is_some_and(|v| !v.is_empty()));
     open.enable(resumable && merged["status"].as_str().is_none_or(|s| s == "PENDING"));
     if !resumable {
-        status.set_label("此订单没有可恢复的付款凭据，可核对状态或取消待支付订单。");
+        status.set_label("此订单暂不能继续付款，可核对当前状态。");
     }
     let (a, o, f) = (api.clone(), merged.clone(), *frame);
     open.on_click(move |_| {
@@ -341,6 +406,7 @@ pub(super) fn continue_order(frame: &Frame, api: ApiClient, order: &Value) {
             dialog.layout();
         },
     );
+    chrome.finish();
     dialog.show_modal();
     drop(verify_job);
     dialog.destroy();
@@ -381,13 +447,16 @@ pub(super) fn official_window(
     ) else {
         return;
     };
-    let size = super::super::ai_gw_channel_dialog_size(frame, Size::new(940, 760));
-    let dialog = Dialog::builder(frame, title)
-        .with_size(size.width, size.height)
-        .with_style(DialogStyle::DefaultDialogStyle | DialogStyle::ResizeBorder)
-        .build();
+    let chrome = SquadDialog::new(
+        frame,
+        title,
+        "在此窗口完成付款或账户验证。",
+        Size::new(940, 760),
+    );
+    let dialog = chrome.dialog;
+    chrome.body.set_scroll_rate(0, 0);
     let Some(view) = WebView::try_private(
-        &dialog,
+        &chrome.body,
         if cfg!(windows) {
             WebViewBackend::Edge
         } else {
@@ -427,9 +496,17 @@ pub(super) fn official_window(
             view.load_url(&s);
         }
     });
-    let column = BoxSizer::builder(Orientation::Vertical).build();
-    column.add(&view, 1, SizerFlag::Expand, 0);
-    dialog.set_sizer(column, true);
+    view.set_min_size(Size::new(0, 0));
+    chrome.content.add(&view, 1, SizerFlag::Expand, 0);
+    if order.is_some() {
+        chrome.status.set_label("完成付款后返回核对订单状态。");
+    }
+    let back = Button::builder(&dialog)
+        .with_label("返回")
+        .with_kind(ButtonKind::Ghost)
+        .build();
+    back.on_click(move |_| dialog.end_modal(ID_CANCEL));
+    chrome.actions.add(&back, 0, SizerFlag::default(), 0);
     let target = if raw.ends_with("/purchase") {
         order
             .map(|o| {
@@ -443,6 +520,7 @@ pub(super) fn official_window(
         raw.into()
     };
     view.load_url(&target);
+    chrome.finish();
     dialog.show_modal();
     view.stop();
     view.remove_all_user_scripts();

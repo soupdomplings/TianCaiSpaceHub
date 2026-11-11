@@ -1,5 +1,52 @@
 # V1 桌面视觉与组件规范
 
+## V1.0.24 导航与模型同步
+
+左栏固定展示五个可见客户端，不再维护最近三个位置、更多或收起，旧 `recent-clients.json` 留在本机但不读取/写入。Nav、Tab、Segment 的逻辑选中立即切换，原生按钮自持 160 ms 颜色/指示线过渡；不移动按钮边界，不延后业务动作，可从当前值反向。普通按钮不套用该动画，减少动画设置直接取终态；隐藏或销毁停止计时。入口为 `controls.rs` 和 vendor `button.cpp`。
+
+Codex 模型选择以最近实际读取值为基准，无草稿时接收搭档/API 的保存；存在未保存勾选或手填文字时保留并显示“载入更新”。点击立即应用最近模型列表，不等待下一次 dashboard 刷新。仅顺序变化时同步原始保存基准，避免无意义的 revision 冲突。入口为 `clients.rs`、`codex_tab.rs` 和 `codex_models.rs`，不迁移配置，不撤销已保存模型。
+
+小分队导入结果使用原生三列表格。联调同时修复 vendor `ListCtrl::get_item_text` 的 UTF-8 缓冲长度：C++ 返回字节数不含 NUL，Rust 分配额外终止位再按返回长度取正文，避免中文回读末尾被截断；显示数据和原生提交协议不变。必要验证及浅深/窄窗结果统一记录在 [V24 交付](../releases/v1.0.24.md)。
+
+## V1.0.24 天才小分队弹窗统一（本轮开发）
+
+用户要求小分队弹出页面统一整理，避免冗长标题、整屏文字和连续选择窗口。本轮共用 `src/gui/squad_dialog.rs::SquadDialog` 承载简短标题／说明、主题卡片、独立滚动正文、固定反馈与底部主次动作；尺寸按 DIP 换算，并受 Hub 客户区和系统工作区约束。沿既有 `theme` 字号、浅深色、圆角和 `controls::Button`，不另造网页风格或用原始 JSON 代替业务内容。
+
+共用编辑表单 `squad_form.rs` 按基本信息、渠道与状态、资金与额度、用量与限额、有效期、访问验证、开票资料及成员分配整理字段；字段名用简短中文，数值、选择、开关与逐行列表保留原生输入。表单直接复用外层正文滚动，固定保存和错误反馈；现有完整成员／额度页仍使用自己的单一滚动与固定动作，避免重复标题和嵌套底栏。非业务用的未知复杂结构保留于原请求，界面不提供原始 JSON 编辑器。原金额编辑、精度、未知选项保留、`expected_*` 并发字段和验证器保持，视觉分组不改变提交合同。详情按既有业务字段白名单显示主题卡片，不列内部身份或私有凭据。
+
+账户安全改用主题选择卡。通知邮箱合并主邮箱、其他邮箱列表和当前行启停／移除动作，减少先看详情、再选动作、再选邮箱的连续窗口；添加仍走发送验证码与原验证接口，删除保留确认。密钥详情使用单一密钥卡和固定复制／关闭，完整密钥默认遮盖、可再次隐藏。资金顺序使用带实际启用状态的序号列表，上移／下移按当前选择禁用，底部一次保存。通用单选／批量选择继续使用现有可搜索主题组件，保留已选身份和自身底部操作。
+
+支付建单、继续原订单和受限付款／验证 WebView 使用同一外框，订单内容与预计支付分卡，金额有独立层级，仅显示当前用途需要的金额或方案。发票列表分金额概览、右对齐金额表格、操作和分页；部门排序也归入主题外框。组织、成员、分配的完整复合页面保留内建标题／滚动／底栏，仅统一宿主、字体和 20 DIP 边距。站点接口、账户代次、权限、财务口径、一次下单、继续原订单和查单确认保持。导入多模型与客户端的一键配置由本批另一专题记录，不以弹窗整理代替其保存或测试结果。
+
+使用 `ui-ux-pro-max` 定向 `dialog form grouping scroll footer` 查询，结果中 Submit Feedback 的 All 平台建议适用：原位置展示保存／错误，保持草稿并可继续。Web 锚点平滑与横向滚动示例不作为 wxWidgets 规则；卡片、短标签和固定底部依据本产品已采用的桌面体系。没有新增持久配置或站点改动；回退相应 GUI 文件即可，保留账户、密钥、模型和原支付订单。
+
+修改入口为 `src/gui/squad_dialog.rs`、`squad_form.rs`、`squad.rs` 与 `squad/{payment,organization,finance}.rs`。隐藏定向夹具 `gui::squad_form::native_review_tests::squad_forms_keep_footer_visible_and_preserve_unedited_server_fields`（显式 `--ignored --exact --test-threads=1`）检查浅深、大小窗口的正文滚动、保存始终可见、字段横向边界，以及金额精度／并发字段／未知结构原样保留；设置 `TIANCAI_NATIVE_REVIEW_DIR` 后保存四张合成组件图供人工检查。管理会话已通过 Windows GUI 编译和该原生夹具，四张浅深/大小窗组件图已人工查看。实际小分队新弹窗、支付／邮箱／密钥操作、Windows 缩放和 macOS 待用户验收；没有启动实际产品、真实账户、支付或安装器。
+
+## V1.0.24 天才搭档消息滚轮、Markdown 与展开动画（本轮开发）
+
+用户反馈对话浮层无法用滚轮翻阅。根因在 `src/gui/assistant.rs::MessageCard`：旧回调只匹配 `WindowEventData::General`，而本仓库 wxDragon 的 `wxd_IsMouseButtonEvent` 把 `wxEVT_MOUSEWHEEL` 包装为 `MouseButton`；因此正文转交分支未执行，原生只读多行文本默认处理了滚轮，外层消息区没有滚动。旧分支还固定每格三行，没有采用系统行数和高精度累积。
+
+消息正文、气泡边距、卡片空白及结果标题现在把一次普通竖向滚轮交给消息区自己的原生 `wxScrollHelper`。采用事件副本并转换坐标、对象和 ID，目标同步处理后明确消费原事件，避免默认处理再滚一次；不保留事件指针或引入后台任务。新增 `ScrolledWindow::forward_mouse_wheel` 只在显式绑定时启用，不改全局事件分类。系统每格行数、整页滚动及不足一格的累积沿用 wxWidgets 原生逻辑；Ctrl+滚轮和横向滚轮放行，输入框仍自行处理多行滚动。消息区空白沿用 ScrolledWindow 默认滚轮路径，欢迎内容的子控件也有同样转交。
+
+消息正文接入 `src/gui/assistant_markdown.rs::MessageBody`，使用可选择和复制的原生块控件显示段落、1–6 级标题、有序／无序列表、围栏代码、行内代码及粗体。表格使用原生标题与单元格，沿现有主题区分表头、行和分隔；每列宽度不足 76 DIP 时转为逐记录的标签／值排列，避免横向裁切。长网址和代码按字符换行；链接与 HTML 保留为普通文字，不新增自动打开行为。未完成的流式尾块可继续更新，已完成块和兼容表格单元格复用原控件及选区；结构变化只替换受影响尾部。新块、表格文字和空白继续转交消息区滚轮，并保留 Esc 收起和原生复制按键。
+
+展开／收起采用 160 ms cubic ease-out 短位移，最多使用最终矩形上方的 14 DIP 空余空间。只移动原生子 Panel，正文、表格与输入尺寸不随每帧重排，焦点和发送不等待动画；小窗口没有可用位移空间或现有减少动画设置开启时直接到达终态。连续点击可从当前位置反向，收起末尾隐藏，重新展开保留对话和草稿。清空、切换临时对话／账户及停用即时停止过渡；主窗最小化或隐藏时停止计时并保留应有展开状态，销毁时释放动画 Timer。动画 Timer 由 chat 独立持有，与模块页状态轮询分开，避免当前 vendor 按 owner 绑定 Timer 回调时互相触发。
+
+消息身份和自动跟随计算保持；上滚时的新消息继续保留原阅读位置，回到底部后才随新内容。未改后端、配置格式、用户资料及 V23 浮层裁剪。回滚 assistant、新 Markdown 模块及注册和三个 vendor ScrolledWindow 文件即可恢复原行为，不迁移用户配置。
+
+使用 `ui-ux-pro-max` 的 UX 定向查询 `nested chat mouse wheel scrolling`，结果为 Web 水平溢出及 IME Enter；按技能要求收窄为 `scroll hijacking nested scrolling`，结果为 Web 锚点平滑和动效敏感。没有核对到适用于本原生事件转交的规则，故未套用 Web CSS/滚动动画。事件处理依据为本机实际 wxWidgets 3.3.2 的 `scrlwing.cpp::HandleOnMouseWheel` 与官方 [滚轮消息说明](https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-mousewheel)。
+
+Markdown 查询 `markdown narrow text readability` 核对 Text Reflow／Contrast，沿现有字号、颜色与原生控件实现。动画查询 `reduced motion animation interruption` 命中 All 平台的 Reduced Motion、Excessive Motion 和 Duration Timing；只采用尊重现有动画偏好、限制移动范围及保持反馈及时的建议，160 ms 是本组件取值，不当作全部交互的固定要求，也不移植 CSS 媒体查询。
+
+验证入口包括以下定向用例；原生夹具需显式 `--ignored --exact --test-threads=1`：
+
+- `gui::assistant::native_overlay_tests::assistant_transcript_wheel_routes_native_children_and_preserves_reading`：显示隔离合成窗口，用 Windows `WM_MOUSEWHEEL`／`WM_MOUSEHWHEEL` 覆盖正文、气泡边距、行空白、结果标题、消息区空白、半格累积、修饰键、选区、阅读／跟随及输入框自身滚动。
+- `gui::assistant_markdown::tests::native_markdown_reflows_tables_and_keeps_streamed_prefix_selection`：隐藏合成窗口中的标题、列表、长代码／网址、宽窄表格、流式追加与前块／单元格句柄和选区保留；另有三个 `markdown_` 纯解析用例。
+- `gui::assistant::layout_tests::chat_motion_reverses_continuously_and_respects_reduced_motion`：纯状态检查打断连续性、边界及减少动画直接到位。
+- `gui::assistant::native_overlay_tests::assistant_chat_motion_keeps_layout_and_handles_interruptions`：隔离合成窗口检查焦点、尺寸、裁剪、快速反向、实际 Timer 收尾、收起续聊、减少动画、隐藏、切号、停用和销毁。原 V23 浮层屏幕夹具只补显式结束收起过渡，避免把动画期间仍显示当成错误；不扩大为本轮重新通过旧版全部屏幕验收。
+
+上述夹具不启动用户 Hub、后台、账号或模型。管理会话已统一编译并执行这些定向用例，原生滚轮、Markdown、动画及菜单检查通过，最终输入与复用范围见 V24 交付。真实 Hub 滚轮、Markdown 观感／复制、Windows 多屏／DPI、动画与 macOS 仍待用户验收，不能以源码就绪替代构建或实机结果。
+
 ## 2026-11-11 客户端入口精简（本轮开发）
 
 按用户要求隐藏 VS Code 和 WebStorm。侧栏最近三个位置、展开列表、客户端页面构建、配置位置选择、添加模型的来源候选、天工内置模型的跨端分享统一使用 `ClientId::VISIBLE` 或其 `is_visible` 判定。该列表保留 ChatGPT / Codex、WorkBuddy、天工 Work、DeepSeek Harness 和 ZCode；后台 `ClientId::ALL` 仍含全部七端。

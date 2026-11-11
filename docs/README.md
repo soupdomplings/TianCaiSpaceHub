@@ -1,5 +1,7 @@
 # TianCaiSpaceHub 文档总入口
 
+2026-11-11 **V1.0.24 统一集成**：搭档滚轮、Markdown、真实模型解析和保存回读；Codex 模型页同步、五端全展示及轻量动画；小分队统一弹窗和多模型/多客户端导入；ZCode 外部模型免登录启动与天工可见错误反馈。实现见 [搭档](customizations/genius-buddy.md)、[视觉](development/desktop-visual-system.md)、[导入](hub-external-import.md)、[账户](customizations/tiancai-squad-account.md) 和 [客户端](customizations/desktop-client-adapters.md)。最终检查、唯一新包及验收边界以 [V24 交付](releases/v1.0.24.md) 为准，下列历史状态保留原归属。 Windows GUI/release、45 项不同 Rust、7 项 Node 和真实 Server 5 轮验收通过；唯一 MSI `193313` 已生成并完成静态核验，用户实机和 macOS 仍待验收。
+
 2026-11-11 **V1.0.23 搭档配置流水线与界面精简**：修正 Windows 原生业务页遮挡浮层，补充助手操作指引及参数回读；隐藏 WebStorm/VS Code，增加 MiniMax 厂商预设。GUI编译及57项定向回归通过，原真实模型7轮配置流程和屏幕夹具沿原输入复用；新增密钥创建/列表选择→渠道→临时ZCode指定模型的真实3轮流程通过，测试密钥已撤销。Windows release与唯一MSI `181709`已生成，版本/升级及六项载荷核验通过，源码已推送GitHub `main`（`b05775a`）。身份及验收边界见 [V23交付](releases/v1.0.23.md)，行为见 [搭档](customizations/genius-buddy.md)、[账户](customizations/tiancai-squad-account.md) 与 [客户端](customizations/desktop-client-adapters.md)。
 
 2026-11-11 **V1.0.22 天才搭档对话修复与 Hub 内浮层**：修复新版 Server 拒绝旧 `readOnly.access` 参数的问题，配置、能力目录和会话请求复用 Hub Codex 流程，模型仍来自天才小分队。右下角纯对话图标，框内去产品标题，消息可复制、收起可续聊。Windows GUI 测试目标及 release 编译、46 个不同定向离线用例通过，唯一 MSI `152228` 的版本/升级/六项载荷核验通过。实现见 [搭档专题](customizations/genius-buddy.md)、[桌面视觉](development/desktop-visual-system.md)，包身份和验证边界见 [V22 交付](releases/v1.0.22.md)；真实界面、调用与 macOS 待用户验收。

@@ -54,8 +54,10 @@ pub(super) struct CodexTab {
     model_provider: Choice,
     model_provider_names: Rc<RefCell<Vec<String>>>,
     custom_models_input: TextCtrl,
+    models_updated: Panel,
     discovered_models: Rc<RefCell<std::collections::BTreeMap<String, DiscoveredModels>>>,
     base_models: Rc<RefCell<Option<Vec<String>>>>,
+    latest_models: Rc<RefCell<Option<Vec<String>>>>,
     list_saved: Rc<RefCell<Option<Rc<dyn Fn()>>>>,
     model_picker: super::codex_models::ChannelModels,
     models_initialized: CodexModelsInitialized,
@@ -294,6 +296,33 @@ pub(super) fn create_with_settings(
         page.layout();
     });
 
+    let models_updated = Panel::builder(&models_box).build();
+    models_updated.set_background_color(models_box.get_background_color());
+    let updated_row = BoxSizer::builder(Orientation::Horizontal).build();
+    let updated_hint = StaticText::builder(&models_updated)
+        .with_label("模型配置已更新，未保存的选择已保留。")
+        .build();
+    updated_hint.set_foreground_color(theme::theme().warn);
+    let load_updated = Button::builder(&models_updated)
+        .with_label("载入更新")
+        .with_kind(super::controls::ButtonKind::Ghost)
+        .build();
+    updated_row.add(&updated_hint, 1, SizerFlag::AlignCenterVertical, 0);
+    updated_row.add(
+        &load_updated,
+        0,
+        SizerFlag::Left,
+        models_updated.from_dip(8),
+    );
+    models_updated.set_sizer(updated_row, false);
+    models_updated.hide();
+    models_section.add(
+        &models_updated,
+        0,
+        SizerFlag::Expand | SizerFlag::All,
+        page.from_dip(10),
+    );
+
     let save_models_button = Button::builder(&models_box)
         .with_label(text.save_codex_models())
         .build();
@@ -327,7 +356,7 @@ pub(super) fn create_with_settings(
     page.set_sizer(sizer, true);
     page.layout();
 
-    CodexTab {
+    let tab = CodexTab {
         page,
         text,
         inject_button,
@@ -344,8 +373,10 @@ pub(super) fn create_with_settings(
         model_provider,
         model_provider_names: Rc::new(RefCell::new(Vec::new())),
         custom_models_input,
+        models_updated,
         discovered_models: Default::default(),
         base_models: Default::default(),
+        latest_models: Default::default(),
         list_saved: Default::default(),
         model_picker,
         models_initialized: Rc::new(Cell::new(false)),
@@ -355,7 +386,10 @@ pub(super) fn create_with_settings(
         remote_ready: Rc::new(Cell::new(false)),
         service_enabled: Rc::new(Cell::new(false)),
         local_connection_mode: Rc::new(Cell::new(LocalConnectionMode::Standard)),
-    }
+    };
+    let rebase = tab.clone();
+    load_updated.on_click(move |_| reload_visible_models(&rebase));
+    tab
 }
 
 pub(super) fn invalidate_visible_models(tab: &CodexTab) {
@@ -365,6 +399,13 @@ pub(super) fn reload_visible_models(tab: &CodexTab) {
     tab.models_initialized.set(false);
     tab.discovered_models.borrow_mut().clear();
     tab.custom_models_input.change_value("");
+    if let Some(models) = tab.latest_models.borrow().clone() {
+        *tab.base_models.borrow_mut() = Some(models.clone());
+        tab.model_picker.replace_selected_models(&models);
+        tab.models_initialized.set(true);
+    }
+    tab.models_updated.hide();
+    tab.page.layout();
     if let Some(saved) = tab.list_saved.borrow().clone() {
         saved();
     }
@@ -374,8 +415,21 @@ pub(super) fn focus_model(tab: &CodexTab, model: &str) {
 }
 pub(super) fn bind_model_list(tab: &CodexTab, page: &super::clients::ClientPage) {
     let view = page.clone();
-    tab.model_picker
-        .on_changed(move |models| view.set_codex_selection(models));
+    let current = tab.clone();
+    tab.model_picker.on_changed(move |_| {
+        view.set_codex_selection(
+            selected_visible_models(&current),
+            current.base_models.borrow().clone().unwrap_or_default(),
+        );
+    });
+    let view = page.clone();
+    let current = tab.clone();
+    tab.custom_models_input.on_text_updated(move |_| {
+        view.set_codex_selection(
+            selected_visible_models(&current),
+            current.base_models.borrow().clone().unwrap_or_default(),
+        );
+    });
     let picker = tab.model_picker.clone();
     let manual = tab.custom_models_input;
     page.on_model_remove(move |model| {
@@ -394,6 +448,38 @@ pub(super) fn bind_model_list(tab: &CodexTab, page: &super::clients::ClientPage)
 #[cfg(all(test, windows))]
 pub(super) fn review_picker(tab: &CodexTab) -> super::codex_models::ChannelModels {
     tab.model_picker.clone()
+}
+#[cfg(all(test, windows))]
+pub(super) fn review_remote_model_updates(tab: &CodexTab, config: &mut AiGatewayConfig) {
+    let original = config.codex_visible_models.clone();
+    config.codex_visible_models = vec!["external-saved-model".into()];
+    initialize_visible_model_checks(tab, config);
+    assert_eq!(tab.model_picker.selected_models(), ["external-saved-model"]);
+    assert!(!tab.models_updated.is_shown());
+
+    // A manual selection and a typed entry are both drafts. A second remote
+    // save must leave them intact until the user explicitly loads the update.
+    tab.model_picker.select_models(&["draft-model".into()]);
+    config.codex_visible_models = vec!["second-external-model".into()];
+    initialize_visible_model_checks(tab, config);
+    assert!(
+        tab.model_picker
+            .selected_models()
+            .contains(&"draft-model".into())
+    );
+    assert!(tab.models_updated.is_shown());
+    tab.custom_models_input.change_value("typed-model");
+    initialize_visible_model_checks(tab, config);
+    assert_eq!(tab.custom_models_input.get_value(), "typed-model");
+    reload_visible_models(tab);
+    assert_eq!(
+        tab.model_picker.selected_models(),
+        ["second-external-model"]
+    );
+    assert!(!tab.models_updated.is_shown());
+
+    config.codex_visible_models = original;
+    initialize_visible_model_checks(tab, config);
 }
 
 pub(super) fn bind_actions(
@@ -452,6 +538,7 @@ pub(super) fn refresh_remote_ready(tab: &CodexTab, remote_ready: bool) {
 }
 
 pub(super) fn initialize_visible_model_checks(tab: &CodexTab, gateway_config: &AiGatewayConfig) {
+    *tab.latest_models.borrow_mut() = Some(gateway_config.codex_visible_models.clone());
     let names: Vec<String> = gateway_config
         .providers
         .iter()
@@ -485,14 +572,33 @@ pub(super) fn initialize_visible_model_checks(tab: &CodexTab, gateway_config: &A
             }
         }
     }
-    if !tab.models_initialized.get() {
+    let base = tab.base_models.borrow().clone();
+    let has_draft = base.as_ref().is_some_and(|base| {
+        !same_model_set(&selected_visible_models(tab), base)
+            || !tab.custom_models_input.get_value().trim().is_empty()
+    });
+    let remote_changed = base
+        .as_ref()
+        .is_some_and(|base| !same_model_set(base, &gateway_config.codex_visible_models));
+    let reload = !tab.models_initialized.get() || (remote_changed && !has_draft);
+    if reload || !remote_changed {
         *tab.base_models.borrow_mut() = Some(gateway_config.codex_visible_models.clone());
+    }
+    let show_update = remote_changed && has_draft && !reload;
+    if tab.models_updated.is_shown() != show_update {
+        tab.models_updated.show(show_update);
+        tab.page.layout();
     }
     tab.model_picker.update(
         groups,
-        (!tab.models_initialized.get()).then_some(&gateway_config.codex_visible_models),
+        reload.then_some(&gateway_config.codex_visible_models),
     );
     tab.models_initialized.set(true);
+}
+
+pub(super) fn same_model_set(left: &[String], right: &[String]) -> bool {
+    use std::collections::BTreeSet;
+    left.iter().collect::<BTreeSet<_>>() == right.iter().collect::<BTreeSet<_>>()
 }
 
 pub(super) fn apply_pending_action(

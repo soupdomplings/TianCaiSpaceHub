@@ -1,28 +1,24 @@
 //! Explicit external-model workspace startup. The renderer override lives only
 //! in this CDP connection; installed files and official account records stay native.
-use std::{collections::VecDeque, time::Duration};
+use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
 use base64::Engine;
-use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::{
-    net::TcpStream,
     sync::{Mutex, watch},
     task::JoinHandle,
 };
-use tokio_tungstenite::{
-    MaybeTlsStream, WebSocketStream, connect_async_with_config,
-    tungstenite::{Message, protocol::WebSocketConfig},
-};
 use url::Url;
 
-use crate::{config::AppConfig, gmclaw_config::GmClawConfigStatus};
+use crate::{
+    config::AppConfig,
+    desktop::renderer_cdp::{Cdp, MAX_BYTES},
+    gmclaw_config::GmClawConfigStatus,
+};
 
-const MAX_BYTES: usize = 16 * 1024 * 1024;
 const READY_TIMEOUT: Duration = Duration::from_secs(30);
-const CALL_TIMEOUT: Duration = Duration::from_secs(8);
 static ENHANCE_LOCK: Mutex<()> = Mutex::const_new(());
 static SESSION: Mutex<Option<WorkspaceSession>> = Mutex::const_new(None);
 
@@ -51,6 +47,9 @@ fn select_options(
     status: GmClawConfigStatus,
     preferred: Option<&str>,
 ) -> Result<WorkspaceOptions> {
+    if let Some(error) = status.error.as_deref() {
+        anyhow::bail!("无法读取已保存的天工外部模型：{error}");
+    }
     let entries: Vec<_> = status
         .entries
         .iter()
@@ -85,7 +84,7 @@ pub(crate) async fn enhance_workspace(options: WorkspaceOptions) -> Result<()> {
     let installation = tokio::task::spawn_blocking(super::discover).await??;
     let executable = installation.executable.context("未找到天工 Work 安装")?;
     let socket = super::display::target(&executable, &installation.process_ids).await?;
-    let mut cdp = Cdp::connect(&socket).await?;
+    let mut cdp = Cdp::connect(&socket, "天工").await?;
     let probe = cdp.evaluate(PROBE).await?;
     let installed = probe["installed"] == true;
     if installed {
@@ -313,99 +312,11 @@ fn same_renderer_entry(page: &str, entry: &str) -> bool {
         && entry.path().ends_with(".js")
 }
 
-struct Cdp {
-    socket: WebSocketStream<MaybeTlsStream<TcpStream>>,
-    next_id: u32,
-    events: VecDeque<Value>,
-}
-impl Cdp {
-    async fn connect(socket: &Url) -> Result<Self> {
-        let config = WebSocketConfig {
-            max_message_size: Some(MAX_BYTES),
-            max_frame_size: Some(MAX_BYTES),
-            ..WebSocketConfig::default()
-        };
-        let (socket, _) = connect_async_with_config(socket.as_str(), Some(config), false)
-            .await
-            .map_err(|_| anyhow::anyhow!("天工增强启动通道未启用，请正常退出天工后从 Hub 启动"))?;
-        Ok(Self {
-            socket,
-            next_id: 0,
-            events: VecDeque::new(),
-        })
-    }
-    async fn receive(&mut self) -> Result<Value> {
-        loop {
-            match self.socket.next().await {
-                Some(Ok(Message::Text(text))) => {
-                    return serde_json::from_str(&text)
-                        .map_err(|_| anyhow::anyhow!("天工增强启动通信格式不兼容"));
-                }
-                Some(Ok(Message::Ping(bytes))) => {
-                    self.socket.send(Message::Pong(bytes)).await?;
-                }
-                Some(Ok(Message::Close(_))) | None => anyhow::bail!("天工增强启动连接已关闭"),
-                Some(Err(_)) => anyhow::bail!("天工增强启动通信中断"),
-                _ => {}
-            }
-        }
-    }
-    async fn call(&mut self, method: &str, params: Value) -> Result<Value> {
-        self.next_id += 1;
-        let id = self.next_id;
-        let request = json!({"id":id,"method":method,"params":params}).to_string();
-        ensure!(request.len() <= MAX_BYTES, "天工增强启动请求超过支持大小");
-        tokio::time::timeout(CALL_TIMEOUT, async {
-            self.socket.send(Message::Text(request)).await?;
-            loop {
-                let value = self.receive().await?;
-                if value["id"].as_u64() == Some(id as u64) {
-                    ensure!(value.get("error").is_none(), "天工增强启动协议暂不兼容");
-                    return Ok(value["result"].clone());
-                }
-                if value["method"].is_string() {
-                    ensure!(self.events.len() < 256, "天工增强启动事件过多，请稍后重试");
-                    self.events.push_back(value);
-                }
-            }
-        })
-        .await
-        .map_err(|_| anyhow::anyhow!("天工增强启动通信超时"))?
-    }
-    async fn event(&mut self) -> Result<Value> {
-        if let Some(event) = self.events.pop_front() {
-            return Ok(event);
-        }
-        loop {
-            let value = self.receive().await?;
-            if value["method"].is_string() {
-                return Ok(value);
-            }
-        }
-    }
-    async fn evaluate(&mut self, expression: &str) -> Result<Value> {
-        let result = self
-            .call(
-                "Runtime.evaluate",
-                json!({
-                    "expression":expression,"returnByValue":true,"silent":true
-                }),
-            )
-            .await?;
-        ensure!(
-            result.get("exceptionDetails").is_none(),
-            "天工增强启动界面脚本未完成"
-        );
-        result["result"]
-            .get("value")
-            .cloned()
-            .context("天工增强启动界面响应缺失")
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
 
     #[test]
     fn entry_must_stay_in_the_verified_renderer_directory() {
@@ -473,6 +384,18 @@ mod tests {
     }
 
     #[test]
+    fn enhanced_preflight_keeps_native_read_failure_details() {
+        let (config, mut status) = fixture(false);
+        status.error = Some("模型数据库当前不可读".into());
+        let error = select_options(&config, status, None)
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(error.contains("模型数据库当前不可读"));
+        assert!(!error.contains("请先"));
+    }
+
+    #[test]
     fn preferred_model_cannot_select_another_clients_provider() {
         let (mut config, status) = fixture(true);
         config.ai_gateway.providers[0].name = "workbuddy".into();
@@ -512,7 +435,7 @@ mod tests {
             requests
         });
         (
-            Cdp::connect(&Url::parse(&format!("ws://{address}")).unwrap())
+            Cdp::connect(&Url::parse(&format!("ws://{address}")).unwrap(), "天工")
                 .await
                 .unwrap(),
             task,

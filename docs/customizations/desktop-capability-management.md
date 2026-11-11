@@ -4,6 +4,8 @@
 
 “模型与渠道 → 新增大模型厂商”增加 MiniMax 选项。默认名称为 `minimax`，使用现有 `ChatCompletions` 和 `compatibility="openai_chat"`；国内地址预填 `https://api.minimax.cn/v1`，国际用户直接改成 `https://api.minimax.io/v1`，并填写对应站点的 API Key。地址、渠道名、模型列表及独立模型目录地址均可编辑，不新增地区开关或协议适配器。
 
+2026-11-11用户追问协议及套餐差异后重新核对官方文档：上述OpenAI兼容接口是MiniMax官方提供的。普通API按量计费与Coding Plan（当前官方文档称M Plan）是两类凭据和额度，订阅Key与普通按量Key相互独立；官方订阅接入同样使用`/v1`的OpenAI兼容入口，也提供`/anthropic`的Anthropic兼容入口。Hub当前预设使用前者，不把套餐当作另一种协议，不新增无实际请求差异的套餐开关，也不因订阅额度用尽自动换普通Key。V1.0.24补充厂商选项/地址提示：使用同站点相应Key，由Key决定费用归属，套餐模型以官方实际允许为准；不改已有渠道、协议或配置格式。官方通用教程推荐支持两种时选Anthropic；现有OpenAI预设仍是官方支持路径，不能据此宣称已经验收所有推理/工具特性。
+
 预填当前官方目录中的 `MiniMax-M3.1-Flash`、`MiniMax-M3`，可手动维护，也可点现有“获取模型”，按所填地址请求 `/models`。不新增跨站点目录回退。MiniMax 预设默认不勾选“关闭推理”，说明提示 M3.1-Flash 不支持关闭推理；该复选框仍按现有 Chat Completions 配置方式保存。厂商列表和表单使用现有通用 Router 图标，不借用其他厂商标志。
 
 编辑时仅把名称以 MiniMax 开头或地址主机为已知官方域名的 Chat Completions 渠道识别为 MiniMax。普通 OpenAI Chat Completions、DeepSeek 及其他协议继续保持原来的选择和保存方式。若用户同时改成其他名称与自建地址，回读显示通用 Chat Completions，已保存的地址、模型及凭据仍沿原格式保留；无需配置迁移。
@@ -13,6 +15,8 @@
 `minimax_preset_preserves_editable_chat_configuration` 和 `minimax_identity_does_not_relabel_other_chat_providers` 两项离线用例已由管理会话执行通过，覆盖两站与自建地址、目录不跨站回退、编辑配置回读及其他渠道不被误标，纳入本批57项定向回归和GUI测试目标编译。唯一测试包见 [V23交付](../releases/v1.0.23.md)；未请求真实MiniMax模型，Windows/macOS界面与真实连通待用户验收。
 
 官方依据：[国内 OpenAI 兼容说明](https://platform.minimax.cn/docs/api-reference/text-openai-api)、[国际 OpenAI 兼容说明](https://platform.minimax.io/docs/api-reference/text-openai-api)、[国内模型目录](https://platform.minimax.cn/docs/api-reference/models/openai/list-models)、[国际模型目录](https://platform.minimax.io/docs/api-reference/models/openai/list-models)。核对日期：2026-11-11。
+
+套餐补充依据：[官方订阅工具接入](https://platform.minimax.cn/docs/m-plan/other-tools)、[官方M Plan密钥与计费FAQ](https://platform.minimax.cn/docs/m-plan/faq)。V1.0.24仅补充说明，复用V23协议/模板检查；不请求真实MiniMax，不读取或更换用户Key，真实连通及扣费仍由用户验收。回滚恢复提示文案即可，不需要迁移配置。
 
 ## 2026-11-11 天才搭档与入口收敛
 

@@ -3,13 +3,9 @@ use super::{
     theme,
     visual::{self, Canvas, Icon},
 };
-use crate::desktop::{
-    clients::{ClientId, RecentClients},
-    transaction,
-};
+use crate::desktop::clients::ClientId;
 use std::{
     cell::{Cell, RefCell},
-    path::PathBuf,
     rc::Rc,
 };
 use wxdragon::dc::GraphicsDC;
@@ -126,15 +122,7 @@ pub(super) struct Shell {
     pages: Rc<RefCell<Vec<PageId>>>,
     current: Rc<Cell<PageId>>,
     buttons: Rc<RefCell<Vec<(PageId, Button)>>>,
-    recent: Rc<RefCell<RecentClients>>,
-    displayed_slots: Rc<Cell<[ClientId; 3]>>,
-    slots: [Button; 3],
-    extras: Vec<(ClientId, Button)>,
-    more: Button,
-    collapse: Button,
-    expanded: Rc<Cell<bool>>,
     changed: Rc<RefCell<Option<Changed>>>,
-    recent_path: Option<PathBuf>,
     source_focus: Rc<RefCell<Option<String>>>,
 }
 
@@ -184,23 +172,11 @@ impl Shell {
             );
             buttons.push((id, b));
         }
-        let client_heading = BoxSizer::builder(Orientation::Horizontal).build();
         let label = StaticText::builder(&sidebar).with_label("客户端").build();
         label.set_font(&theme::font(theme::TextRole::Caption));
         label.set_foreground_color(t.ink_secondary);
-        let collapse = Button::builder(&sidebar)
-            .with_label("")
-            .with_kind(ButtonKind::Ghost)
-            .with_size(Size::new(32, 30))
-            .build();
-        collapse.set_icon(Icon::Collapse);
-        collapse.set_name("collapse-clients");
-        collapse.set_tooltip("收起客户端");
-        collapse.hide();
-        client_heading.add(&label, 1, SizerFlag::AlignCenterVertical, 0);
-        client_heading.add(&collapse, 0, SizerFlag::AlignCenterVertical, 0);
-        side.add_sizer(
-            &client_heading,
+        side.add(
+            &label,
             0,
             SizerFlag::Expand
                 | SizerFlag::Left
@@ -209,55 +185,18 @@ impl Shell {
                 | SizerFlag::Bottom,
             sidebar.from_dip(12),
         );
-        let recent_path = super::daemon_config_path()
-            .map(|p| crate::desktop::state_root(&p).join("recent-clients.json"));
-        let mut recent = recent_path
-            .as_ref()
-            .and_then(|p| transaction::read(p).ok().flatten())
-            .and_then(|b| serde_json::from_slice::<RecentClients>(&b).ok())
-            .filter(|v| v.validate())
-            .unwrap_or_default();
-        recent.normalize_visible();
-        let slots = std::array::from_fn(|i| {
-            let b = nav_button(&sidebar, visual::client_short(recent.slots()[i]));
+        // The five supported destinations stay visible and stationary.
+        for id in ClientId::VISIBLE {
+            let b = nav_button(&sidebar, visual::client_short(id));
+            b.set_icon(Icon::client(id));
             side.add(
                 &b,
                 0,
                 SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Bottom,
                 sidebar.from_dip(4),
             );
-            b
-        });
-        let more = Button::builder(&sidebar)
-            .with_label("")
-            .with_kind(ButtonKind::Ghost)
-            .with_size(Size::new(180, 34))
-            .build();
-        more.set_icon(Icon::More);
-        more.set_name("expand-clients");
-        more.set_min_size(visual::dip_size(&more, 180, 34));
-        more.set_tooltip("展开其余客户端");
-        side.add(
-            &more,
-            0,
-            SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right,
-            sidebar.from_dip(10),
-        );
-        let extras = ClientId::VISIBLE
-            .into_iter()
-            .map(|id| {
-                let b = nav_button(&sidebar, visual::client_short(id));
-                b.set_icon(Icon::client(id));
-                side.add(
-                    &b,
-                    0,
-                    SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Bottom,
-                    sidebar.from_dip(4),
-                );
-                b.hide();
-                (id, b)
-            })
-            .collect();
+            buttons.push((PageId::Client(id), b));
+        }
         let shared = StaticText::builder(&sidebar).with_label("共用能力").build();
         shared.set_font(&theme::font(theme::TextRole::Caption));
         shared.set_foreground_color(t.ink_secondary);
@@ -461,38 +400,12 @@ impl Shell {
             pages: Default::default(),
             current: Rc::new(Cell::new(PageId::Overview)),
             buttons: Rc::new(RefCell::new(buttons)),
-            displayed_slots: Rc::new(Cell::new(*recent.slots())),
-            recent: Rc::new(RefCell::new(recent)),
-            slots,
-            extras,
-            more,
-            collapse,
-            expanded: Default::default(),
             changed: Default::default(),
-            recent_path,
             source_focus: Default::default(),
         };
         for (id, b) in shell.buttons.borrow().iter() {
             let (id, nav) = (*id, shell.clone());
             b.on_click(move |_| nav.navigate(id));
-        }
-        for (i, b) in shell.slots.iter().enumerate() {
-            let nav = shell.clone();
-            b.on_click(move |_| {
-                let id = nav.displayed_slots.get()[i];
-                nav.navigate(PageId::Client(id));
-            });
-        }
-        for (id, b) in &shell.extras {
-            let (id, nav) = (*id, shell.clone());
-            b.on_click(move |_| nav.navigate(PageId::Client(id)));
-        }
-        for b in [more, collapse] {
-            let nav = shell.clone();
-            b.on_click(move |_| {
-                nav.expanded.set(!nav.expanded.get());
-                nav.refresh_navigation();
-            });
         }
         let nav = shell.clone();
         back.on_click(move |_| nav.navigate(nav.secondary_origin.get()));
@@ -568,16 +481,6 @@ impl Shell {
             return;
         };
         self.back.hide();
-        if let PageId::Client(client) = id {
-            self.recent.borrow_mut().visit(client);
-            if let Some(path) = &self.recent_path {
-                if let Ok(bytes) = serde_json::to_vec(&*self.recent.borrow()) {
-                    if transaction::atomic_write(path, &bytes).is_err() {
-                        tracing::warn!("could not save recent-client preference");
-                    }
-                }
-            }
-        }
         self.book.change_selection(index);
         self.current.set(id);
         self.title.set_label(id.title());
@@ -602,24 +505,6 @@ impl Shell {
         for (id, button) in self.buttons.borrow().iter() {
             nav_colour(button, *id == self.current.get());
         }
-        // Keep the expanded list stationary, including the three visible slots.
-        // Apply accumulated recency only after collapsing it again.
-        if !self.expanded.get() {
-            self.displayed_slots.set(*self.recent.borrow().slots());
-        }
-        let slots = self.displayed_slots.get();
-        for (i, b) in self.slots.iter().enumerate() {
-            let client = slots[i];
-            b.set_label(visual::client_short(client));
-            b.set_icon(Icon::client(client));
-            nav_colour(b, self.current.get() == PageId::Client(client));
-        }
-        for (id, b) in &self.extras {
-            b.show(self.expanded.get() && !slots.contains(id));
-            nav_colour(b, self.current.get() == PageId::Client(*id));
-        }
-        self.more.show(!self.expanded.get());
-        self.collapse.show(self.expanded.get());
         self.title.set_foreground_color(t.ink_primary);
         self.sidebar.layout();
         self.sidebar.fit_inside();

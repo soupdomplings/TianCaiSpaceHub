@@ -2,6 +2,7 @@
 //! configuration operations; this view never stores keys in chat messages.
 use super::{
     api::ApiClient,
+    assistant_markdown::MessageBody,
     controls::{Button, ButtonKind, TextCtrl},
     dialog_job,
     shell::{PageId, Shell},
@@ -18,9 +19,9 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use wxdragon::{
-    dc::GraphicsDC, prelude::*, timer::Timer, widgets::textctrl::TextCtrl as MessageText,
-};
+#[cfg(all(test, windows))]
+use wxdragon::widgets::textctrl::TextCtrl as MessageText;
+use wxdragon::{dc::GraphicsDC, prelude::*, timer::Timer};
 
 #[derive(Clone)]
 enum Action {
@@ -88,13 +89,27 @@ fn chat_messages(state: &Value) -> Vec<ChatMessage> {
         .collect()
 }
 
-/// A message remains a native selectable editor, but each turn has its own
-/// bubble. Updating a streaming turn does not replace earlier selections.
+pub(super) fn scroll_transcript_from(widget: &impl WindowEvents, transcript: ScrolledWindow) {
+    widget.on_mouse_wheel(move |event| {
+        // wxDragon represents wxEVT_MOUSEWHEEL as MouseButton. Forward the
+        // original wheel data instead of replacing native scroll settings.
+        let handled = match &event {
+            WindowEventData::MouseButton(mouse) => {
+                transcript.forward_mouse_wheel(&mouse.event.event)
+            }
+            WindowEventData::General(wheel) => transcript.forward_mouse_wheel(wheel),
+            _ => false,
+        };
+        event.skip(!handled);
+    });
+}
+
+/// Each turn retains its native selectable Markdown blocks while streaming.
 struct MessageCard {
     message: ChatMessage,
     row: Panel,
     bubble: Panel,
-    body: MessageText,
+    body: MessageBody,
     caption: Option<StaticText>,
     layout_width: Cell<i32>,
 }
@@ -127,22 +142,11 @@ impl MessageCard {
             );
             caption
         });
-        let body = MessageText::builder(&bubble)
-            .with_value(&message.text)
-            .with_style(
-                TextCtrlStyle::MultiLine
-                    | TextCtrlStyle::ReadOnly
-                    | TextCtrlStyle::BorderNone
-                    | TextCtrlStyle::NoVScroll
-                    | TextCtrlStyle::CharWrap,
-            )
-            .build();
-        body.set_name(if user { "你的消息" } else { "回复内容" });
-        body.set_font(&theme::font(theme::TextRole::Body));
-        body.set_background_color(background);
-        body.set_foreground_color(foreground);
+        let body = MessageBody::new(&bubble, &message.text, foreground, background, *parent);
+        body.panel
+            .set_name(if user { "你的消息" } else { "回复内容" });
         content.add(
-            &body,
+            &body.panel,
             0,
             SizerFlag::Expand | SizerFlag::All,
             bubble.from_dip(12),
@@ -157,20 +161,11 @@ impl MessageCard {
             line.add_stretch_spacer(1);
         }
         row.set_sizer(line, false);
-        let transcript = *parent;
-        body.on_mouse_wheel(move |event| {
-            if let WindowEventData::General(wheel) = &event {
-                let delta = wheel.get_wheel_delta();
-                let rotation = wheel.get_wheel_rotation();
-                if delta != 0 && rotation != 0 {
-                    let lines = (rotation / delta * 3).abs().max(1) * rotation.signum();
-                    let position = transcript.view_start();
-                    transcript.scroll_coords(-1, (position.y - lines).max(0));
-                    return;
-                }
-            }
-            event.skip(true);
-        });
+        scroll_transcript_from(&bubble, *parent);
+        scroll_transcript_from(&row, *parent);
+        if let Some(caption) = caption {
+            scroll_transcript_from(&caption, *parent);
+        }
         Self {
             message,
             row,
@@ -183,9 +178,7 @@ impl MessageCard {
 
     fn update(&mut self, message: ChatMessage) {
         if self.message.text != message.text {
-            let selection = self.body.get_selection();
-            self.body.change_value(&message.text);
-            self.body.set_selection(selection.0, selection.1);
+            self.body.update(&message.text);
             self.layout_width.set(0);
         }
         self.message = message;
@@ -197,31 +190,19 @@ impl MessageCard {
         }
         let padding = self.row.from_dip(24);
         let max_width = (width - self.row.from_dip(40)).max(1);
+        let primary = self.body.primary_text();
         let text_width = self
             .message
             .text
             .lines()
-            .map(|line| self.body.get_text_extent(line).width)
+            .map(|line| primary.get_text_extent(line).width)
             .max()
             .unwrap_or(0);
         let bubble_width = (text_width + padding)
             .max(self.row.from_dip(92))
             .min(max_width);
         let body_width = (bubble_width - padding).max(1);
-        self.body
-            .set_size(Size::new(body_width, self.body.get_char_height()));
-        // wxMSW reports the wrapped display lines after the width is applied.
-        // The measured bound also keeps the text readable on other wx ports.
-        let measured_lines = self
-            .message
-            .text
-            .split('\n')
-            .map(|line| (self.body.get_text_extent(line).width + body_width - 1) / body_width)
-            .map(|lines| lines.max(1))
-            .sum::<i32>();
-        let lines = self.body.get_number_of_lines().max(measured_lines).max(1);
-        let height = lines * self.body.get_char_height().max(1) + self.body.from_dip(6);
-        self.body.set_min_size(Size::new(body_width, height));
+        let height = self.body.layout(body_width);
         let caption_height = self
             .caption
             .map(|caption| {
@@ -279,6 +260,45 @@ fn fit_chat(area: Rect, preferred: Size) -> Rect {
     )
 }
 
+const CHAT_MOTION_DURATION: Duration = Duration::from_millis(160);
+
+/// Normalized displacement, separate from message layout. Retargeting samples
+/// the current position so rapid open/close actions do not jump to an endpoint.
+#[derive(Clone, Copy, Default)]
+struct ChatMotion {
+    from: f64,
+    target: f64,
+    started: Option<Instant>,
+}
+
+impl ChatMotion {
+    fn position(self, now: Instant) -> f64 {
+        let Some(started) = self.started else {
+            return self.target;
+        };
+        let elapsed = now.saturating_duration_since(started).as_secs_f64();
+        let progress = (elapsed / CHAT_MOTION_DURATION.as_secs_f64()).clamp(0.0, 1.0);
+        let eased = 1.0 - (1.0 - progress).powi(3);
+        self.from + (self.target - self.from) * eased
+    }
+
+    fn retarget(&mut self, open: bool, animate: bool, now: Instant) {
+        let target = if open { 0.0 } else { 1.0 };
+        if animate && self.target == target {
+            return;
+        }
+        let position = self.position(now);
+        self.from = if animate { position } else { target };
+        self.target = target;
+        self.started = (animate && self.from != target).then_some(now);
+    }
+
+    fn finished(self, now: Instant) -> bool {
+        self.started
+            .is_none_or(|started| now.saturating_duration_since(started) >= CHAT_MOTION_DURATION)
+    }
+}
+
 #[derive(Clone)]
 pub(super) struct AssistantUi {
     pub page: Panel,
@@ -317,6 +337,8 @@ pub(super) struct AssistantUi {
     fetching: Arc<AtomicBool>,
     acting: Arc<AtomicBool>,
     timer: Rc<RefCell<Option<Timer<Panel>>>>,
+    motion_timer: Rc<RefCell<Option<Timer<Panel>>>>,
+    motion: Rc<Cell<ChatMotion>>,
     last_poll: Rc<Cell<Instant>>,
     active: Rc<Cell<bool>>,
     navigated: Rc<RefCell<Option<String>>>,
@@ -484,6 +506,8 @@ impl AssistantUi {
         welcome.set_background_color(t.bg_card);
         let intro = BoxSizer::builder(Orientation::Vertical).build();
         let welcome_title = label(&welcome, "想先处理什么？", theme::TextRole::Title);
+        scroll_transcript_from(&welcome, transcript);
+        scroll_transcript_from(&welcome_title, transcript);
         intro.add(&welcome_title, 0, SizerFlag::Bottom, root.from_dip(8));
         let welcome_text = label(
             &welcome,
@@ -491,6 +515,7 @@ impl AssistantUi {
             theme::TextRole::Body,
         );
         welcome_text.set_foreground_color(t.ink_secondary);
+        scroll_transcript_from(&welcome_text, transcript);
         intro.add(
             &welcome_text,
             0,
@@ -508,6 +533,7 @@ impl AssistantUi {
                 .build();
             intro.add(&button, 0, SizerFlag::Bottom, root.from_dip(8));
             suggestions.push((button, prompt));
+            scroll_transcript_from(&button, transcript);
         }
         welcome.set_sizer(intro, false);
         let messages = BoxSizer::builder(Orientation::Vertical).build();
@@ -636,6 +662,8 @@ impl AssistantUi {
             fetching: Default::default(),
             acting: Default::default(),
             timer: Default::default(),
+            motion_timer: Default::default(),
+            motion: Default::default(),
             last_poll: Rc::new(Cell::new(Instant::now() - Duration::from_secs(30))),
             active: Default::default(),
             navigated: Default::default(),
@@ -654,7 +682,7 @@ impl AssistantUi {
         login.on_click(move |_| nav.navigate(PageId::Squad));
         let u = ui.clone();
         shell.assistant_launcher.on_click(move |_| {
-            if u.chat.is_shown() {
+            if u.chat.is_shown() && u.motion.get().target == 0.0 {
                 u.collapse();
             } else {
                 u.show_chat();
@@ -695,7 +723,10 @@ impl AssistantUi {
         stop.on_click(move |_| u.post("stop", json!({}), Action::Stop));
         for button in [clear, clean] {
             let u = ui.clone();
-            button.on_click(move |_| u.post("clear", json!({}), Action::Clear));
+            button.on_click(move |_| {
+                u.finish_chat_motion();
+                u.post("clear", json!({}), Action::Clear);
+            });
         }
         for (button, approved) in [(approve, true), (reject, false)] {
             let u = ui.clone();
@@ -758,6 +789,25 @@ impl AssistantUi {
             u.position_chat();
             event.skip(true);
         });
+        // Timer callbacks are bound to their owner rather than the timer ID.
+        // Keep motion on chat, separate from the page's status polling timer.
+        let timer = Timer::new(&chat);
+        let u = ui.clone();
+        timer.on_tick(move |_| u.tick_chat_motion());
+        ui.motion_timer.borrow_mut().replace(timer);
+        let timer_slot = ui.motion_timer.clone();
+        let motion = ui.motion.clone();
+        let chat_ptr = chat.handle_ptr();
+        chat.on_destroy(move |event| {
+            // wx destroy events also bubble from a removed message child.
+            let own_destroy = matches!(&event, WindowEventData::General(raw)
+                if raw.get_event_object().is_some_and(|object| object.as_ptr() == chat_ptr));
+            if own_destroy {
+                timer_slot.borrow_mut().take();
+                motion.set(ChatMotion::default());
+            }
+            event.skip(true);
+        });
         if monitor {
             let timer = Timer::new(&page);
             let u = ui.clone();
@@ -790,18 +840,74 @@ impl AssistantUi {
             return;
         }
         drop(state);
-        self.position_chat();
-        self.chat.show(true);
-        self.chat.raise_child_overlay();
+        self.animate_chat(true);
         self.input.set_focus();
         self.fetch();
     }
 
     fn collapse(&self) {
-        self.chat.show(false);
+        self.animate_chat(false);
         if self.parent.is_shown() && self.shell.assistant_launcher.is_shown() {
             self.shell.assistant_launcher.set_focus();
         }
+    }
+
+    fn animate_chat(&self, open: bool) {
+        let mut motion = self.motion.get();
+        let area = self.shell.assistant_overlay_area();
+        let room_to_move = fit_chat(area, visual::dip_size(&self.chat, 420, 560)).y > area.y;
+        let animate = theme::motion_enabled()
+            && self.parent.is_shown()
+            && !self.parent.is_iconized()
+            && room_to_move
+            && (open || self.chat.is_shown());
+        if open && !self.chat.is_shown() {
+            motion = ChatMotion {
+                from: 1.0,
+                target: 1.0,
+                started: None,
+            };
+        }
+        motion.retarget(open, animate, Instant::now());
+        self.motion.set(motion);
+        self.position_chat();
+        if open {
+            self.chat.show(true);
+            self.chat.raise_child_overlay();
+        }
+        let running = motion.started.is_some()
+            && self
+                .motion_timer
+                .borrow()
+                .as_ref()
+                .is_some_and(|timer| timer.start(16, false));
+        if !running {
+            self.finish_chat_motion();
+        }
+    }
+
+    fn tick_chat_motion(&self) {
+        if !self.parent.is_shown()
+            || self.parent.is_iconized()
+            || !theme::motion_enabled()
+            || self.motion.get().finished(Instant::now())
+        {
+            self.finish_chat_motion();
+        } else {
+            self.position_chat();
+        }
+    }
+
+    fn finish_chat_motion(&self) {
+        if let Some(timer) = self.motion_timer.borrow().as_ref() {
+            timer.stop();
+        }
+        let close = self.motion.get().target == 1.0;
+        self.motion.set(ChatMotion::default());
+        if close {
+            self.chat.hide();
+        }
+        self.position_chat();
     }
 
     fn bind_collapse_key(&self, widget: &impl WindowEvents) {
@@ -816,19 +922,19 @@ impl AssistantUi {
     }
 
     fn position_chat(&self) {
-        let bounds = fit_chat(
-            self.shell.assistant_overlay_area(),
-            visual::dip_size(&self.chat, 420, 560),
-        );
+        let area = self.shell.assistant_overlay_area();
+        let mut bounds = fit_chat(area, visual::dip_size(&self.chat, 420, 560));
+        // Move only through unused space above the final bounds. Small Hub
+        // windows keep the full message/input area and all chrome reachable.
+        let travel = self.chat.from_dip(14).min((bounds.y - area.y).max(0));
+        bounds.y -= (travel as f64 * self.motion.get().position(Instant::now())).round() as i32;
         let position = self.chat.get_position();
         let size = self.chat.get_size();
-        if position.x != bounds.x
-            || position.y != bounds.y
-            || size.width != bounds.width
-            || size.height != bounds.height
-        {
+        if size.width != bounds.width || size.height != bounds.height {
             self.chat
                 .set_size_with_pos(bounds.x, bounds.y, bounds.width, bounds.height);
+        } else if position.x != bounds.x || position.y != bounds.y {
+            self.chat.move_window(bounds.x, bounds.y);
         }
         if self.chat.is_shown() {
             self.chat.raise_child_overlay();
@@ -905,8 +1011,9 @@ impl AssistantUi {
             if let Some(card) = cards.get_mut(index) {
                 card.update(message);
             } else {
-                let card = MessageCard::new(&self.transcript, message);
-                self.bind_collapse_key(&card.body);
+                let mut card = MessageCard::new(&self.transcript, message);
+                let u = self.clone();
+                card.body.on_escape(Rc::new(move || u.collapse()));
                 cards.push(card);
             }
         }
@@ -1082,6 +1189,7 @@ impl AssistantUi {
                         }
                     }
                     if matches!(action, Action::Clear) {
+                        self.finish_chat_motion();
                         self.input.clear();
                     }
                     if value.get("enabled").is_some() {
@@ -1142,6 +1250,7 @@ impl AssistantUi {
             || (old["conversationId"].is_string()
                 && old["conversationId"] != value["conversationId"])
         {
+            self.finish_chat_motion();
             self.input.clear();
         }
         drop(old);
@@ -1255,6 +1364,7 @@ impl AssistantUi {
         );
         self.shell.set_assistant_ready(enabled && ready);
         if !enabled {
+            self.finish_chat_motion();
             self.chat.show(false);
         }
         *self.state.borrow_mut() = value;
@@ -1446,6 +1556,28 @@ mod layout_tests {
     use super::*;
 
     #[test]
+    fn chat_motion_reverses_continuously_and_respects_reduced_motion() {
+        let start = Instant::now();
+        let mut motion = ChatMotion::default();
+        motion.retarget(false, true, start);
+        let reverse_at = start + Duration::from_millis(40);
+        let intermediate = motion.position(reverse_at);
+        assert!(intermediate > 0.0 && intermediate < 1.0);
+        motion.retarget(true, true, reverse_at);
+        assert_eq!(motion.position(reverse_at), intermediate);
+        for milliseconds in [0, 16, 40, 80, 160, 320] {
+            let value = motion.position(reverse_at + Duration::from_millis(milliseconds));
+            assert!(value >= 0.0 && value <= intermediate);
+        }
+        assert_eq!(motion.position(reverse_at + CHAT_MOTION_DURATION), 0.0);
+        assert!(motion.finished(reverse_at + CHAT_MOTION_DURATION));
+        motion.retarget(false, true, reverse_at);
+        motion.retarget(false, false, reverse_at + Duration::from_millis(20));
+        assert!(motion.started.is_none());
+        assert_eq!(motion.position(reverse_at), 1.0);
+    }
+
+    #[test]
     fn floating_chat_fits_normal_small_and_scaled_content_areas() {
         for (area, preferred) in [
             (Rect::new(20, 56, 940, 710), Size::new(420, 560)),
@@ -1566,12 +1698,12 @@ fn assistant_account_switch_and_pending_actions_fit_the_hub_overlay() {
                 let p=ui.chat.screen_to_client(screen);let control_size=control.get_size();
                 assert!(p.x>=0 && p.y>=0 && p.x+control_size.width<=size.width+1 && p.y+control_size.height<=size.height+1,"assistant action clipped: {p:?} {control_size:?} in {size:?}");
             }
-            assert!(ui.cards.borrow().iter().any(|card|card.body.get_value().contains("帮我调整模型配置")));
-            let first=ui.cards.borrow()[0].body;
+            assert!(ui.cards.borrow().iter().any(|card|card.body.primary_text().get_value().contains("帮我调整模型配置")));
+            let first=ui.cards.borrow()[0].body.primary_text();
             first.set_selection(0,2);
             state["messages"][1]["text"]="请确认以下删除操作，确认后继续。".into();
             ui.apply(state.clone());
-            assert_eq!(ui.cards.borrow()[0].body.handle_ptr(),first.handle_ptr());
+            assert_eq!(ui.cards.borrow()[0].body.primary_text().handle_ptr(),first.handle_ptr());
             assert_eq!(first.get_selection(),(0,2));
             ui.input.set_value("旧账户尚未发送的草稿");
             state["conversationId"]="fixture-b".into();state["messages"]=json!([]);state["pendingDeletion"]=Value::Null;state["running"]=false.into();
@@ -1596,9 +1728,10 @@ mod native_overlay_tests {
     use windows_sys::Win32::{
         Foundation::{HWND, POINT},
         UI::WindowsAndMessaging::{
-            ChildWindowFromPointEx, DispatchMessageW, GA_ROOT, GWL_STYLE, GetAncestor,
-            GetWindowLongPtrW, IsChild, MSG, PM_REMOVE, PeekMessageW, TranslateMessage, WS_CHILD,
-            WS_CLIPSIBLINGS, WindowFromPoint,
+            ChildWindowFromPointEx, DispatchMessageW, GA_ROOT, GW_CHILD, GWL_STYLE, GetAncestor,
+            GetWindow, GetWindowLongPtrW, IsChild, MSG, PM_REMOVE, PeekMessageW, SendMessageW,
+            TranslateMessage, WM_MOUSEHWHEEL, WM_MOUSEWHEEL, WS_CHILD, WS_CLIPSIBLINGS,
+            WindowFromPoint,
         },
     };
     use wxdragon::{
@@ -1613,6 +1746,7 @@ mod native_overlay_tests {
         fn ReleaseDC(window: HWND, dc: *mut c_void) -> i32;
         fn SetThreadDpiAwarenessContext(context: *mut c_void) -> *mut c_void;
         fn GetDpiForWindow(window: HWND) -> u32;
+        fn GetFocus() -> HWND;
     }
     #[link(name = "gdi32")]
     unsafe extern "system" {
@@ -1750,6 +1884,312 @@ mod native_overlay_tests {
         page.set_sizer(column, false);
         shell.register(id, &page);
         (book, pages)
+    }
+
+    fn native_wheel(window: HWND, screen: Point, rotation: i16, keys: u16, horizontal: bool) {
+        let delta = (rotation as u16 as usize) << 16 | keys as usize;
+        let position = (screen.x as u16 as u32 | (screen.y as u16 as u32) << 16) as isize;
+        unsafe {
+            SendMessageW(
+                window,
+                if horizontal {
+                    WM_MOUSEHWHEEL
+                } else {
+                    WM_MOUSEWHEEL
+                },
+                delta,
+                position,
+            );
+        }
+        pump_native_messages();
+    }
+
+    /// Sends native Windows wheel messages to the production widgets. This
+    /// opens only a synthetic frame: no Hub backend, account or model is used.
+    #[test]
+    #[ignore = "shows an isolated native chat fixture and sends Windows wheel messages"]
+    fn assistant_transcript_wheel_routes_native_children_and_preserves_reading() {
+        let _dpi_context = ReviewDpiContext::enter();
+        wxdragon::app::render_offscreen(|| {
+            theme::init(theme::ThemeMode::Light);
+            let parent = Frame::builder().with_title("Hub 滚轮隔离验证（合成）")
+                .with_position(Point::new(40, 40)).build();
+            parent.set_size(visual::dip_size(&parent, 1168, 754));
+            let host = Panel::builder(&parent).build();
+            let shell = Shell::new(&host, &parent);
+            let api = ApiClient::new("http://127.0.0.1:1".into(),
+                super::super::text::GuiText::new(super::super::text::GuiLocale::ZhCn));
+            let ui = AssistantUi::build(&parent, &shell, api, false);
+            let column = BoxSizer::builder(Orientation::Vertical).build();
+            column.add(&shell.panel, 1, SizerFlag::Expand, 0);
+            host.set_sizer(column, false);
+            let outer = BoxSizer::builder(Orientation::Vertical).build();
+            outer.add(&host, 1, SizerFlag::Expand, 0);
+            parent.set_sizer(outer, false);
+            // HWND hit tests use final geometry; suppress only this fixture's
+            // first-show DWM transform, as in the existing screen review.
+            let disabled = 1i32;
+            assert_eq!(unsafe { DwmSetWindowAttribute(parent.get_handle(), 3,
+                (&disabled as *const i32).cast(), std::mem::size_of_val(&disabled) as u32) }, 0);
+            parent.show(true);
+            parent.raise();
+            layout_fixture(&parent, &host, &ui);
+            let mut state = json!({"enabled":true,"runtimeReady":true,"loggedIn":true,
+                "modelServiceReady":true,"running":false,"conversationId":"wheel-fixture",
+                "messages":(0..30).map(|index|json!({"id":format!("wheel-{index}"),
+                    "role":"tool","text":format!("第 {index} 条合成回复\n可选择和复制的消息内容")})).collect::<Vec<_>>()});
+            ui.apply(state.clone());
+            // Keep a full native background region visible even when scroll
+            // units round the final few pixels of the normal 8-DIP spacer.
+            ui.transcript.get_sizer().unwrap().add_spacer(ui.transcript.from_dip(48));
+            ui.chat.show(true);
+            ui.position_chat();
+            ui.layout_chat();
+            pump_native_messages();
+            let transcript = ui.transcript;
+            let (_, unit) = transcript.get_scroll_pixels_per_unit();
+            let bottom = || {
+                transcript.scroll_coords(-1, transcript.get_virtual_size().height / unit.max(1));
+                pump_native_messages();
+                transcript.view_start().y
+            };
+            let maximum = bottom();
+            assert!(maximum * unit > transcript.get_client_size().height * 3,
+                "fixture needs several viewports of native messages");
+
+            // The final sizer spacer is real transcript background. Exercise
+            // its default wxScrollHelper path as the reference wheel distance.
+            let size = transcript.get_client_size();
+            let blank = transcript.client_to_screen(Point::new(transcript.from_dip(2), size.height - 2));
+            assert_eq!(unsafe { WindowFromPoint(POINT { x:blank.x, y:blank.y }) }, transcript.get_handle());
+            native_wheel(transcript.get_handle(), blank, 120, 0, false);
+            let step = maximum - transcript.view_start().y;
+            assert!(step > 0, "native background wheel must scroll with the current OS settings");
+
+            let start = maximum / 2;
+            transcript.scroll_coords(-1, start);
+            pump_native_messages();
+            let top = transcript.client_to_screen(Point::new(0, 0));
+            let height = transcript.get_client_size().height;
+            let (body, row, bubble, caption) = ui.cards.borrow().iter().find_map(|card| {
+                let origin = card.row.client_to_screen(Point::new(0, 0));
+                (origin.y >= top.y && origin.y + card.row.get_size().height < top.y + height)
+                    .then(|| (card.body.primary_text(), card.row, card.bubble, card.caption.unwrap()))
+            }).expect("a complete message card must be visible");
+            body.set_selection(0, 4);
+            let selection = body.get_selection();
+            let text = body.get_value();
+            for (name, control, point) in [
+                ("正文", body.get_handle(), body.client_to_screen(Point::new(body.from_dip(8), body.get_client_size().height / 2))),
+                ("卡片空白", row.get_handle(), row.client_to_screen(Point::new(row.get_client_size().width - row.from_dip(20), row.get_client_size().height / 2))),
+                ("气泡边距", bubble.get_handle(), bubble.client_to_screen(Point::new(bubble.from_dip(6), bubble.get_client_size().height / 2))),
+                ("结果标题", caption.get_handle(), caption.client_to_screen(Point::new(caption.from_dip(4), caption.get_client_size().height / 2))),
+            ] {
+                transcript.scroll_coords(-1, start);
+                pump_native_messages();
+                assert_eq!(unsafe { WindowFromPoint(POINT {x:point.x, y:point.y}) }, control,
+                    "wheel target must be the visible {name} widget");
+                native_wheel(control, point, 120, 0, false);
+                assert_eq!(start - transcript.view_start().y, step, "{name}: one event must scroll once");
+                transcript.scroll_coords(-1, start);
+                native_wheel(control, point, -120, 0, false);
+                assert_eq!(transcript.view_start().y - start, step, "{name}: reverse wheel must scroll down");
+            }
+            assert_eq!(body.get_selection(), selection);
+            assert_eq!(body.get_value(), text);
+
+            // Fractional wheel messages accumulate in the same native helper,
+            // including when the pointer crosses from text to card background.
+            transcript.scroll_coords(-1, start);
+            let point = body.client_to_screen(Point::new(8, 8));
+            native_wheel(body.get_handle(), point, 60, 0, false);
+            assert_eq!(transcript.view_start().y, start);
+            native_wheel(row.get_handle(), point, 60, 0, false);
+            assert_eq!(start - transcript.view_start().y, step);
+
+            let passed_through = Rc::new(Cell::new(0));
+            let passed = passed_through.clone();
+            body.on_mouse_wheel(move |event| {
+                passed.set(passed.get() + 1);
+                event.skip(true);
+            });
+            native_wheel(body.get_handle(), point, 120, 0x8, false); // MK_CONTROL
+            assert_eq!(passed_through.get(), 1, "Ctrl+wheel must retain its native handling");
+            transcript.scroll_coords(-1, start);
+            native_wheel(body.get_handle(), point, 120, 0, true);
+            assert_eq!(passed_through.get(), 2, "horizontal wheel must retain its native handling");
+            assert_eq!(transcript.view_start().y, start, "horizontal wheel must not become vertical");
+
+            // Streaming updates preserve an older reading position/selection;
+            // at the end, new content continues following the latest message.
+            transcript.scroll_coords(-1, start);
+            state["messages"][29]["text"] = "追加中的合成回复\n第一段\n第二段".into();
+            ui.apply(state.clone());
+            pump_native_messages();
+            assert_eq!(transcript.view_start().y, start);
+            assert_eq!(body.get_selection(), selection);
+            bottom();
+            assert!(ui.at_latest_message());
+            state["messages"][29]["text"] = "追加中的合成回复\n第一段\n第二段\n第三段\n第四段".into();
+            ui.apply(state);
+            pump_native_messages();
+            assert!(ui.at_latest_message());
+
+            // The separate composer keeps its own native multiline scrolling.
+            ui.input.set_value(&(0..40).map(|index|format!("输入框草稿 {index}\n")).collect::<String>());
+            ui.input.set_focus();
+            ui.input.set_insertion_point_end();
+            pump_native_messages();
+            let editor = unsafe { GetWindow(ui.input.get_handle(), GW_CHILD) };
+            assert!(!editor.is_null());
+            let first_line = unsafe { SendMessageW(editor, 0xce, 0, 0) }; // EM_GETFIRSTVISIBLELINE
+            assert!(first_line > 0);
+            let outside = transcript.view_start();
+            let point = ui.input.client_to_screen(Point::new(20, 20));
+            native_wheel(editor, point, 120, 0, false);
+            assert!(unsafe { SendMessageW(editor, 0xce, 0, 0) } < first_line);
+            assert_eq!(transcript.view_start(), outside);
+            eprintln!("native wheel: background/text/row/bubble/caption, both directions, partial deltas, modifiers, reading/follow, composer passed");
+            parent.destroy();
+            pump_native_messages();
+        }).unwrap();
+    }
+
+    #[test]
+    #[ignore = "shows an isolated native chat fixture and exercises motion timers"]
+    fn assistant_chat_motion_keeps_layout_and_handles_interruptions() {
+        let _dpi_context = ReviewDpiContext::enter();
+        let timer_after_shutdown = RefCell::new(None);
+        wxdragon::app::render_offscreen(|| {
+            theme::init(theme::ThemeMode::Light);
+            let previous_motion = theme::motion_enabled();
+            theme::set_motion_enabled(true);
+            let parent = Frame::builder()
+                .with_title("Hub 对话动画隔离验证（合成）")
+                .build();
+            parent.set_client_size(visual::dip_size(&parent, 1168, 900));
+            let host = Panel::builder(&parent).build();
+            let shell = Shell::new(&host, &parent);
+            let api = ApiClient::new(
+                "http://127.0.0.1:1".into(),
+                super::super::text::GuiText::new(super::super::text::GuiLocale::ZhCn),
+            );
+            let ui = AssistantUi::build(&parent, &shell, api, false);
+            // Exercise show_chat, including its focus, without any HTTP worker.
+            ui.fetching.store(true, Ordering::SeqCst);
+            let column = BoxSizer::builder(Orientation::Vertical).build();
+            column.add(&shell.panel, 1, SizerFlag::Expand, 0);
+            host.set_sizer(column, false);
+            let outer = BoxSizer::builder(Orientation::Vertical).build();
+            outer.add(&host, 1, SizerFlag::Expand, 0);
+            parent.set_sizer(outer, false);
+            parent.show(true);
+            parent.raise();
+            layout_fixture(&parent, &host, &ui);
+            let mut state = json!({"enabled":true,"runtimeReady":true,"loggedIn":true,
+                "modelServiceReady":true,"running":false,"conversationId":"motion-fixture",
+                "messages":[{"id":"reply","role":"assistant","text":"保留当前消息和选区。"}]});
+            ui.apply(state.clone());
+            ui.input.set_value("收起后保留的草稿");
+            let body = ui.cards.borrow()[0].body.primary_text();
+            body.set_selection(0, 2);
+            let body_selection = body.get_selection();
+            ui.show_chat();
+            assert!(ui.chat.is_shown());
+            assert!(ui.motion.get().started.is_some());
+            assert!(ui.motion_timer.borrow().as_ref().unwrap().is_running());
+            let focus = unsafe { GetFocus() };
+            assert!(
+                focus == ui.input.get_handle()
+                    || unsafe { IsChild(ui.input.get_handle(), focus) } != 0,
+                "opening must focus the composer without waiting for motion"
+            );
+            let chat_size = ui.chat.get_client_size();
+            let input_size = ui.input.get_client_size();
+            for _ in 0..3 {
+                std::thread::sleep(Duration::from_millis(20));
+                pump_native_messages();
+                assert_eq!(ui.chat.get_client_size(), chat_size);
+                assert_eq!(ui.input.get_client_size(), input_size);
+                let area = shell.assistant_overlay_area();
+                let position = ui.chat.get_position();
+                assert!(
+                    position.y >= area.y && position.y + chat_size.height <= area.y + area.height
+                );
+                assert_native_order(&ui);
+            }
+            ui.collapse();
+            assert_eq!(ui.motion.get().target, 1.0);
+            ui.show_chat();
+            assert_eq!(ui.motion.get().target, 0.0);
+            std::thread::sleep(CHAT_MOTION_DURATION + Duration::from_millis(30));
+            pump_native_messages();
+            assert!(ui.chat.is_shown());
+            assert!(!ui.motion_timer.borrow().as_ref().unwrap().is_running());
+            assert_eq!(ui.input.get_value(), "收起后保留的草稿");
+            assert_eq!(body.get_selection(), body_selection);
+            let settled = fit_chat(
+                shell.assistant_overlay_area(),
+                visual::dip_size(&ui.chat, 420, 560),
+            );
+            assert_eq!(ui.chat.get_position(), Point::new(settled.x, settled.y));
+            ui.collapse();
+            std::thread::sleep(CHAT_MOTION_DURATION + Duration::from_millis(30));
+            pump_native_messages();
+            assert!(!ui.chat.is_shown());
+            assert!(!ui.motion_timer.borrow().as_ref().unwrap().is_running());
+
+            theme::set_motion_enabled(false);
+            ui.show_chat();
+            assert!(ui.chat.is_shown() && ui.motion.get().started.is_none());
+            ui.collapse();
+            assert!(!ui.chat.is_shown());
+            theme::set_motion_enabled(true);
+            ui.show_chat();
+            parent.hide();
+            ui.tick_chat_motion();
+            assert!(
+                ui.chat.is_shown(),
+                "tray-style hiding must retain the open conversation"
+            );
+            assert!(!ui.motion_timer.borrow().as_ref().unwrap().is_running());
+            parent.show(true);
+            ui.position_chat();
+            assert_native_order(&ui);
+            ui.collapse();
+            state["conversationId"] = "motion-fixture-next".into();
+            state["messages"] = json!([]);
+            ui.apply(state.clone());
+            assert!(ui.input.get_value().is_empty());
+            assert!(!ui.motion_timer.borrow().as_ref().unwrap().is_running());
+            ui.show_chat();
+            state["enabled"] = false.into();
+            ui.apply(state.clone());
+            assert!(!ui.chat.is_shown());
+            assert!(!ui.motion_timer.borrow().as_ref().unwrap().is_running());
+            state["enabled"] = true.into();
+            ui.apply(state);
+            ui.show_chat();
+            *timer_after_shutdown.borrow_mut() = Some(ui.motion_timer.clone());
+            parent.destroy();
+            pump_native_messages();
+            theme::set_motion_enabled(previous_motion);
+        })
+        .unwrap();
+        // Top-level Destroy queues deletion for wx idle. The raw Win32 pump
+        // above does not run idle; render_offscreen's wxEntryCleanup does.
+        assert!(
+            timer_after_shutdown
+                .borrow()
+                .as_ref()
+                .unwrap()
+                .borrow()
+                .is_none(),
+            "actual native destruction must release the motion timer"
+        );
+        eprintln!(
+            "native motion: focus/layout/clipping, reverse, collapse/continue, reduced motion, hide, account switch, disable and destroy passed"
+        );
     }
 
     fn assert_screen_pixels(ui: &AssistantUi, background: &Panel, label: &str) {
@@ -1950,6 +2390,7 @@ mod native_overlay_tests {
                 }
                 ui.input.set_value("收起后保留的草稿");
                 ui.collapse();
+                ui.finish_chat_motion();
                 assert!(!ui.chat.is_shown());
                 ui.chat.show(true);
                 ui.position_chat();

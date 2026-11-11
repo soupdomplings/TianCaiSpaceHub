@@ -18,6 +18,13 @@ const SOURCE: &str = "验收来源";
 const NEW_CHANNEL: &str = "验收新渠道";
 const FIXTURE_SECRET: &str = "synthetic-acceptance-secret-never-an-upstream-key";
 
+#[derive(Clone, Copy)]
+enum Scenario {
+    Configuration,
+    KeyPipeline,
+    WorkBuddy,
+}
+
 struct Acceptance {
     state: SharedState,
     worker: worker::Worker,
@@ -26,8 +33,11 @@ struct Acceptance {
     http: reqwest::Client,
     base: String,
     model_id: String,
-    target_id: &'static str,
+    target_id: String,
+    codex_target_id: Option<String>,
     fixture_client: ClientId,
+    workbuddy_entry: Option<String>,
+    codex_copy: Option<String>,
     key_name: Option<String>,
     created_key: Option<u64>,
     key_create_requested: bool,
@@ -61,10 +71,12 @@ impl Acceptance {
         };
         match name {
             "hub_help" | "hub_request_credential" | "hub_open_page" => (),
+            "hub_resolve_model" => (),
             "hub_read_configuration" => ensure!(
                 args["client"]
                     .as_str()
-                    .is_none_or(|c| matches!(c, "codex" | "vscode" | "zcode")),
+                    .is_none_or(|c| matches!(c, "codex" | "vscode" | "zcode")
+                        || (c == "workbuddy" && self.fixture_client == ClientId::WorkBuddy)),
                 "验收不读取用户原生客户端配置"
             ),
             "hub_save_channel" => ensure!(
@@ -76,11 +88,24 @@ impl Acceptance {
                 "验收只修改临时模型"
             ),
             "hub_configure_client" => {
-                ensure!(args["targetId"] == self.target_id, "验收只配置临时客户端")
+                ensure!(
+                    args["targetId"] == self.target_id
+                        || self
+                            .codex_target_id
+                            .as_deref()
+                            .is_some_and(|id| Some(id) == args["targetId"].as_str()),
+                    "验收只配置临时客户端"
+                )
             }
             "hub_set_model_parameters" => ensure!(
                 args["client"] == self.fixture_client.key()
-                    && args["id"].as_str().is_some_and(fixture_binding),
+                    && (if self.fixture_client == ClientId::WorkBuddy {
+                        args["entryId"]
+                            .as_str()
+                            .is_some_and(|entry| Some(entry) == self.workbuddy_entry.as_deref())
+                    } else {
+                        args["id"].as_str().is_some_and(fixture_binding)
+                    }),
                 "验收只修改临时客户端副本"
             ),
             "hub_squad_key_options" | "hub_squad_list_api_keys" => {
@@ -196,6 +221,9 @@ impl Acceptance {
                         } else if name == "hub_squad_prepare_api_key" {
                             self.prepared_models = value["settings"]["models"].as_array()
                                 .into_iter().flatten().filter_map(|v|v.as_str().map(str::to_owned)).collect();
+                        } else if name == "hub_configure_client" {
+                            if value["client"]=="workbuddy" { self.workbuddy_entry=value["entryId"].as_str().map(str::to_owned); }
+                            if value["client"]=="codex" { self.codex_copy=value["model"].as_str().map(str::to_owned); }
                         }
                     }
                     // Only record success/shape, never the private raw model or tool transport.
@@ -290,7 +318,7 @@ impl Acceptance {
 
     async fn scenarios(&mut self) -> Result<()> {
         self.turn("帮助与读取", "这是隔离验收环境。先读取Hub帮助，再查看当前配置，只简要汇报名为‘验收来源’的渠道和名为‘验收 VS Code’的客户端支持哪些操作，不列出其他已安装目标，不作修改。后续只操作这些验收条目。",false,false).await?;
-        self.turn("渠道模型与凭据", "新建普通渠道‘验收新渠道’，地址https://fixture.invalid/v1，协议OpenAI Responses，保留停用，不实际请求该地址。请调用本机凭据表单为它设置测试凭据，不问我要聊天明文。添加模型acceptance-model，再添加别名acceptance-alias指向acceptance-model，权重7、超时90秒，保存后回读核对。",false,false).await?;
+        self.turn("渠道模型与凭据", "新建普通渠道‘验收新渠道’，使用验收来源同一地址https://fixture.invalid/v1、协议OpenAI Responses；本机凭据表单会提供与验收来源相同的测试凭据，保留新渠道停用，不实际请求该地址。沿同连接已存在真实ID source-model添加别名acceptance-alias指向source-model，不凭空增加上游模型。权重7、超时90秒，保存后回读核对。",false,false).await?;
         let config = self.config()?;
         let p = config
             .ai_gateway
@@ -303,7 +331,7 @@ impl Acceptance {
             "新渠道实际值不符"
         );
         ensure!(
-            p.resolve_upstream_model("acceptance-alias") == Some("acceptance-model"),
+            p.resolve_upstream_model("acceptance-alias") == Some("source-model"),
             "模型别名没有保存"
         );
         self.turn("客户端配置与参数", "现在启用验收新渠道，然后把它的acceptance-alias配置到名称严格为‘验收 VS Code’的目标，标签‘验收模型’，只选择这个临时目标，不启动客户端，不实际请求上游。对返回的新副本设置上下文64000、输出上限4096、开启流式，可选推理强度low和high、默认high；仅设置该端实际支持的字段。保存后回读确认。",false,false).await?;
@@ -472,22 +500,178 @@ impl Acceptance {
         );
         Ok(())
     }
+    async fn workbuddy_pipeline(&mut self) -> Result<()> {
+        let before = std::fs::read(&self.state.config_path)?;
+        self.turn("未知GPT模型不造源", "请给ChatGPT配置一个gpt-6.2模型。只使用目前已有模型来源，不新增或修改来源渠道，不运行客户端。",false,false).await?;
+        ensure!(
+            std::fs::read(&self.state.config_path)? == before,
+            "不存在的模型不应写入任何配置"
+        );
+        self.turn("WorkBuddy前缀歧义", "给workbuddy配置一个gpt-6-a的模型。只使用现有来源，若存在歧义先列出真实候选让我选择，不擅自新增上游ID。",false,false).await?;
+        ensure!(
+            std::fs::read(&self.state.config_path)? == before,
+            "模型前缀有歧义时不应先修改配置"
+        );
+        self.turn("明确WorkBuddy现有别名", "我选择验收来源中精确存在的别名gpt-6-a-preset，配置到名称严格为‘验收 WorkBuddy’的临时目标，并回读核对。不要新增源模型，不启动客户端，不请求该来源的推理API。",false,false).await?;
+        let entry = self
+            .workbuddy_entry
+            .clone()
+            .context("没有执行WorkBuddy配置工具或未取得真实entryId")?;
+        let config = self.config()?;
+        let native = crate::workbuddy_config::load_selected(&config, Some(&entry))?;
+        ensure!(native.error.is_none(), "WorkBuddy原生状态读取失败");
+        let row = native
+            .entries
+            .iter()
+            .find(|row| row.entry_id == entry)
+            .context("WorkBuddy原生文件没有保存本次模型")?;
+        ensure!(
+            row.model.provider_model == "gpt-6-a-preset"
+                && row.model.id == format!("tiancaispacehub-{entry}"),
+            "WorkBuddy别名或条目身份不符"
+        );
+        let dedicated = config
+            .ai_gateway
+            .providers
+            .iter()
+            .find(|p| p.name == format!("workbuddy:{entry}"))
+            .context("缺少WorkBuddy独立来源")?;
+        ensure!(
+            dedicated.resolve_upstream_model(&row.model.id) == Some("gpt-6-astra"),
+            "WorkBuddy别名未解析到真实GPT上游"
+        );
+        self.turn("WorkBuddy参数回读", "把刚才实际WorkBuddy条目的默认思考强度改为max，按该条目支持的字段执行并回读。不改来源和其他条目。",false,false).await?;
+        let native = crate::workbuddy_config::load_selected(&self.config()?, Some(&entry))?;
+        ensure!(
+            native.model.upstream_default_reasoning_effort == "max",
+            "WorkBuddy默认强度未保存"
+        );
+        self.turn("Codex真实独立副本回读", "继续使用验收来源中精确存在的gpt-6-a-preset别名，把它配置到临时ChatGPT/Codex默认目标，保存后用返回的独立model回读，确认using、channel及upstreamModel。不改来源目录或原有条目，不启动客户端。",false,false).await?;
+        let alias = self
+            .codex_copy
+            .as_deref()
+            .context("未真正调用Codex配置工具并取得独立别名")?;
+        ensure!(alias != "gpt-6-a-preset", "Codex必须返回独立副本身份");
+        let view = test_tool_scope(
+            &self.state,
+            tools::call(
+                &self.state,
+                "hub_read_configuration",
+                json!({"client":"codex"}),
+            ),
+        )
+        .await?;
+        let saved = view["client"]["models"]
+            .as_array()
+            .context("Codex回读缺少模型列表")?
+            .iter()
+            .find(|m| m["model"] == alias)
+            .context("独立别名未出现在Codex回读")?;
+        ensure!(
+            saved["using"] == true
+                && saved["upstreamModel"] == "gpt-6-astra"
+                && saved["channel"]
+                    .as_str()
+                    .is_some_and(|name| name.starts_with("Codex · ")),
+            "Codex副本实际来源或使用状态不符"
+        );
+        let config = self.config()?;
+        let source = config
+            .ai_gateway
+            .providers
+            .iter()
+            .find(|p| p.name == SOURCE)
+            .unwrap();
+        ensure!(
+            source.models == ["gpt-6-astra", "gpt-6-astra-fast"]
+                && source
+                    .model_aliases
+                    .get("gpt-6-a-preset")
+                    .map(String::as_str)
+                    == Some("gpt-6-astra"),
+            "配置客户端不应扩充来源目录"
+        );
+        for required in [
+            "hub_read_configuration",
+            "hub_resolve_model",
+            "hub_configure_client",
+            "hub_set_model_parameters",
+        ] {
+            ensure!(
+                self.calls.iter().any(|call| call["name"] == required),
+                "未实际调用工具 {required}"
+            );
+        }
+        ensure!(
+            self.threads.len() == 1,
+            "WorkBuddy及Codex配置应保持一个对话"
+        );
+        Ok(())
+    }
 }
 
 #[tokio::test]
 #[ignore = "Explicit user-authorized real Server/model test; requires TIANCAI_ASSISTANT_ACCEPTANCE_CONFIG and TIANCAI_ASSISTANT_ACCEPTANCE_REPORT_DIR"]
 async fn real_server_and_squad_model_follow_the_hub_configuration_workflow() -> Result<()> {
-    run_acceptance(false).await
+    run_acceptance(Scenario::Configuration).await
 }
 
 #[tokio::test]
 #[ignore = "Explicit user-authorized temporary real account key creation and revocation; isolated Hub/client writes"]
 async fn real_squad_key_selection_and_creation_flow_saves_the_specified_client_model() -> Result<()>
 {
-    run_acceptance(true).await
+    run_acceptance(Scenario::KeyPipeline).await
 }
 
-async fn run_acceptance(key_pipeline: bool) -> Result<()> {
+#[tokio::test]
+#[ignore = "Explicit real administrator-model acceptance; subprocess isolates all native client homes"]
+async fn real_workbuddy_gpt_selection_and_codex_copy_use_existing_sources() -> Result<()> {
+    const NAME: &str = "real_workbuddy_gpt_selection_and_codex_copy_use_existing_sources";
+    if std::env::var("TIANCAI_ASSISTANT_NATIVE_ACCEPTANCE").as_deref() != Ok(NAME) {
+        let report = PathBuf::from(
+            std::env::var_os("TIANCAI_ASSISTANT_ACCEPTANCE_REPORT_DIR")
+                .context("未指定验收报告目录")?,
+        );
+        ensure!(report.is_absolute() && report.is_dir(), "验收报告目录无效");
+        let temp = tempfile::Builder::new()
+            .prefix("isolated-native-")
+            .tempdir_in(report)?;
+        let home = temp.path().join("user");
+        std::fs::create_dir_all(&home)?;
+        let output = std::process::Command::new(std::env::current_exe()?)
+            .args([
+                "--exact",
+                &format!("assistant::acceptance::{NAME}"),
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("TIANCAI_ASSISTANT_NATIVE_ACCEPTANCE", NAME)
+            .env("HOME", &home)
+            .env("USERPROFILE", &home)
+            .env("APPDATA", home.join("AppData/Roaming"))
+            .env("WORKBUDDY_CONFIG_PATH", home.join(".workbuddy/models.json"))
+            .env("GMCLAW_CONFIG_PATH", home.join("tiangong/electron-data.db"))
+            .env("DSH_HOME", home.join("dsh"))
+            .env("ZCODE_HOME", home.join("zcode"))
+            .output()?;
+        ensure!(
+            output.status.success(),
+            "隔离原生客户端验收失败：{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        ensure!(
+            String::from_utf8_lossy(&output.stdout).contains("test result: ok. 1 passed;"),
+            "隔离原生客户端验收未实际执行"
+        );
+        eprintln!("{}", String::from_utf8_lossy(&output.stderr));
+        return Ok(());
+    }
+    run_acceptance(Scenario::WorkBuddy).await
+}
+
+async fn run_acceptance(scenario: Scenario) -> Result<()> {
+    let key_pipeline = matches!(scenario, Scenario::KeyPipeline);
+    let workbuddy_pipeline = matches!(scenario, Scenario::WorkBuddy);
     let production = PathBuf::from(
         std::env::var_os("TIANCAI_ASSISTANT_ACCEPTANCE_CONFIG")
             .context("未指定现有登录/运行端配置路径")?,
@@ -519,30 +703,70 @@ async fn run_acceptance(key_pipeline: bool) -> Result<()> {
         name: SOURCE.into(),
         base_url: "https://fixture.invalid/v1".into(),
         api_key: FIXTURE_SECRET.into(),
-        models: vec!["source-model".into()],
-        enabled: false,
+        models: if workbuddy_pipeline {
+            vec!["gpt-6-astra".into(), "gpt-6-astra-fast".into()]
+        } else {
+            vec!["source-model".into()]
+        },
+        model_aliases: if workbuddy_pipeline {
+            std::collections::BTreeMap::from([("gpt-6-a-preset".into(), "gpt-6-astra".into())])
+        } else {
+            Default::default()
+        },
+        enabled: true,
         ..Default::default()
     }];
     config.save(&path)?;
     let library = Library::new(&path)?;
-    let fixture_client = if key_pipeline {
+    let fixture_client = if workbuddy_pipeline {
+        ClientId::WorkBuddy
+    } else if key_pipeline {
         ClientId::ZCode
     } else {
         ClientId::VsCode
     };
-    let target_id = if key_pipeline {
+    let mut target_id = if key_pipeline {
         "assistant-acceptance-zcode"
     } else {
         TARGET
+    }
+    .to_string();
+    let client_root = if workbuddy_pipeline {
+        crate::workbuddy_config::config_path()
+            .parent()
+            .context("隔离WorkBuddy路径无效")?
+            .to_path_buf()
+    } else {
+        fixture.path().join(fixture_client.key())
     };
-    let client_root = fixture.path().join(fixture_client.key());
     std::fs::create_dir_all(&client_root)?;
+    let codex_target_id = if workbuddy_pipeline {
+        let defaults = crate::desktop::targets::discover()?;
+        target_id = defaults
+            .iter()
+            .find(|target| target.client == ClientId::WorkBuddy)
+            .context("未发现隔离WorkBuddy目标")?
+            .id
+            .clone();
+        Some(
+            defaults
+                .iter()
+                .find(|target| target.client == ClientId::Codex)
+                .context("未发现隔离Codex目标")?
+                .id
+                .clone(),
+        )
+    } else {
+        None
+    };
     library.save_targets(
         library.load()?,
         vec![ClientTarget {
-            id: target_id.into(),
+            id: target_id.clone(),
             client: fixture_client,
-            label: if key_pipeline {
+            label: if workbuddy_pipeline {
+                "验收 WorkBuddy"
+            } else if key_pipeline {
                 "验收 ZCode"
             } else {
                 "验收 VS Code"
@@ -553,7 +777,12 @@ async fn run_acceptance(key_pipeline: bool) -> Result<()> {
             mcp: client_root.join("mcp.json"),
             mcp_format: McpFormat::McpServers,
             present: true,
-            model_mode: "chat".into(),
+            model_mode: if workbuddy_pipeline {
+                "workbuddy"
+            } else {
+                "chat"
+            }
+            .into(),
             model_root: None,
             models_inherited: false,
         }],
@@ -605,7 +834,10 @@ async fn run_acceptance(key_pipeline: bool) -> Result<()> {
         base: format!("http://{address}"),
         model_id: model_id.clone(),
         target_id,
+        codex_target_id,
         fixture_client,
+        workbuddy_entry: None,
+        codex_copy: None,
         key_name: key_pipeline.then(|| format!("Hub搭档验收-{}", uuid::Uuid::new_v4())),
         created_key: None,
         key_create_requested: false,
@@ -613,7 +845,9 @@ async fn run_acceptance(key_pipeline: bool) -> Result<()> {
         key_revoked: false,
         calls: vec![],
         turns: vec![],
-        report: report_dir.join(if key_pipeline {
+        report: report_dir.join(if workbuddy_pipeline {
+            "real-workbuddy-gpt-selection.json"
+        } else if key_pipeline {
             "real-key-pipeline.json"
         } else {
             "real-acceptance.json"
@@ -631,7 +865,9 @@ async fn run_acceptance(key_pipeline: bool) -> Result<()> {
             test.step().await?;
         }
         eprintln!("real Server initialized; administrator model: {model_id}");
-        if key_pipeline {
+        if workbuddy_pipeline {
+            test.workbuddy_pipeline().await
+        } else if key_pipeline {
             test.key_pipeline().await
         } else {
             test.scenarios().await

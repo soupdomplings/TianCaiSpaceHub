@@ -404,13 +404,7 @@ impl ApiClient {
             &serde_json::json!({"expectedRevision": revision,"enhanced":enhanced,"modelId":model_id}),
             Duration::from_secs(if enhanced { 90 } else { 45 }),
         )?;
-        use crate::gmclaw_runtime::GmClawConnectionState;
-        match status.state {
-            GmClawConnectionState::Connected | GmClawConnectionState::Unverified => {
-                Ok(status.detail)
-            }
-            _ => Err(status.detail),
-        }
+        gmclaw_start_feedback(status, enhanced)
     }
 
     pub(super) fn start_workbuddy_desktop(&self) -> Result<String, String> {
@@ -735,8 +729,41 @@ fn default_true() -> bool {
     true
 }
 
+fn gmclaw_start_feedback(
+    status: crate::gmclaw_runtime::GmClawRuntimeStatus,
+    enhanced: bool,
+) -> Result<String, String> {
+    use crate::gmclaw_runtime::GmClawConnectionState::*;
+    match status.state {
+        Connected => Ok(status.detail),
+        Unverified if !enhanced => Ok(status.detail),
+        Unverified => Err(format!(
+            "天工增强工作区尚未就绪：{}。请等待天工初始化后重试增强启动。",
+            status.detail
+        )),
+        _ => Err(status.detail),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn enhanced_tiangong_launch_does_not_report_unverified_as_ready() {
+        use crate::gmclaw_runtime::{GmClawConnectionState, GmClawRuntimeStatus};
+        let mut status = GmClawRuntimeStatus {
+            state: GmClawConnectionState::Unverified,
+            detail: "正在等待本地服务".into(),
+            installed: true,
+            running: true,
+        };
+        assert!(super::gmclaw_start_feedback(status.clone(), false).is_ok());
+        let error = super::gmclaw_start_feedback(status.clone(), true).unwrap_err();
+        assert!(error.contains("尚未就绪") && error.contains("正在等待本地服务"));
+        status.state = GmClawConnectionState::Connected;
+        assert!(super::gmclaw_start_feedback(status.clone(), true).is_ok());
+        status.state = GmClawConnectionState::Error;
+        assert!(super::gmclaw_start_feedback(status, true).is_err());
+    }
     use super::*;
 
     #[test]

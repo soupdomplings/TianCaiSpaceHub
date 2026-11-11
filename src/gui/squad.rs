@@ -1,11 +1,12 @@
 //! Native TianCai account workspace. WebView is limited to verification/payment.
-use super::controls::Button;
+use super::controls::{Button, ButtonKind};
 use super::{
     api::ApiClient,
     dialog_job,
     shell::{PageId, Shell},
     squad_account::AccountBadge,
     squad_browser::BrowserLogin,
+    squad_dialog::SquadDialog,
     squad_form as forms,
     squad_login::InlineLogin,
     squad_view::Workspace,
@@ -1095,13 +1096,7 @@ fn pending(
 }
 fn security(frame: &Frame, api: ApiClient) {
     let choices = ["修改密码", "通知邮箱", "双因素认证 / 通行密钥"];
-    let dialog = SingleChoiceDialog::builder(frame, "账户安全", "选择操作", &choices).build();
-    let selection = if dialog.show_modal() == ID_OK {
-        Some(dialog.get_selection())
-    } else {
-        None
-    };
-    dialog.destroy();
+    let selection = forms::choice(frame, "账户安全", &choices);
     match selection {
         Some(0) => {
             forms::edit(
@@ -1128,46 +1123,123 @@ fn notify_email(frame: &Frame, api: ApiClient) {
     let Some(profile) = query(frame, api.clone(), "读取通知邮箱", "/user/profile") else {
         return;
     };
-    forms::inspect(
+    let rows = profile["balance_notify_extra_emails"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let chrome = SquadDialog::new(
         frame,
-        "当前通知邮箱",
-        &organization::pick(
-            &profile,
-            &[
-                "email",
-                "balance_notify_extra_emails",
-                "balance_notify_enabled",
-            ],
-        ),
+        "通知邮箱",
+        "管理接收账户通知的邮箱。",
+        Size::new(640, 500),
     );
-    let choices = ["添加通知邮箱", "启用 / 停用邮箱", "移除通知邮箱"];
-    let dialog = SingleChoiceDialog::builder(frame, "通知邮箱", "选择操作", &choices).build();
-    let selection = if dialog.show_modal() == ID_OK {
-        Some(dialog.get_selection())
-    } else {
-        None
-    };
+    let dialog = chrome.dialog;
+    let (primary, details) = chrome.section("主邮箱");
+    let email =
+        super::squad_dialog::field_label(&primary, profile["email"].as_str().unwrap_or("未设置"));
+    details.add(&email, 0, SizerFlag::Expand, 0);
+    let reminder = super::squad_dialog::note(
+        &primary,
+        match profile["balance_notify_enabled"].as_bool() {
+            Some(true) => "余额提醒已开启",
+            Some(false) => "余额提醒未开启",
+            None => "",
+        },
+    );
+    details.add(&reminder, 0, SizerFlag::Top, primary.from_dip(8));
+    let (card, column) = chrome.section("其他通知邮箱");
+    let list = ListBox::builder(&card).build();
+    list.set_background_color(theme::theme().bg_card);
+    list.set_foreground_color(theme::theme().ink_primary);
+    list.set_font(&theme::font(theme::TextRole::Body));
+    list.set_min_size(Size::new(0, card.from_dip(126)));
+    for row in &rows {
+        list.append(&format!(
+            "{} · {}",
+            row["email"].as_str().unwrap_or("通知邮箱"),
+            if row["disabled"] == true {
+                "已停用"
+            } else {
+                "已启用"
+            }
+        ));
+    }
+    if !rows.is_empty() {
+        list.set_selection(0, true);
+    }
+    column.add(
+        &list,
+        0,
+        SizerFlag::Expand | SizerFlag::Bottom,
+        card.from_dip(12),
+    );
+    let tools = BoxSizer::builder(Orientation::Horizontal).build();
+    let toggle = Button::builder(&card).with_label("停用").build();
+    let remove = Button::builder(&card)
+        .with_label("移除")
+        .with_kind(ButtonKind::Ghost)
+        .build();
+    tools.add(&toggle, 0, SizerFlag::Right, card.from_dip(8));
+    tools.add(&remove, 0, SizerFlag::default(), 0);
+    column.add_sizer(&tools, 0, SizerFlag::Expand, 0);
+    let update_rows = rows.clone();
+    let update = Rc::new(move || {
+        let selected = list
+            .get_selection()
+            .and_then(|index| update_rows.get(index as usize));
+        toggle.enable(selected.is_some());
+        remove.enable(selected.is_some());
+        toggle.set_label(if selected.is_some_and(|row| row["disabled"] == true) {
+            "启用"
+        } else {
+            "停用"
+        });
+    });
+    update();
+    list.on_selection_changed(move |_| update());
+    let close = Button::builder(&dialog)
+        .with_id(ID_CANCEL)
+        .with_label("关闭")
+        .with_kind(ButtonKind::Ghost)
+        .build();
+    close.on_click(move |_| dialog.end_modal(ID_CANCEL));
+    let add = Button::builder(&dialog)
+        .with_label("添加邮箱")
+        .with_kind(ButtonKind::Primary)
+        .build();
+    chrome
+        .actions
+        .add(&close, 0, SizerFlag::Right, dialog.from_dip(8));
+    chrome.actions.add(&add, 0, SizerFlag::default(), 0);
+    let selected: Rc<Cell<Option<(u8, usize)>>> = Default::default();
+    let selection = selected.clone();
+    add.on_click(move |_| {
+        selection.set(Some((0, 0)));
+        dialog.end_modal(ID_OK);
+    });
+    for (button, operation) in [(toggle, 1), (remove, 2)] {
+        let selection = selected.clone();
+        button.on_click(move |_| {
+            if let Some(index) = list.get_selection() {
+                selection.set(Some((operation, index as usize)));
+                dialog.end_modal(ID_OK);
+            }
+        });
+    }
+    chrome.finish();
+    let accepted = dialog.show_modal() == ID_OK;
+    let selection = if accepted { selected.get() } else { None };
     dialog.destroy();
     match selection {
-        Some(0) => {
-            let prompt = TextEntryDialog::builder(frame, "填写接收通知的邮箱", "添加邮箱").build();
-            let email = if prompt.show_modal() == ID_OK {
-                prompt.get_value()
-            } else {
-                None
-            };
-            prompt.destroy();
+        Some((0, _)) => {
+            let email = forms::prompt(frame, "添加通知邮箱", "email", "");
             if let Some(email) = email {
                 if dialog_job::run(frame,api.clone(),"发送验证码","/api/desktop/squad/request",json!({"method":"POST","path":"/user/notify-email/send-code","body":{"email":email}})).is_some(){forms::edit(frame,api,"验证通知邮箱","POST","/user/notify-email/verify",json!({"email":email,"code":""}));}
             }
         }
-        Some(1 | 2) => {
-            let rows = profile["balance_notify_extra_emails"]
-                .as_array()
-                .cloned()
-                .unwrap_or_default();
-            if let Some(row) = organization::choose(frame, "选择通知邮箱", &rows, "email") {
-                if selection == Some(1) {
+        Some((operation @ (1 | 2), index)) => {
+            if let Some(row) = rows.get(index) {
+                if operation == 1 {
                     dialog_job::run(
                         frame,
                         api,
@@ -1256,39 +1328,73 @@ fn key_form(frame: &Frame, api: ApiClient, row: Option<&Value>) {
     }
 }
 fn key_details(frame: &Frame, key: &Value) {
-    let dialog = Dialog::builder(frame, "API 密钥")
-        .with_size(620, 260)
-        .build();
-    let column = BoxSizer::builder(Orientation::Vertical).build();
-    let title = StaticText::builder(&dialog)
-        .with_label(key["name"].as_str().unwrap_or("API 密钥"))
-        .build();
-    column.add(&title, 0, SizerFlag::All, 18);
-    let field = TextCtrl::builder(&dialog)
-        .with_value("••••••••••••••••")
+    let chrome = SquadDialog::new(
+        frame,
+        "API 密钥",
+        "按需显示或复制这枚密钥。",
+        Size::new(620, 340),
+    );
+    let dialog = chrome.dialog;
+    let (card, column) = chrome.section(key["name"].as_str().unwrap_or("连接密钥"));
+    let raw = Rc::new(key["key"].as_str().unwrap_or("").to_string());
+    let field = TextCtrl::builder(&card)
+        .with_value(if raw.is_empty() {
+            "未提供完整密钥"
+        } else {
+            "••••••••••••••••"
+        })
         .with_style(TextCtrlStyle::ReadOnly)
         .build();
-    column.add(
-        &field,
-        0,
-        SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right,
-        18,
-    );
+    column.add(&field, 0, SizerFlag::Expand, 0);
     let bar = BoxSizer::builder(Orientation::Horizontal).build();
-    let reveal = Button::builder(&dialog).with_label("显示密钥").build();
-    let copy = Button::builder(&dialog).with_label("复制密钥").build();
-    bar.add(&reveal, 0, SizerFlag::Right, 8);
-    bar.add(&copy, 0, SizerFlag::default(), 0);
-    column.add_sizer(&bar, 0, SizerFlag::AlignRight | SizerFlag::All, 18);
-    dialog.set_sizer(column, true);
-    let raw = key["key"].as_str().unwrap_or("").to_string();
+    bar.add_stretch_spacer(1);
+    let reveal = Button::builder(&card)
+        .with_label("显示密钥")
+        .with_kind(ButtonKind::Ghost)
+        .build();
+    reveal.enable(!raw.is_empty());
+    bar.add(&reveal, 0, SizerFlag::default(), 0);
+    column.add_sizer(
+        &bar,
+        0,
+        SizerFlag::Expand | SizerFlag::Top,
+        card.from_dip(8),
+    );
+    let close = Button::builder(&dialog)
+        .with_id(ID_CANCEL)
+        .with_label("关闭")
+        .with_kind(ButtonKind::Ghost)
+        .build();
+    close.on_click(move |_| dialog.end_modal(ID_CANCEL));
+    let copy = Button::builder(&dialog)
+        .with_label("复制密钥")
+        .with_kind(ButtonKind::Primary)
+        .build();
+    copy.enable(!raw.is_empty());
+    chrome
+        .actions
+        .add(&close, 0, SizerFlag::Right, dialog.from_dip(8));
+    chrome.actions.add(&copy, 0, SizerFlag::default(), 0);
     let text = raw.clone();
-    reveal.on_click(move |_| field.set_value(&text));
+    let visible = Cell::new(false);
+    reveal.on_click(move |_| {
+        let show = !visible.get();
+        visible.set(show);
+        field.set_value(if show {
+            text.as_str()
+        } else {
+            "••••••••••••••••"
+        });
+        reveal.set_label(if show { "隐藏密钥" } else { "显示密钥" });
+    });
+    let status = chrome.status;
     copy.on_click(move |_| {
-        if !raw.is_empty() && wxdragon::clipboard::Clipboard::get().set_text(&raw) {
-            copy.set_label("已复制");
+        if wxdragon::clipboard::Clipboard::get().set_text(raw.as_str()) {
+            status.set_label("密钥已复制到剪贴板");
+            status.set_foreground_color(theme::theme().ok);
         }
     });
+    chrome.finish();
     dialog.show_modal();
     dialog.destroy();
 }
@@ -1299,52 +1405,111 @@ fn funding_order(frame: &Frame, api: ApiClient, state: &Value) {
             .cloned()
             .unwrap_or_default(),
     ));
-    let dialog = Dialog::builder(frame, "资金使用顺序")
-        .with_size(650, 480)
-        .with_style(DialogStyle::DefaultDialogStyle | DialogStyle::ResizeBorder)
-        .build();
-    let column = BoxSizer::builder(Orientation::Vertical).build();
-    let list = ListBox::builder(&dialog).build();
-    column.add(&list, 1, SizerFlag::Expand | SizerFlag::All, 16);
+    let chrome = SquadDialog::new(
+        frame,
+        "资金使用顺序",
+        "从上到下依次尝试已启用的资金来源。",
+        Size::new(650, 500),
+    );
+    let dialog = chrome.dialog;
+    let (card, column) = chrome.section("扣费顺序");
+    let list = ListBox::builder(&card).build();
+    list.set_background_color(theme::theme().bg_card);
+    list.set_foreground_color(theme::theme().ink_primary);
+    list.set_font(&theme::font(theme::TextRole::Body));
+    list.set_min_size(Size::new(0, card.from_dip(176)));
+    column.add(
+        &list,
+        1,
+        SizerFlag::Expand | SizerFlag::Bottom,
+        card.from_dip(12),
+    );
     let controls = BoxSizer::builder(Orientation::Horizontal).build();
-    let up = Button::builder(&dialog).with_label("上移").build();
-    let down = Button::builder(&dialog).with_label("下移").build();
-    let toggle = Button::builder(&dialog).with_label("启用 / 停用").build();
+    let up = Button::builder(&card).with_label("上移").build();
+    let down = Button::builder(&card).with_label("下移").build();
+    let toggle = Button::builder(&card).with_label("停用").build();
     for b in [up, down, toggle] {
-        controls.add(&b, 0, SizerFlag::Right, 8);
+        controls.add(&b, 0, SizerFlag::Right, card.from_dip(8));
     }
-    column.add_sizer(&controls, 0, SizerFlag::Left, 16);
-    let status = StaticText::builder(&dialog).build();
-    column.add(&status, 0, SizerFlag::Expand | SizerFlag::All, 14);
-    let save = Button::builder(&dialog).with_label("保存顺序").build();
-    column.add(&save, 0, SizerFlag::AlignRight | SizerFlag::All, 16);
-    dialog.set_sizer(column, true);
+    column.add_sizer(&controls, 0, SizerFlag::Expand, 0);
+    let status = chrome.status;
+    let close = Button::builder(&dialog)
+        .with_id(ID_CANCEL)
+        .with_label("取消")
+        .with_kind(ButtonKind::Ghost)
+        .build();
+    close.on_click(move |_| dialog.end_modal(ID_CANCEL));
+    let save = Button::builder(&dialog)
+        .with_label("保存顺序")
+        .with_kind(ButtonKind::Primary)
+        .build();
+    save.set_default();
+    chrome
+        .actions
+        .add(&close, 0, SizerFlag::Right, dialog.from_dip(8));
+    chrome.actions.add(&save, 0, SizerFlag::default(), 0);
     let rows = items.clone();
+    let update = Rc::new(move || {
+        let rows = rows.borrow();
+        let selected = list.get_selection().map(|index| index as usize);
+        up.enable(selected.is_some_and(|index| index > 0));
+        down.enable(selected.is_some_and(|index| index + 1 < rows.len()));
+        toggle.enable(selected.is_some_and(|index| index < rows.len()));
+        toggle.set_label(
+            if selected
+                .and_then(|index| rows.get(index))
+                .is_some_and(|row| row["enabled"] == true)
+            {
+                "停用"
+            } else {
+                "启用"
+            },
+        );
+        save.enable(!rows.is_empty());
+    });
+    let rows = items.clone();
+    let after_refresh = update.clone();
     let refresh = Rc::new(move |selected: usize| {
         list.clear();
-        for item in rows.borrow().iter() {
+        for (index, item) in rows.borrow().iter().enumerate() {
             let source = match item["source_type"].as_str() {
                 Some("personal_balance") => "个人余额",
                 Some("subscription") => "订阅",
                 Some("department_budget") => "部门预算",
                 _ => "组织资金",
             };
+            let context = [
+                item["business_unit_name"].as_str(),
+                item["department_name"].as_str(),
+            ]
+            .into_iter()
+            .flatten()
+            .filter(|value| !value.is_empty())
+            .collect::<Vec<_>>()
+            .join(" / ");
             list.append(&format!(
-                "{}  {}  {} / {}",
-                if item["enabled"] == true {
-                    "●"
-                } else {
-                    "○"
-                },
+                "{}. {} · {}{}",
+                index + 1,
                 source,
-                item["business_unit_name"].as_str().unwrap_or(""),
-                item["department_name"].as_str().unwrap_or("")
+                if item["enabled"] == true {
+                    "已启用"
+                } else {
+                    "已停用"
+                },
+                if context.is_empty() {
+                    String::new()
+                } else {
+                    format!(" · {context}")
+                }
             ));
         }
         if selected < rows.borrow().len() {
             list.set_selection(selected as u32, true);
         }
+        after_refresh();
     });
+    let selection_changed = update.clone();
+    list.on_selection_changed(move |_| selection_changed());
     refresh(0);
     for (action, b) in [(0, up), (1, down), (2, toggle)] {
         let rows = items.clone();
@@ -1376,6 +1541,7 @@ fn funding_order(frame: &Frame, api: ApiClient, state: &Value) {
             json!({"method":"PUT","path":"/user/organization/funding-priorities","body":{"items":items.borrow().iter().map(|r|organization::pick(r,&["source_type","business_unit_id","department_id","enabled"])).collect::<Vec<_>>()}}),
         ))
     });
+    chrome.finish();
     dialog.show_modal();
     drop(job);
     dialog.destroy();

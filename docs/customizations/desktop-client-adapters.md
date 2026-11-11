@@ -1,10 +1,31 @@
 # 多客户端与外部模型接入：适配规格
 
+## ZCode 外部模型增强启动（V1.0.24，本轮开发）
+
+日期：2026-11-11；关联 TC-018。基线为 `main` / `3e8a264` 加本轮累计工作区。Windows 源码已实现；本节的编译与交付状态以后续 [V24 集成交付](../releases/v1.0.24.md) 为准，真实客户端与 macOS 尚未验收。
+
+只读核对本机官方 ZCode **3.17.2** 的安装资源，确认原生模型目录已有外部模型时，启动仍会因 `providerFamilyDomain` 为空而进入登录入口；主入口与渲染层未发现可直接使用的免登录启动参数。当前修正作用于原生的启动检查：Hub 网关启用、ZCode 独立模型副本启用且其受管原生配置仍在使用时，从 Hub 点击启动会准备增强模式。原生 registry 必须实际返回该副本的 `tiancai-hub-<UUID>` providerId 和对应 modelId，才放行启动并等待真实工作区出现；仅保存了来源、其他端的模型、停用副本或缺失的原生配置不满足条件。没有合格副本时沿普通启动，读取失败及客户端后改明确反馈。
+
+增强模式通过随机本机回环 CDP 端口，只在内存替换当前 renderer 的 `styles-*.js` 启动检查，不修改安装文件。原生用户、`providerFamilyDomain`、OAuth 及官方云服务权限按客户端原有状态处理；手动登录、退出后登录与会话过期入口继续由客户端决定。接口仍为 `POST /api/desktop/client/open`，ZCode 默认按上述条件选择增强；传 `enhanced:false` 可明确普通启动，其他客户端保留原启动方法，不增加额外二级菜单。
+
+- 新启动仅在登录入口可见、没有输入、没有进行中的 OAuth，且还未打开工作区时刷新一次。原生恢复出的工作区、任务和草稿保留；此时只挂接适配，下次客户端自行刷新时生效。
+- 同一次 Hub 运行内复用一条 ZCode 适配连接，更新允许使用的模型身份；重复打开可将原窗口带到前台。若 ZCode 已运行但不属于本次 Hub 的连接，提示正常退出 ZCode 后再增强启动，不强制结束进程，也不扫描用户端口或命令行。
+- 启动脚本须属于发现的安装目录和当前 renderer，启动检查须唯一匹配。结构不兼容、加载失败或超时会释放原响应并显示原因，不能仅凭改写成功宣称工作区可用。适配消息中仅传 provider/model 身份，运行态仅保存原生目录中的身份，不另存模型凭据、配置副本、聊天内容或协议日志。
+- Windows 主程序启动不继承 Hub 的句柄，移除子进程中的 `ELECTRON_RUN_AS_NODE`；本轮 macOS 沿普通启动，尚未实现或验证相同的增强适配。Hub 需在使用本机网关期间保持运行。
+
+维护入口：`src/desktop/launcher.rs::open_with_config`、`launcher/zcode_workspace.rs`、`launcher/zcode-workspace-adapter.js` 和 `src/web/desktop.rs::launch_client`。天工与 ZCode 共用 `src/desktop/renderer_cdp.rs` 的传输层，保留原 16 MiB 消息上限、8 秒调用超时、事件队列和失败后释放 paused 响应的语义；天工的配置判断和工作区适配保持各自实现。天工同样必须在原生数据库中有已配置的 Hub 受管外部模型，仅有网关来源不足以增强启动；本轮对本机的只读检查未发现可用受管行，真实增强路径仍待用户保存并验收。
+
+验证：新增 `scripts/test-zcode-workspace.cjs` 的 7 项合成检查通过，覆盖实际身份匹配、空目录/其他来源、原登录状态、只读一次的目录刷新、同会话模型更新、唯一结构及 minifier 改名。对上述官方 3.17.2 模块的内存适配唯一命中，改写后 `node --check` 通过，参考输出仅在已忽略的 `target/v1.0.24-unified-20261111/zcode-source/`；没有运行官方代码。新增 Rust 定向检查入口为 `desktop::launcher::zcode_workspace::tests::`，覆盖原生配置证据、草稿/OAuth 保护、安装页面/回环连接和原响应释放/响应头，交管理会话集成执行。`rustfmt --check` 与定向差异空白检查通过；未启动 Hub、ZCode、安装器或真实模型调用。
+
+管理会话最终集成已通过 ZCode 4 项 Rust 边界检查、天工共用传输提炼后的 7 项回归及 Windows GUI 测试目标编译；7 项 Node 和官方安装模块语法检查沿同一实现复用。真实 ZCode 启动、模型推理与 macOS 仍未执行；统一构建和包身份见 [V24 交付](../releases/v1.0.24.md)。GUI 的本机调用复用原 `desktop_post` 120 秒等待，覆盖增强准备时间，不改变其他 HTTP 默认值。
+
+本次不迁移模型配置，也不新增持久启动记录。回滚恢复 ZCode 启动分支及内存适配即可；原生页面刷新或退出 ZCode 后，本次加载的适配代码消失。Hub 退出会结束适配连接，当前已加载的页面代码仍由客户端持有到刷新或退出，不把断开连接记成安装文件已回写。
+
 ## VS Code 与 WebStorm 界面入口隐藏（本轮开发）
 
-日期：2026-11-11。用户要求在 Hub 界面隐藏 VS Code 和 WebStorm。当前只展示 ChatGPT / Codex、WorkBuddy、天工 Work、DeepSeek Harness、ZCode；侧栏、旧最近记录、概览活动图和状态卡、配置位置选择、添加模型来源与天工模型分享均按同一可见列表处理。旧导航及助手要求跳转隐藏端时返回概览；历史请求日志和统计来源名称保留。
+日期：2026-11-11。用户要求在 Hub 界面隐藏 VS Code 和 WebStorm。当前只展示 ChatGPT / Codex、WorkBuddy、天工 Work、DeepSeek Harness、ZCode；V1.0.24 左栏默认固定展示全部五端，移除“最近三个／更多展开”及访问后重排，不再按最近访问列表生成导航。概览活动图和状态卡、配置位置选择、添加模型来源与天工模型分享继续按同一可见列表处理。旧导航及助手要求跳转隐藏端时返回概览；历史请求日志和统计来源名称保留。
 
-实现入口为 `src/desktop/clients.rs::ClientId::{VISIBLE,is_visible}`、`RecentClients::normalize_visible`，以及 `src/gui/{shell,preferences,overview,model_fields,client_overview,tiangong_models}.rs` 和 `src/gui.rs` 的客户端构建/绑定。`ALL`、枚举序列化身份、配置发现、模型 writer、启动器及 API 保持，不删除已有用户资料；天才搭档的后端工具仍支持原有端，真实验收使用的临时 VS Code 目标也不因界面隐藏而失效。旧最近记录采用原 JSON 格式，下一次正常导航按原保存流程写入已替换的槽位。
+实现入口为 `src/desktop/clients.rs::ClientId::{VISIBLE,is_visible}`，以及 `src/gui/{shell,preferences,overview,model_fields,client_overview,tiangong_models}.rs` 和 `src/gui.rs` 的客户端构建/绑定。`ALL`、枚举序列化身份、配置发现及模型 writer 保持；本批 ZCode 启动的增补见上节。不删除已有用户资料，天才搭档的后端工具仍支持原有端，真实验收使用的临时 VS Code 目标也不因界面隐藏而失效。旧最近记录保留而不参与当前导航，不为此次精简改写历史数据。
 
 回滚恢复可见列表和 GUI 投影即可重新展示两端，原配置和模型无需重建。管理会话已完成GUI测试目标编译；新增三个定向用例及受影响旧用例通过，纳入本批57项定向回归，唯一包见 [V23交付](../releases/v1.0.23.md)。未启动用户原有客户端或安装器，Windows实际界面及macOS待用户验收；既有两端后台测试结果保持各自版本归属。前文入口沿革见 [桌面视觉](../development/desktop-visual-system.md#2026-11-11-客户端入口精简本轮开发)，下文七端适配资料继续作为实现和兼容参考。
 

@@ -3283,8 +3283,12 @@ impl GuiText {
 
     pub(super) fn ai_gw_minimax_help(self) -> &'static str {
         match self.locale {
-            GuiLocale::ZhCn => "默认国内站 https://api.minimax.cn/v1；国际站可改为 https://api.minimax.io/v1，并使用对应站点的 API Key。已预填 MiniMax-M3.1-Flash 与 MiniMax-M3，可获取模型或手动编辑。M3.1-Flash 不支持关闭推理。",
-            GuiLocale::EnUs => "Defaults to China: https://api.minimax.cn/v1. For the international service, use https://api.minimax.io/v1 and its API key. MiniMax-M3.1-Flash and MiniMax-M3 are prefilled; fetch models or edit them manually. M3.1-Flash requires reasoning.",
+            GuiLocale::ZhCn => {
+                "官方 OpenAI 兼容接口：国内 https://api.minimax.cn/v1，国际 https://api.minimax.io/v1。普通 API 用按量 Key；Coding Plan / M Plan 用订阅 Key，使用同一协议地址，由所填 Key 决定计费。两类 Key 不能混用。已预填 MiniMax-M3.1-Flash 与 MiniMax-M3，可获取模型或编辑；套餐可用模型以官方实际返回为准。M3.1-Flash 不支持关闭推理。"
+            }
+            GuiLocale::EnUs => {
+                "Official OpenAI-compatible API: China https://api.minimax.cn/v1; international https://api.minimax.io/v1. Standard API usage needs a pay-as-you-go key; Coding Plan / M Plan needs a subscription key. Both use the same protocol endpoint; the key determines billing and the keys are not interchangeable. MiniMax-M3.1-Flash and MiniMax-M3 are prefilled and editable; plan availability follows the official service. M3.1-Flash requires reasoning."
+            }
         }
     }
 

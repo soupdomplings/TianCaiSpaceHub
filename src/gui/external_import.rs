@@ -1,13 +1,17 @@
-use super::{GuiTimers, api::ApiClient};
-use crate::gui::controls::Button;
-use crate::gui::controls::{Choice, TextCtrl};
+use super::{
+    GuiTimers,
+    api::ApiClient,
+    controls::{Button, ButtonKind, Choice, TextCtrl},
+    squad_dialog::{SquadDialog, field_label, note},
+};
 use crate::{
     config::AppConfig,
+    desktop::targets::ClientTarget,
     external_import::{self as import, CommitImport, ImportDraft, ImportLink, UpdateTarget},
 };
 use std::{
     cell::{Cell, RefCell},
-    collections::VecDeque,
+    collections::{BTreeSet, VecDeque},
     rc::Rc,
     sync::mpsc,
     thread,
@@ -19,6 +23,8 @@ use wxdragon::{prelude::*, timer::Timer};
 // type-check it too. Native delivery and Unix IPC still require macOS acceptance.
 #[cfg(any(target_os = "macos", all(test, windows)))]
 pub(super) mod macos;
+
+mod batch;
 
 enum Work {
     Resolved(Result<ImportDraft, String>),
@@ -223,12 +229,6 @@ pub(super) fn install(
     timers.panel_timers.borrow_mut().extend([timer, presenter]);
 }
 
-fn add_label(parent: &impl WxWidget, root: &BoxSizer, value: &str) {
-    let label = StaticText::builder(parent).with_label(value).build();
-    label.wrap(580);
-    root.add(&label, 0, SizerFlag::Expand | SizerFlag::All, 8);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -334,211 +334,657 @@ pub(super) fn preview(parent: &Frame, api: &ApiClient, draft: ImportDraft) {
     preview_with_config(parent, api, draft, config);
 }
 
-fn preview_with_config(parent: &Frame, api: &ApiClient, draft: ImportDraft, config: AppConfig) {
-    let targets: Vec<_> = config
-        .ai_gateway
-        .providers
-        .iter()
-        .filter(|p| !p.is_client_reserved())
-        .cloned()
-        .collect();
-    let matching = targets.iter().position(|p| {
-        p.import_source
-            .as_ref()
-            .is_some_and(|s| s.same_key(&draft.source))
-    });
-    let mut new_name = draft.provider.name.clone();
-    let mut suffix = 2;
-    while config
-        .ai_gateway
-        .providers
-        .iter()
-        .any(|p| p.name.eq_ignore_ascii_case(&new_name))
-    {
-        new_name = format!("{} ({suffix})", draft.provider.name);
-        suffix += 1;
-    }
-    let dialog = Dialog::builder(parent, "导入渠道 / Import channel")
-        .with_style(DialogStyle::DefaultDialogStyle | DialogStyle::ResizeBorder)
-        .with_size(680, 740)
-        .build();
-    dialog.set_min_size(Size::new(560, 520));
-    let panel = ScrolledWindow::builder(&dialog)
-        .with_style(ScrolledWindowStyle::VScroll)
-        .build();
-    panel.set_scroll_rate(0, 12);
-    let root = BoxSizer::builder(Orientation::Vertical).build();
-    add_label(
-        &panel,
-        &root,
-        &format!(
-            "来源 / Source: {}\n站点：{}    Key：{}\n协议 / Protocol: {}\n模型服务 / Endpoint: {}\nAPI Key: ••••••••",
-            draft.source.origin,
-            draft.source.site_name,
-            draft.source.key_name,
-            super::provider_protocol_display(
-                &draft.provider.provider_type,
-                draft.provider.compatibility.as_deref()
-            ),
-            draft.provider.base_url
-        ),
-    );
-    add_label(&panel, &root, "保存方式 / Save as");
-    if matching.is_some() {
-        add_label(
-            &panel,
-            &root,
-            "已发现相同站点及 Key 的渠道，可更新已有渠道或选择新建。\nA channel for this source and key already exists.",
+#[derive(Clone)]
+struct ImportModels {
+    list: CheckListBox,
+    search: TextCtrl,
+    count: StaticText,
+    models: Rc<Vec<String>>,
+    selected: Rc<RefCell<BTreeSet<String>>>,
+}
+
+impl ImportModels {
+    fn new(parent: &Panel, content: &BoxSizer, models: &[String]) -> Self {
+        let search = TextCtrl::builder(parent).build();
+        search.set_name("import-model-search");
+        search.set_hint("搜索模型");
+        content.add(
+            &search,
+            0,
+            SizerFlag::Expand | SizerFlag::Bottom,
+            parent.from_dip(10),
         );
-    } else if config
-        .ai_gateway
-        .providers
-        .iter()
-        .any(|p| p.name.eq_ignore_ascii_case(&draft.provider.name))
-    {
-        add_label(
-            &panel,
-            &root,
-            "已有同名渠道：默认新建并添加编号，也可明确选择更新目标。\nA channel with this name exists; choose create or update.",
+        let tools = BoxSizer::builder(Orientation::Horizontal).build();
+        let count = note(parent, "");
+        tools.add(&count, 1, SizerFlag::AlignCenterVertical, 0);
+        let all = Button::builder(parent)
+            .with_label("选择当前结果")
+            .with_kind(ButtonKind::Ghost)
+            .build();
+        let clear = Button::builder(parent)
+            .with_label("清空选择")
+            .with_kind(ButtonKind::Ghost)
+            .build();
+        tools.add(&all, 0, SizerFlag::Right, parent.from_dip(8));
+        tools.add(&clear, 0, SizerFlag::default(), 0);
+        content.add_sizer(
+            &tools,
+            0,
+            SizerFlag::Expand | SizerFlag::Bottom,
+            parent.from_dip(8),
         );
-    }
-    let operation = Choice::builder(&panel).build();
-    operation.append("新建渠道 / Create new channel");
-    for target in &targets {
-        operation.append(&format!("更新渠道 / Update: {}", target.name));
-    }
-    operation.set_selection(matching.map(|i| i as u32 + 1).unwrap_or(0));
-    root.add(&operation, 0, SizerFlag::Expand | SizerFlag::All, 8);
-    add_label(&panel, &root, "渠道名称 / Channel name");
-    let name = TextCtrl::builder(&panel)
-        .with_value(
-            matching
-                .map(|i| targets[i].name.as_str())
-                .unwrap_or(&new_name),
-        )
-        .build();
-    root.add(&name, 0, SizerFlag::Expand | SizerFlag::All, 8);
-    {
-        let targets = targets.clone();
-        let new_name = new_name.clone();
-        operation.on_selection_changed(move |_| {
-            let index = operation.get_selection().unwrap_or(0) as usize;
-            name.change_value(if index == 0 {
-                &new_name
-            } else {
-                &targets[index - 1].name
-            });
+        let list = CheckListBox::builder(parent)
+            .with_size(Size::new(-1, parent.from_dip(152)))
+            .build();
+        list.set_min_size(Size::new(0, parent.from_dip(152)));
+        list.set_name("import-models");
+        list.set_background_color(super::theme::theme().bg_card);
+        list.set_foreground_color(super::theme::theme().ink_primary);
+        content.add(&list, 0, SizerFlag::Expand, 0);
+        let ui = Self {
+            list,
+            search,
+            count,
+            models: Rc::new(models.to_vec()),
+            selected: Rc::new(RefCell::new(models.iter().cloned().collect())),
+        };
+        let u = ui.clone();
+        search.on_text_updated(move |_| u.render());
+        let u = ui.clone();
+        list.on_toggled(move |event| {
+            if let Some(index) = event.get_selection() {
+                u.update_selection(index);
+            }
         });
+        let u = ui.clone();
+        all.on_click(move |_| {
+            for i in 0..u.list.get_count() {
+                if let Some(model) = u.list.get_string(i as usize) {
+                    u.selected.borrow_mut().insert(model);
+                    u.list.check(i, true);
+                }
+            }
+            u.update_count();
+        });
+        let u = ui.clone();
+        clear.on_click(move |_| {
+            u.selected.borrow_mut().clear();
+            u.render();
+        });
+        ui.render();
+        ui
     }
-    add_label(
-        &panel,
-        &root,
-        "保留要导入的模型，每行一个；可以手动补充 / Models to import, one per line",
-    );
-    let models = TextCtrl::builder(&panel)
-        .with_value(&draft.provider.models.join("\n"))
-        .with_style(TextCtrlStyle::MultiLine)
-        .with_size(Size::new(-1, 140))
-        .build();
-    root.add(&models, 1, SizerFlag::Expand | SizerFlag::All, 8);
-    let enabled = CheckBox::builder(&panel)
-        .with_label("启用此渠道（相同模型将按现有优先级路由） / Enable this channel")
-        .build();
-    let visible = CheckBox::builder(&panel)
-        .with_label("将以上模型追加到 Codex 可见模型 / Add models to Codex list")
-        .build();
-    let aliases = CheckBox::builder(&panel)
-        .with_label("更新时替换原有模型映射 / Replace existing aliases on update")
-        .build();
-    root.add(&enabled, 0, SizerFlag::All, 8);
-    root.add(&visible, 0, SizerFlag::All, 8);
-    root.add(&aliases, 0, SizerFlag::All, 8);
-    add_label(
-        &panel,
-        &root,
-        "默认禁用保存。空模型渠道需补全后启用。Codex 首次接入仍需手动初始化。\nSaved disabled by default. Set up Codex separately if needed.",
-    );
-    let status = StaticText::builder(&panel)
-        .with_label(
-            draft
-                .model_warning
-                .as_deref()
-                .unwrap_or("模型列表已获取 / Model list loaded"),
-        )
-        .build();
-    status.wrap(580);
-    root.add(&status, 0, SizerFlag::Expand | SizerFlag::All, 8);
-    panel.set_sizer(root, true);
-    let buttons = BoxSizer::builder(Orientation::Horizontal).build();
-    let cancel = Button::builder(&dialog)
-        .with_id(ID_CANCEL)
-        .with_label("取消 / Cancel")
-        .build();
-    let save = Button::builder(&dialog)
-        .with_label("确认保存 / Save")
-        .build();
-    buttons.add_stretch_spacer(1);
-    buttons.add(&cancel, 0, SizerFlag::All, 10);
-    buttons.add(&save, 0, SizerFlag::All, 10);
-    let outer = BoxSizer::builder(Orientation::Vertical).build();
-    outer.add(&panel, 1, SizerFlag::Expand, 0);
-    outer.add_sizer(&buttons, 0, SizerFlag::Expand, 0);
-    dialog.set_sizer(outer, true);
-    let (result_tx, result_rx) = mpsc::channel::<Result<(), String>>();
+    fn selected_models(&self) -> Vec<String> {
+        let selected = self.selected.borrow();
+        self.models
+            .iter()
+            .filter(|m| selected.contains(*m))
+            .cloned()
+            .collect()
+    }
+    fn update_selection(&self, index: u32) {
+        if let Some(model) = self.list.get_string(index as usize) {
+            if self.list.is_checked(index) {
+                self.selected.borrow_mut().insert(model);
+            } else {
+                self.selected.borrow_mut().remove(&model);
+            }
+            self.update_count();
+        }
+    }
+    fn render(&self) {
+        let query = self.search.get_value().trim().to_lowercase();
+        let selected = self.selected.borrow();
+        self.list.freeze();
+        self.list.clear();
+        for model in self
+            .models
+            .iter()
+            .filter(|m| m.to_lowercase().contains(&query))
+        {
+            self.list.append(model);
+            self.list
+                .check(self.list.get_count() - 1, selected.contains(model));
+        }
+        self.list.thaw();
+        self.update_count();
+    }
+    fn update_count(&self) {
+        self.count.set_label(&format!(
+            "已选 {} 个 · 当前 {} 个",
+            self.selected.borrow().len(),
+            self.list.get_count()
+        ));
+    }
+}
+
+#[derive(Clone)]
+struct ImportResults {
+    table: ListCtrl,
+    detail: TextCtrl,
+    details: Rc<RefCell<Vec<String>>>,
+}
+
+impl ImportResults {
+    fn new(parent: &Panel, content: &BoxSizer) -> Self {
+        let table = ListCtrl::builder(parent)
+            .with_style(
+                ListCtrlStyle::Report | ListCtrlStyle::SingleSel | ListCtrlStyle::BorderNone,
+            )
+            .with_size(Size::new(-1, parent.from_dip(220)))
+            .build();
+        table.set_name("import-results");
+        table.set_background_color(super::theme::theme().bg_card);
+        table.set_foreground_color(super::theme::theme().ink_primary);
+        for (column, title) in ["客户端", "模型", "结果"].iter().enumerate() {
+            table.insert_column(
+                column as i64,
+                title,
+                ListColumnFormat::Left,
+                parent.from_dip(160),
+            );
+        }
+        table.on_size(move |event| {
+            let width = (table.get_client_size().width - table.from_dip(18)).max(1);
+            let state = table.from_dip(92).min(width / 3);
+            let client = (width - state) * 2 / 5;
+            table.set_column_width(0, client);
+            table.set_column_width(1, width - state - client);
+            table.set_column_width(2, state);
+            event.skip(true);
+        });
+        content.add(&table, 1, SizerFlag::Expand, 0);
+        let detail = TextCtrl::builder(parent)
+            .with_style(TextCtrlStyle::MultiLine | TextCtrlStyle::ReadOnly)
+            .with_size(Size::new(-1, 90))
+            .with_value("选择一项查看详情。")
+            .build();
+        detail.set_name("import-result-detail");
+        content.add(
+            &detail,
+            0,
+            SizerFlag::Expand | SizerFlag::Top,
+            parent.from_dip(10),
+        );
+        let ui = Self {
+            table,
+            detail,
+            details: Default::default(),
+        };
+        let u = ui.clone();
+        table.on_item_selected(move |event| {
+            u.select(event.get_item_index() as usize);
+        });
+        ui
+    }
+    fn select(&self, index: usize) {
+        if let Some(detail) = self.details.borrow().get(index) {
+            self.detail.change_value(detail);
+        }
+    }
+    fn add(&self, target: &str, model: &str, result: &str, detail: &str, failed: bool) {
+        let row = self
+            .table
+            .insert_item(self.table.get_item_count() as i64, target, None) as i64;
+        self.table.set_item_text_by_column(row, 1, model);
+        self.table.set_item_text_by_column(row, 2, result);
+        self.table.set_item_text_colour(
+            row,
+            &if failed {
+                super::theme::theme().error
+            } else {
+                super::theme::theme().ink_primary
+            },
+        );
+        self.details
+            .borrow_mut()
+            .push(format!("{target} · {model}\n{detail}"));
+    }
+    fn start(&self) {
+        self.table.delete_all_items();
+        self.details.borrow_mut().clear();
+        self.add("来源渠道", "—", "保存中", "正在保存来源渠道。", false);
+        self.detail.change_value("正在保存来源渠道。");
+    }
+    fn saved(&self) {
+        self.table.set_item_text_by_column(0, 2, "已保存");
+        self.details.borrow_mut()[0] = "来源渠道已保存；已选客户端的模型正在逐项接入。".into();
+        self.select(0);
+    }
+    fn outcome(&self, outcome: &batch::Outcome) {
+        let (state, detail, failed) = match &outcome.result {
+            Ok(message) => ("已接入", message.as_str(), false),
+            Err(error) => ("未完成", error.as_str(), true),
+        };
+        self.add(&outcome.target, &outcome.model, state, detail, failed);
+    }
+    fn save_error(&self, error: &str) {
+        self.table.set_item_text_by_column(0, 2, "未确认");
+        self.table
+            .set_item_text_colour(0, &super::theme::theme().error);
+        self.details.borrow_mut()[0] =
+            format!("渠道保存未确认：{error}\n请在渠道页核对，本批不会自动再次提交。");
+        self.select(0);
+    }
+}
+
+struct ImportPreview {
+    chrome: SquadDialog,
+    cards: [Panel; 4],
+    operation: Choice,
+    name: TextCtrl,
+    models: ImportModels,
+    target_card: Panel,
+    target_fields: BoxSizer,
+    target_status: StaticText,
+    target_rows: Rc<RefCell<Vec<(ClientTarget, CheckBox)>>>,
+    enabled: CheckBox,
+    aliases: CheckBox,
+    result_card: Panel,
+    results: ImportResults,
+    save: Button,
+    close: Button,
+    channels: Vec<crate::ai_gateway::config::ProviderConfig>,
+    draft: ImportDraft,
+    config: AppConfig,
+}
+
+impl ImportPreview {
+    fn new(parent: &Frame, draft: ImportDraft, config: AppConfig) -> Self {
+        let channels = config
+            .ai_gateway
+            .providers
+            .iter()
+            .filter(|p| !p.is_client_reserved())
+            .cloned()
+            .collect::<Vec<_>>();
+        let matching = channels.iter().position(|p| {
+            p.import_source
+                .as_ref()
+                .is_some_and(|s| s.same_key(&draft.source))
+        });
+        let mut new_name = draft.provider.name.clone();
+        let mut suffix = 2;
+        while config
+            .ai_gateway
+            .providers
+            .iter()
+            .any(|p| p.name.eq_ignore_ascii_case(&new_name))
+        {
+            new_name = format!("{} ({suffix})", draft.provider.name);
+            suffix += 1;
+        }
+
+        let ui = SquadDialog::new(
+            parent,
+            "导入模型",
+            "勾选模型和客户端后一次接入；不选客户端则只保存渠道。",
+            Size::new(760, 840),
+        );
+        let (dialog, body) = (ui.dialog, ui.body);
+        let wrap_width = (dialog.get_client_size().width - dialog.from_dip(112)).max(100);
+        let mut wrapped = Vec::new();
+        dialog.set_name("hub-import-dialog");
+        let (source_card, source_fields) = ui.section("来源与保存");
+        let source = note(
+            &source_card,
+            &format!(
+                "{} · {}    密钥：••••••••",
+                draft.source.site_name, draft.source.key_name
+            ),
+        );
+        wrapped.push((source, source.get_label()));
+        source.wrap(wrap_width);
+        source_fields.add(
+            &source,
+            0,
+            SizerFlag::Expand | SizerFlag::Bottom,
+            source_card.from_dip(12),
+        );
+        let operation_label = field_label(&source_card, "保存方式");
+        source_fields.add(
+            &operation_label,
+            0,
+            SizerFlag::Bottom,
+            source_card.from_dip(6),
+        );
+        let operation = Choice::builder(&source_card).build();
+        operation.append("新建渠道");
+        for channel in &channels {
+            operation.append(&format!("更新 · {}", channel.name));
+        }
+        operation.set_selection(matching.map(|i| i as u32 + 1).unwrap_or(0));
+        source_fields.add(
+            &operation,
+            0,
+            SizerFlag::Expand | SizerFlag::Bottom,
+            source_card.from_dip(12),
+        );
+        let name_label = field_label(&source_card, "渠道名称");
+        source_fields.add(&name_label, 0, SizerFlag::Bottom, source_card.from_dip(6));
+        let name = TextCtrl::builder(&source_card)
+            .with_value(
+                matching
+                    .map(|i| channels[i].name.as_str())
+                    .unwrap_or(&new_name),
+            )
+            .build();
+        name.set_name("import-channel-name");
+        source_fields.add(&name, 0, SizerFlag::Expand, 0);
+        {
+            let channels = channels.clone();
+            operation.on_selection_changed(move |_| {
+                let index = operation.get_selection().unwrap_or(0) as usize;
+                name.change_value(
+                    index
+                        .checked_sub(1)
+                        .map(|i| channels[i].name.as_str())
+                        .unwrap_or(&new_name),
+                );
+            });
+        }
+
+        let (model_card, model_fields) = ui.section("选择模型");
+        if let Some(warning) = &draft.model_warning {
+            let warning = note(&model_card, warning);
+            wrapped.push((warning, warning.get_label()));
+            warning.wrap(wrap_width);
+            model_fields.add(
+                &warning,
+                0,
+                SizerFlag::Expand | SizerFlag::Bottom,
+                model_card.from_dip(8),
+            );
+        }
+        if draft.provider.models.is_empty() {
+            let empty = note(
+                &model_card,
+                "暂未获取到模型，可先保存渠道，再到渠道页补充。",
+            );
+            wrapped.push((empty, empty.get_label()));
+            empty.wrap(wrap_width);
+            model_fields.add(
+                &empty,
+                0,
+                SizerFlag::Expand | SizerFlag::Bottom,
+                model_card.from_dip(8),
+            );
+        }
+        let models = ImportModels::new(&model_card, &model_fields, &draft.provider.models);
+
+        let (target_card, target_fields) = ui.section("接入客户端");
+        let target_status = note(&target_card, "正在读取可用客户端…");
+        target_fields.add(
+            &target_status,
+            0,
+            SizerFlag::Expand | SizerFlag::Bottom,
+            target_card.from_dip(8),
+        );
+        let target_rows: Rc<RefCell<Vec<(ClientTarget, CheckBox)>>> = Default::default();
+
+        let (advanced_card, advanced_fields) = ui.section("");
+        let advanced = CollapsiblePane::builder(&advanced_card)
+            .with_label("高级选项")
+            .with_style(CollapsiblePaneStyle::NoTlwResize)
+            .build();
+        let advanced_panel = advanced.get_pane().expect("import advanced pane");
+        let advanced_col = BoxSizer::builder(Orientation::Vertical).build();
+        let addresses = note(
+            &advanced_panel,
+            &format!(
+                "站点：{}\n模型服务：{}\n协议：{}",
+                draft.source.origin,
+                draft.provider.base_url,
+                super::provider_protocol_display(
+                    &draft.provider.provider_type,
+                    draft.provider.compatibility.as_deref()
+                )
+            ),
+        );
+        wrapped.push((addresses, addresses.get_label()));
+        addresses.wrap(wrap_width);
+        advanced_col.add(
+            &addresses,
+            0,
+            SizerFlag::Expand | SizerFlag::Bottom,
+            advanced_card.from_dip(12),
+        );
+        let enabled = CheckBox::builder(&advanced_panel)
+            .with_label("仅保存渠道时也启用")
+            .build();
+        let aliases = CheckBox::builder(&advanced_panel)
+            .with_label("更新时替换原有模型映射")
+            .build();
+        advanced_col.add(&enabled, 0, SizerFlag::Bottom, advanced_card.from_dip(10));
+        advanced_col.add(&aliases, 0, SizerFlag::default(), 0);
+        advanced_panel.set_sizer(advanced_col, false);
+        advanced_fields.add(&advanced, 0, SizerFlag::Expand, 0);
+        advanced.on_changed(move |_| {
+            body.layout();
+            body.fit_inside();
+            dialog.layout();
+        });
+
+        let (result_card, result_fields) = ui.section("接入结果");
+        let results = ImportResults::new(&result_card, &result_fields);
+        result_card.show(false);
+
+        let close = Button::builder(&dialog)
+            .with_id(ID_CANCEL)
+            .with_label("取消")
+            .build();
+        let save = Button::builder(&dialog)
+            .with_label("仅保存渠道")
+            .with_kind(ButtonKind::Primary)
+            .build();
+        close.set_name("import-close");
+        save.set_name("import-submit");
+        save.enable(false);
+        ui.actions
+            .add(&close, 0, SizerFlag::Right, dialog.from_dip(10));
+        ui.actions.add(&save, 0, SizerFlag::default(), 0);
+        dialog.on_size(move |event| {
+            let width = (dialog.get_client_size().width - dialog.from_dip(112)).max(100);
+            for (label, text) in &wrapped {
+                label.set_label(text);
+                label.wrap(width);
+            }
+            event.skip(true);
+        });
+
+        ui.finish();
+        Self {
+            chrome: ui,
+            cards: [source_card, model_card, target_card, advanced_card],
+            operation,
+            name,
+            models,
+            target_card,
+            target_fields,
+            target_status,
+            target_rows,
+            enabled,
+            aliases,
+            result_card,
+            results,
+            save,
+            close,
+            channels,
+            draft,
+            config,
+        }
+    }
+    fn load_targets(&self, result: Result<Vec<ClientTarget>, String>) {
+        match result {
+            Ok(targets) => {
+                self.target_status.set_label(if targets.is_empty() {
+                    "未发现可接入的客户端配置目录，可先保存渠道。"
+                } else {
+                    "可多选。ChatGPT 首次使用需在接入设置完成初始化。"
+                });
+                let mut rows = self.target_rows.borrow_mut();
+                for target in targets {
+                    let same_client = rows.iter().any(|(t, _)| t.client == target.client);
+                    let label = if target.label == "默认" && !same_client {
+                        target.client.name().to_string()
+                    } else {
+                        format!("{} · {}", target.client.name(), target.label)
+                    };
+                    let check = CheckBox::builder(&self.target_card)
+                        .with_label(&label)
+                        .build();
+                    check.set_min_size(Size::new(0, check.get_best_size().height));
+                    check.set_name(&format!("import-target-{}", target.id));
+                    check.set_tooltip(&format!("{label}\n{}", target.models_root().display()));
+                    self.target_fields.add(
+                        &check,
+                        0,
+                        SizerFlag::Expand | SizerFlag::Bottom,
+                        self.target_card.from_dip(10),
+                    );
+                    let row_store = self.target_rows.clone();
+                    let save = self.save;
+                    check.on_toggled(move |_| {
+                        save.set_label(if row_store.borrow().iter().any(|(_, c)| c.is_checked()) {
+                            "保存并接入"
+                        } else {
+                            "仅保存渠道"
+                        });
+                    });
+                    rows.push((target, check));
+                }
+            }
+            Err(error) => self
+                .target_status
+                .set_label(&format!("客户端列表读取失败：{error}\n本次可先保存渠道。")),
+        }
+        let width = self.chrome.dialog.get_client_size().width - self.chrome.dialog.from_dip(96);
+        self.target_status.wrap(width.max(100));
+        self.save.enable(true);
+        self.layout();
+    }
+    fn request(&self) -> Result<(CommitImport, Vec<ClientTarget>), String> {
+        let models = self.models.selected_models();
+        let targets = self
+            .target_rows
+            .borrow()
+            .iter()
+            .filter(|(_, check)| check.is_checked())
+            .map(|(target, _)| target.clone())
+            .collect::<Vec<_>>();
+        if !targets.is_empty() && models.is_empty() {
+            return Err("请至少选择一个要接入的模型。".into());
+        }
+        let selected = self.operation.get_selection().unwrap_or(0) as usize;
+        let mut draft = self.draft.clone();
+        draft
+            .provider
+            .model_aliases
+            .retain(|_, upstream| models.contains(upstream));
+        let request = CommitImport {
+            draft,
+            name: self.name.get_value(),
+            update: selected.checked_sub(1).map(|i| UpdateTarget {
+                name: self.channels[i].name.clone(),
+                fingerprint: import::provider_fingerprint(&self.channels[i]),
+            }),
+            models,
+            enabled: !targets.is_empty() || self.enabled.is_checked(),
+            visible_models: false,
+            replace_aliases: self.aliases.is_checked(),
+        };
+        let mut trial = self.config.clone();
+        import::merge_import(&mut trial, &request)?;
+        Ok((request, targets))
+    }
+    fn start(&self) {
+        self.save.enable(false);
+        self.close.enable(false);
+        for card in self.cards {
+            card.hide();
+        }
+        self.result_card.show(true);
+        self.results.start();
+        self.feedback("正在保存并接入…", false);
+        self.chrome.body.scroll_coords(0, 0);
+        self.layout();
+    }
+    fn feedback(&self, message: &str, error: bool) {
+        self.chrome.status.set_label(message);
+        self.chrome.status.set_foreground_color(if error {
+            super::theme::theme().error
+        } else {
+            super::theme::theme().ink_secondary
+        });
+        self.chrome.status.wrap(
+            (self.chrome.dialog.get_client_size().width - self.chrome.dialog.from_dip(48)).max(100),
+        );
+        self.chrome.dialog.layout();
+    }
+    fn complete(&self, report: &batch::Report) {
+        self.close.enable(true);
+        self.close.set_label("完成");
+        self.save.hide();
+        if let Some(error) = &report.save_error {
+            self.results.save_error(error);
+        }
+        self.feedback(
+            &report.message(),
+            report.save_error.is_some() || report.outcomes.iter().any(|o| o.result.is_err()),
+        );
+        if report.save_error.is_none() && report.outcomes.is_empty() {
+            self.results
+                .detail
+                .change_value("来源渠道已保存，可在渠道页继续管理。");
+        }
+        self.layout();
+    }
+    fn layout(&self) {
+        self.chrome.dialog.layout();
+        self.chrome.body.layout();
+        self.chrome.body.fit_inside();
+    }
+}
+
+enum ImportEvent {
+    Progress(batch::Progress),
+    Complete(batch::Report),
+}
+
+fn preview_with_config(parent: &Frame, api: &ApiClient, draft: ImportDraft, config: AppConfig) {
+    let ui = Rc::new(ImportPreview::new(parent, draft, config));
+    let dialog = ui.chrome.dialog;
+    let (target_tx, target_rx) = mpsc::channel::<Result<Vec<ClientTarget>, String>>();
+    let (event_tx, event_rx) = mpsc::channel::<ImportEvent>();
     let saving = Rc::new(Cell::new(false));
+    let total = Rc::new(Cell::new(0usize));
     {
         let api = api.clone();
         let saving = saving.clone();
-        save.on_click(move |_| {
+        let total = total.clone();
+        let u = ui.clone();
+        ui.save.on_click(move |_| {
             if saving.get() {
                 return;
             }
-            let models: Vec<String> = models
-                .get_value()
-                .lines()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(str::to_string)
-                .collect();
-            let selected = operation.get_selection().unwrap_or(0) as usize;
-            let request = CommitImport {
-                draft: draft.clone(),
-                name: name.get_value(),
-                update: selected.checked_sub(1).map(|i| UpdateTarget {
-                    name: targets[i].name.clone(),
-                    fingerprint: import::provider_fingerprint(&targets[i]),
-                }),
-                models,
-                enabled: enabled.is_checked(),
-                visible_models: visible.is_checked(),
-                replace_aliases: aliases.is_checked(),
-            };
-            let mut trial = config.clone();
-            if let Err(error) = import::merge_import(&mut trial, &request) {
-                status.set_label(&error);
-                status.wrap(580);
-                panel.layout();
-                return;
-            }
-            saving.set(true);
-            save.enable(false);
-            cancel.enable(false);
-            status.set_label("正在保存，等待本地服务就绪… / Saving; waiting for local service…");
-            let api = api.clone();
-            let sender = result_tx.clone();
-            thread::spawn(move || {
-                let deadline = Instant::now() + Duration::from_secs(30);
-                while !api.is_online() && Instant::now() < deadline {
-                    thread::sleep(Duration::from_millis(300));
+            let (request, targets) = match u.request() {
+                Ok(value) => value,
+                Err(error) => {
+                    u.feedback(&error, true);
+                    return;
                 }
-                let result = api
-                    .post_json_with_timeout::<_, serde_json::Value>(
-                        "/api/external-import/commit",
-                        &request,
-                        Duration::from_secs(15),
-                    )
-                    .map(|_| ());
-                let _ = sender.send(result);
+            };
+            total.set(targets.len() * request.models.len());
+            saving.set(true);
+            u.start();
+            let api = api.clone();
+            let sender = event_tx.clone();
+            thread::spawn(move || {
+                let report = batch::run(&api, request, targets, |progress| {
+                    let _ = sender.send(ImportEvent::Progress(progress));
+                });
+                let _ = sender.send(ImportEvent::Complete(report));
+                wxdragon::wake_up_idle();
             });
         });
     }
@@ -546,10 +992,10 @@ fn preview_with_config(parent: &Frame, api: &ApiClient, draft: ImportDraft, conf
         let saving = saving.clone();
         dialog.on_close(move |event| {
             if saving.get() {
-                if let WindowEventData::General(raw) = &event {
-                    if raw.can_veto() {
-                        raw.veto();
-                    }
+                if let WindowEventData::General(raw) = &event
+                    && raw.can_veto()
+                {
+                    raw.veto();
                 }
             } else {
                 dialog.end_modal(ID_CANCEL);
@@ -559,25 +1005,275 @@ fn preview_with_config(parent: &Frame, api: &ApiClient, draft: ImportDraft, conf
     let timer = Timer::new(&dialog);
     {
         let saving = saving.clone();
+        let total = total.clone();
+        let u = ui.clone();
+        let finished = Cell::new(0usize);
         timer.on_tick(move |_| {
-        if let Ok(result) = result_rx.try_recv() {
-            saving.set(false);
-            match result {
-                Ok(()) => dialog.end_modal(ID_OK),
-                Err(error) => { save.enable(true); cancel.enable(true); status.set_label(&format!("{error}\n请刷新核对渠道后重试 / Refresh and check channels before retrying")); status.wrap(580); panel.layout(); },
+            if let Ok(result) = target_rx.try_recv() {
+                u.load_targets(result);
             }
-        }
-    });
+            while let Ok(event) = event_rx.try_recv() {
+                match event {
+                    ImportEvent::Progress(batch::Progress::Saved) => {
+                        u.results.saved();
+                        u.feedback("渠道已保存，正在接入所选客户端…", false);
+                    }
+                    ImportEvent::Progress(batch::Progress::Item(outcome)) => {
+                        finished.set(finished.get() + 1);
+                        u.results.outcome(&outcome);
+                        u.feedback(
+                            &format!("已处理 {} / {} 项", finished.get(), total.get()),
+                            false,
+                        );
+                    }
+                    ImportEvent::Complete(report) => {
+                        saving.set(false);
+                        u.complete(&report);
+                    }
+                }
+            }
+        });
     }
-    timer.start(150, false);
-    dialog.center();
-    let saved = dialog.show_modal() == ID_OK;
+    {
+        let api = api.clone();
+        thread::spawn(move || {
+            // Deep links may have just started Hub. Read only until the user submits.
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while !api.is_online() && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(300));
+            }
+            let _ = target_tx.send(batch::load_targets(&api));
+            wxdragon::wake_up_idle();
+        });
+    }
+    timer.start(100, false);
+    dialog.show_modal();
     timer.stop();
     dialog.destroy();
-    if saved {
-        super::show_info(
-            parent,
-            "渠道已保存。可在“大模型接入”中查看和启用；新增可见模型后按需重新打开 Codex。\nChannel saved. Manage it in AI Gateway; reopen Codex to refresh its model list.",
+}
+
+#[cfg(all(test, windows))]
+mod native_import_review {
+    use super::*;
+    use crate::{
+        ai_gateway::config::ProviderConfig,
+        desktop::{clients::ClientId, targets::McpFormat},
+    };
+
+    fn draft() -> ImportDraft {
+        let source = import::ImportSource {
+            origin: "https://synthetic.example".into(),
+            key_id: "synthetic-key".into(),
+            site_name: "合成站点的较长说明名称（用于窄窗口排版）".into(),
+            key_name: "合成密钥的较长名称（仅本地示例）".into(),
+        };
+        ImportDraft {
+            source: source.clone(),
+            provider: ProviderConfig {
+                name: format!("synthetic-channel-{}", "long-name-".repeat(14)),
+                base_url: format!("https://synthetic.example/{}", "long-path/".repeat(12)),
+                api_key: "synthetic-only-never-sent".into(),
+                enabled: false,
+                models: vec![
+                    "model-a".into(),
+                    "model-needle".into(),
+                    format!("long-model-{}", "unbroken_".repeat(24)),
+                ],
+                import_source: Some(source),
+                ..Default::default()
+            },
+            model_warning: None,
+        }
+    }
+    fn targets() -> Vec<ClientTarget> {
+        ClientId::VISIBLE
+            .iter()
+            .map(|client| ClientTarget {
+                id: format!("synthetic-{}", client.key()),
+                client: *client,
+                label: format!("合成目标{}", "长名称".repeat(20)),
+                root: std::path::PathBuf::from(format!("C:/synthetic/{}", client.key())),
+                skills: Default::default(),
+                mcp: Default::default(),
+                mcp_format: McpFormat::Codex,
+                present: true,
+                model_mode: client.key().into(),
+                model_root: None,
+                models_inherited: false,
+            })
+            .collect()
+    }
+    fn footer_inside(ui: &ImportPreview) {
+        ui.layout();
+        let size = ui.chrome.dialog.get_client_size();
+        for button in [ui.save, ui.close] {
+            if !button.is_shown() {
+                continue;
+            }
+            let point = ui
+                .chrome
+                .dialog
+                .screen_to_client(button.client_to_screen(Point::new(0, 0)));
+            let rect = button.get_size();
+            assert!(
+                point.x >= 0
+                    && point.y >= 0
+                    && point.x + rect.width <= size.width + 1
+                    && point.y + rect.height <= size.height + 1,
+                "import footer must remain inside the dialog: {point:?} {rect:?} {size:?}"
+            );
+        }
+        let body = ui.chrome.body.get_client_size();
+        assert!(body.width > 0 && body.height > 0);
+        assert!(
+            !ui.chrome.dialog.is_shown(),
+            "fixture must never show a modal window"
         );
+    }
+    fn capture(ui: &ImportPreview, name: &str) {
+        footer_inside(ui);
+        crate::gui::native_model_review::capture(&ui.chrome.dialog, name);
+    }
+
+    #[test]
+    #[ignore = "isolated hidden import form and result layout; run with --test-threads=1"]
+    fn native_import_picker_keeps_selection_footer_and_structured_results_without_backend() {
+        wxdragon::app::render_offscreen(|| {
+            for (mode, suffix) in [
+                (super::super::theme::ThemeMode::Light, "light"),
+                (super::super::theme::ThemeMode::Dark, "dark"),
+            ] {
+                super::super::theme::init(mode);
+                for (width, height) in [(760, 560), (1168, 800)] {
+                    let parent = Frame::builder()
+                        .with_title("hidden synthetic import preview")
+                        .build();
+                    parent.set_client_size(crate::gui::visual::dip_size(&parent, width, height));
+                    let draft = draft();
+                    let mut config = AppConfig::default();
+                    config.ai_gateway.providers.push(draft.provider.clone());
+                    let ui = ImportPreview::new(&parent, draft.clone(), config);
+                    ui.load_targets(Ok(targets()));
+                    assert_eq!(
+                        ui.operation.get_selection(),
+                        Some(1),
+                        "same source/key defaults to update"
+                    );
+                    assert_eq!(ui.models.selected_models(), draft.provider.models);
+                    assert!(
+                        ui.target_rows
+                            .borrow()
+                            .iter()
+                            .all(|(_, check)| !check.is_checked())
+                    );
+                    let (channel_only, targets) = ui.request().unwrap();
+                    assert!(targets.is_empty());
+                    assert!(!channel_only.enabled && !channel_only.visible_models);
+                    ui.models.search.change_value("needle");
+                    ui.models.render();
+                    assert_eq!(ui.models.list.get_count(), 1);
+                    ui.models.list.check(0, false);
+                    ui.models.update_selection(0);
+                    ui.models.search.change_value("");
+                    ui.models.render();
+                    assert_eq!(ui.models.list.get_count(), 3);
+                    assert_eq!(
+                        ui.models.selected_models().len(),
+                        2,
+                        "filtering must preserve other choices"
+                    );
+                    assert!(
+                        !ui.models
+                            .selected_models()
+                            .iter()
+                            .any(|m| m == "model-needle")
+                    );
+                    for (_, check) in ui.target_rows.borrow().iter() {
+                        check.set_value(true);
+                    }
+                    let (request, chosen) = ui.request().unwrap();
+                    assert!(request.enabled);
+                    assert!(!request.visible_models);
+                    assert_eq!(chosen.len(), 5);
+                    assert_eq!(request.models.len(), 2);
+                    footer_inside(&ui);
+                    let body_width = ui.chrome.body.get_client_size().width;
+                    for control in [
+                        &ui.name as &dyn WxWidget,
+                        &ui.operation,
+                        &ui.models.search,
+                        &ui.models.list,
+                    ] {
+                        let point = ui
+                            .chrome
+                            .body
+                            .screen_to_client(control.client_to_screen(Point::new(0, 0)));
+                        assert!(
+                            point.x >= 0 && point.x + control.get_size().width <= body_width + 1,
+                            "import field overflowed body width: {point:?} {:?}",
+                            control.get_size()
+                        );
+                    }
+                    assert!(
+                        ui.chrome.body.get_virtual_size().height
+                            > ui.chrome.body.get_client_size().height,
+                        "long import content should scroll inside the body"
+                    );
+                    capture(&ui, &format!("import-selected-{width}-{suffix}"));
+                    ui.start();
+                    assert!(ui.cards.iter().all(|card| !card.is_shown()));
+                    ui.results.saved();
+                    let outcomes = vec![
+                        batch::Outcome {
+                            target: "ChatGPT / Codex".into(),
+                            model: "model-a".into(),
+                            result: Ok("已接入合成模型".into()),
+                        },
+                        batch::Outcome {
+                            target: "DeepSeek Harness".into(),
+                            model: "model-b".into(),
+                            result: Err("合成写入超时，结果未知；请在客户端页核对。".into()),
+                        },
+                    ];
+                    for outcome in &outcomes {
+                        ui.results.outcome(outcome);
+                    }
+                    ui.complete(&batch::Report {
+                        save_error: None,
+                        outcomes,
+                    });
+                    assert_eq!(ui.results.table.get_item_count(), 3);
+                    assert_eq!(ui.results.table.get_item_text(1, 2), "已接入");
+                    assert_eq!(ui.results.table.get_item_text(2, 2), "未完成");
+                    ui.results.select(2);
+                    assert!(ui.results.detail.get_value().contains("结果未知"));
+                    assert!(!ui.save.is_shown());
+                    assert!(ui.close.is_enabled());
+                    capture(&ui, &format!("import-partial-results-{width}-{suffix}"));
+                    ui.start();
+                    ui.complete(&batch::Report {
+                        save_error: Some("合成保存超时，结果未知".into()),
+                        outcomes: vec![],
+                    });
+                    assert_eq!(ui.results.table.get_item_text(0, 2), "未确认");
+                    capture(&ui, &format!("import-unknown-save-{width}-{suffix}"));
+                    ui.chrome.dialog.destroy();
+
+                    let mut empty_draft = draft;
+                    empty_draft.provider.models.clear();
+                    empty_draft.model_warning = Some("合成目录为空，允许先保存渠道。".into());
+                    let empty = ImportPreview::new(&parent, empty_draft, AppConfig::default());
+                    empty.load_targets(Ok(vec![]));
+                    let (request, chosen) = empty.request().unwrap();
+                    assert!(request.models.is_empty() && chosen.is_empty() && !request.enabled);
+                    assert!(empty.target_rows.borrow().is_empty());
+                    capture(&empty, &format!("import-empty-catalog-{width}-{suffix}"));
+                    empty.chrome.dialog.destroy();
+                    assert!(!parent.is_shown());
+                    parent.destroy();
+                }
+            }
+        })
+        .unwrap();
     }
 }

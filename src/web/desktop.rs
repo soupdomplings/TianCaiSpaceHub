@@ -305,6 +305,7 @@ async fn activity(
 struct LaunchClient {
     client: crate::desktop::clients::ClientId,
     path: Option<PathBuf>,
+    enhanced: Option<bool>,
 }
 async fn launch_client(
     State(state): State<SharedState>,
@@ -315,15 +316,22 @@ async fn launch_client(
         async {
             trusted(&headers)?;
             let path = state.config_path.clone();
-            tokio::task::spawn_blocking(move || {
-                if let Some(executable) = input.path {
+            if let Some(executable) = input.path {
+                tokio::task::spawn_blocking(move || {
                     crate::desktop::launcher::save(&path, input.client, &executable)?;
                     Ok(json!({"saved":true}))
-                } else {
-                    crate::desktop::launcher::open(&path, input.client)
-                }
-            })
-            .await?
+                })
+                .await?
+            } else {
+                let config = state.config.lock().await.clone();
+                crate::desktop::launcher::open_with_config(
+                    &path,
+                    config,
+                    input.client,
+                    input.enhanced.unwrap_or(true),
+                )
+                .await
+            }
         }
         .await,
     )

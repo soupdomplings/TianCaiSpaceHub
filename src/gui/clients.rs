@@ -58,7 +58,7 @@ pub(super) struct ClientPage {
     model_focuser: Rc<RefCell<Option<Rc<dyn Fn(&str)>>>>,
     model_saved: Rc<RefCell<Option<Rc<dyn Fn()>>>>,
     model_remover: Rc<RefCell<Option<Rc<dyn Fn(&str)>>>>,
-    codex_selection: Rc<RefCell<Option<Vec<String>>>>,
+    codex_selection: Rc<RefCell<Option<(Vec<String>, Vec<String>)>>>,
     models_render_pending: Rc<Cell<bool>>,
     models: Rc<RefCell<Value>>,
     activity: Rc<RefCell<Value>>,
@@ -376,13 +376,14 @@ impl ClientPage {
     pub fn on_model_remove(&self, remove: impl Fn(&str) + 'static) {
         *self.model_remover.borrow_mut() = Some(Rc::new(remove));
     }
-    pub fn set_codex_selection(&self, models: Vec<String>) {
-        *self.codex_selection.borrow_mut() = Some(models);
+    pub fn set_codex_selection(&self, models: Vec<String>, base: Vec<String>) {
+        *self.codex_selection.borrow_mut() = Some((models, base));
         // A checkbox command is still running. Updating list rows in place is
         // safe, but defer focusing/rebuilding its originating checkbox panel.
         self.models_render_pending.set(true);
     }
     pub fn finish_codex_models(&self) {
+        self.codex_selection.borrow_mut().take();
         self.draft.borrow_mut().take();
         self.editing_snapshot.borrow_mut().take();
         self.editing_id.borrow_mut().take();
@@ -607,15 +608,26 @@ impl ClientPage {
             })
             .unwrap_or_default();
         if self.id == ClientId::Codex {
-            let selected = self.codex_selection.borrow().clone().unwrap_or_else(|| {
-                self.models.borrow()["codexVisibleModels"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(Value::as_str)
-                    .map(str::to_string)
-                    .collect()
-            });
+            // Keep unsaved choices, but let assistant/API saves appear as soon
+            // as the client snapshot arrives, independently of dashboard timing.
+            let selected = self
+                .codex_selection
+                .borrow()
+                .clone()
+                .and_then(|(models, base)| {
+                    (!super::codex_tab::same_model_set(&models, &base)
+                        || self.models.borrow().get("codexVisibleModels").is_none())
+                    .then_some(models)
+                })
+                .unwrap_or_else(|| {
+                    self.models.borrow()["codexVisibleModels"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect()
+                });
             rows.extend(selected.into_iter().map(|id|json!({"id":format!("codex-visible:{id}"),"model":id,"label":id,"codexCatalog":true,"using":true})));
         }
         for row in &mut rows {
@@ -1251,6 +1263,7 @@ pub(super) fn review_inline_draft(frame: &Frame, shell: &Shell, id: ClientId) {
         super::codex_tab::initialize_visible_model_checks(&tab, &config);
         super::codex_tab::set_actions_enabled(&tab, true);
         let picker = super::codex_tab::review_picker(&tab);
+        super::codex_tab::review_remote_model_updates(&tab, &mut config);
         ui.render();
         ui.select(1);
         ui.model_view.add.enable(true);

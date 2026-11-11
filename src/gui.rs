@@ -157,8 +157,9 @@ struct ImAccountToggle {
 }
 
 mod ai_gateway;
-mod assistant;
 mod api;
+mod assistant;
+mod assistant_markdown;
 mod browser;
 mod chatgpt;
 mod client_header;
@@ -199,6 +200,7 @@ mod skill_market;
 mod squad;
 mod squad_account;
 mod squad_browser;
+mod squad_dialog;
 mod squad_form;
 mod squad_login;
 mod squad_view;

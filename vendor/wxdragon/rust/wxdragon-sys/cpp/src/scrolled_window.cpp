@@ -166,6 +166,27 @@ wxd_ScrolledWindow_SetScrollRate(wxd_ScrolledWindow_t* self, int xstep, int yste
     }
 }
 
+WXD_EXPORTED bool
+wxd_ScrolledWindow_ForwardMouseWheel(wxd_ScrolledWindow_t* self, wxd_Event_t* event)
+{
+    if (!self || !event) return false;
+    auto* scrolled = reinterpret_cast<wxScrolledWindow*>(self);
+    auto* wheel = dynamic_cast<wxMouseEvent*>(reinterpret_cast<wxEvent*>(event));
+    if (!wheel || wheel->GetEventType() != wxEVT_MOUSEWHEEL || wheel->ControlDown() ||
+        wheel->GetWheelAxis() != wxMOUSE_WHEEL_VERTICAL) return false;
+    auto* origin = wxDynamicCast(wheel->GetEventObject(), wxWindow);
+    if (origin == scrolled) return false;
+
+    // Preserve native line/page settings and fractional rotation accumulation.
+    // Process synchronously; neither the source event nor a child is retained.
+    wxMouseEvent forwarded(*wheel);
+    if (origin) forwarded.SetPosition(scrolled->ScreenToClient(origin->ClientToScreen(wheel->GetPosition())));
+    forwarded.SetEventObject(scrolled);
+    forwarded.SetId(scrolled->GetId());
+    forwarded.Skip(false);
+    return scrolled->GetEventHandler()->ProcessEvent(forwarded);
+}
+
 WXD_EXPORTED void
 wxd_ScrolledWindow_FitInside(wxd_ScrolledWindow_t* self)
 {

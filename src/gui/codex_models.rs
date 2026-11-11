@@ -187,6 +187,11 @@ impl ChannelModels {
         self.render();
         self.notify_changed();
     }
+    pub fn replace_selected_models(&self, models: &[String]) {
+        *self.selected.borrow_mut() = models.iter().cloned().collect();
+        self.render();
+        self.notify_changed();
+    }
     pub fn selected_models(&self) -> Vec<String> {
         self.selected.borrow().iter().cloned().collect()
     }
