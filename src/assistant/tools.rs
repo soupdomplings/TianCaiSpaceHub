@@ -310,8 +310,8 @@ pub(crate) fn definitions() -> Vec<Value> {
         ),
         spec(
             "hub_open_page",
-            "打开 Hub 相关页面并等待桌面实际切页回执；仅 opened=true 表示已打开。未打开、超时或不支持时如实说明。page=client时必须传client。",
-            json!({"page":{"type":"string","enum":["overview","squad","sources","client","settings","help","assistant"]},"client":{"type":"string"}}),
+            "打开 Hub 相关页面并等待桌面实际切页回执；仅 opened=true 表示已打开。未打开、超时或不支持时如实说明。page=client时必须传client。用户要求分享WorkBuddy登录内置模型时用workbuddy-builtin-share，仅打开面板，由用户点启用并选择模型和客户端。",
+            json!({"page":{"type":"string","enum":["overview","squad","sources","client","settings","help","assistant","workbuddy-builtin-share"]},"client":{"type":"string"}}),
             &["page"],
         ),
         spec(
@@ -389,6 +389,7 @@ fn ordinary(provider: &ProviderConfig) -> Result<()> {
             && !provider.is_client_reserved()
             && !provider.name.starts_with("Codex · ")
             && provider.tiangong_builtin.is_none()
+            && provider.workbuddy_builtin.is_none()
             && provider.chatgpt_auth_id.is_none()
             && provider.provider_type != crate::ai_gateway::config::ProviderType::ChatGptResponses,
         "请在对应客户端页管理此专用或登录渠道"
@@ -779,7 +780,7 @@ async fn read_configuration(state: &SharedState, args: &Value) -> Result<Value> 
             "modelsUrl":p.models_url,"compatibility":p.compatibility,"models":p.models,"modelAliases":p.model_aliases,
             "weight":p.weight,"timeoutSecs":p.timeout_secs,"chatDisableReasoning":p.chat_disable_reasoning,
             "zaiAccessMode":p.zai_access_mode,"promptCacheRetention":p.prompt_cache_retention,
-            "credentialConfigured":!p.api_key.is_empty()||p.chatgpt_auth_id.is_some()||p.tiangong_builtin.is_some(),
+            "credentialConfigured":!p.api_key.is_empty()||p.chatgpt_auth_id.is_some()||p.tiangong_builtin.is_some()||p.workbuddy_builtin.is_some(),
             "credentialMask":if p.api_key.is_empty(){None}else{Some(mask(&p.api_key))},
             "managedClient":p.desktop_binding.as_ref().map(|b|b.client),"id":p.desktop_binding.as_ref().map(|b|&b.id),
             "model":p.desktop_binding.as_ref().map(|b|&b.model),"label":p.desktop_binding.as_ref().map(|b|&b.label),
@@ -1746,7 +1747,8 @@ async fn open_page(
             "client",
             "settings",
             "help",
-            "assistant"
+            "assistant",
+            "workbuddy-builtin-share"
         ]
         .contains(&page),
         "不支持打开此页面"
@@ -1813,7 +1815,7 @@ pub(crate) async fn call(state: &SharedState, name: &str, args: Value) -> Result
             json!({"assistant":"天才搭档可直接查询用量、实际扣费和请求记录，读取配置、添加修改普通渠道/模型、调整支持参数、配置到客户端及删除专用渠道/客户端模型。普通模式删除集中确认一次，用户开启完全访问后按明确指令直接执行；模型有歧义仍先询问选择。可选当前小分队密钥或按要求新建后准备导入，外部凭据用本机表单输入。",
             "capabilities":{"usage":"hub_query_usage：今天/近周月/自定日期，按模型、当前用户密钥/分组筛选；squad实际人民币账单，hub本机Token/请求统计","requests":"hub_query_requests：按来源、日期及模型等分页查询记录，默认不返回正文和凭据","configuration":"hub_read_configuration、hub_resolve_model、hub_read_channel_models、hub_save_channel、hub_add_model、hub_configure_client、hub_set_model_parameters、hub_delete_configurations","questions":"hub_ask_user：必要的目标和参数选择使用本机结构化选项，不代替删除授权或凭据表单","accountKeys":"hub_squad_list_api_keys、hub_squad_key_options、hub_squad_create_api_key、hub_squad_prepare_api_key","navigation":"hub_open_page：等待桌面实际切页回执，opened=true才算已打开；只有用户要求看页面或工具确实无法完成时才打开，不替代已经支持的查询和配置"},
             "workGuide":WORK_GUIDE,
-            "localActions":{"tiangongBuiltinShare":"用户明确说‘打开天工内置模型分享’时由本机打开专用面板；默认隐藏。这里只打开界面，原生接入、登录及分享必须在现成表单中由用户选择。不能用hub_open_page或其他配置工具自动开启这个入口。"},
+            "localActions":{"tiangongBuiltinShare":"用户明确说‘打开天工内置模型分享’时由本机打开专用面板；默认隐藏。这里只打开界面，原生接入、登录及分享必须在现成表单中由用户选择。不能用hub_open_page或其他配置工具自动开启这个入口。","workbuddyBuiltinShare":"用户要求使用WorkBuddy登录内置模型时，hub_open_page({page:workbuddy-builtin-share})只打开分享面板；由用户启用，读取当前账户目录并选择模型和目标客户端。凭据由WorkBuddy宿主管理，调用费用和额度沿该账号，不是搭档管理员费用。已运行客户端需要用户先正常退出再启用，不替用户强退任务。"},
             "hub":"天才空间 Hub 统一连接模型渠道与多个桌面客户端；客户端模型配置为独立副本，修改来源不会自动同步副本。",
             "navigation":{"models":"左侧模型与渠道；各客户端的模型页管理独立副本","squad":"天才小分队：登录、账户、密钥、使用记录、充值和订阅；按账户权限显示组织功能","tiangongAssistance":"天工 Work → 接入设置 → 本机协助","dumpling":"左侧 Dumpling-MCP 独立入口"},
             "billing":"天才搭档模型由小分队管理员指定并承担费用；天工协助沿用其原模型来源。",
@@ -2538,6 +2540,12 @@ mod tests {
                 .unwrap()
                 .contains("用户明确")
         );
+        assert!(
+            help["localActions"]["workbuddyBuiltinShare"]
+                .as_str()
+                .unwrap()
+                .contains("只打开分享面板")
+        );
         let work = state.clone();
         let task = tokio::spawn(async move {
             call(
@@ -2581,10 +2589,14 @@ mod tests {
         assert!(public_status(&state).await["navigation"].is_null());
 
         let work = state.clone();
-        let task =
-            tokio::spawn(
-                async move { call(&work, "hub_open_page", json!({"page":"settings"})).await },
-            );
+        let task = tokio::spawn(async move {
+            call(
+                &work,
+                "hub_open_page",
+                json!({"page":"workbuddy-builtin-share"}),
+            )
+            .await
+        });
         let id = pending_navigation(&state).await;
         navigation_ack(
             State(state.clone()),

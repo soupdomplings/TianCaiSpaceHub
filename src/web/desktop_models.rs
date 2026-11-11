@@ -143,15 +143,32 @@ async fn share_tiangong_builtin(
     else {
         return response::<Value>(Err(anyhow::anyhow!("请先在天工 Work 的模型页读取内置模型")));
     };
+    share_builtin_source(state, headers, request.revision, source, request.targets,
+        crate::desktop::clients::ClientId::Tiangong).await
+}
+
+/// Both built-in hosts share the same copy/native writers and reuse rules.
+pub(super) async fn share_builtin_source(
+    state: SharedState,
+    headers: HeaderMap,
+    initial_revision: String,
+    source: ProviderConfig,
+    selected_targets: Vec<String>,
+    source_client: crate::desktop::clients::ClientId,
+) -> Response {
+    let config = state.config.lock().await.clone();
+    if config.revision.as_deref() != Some(initial_revision.as_str()) || selected_targets.is_empty() || selected_targets.len() > 32 {
+        return response::<Value>(Err(anyhow::anyhow!("模型或选择已变化，请重新打开分享页面")));
+    }
     let targets = match Library::new(&state.config_path).and_then(|lib| lib.targets(&lib.load()?)) {
         Ok(v) => v,
         Err(e) => return response::<Value>(Err(e)),
     };
-    if request.targets.iter().enumerate().any(|(i, id)| {
-        request.targets[..i].contains(id)
+    if selected_targets.iter().enumerate().any(|(i, id)| {
+        selected_targets[..i].contains(id)
             || !targets.iter().any(|t| {
                 t.id == *id
-                    && t.client != crate::desktop::clients::ClientId::Tiangong
+                    && t.client != source_client
                     && !t.models_inherited
             })
     }) {
@@ -164,9 +181,9 @@ async fn share_tiangong_builtin(
         .cloned()
         .unwrap_or_default();
     let route = provider_route_id(&source);
-    let mut revision = request.revision;
+    let mut revision = initial_revision;
     let mut outcomes = Vec::new();
-    for id in request.targets {
+    for id in selected_targets {
         let target = targets.iter().find(|t| t.id == id).unwrap();
         let latest = state.config.lock().await.clone();
         if latest.revision.as_deref() != Some(revision.as_str()) {
@@ -180,15 +197,15 @@ async fn share_tiangong_builtin(
             .providers
             .iter()
             .find(|p| {
-                p.tiangong_builtin
-                    .as_ref()
-                    .is_some_and(|b| b.model_id == request.model_id)
+                (p.tiangong_builtin.as_ref().is_some_and(|b| source.tiangong_builtin.as_ref().is_some_and(|s| s.model_id == b.model_id))
+                    || p.workbuddy_builtin.as_ref().is_some_and(|b| source.workbuddy_builtin.as_ref().is_some_and(|s| s.account_id == b.account_id && s.model_id == b.model_id)))
                     && (p
                         .desktop_binding
                         .as_ref()
                         .is_some_and(|b| b.target_id == id)
                         || (target.client == crate::desktop::clients::ClientId::WorkBuddy
                             && crate::ai_gateway::config::is_workbuddy_provider_name(&p.name))
+                        || (target.client == crate::desktop::clients::ClientId::Tiangong && p.is_gmclaw())
                         || (target.client == crate::desktop::clients::ClientId::Codex
                             && p.name.starts_with("Codex · ")))
             })
@@ -200,7 +217,7 @@ async fn share_tiangong_builtin(
                         .keys()
                         .any(|m| latest.ai_gateway.codex_visible_models.contains(m)))
         }) {
-            outcomes.push(json!({"targetId":id,"ok":true,"message":"已使用，沿用天工来源参数"}));
+            outcomes.push(json!({"targetId":id,"ok":true,"message":"已使用，沿用原客户端模型参数"}));
             continue;
         }
         use crate::desktop::clients::ClientId;
@@ -221,7 +238,7 @@ async fn share_tiangong_builtin(
                 outcomes.push(json!({"targetId":id,"ok":false,"message":format!("{}已有停用的内置模型，请到该客户端模型页启用原条目；独立参数保持不变",target.client.name())}));
                 break;
             }
-        } else if matches!(target.client, ClientId::Codex | ClientId::WorkBuddy) {
+        } else if matches!(target.client, ClientId::Codex | ClientId::WorkBuddy | ClientId::Tiangong) {
             copy_legacy(
                 State(state.clone()),
                 headers.clone(),
@@ -290,7 +307,7 @@ async fn use_existing_codex_copy(state: &SharedState, revision: &str, name: &str
             .providers
             .iter_mut()
             .find(|p| {
-                p.name == name && p.name.starts_with("Codex · ") && p.tiangong_builtin.is_some()
+                p.name == name && p.name.starts_with("Codex · ") && (p.tiangong_builtin.is_some() || p.workbuddy_builtin.is_some())
             })
             .context("原模型已不存在，请重新读取")?;
         provider.enabled = true;

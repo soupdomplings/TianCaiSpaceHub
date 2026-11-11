@@ -172,7 +172,7 @@ fn valid_executable(_: &Path) -> bool {
     false
 }
 
-fn resolve_executable(path: &Path) -> Option<PathBuf> {
+pub(crate) fn resolve_executable(path: &Path) -> Option<PathBuf> {
     if valid_executable(path) {
         return Some(path.to_path_buf());
     }
@@ -218,7 +218,7 @@ fn resolve_executable(path: &Path) -> Option<PathBuf> {
 }
 
 #[cfg(windows)]
-fn discover() -> Result<(bool, Option<PathBuf>)> {
+pub(crate) fn discover() -> Result<(bool, Option<PathBuf>)> {
     use windows_sys::Win32::{
         Foundation::{CloseHandle, ERROR_NO_MORE_FILES, GetLastError, INVALID_HANDLE_VALUE},
         System::{
@@ -358,7 +358,7 @@ fn install_candidates() -> Vec<PathBuf> {
 }
 
 #[cfg(target_os = "macos")]
-fn discover() -> Result<(bool, Option<PathBuf>)> {
+pub(crate) fn discover() -> Result<(bool, Option<PathBuf>)> {
     // Query executable names only, never command arguments or private state.
     let output = Command::new("/bin/ps")
         .args(["-axo", "comm="])
@@ -395,6 +395,6 @@ fn discover() -> Result<(bool, Option<PathBuf>)> {
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-fn discover() -> Result<(bool, Option<PathBuf>)> {
+pub(crate) fn discover() -> Result<(bool, Option<PathBuf>)> {
     anyhow::bail!("WorkBuddy 桌面启动仅支持 Windows 和 macOS")
 }

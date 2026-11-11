@@ -29,7 +29,8 @@ mod oauth;
 mod onboarding;
 pub(crate) mod plugins;
 mod squad;
-mod workbuddy_launch;
+mod workbuddy_builtin;
+pub(crate) mod workbuddy_launch;
 
 pub async fn start_bridge_if_ready(state: &SharedState, event_message: &'static str) -> bool {
     im_api::start_bridge_task(state, im_api::BridgeStartMode::KeepExisting, event_message).await
@@ -257,6 +258,7 @@ pub fn router(state: SharedState) -> Router {
         .merge(desktop::router())
         .merge(crate::local_assistance::web::router())
         .merge(crate::assistant::router())
+        .merge(workbuddy_builtin::router())
         .merge(crate::desktop::mcp_bridge::router())
         .merge(desktop_models::router())
         .merge(squad::router())
@@ -430,6 +432,12 @@ async fn save_config(
             Json(
                 json!({"error":"配置缺少版本，请刷新后重试 / Reload configuration before saving"}),
             ),
+        );
+    }
+    if let Err(err) = crate::desktop::workbuddy_builtin::validate_edit(&current, &config) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": err.to_string() })),
         );
     }
     if let Err(err) = crate::outbound_http::validate_for_local_port(

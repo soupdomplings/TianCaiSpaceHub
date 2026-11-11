@@ -102,6 +102,7 @@ pub fn copy(
     label: &str,
 ) -> Result<ProviderConfig> {
     super::tiangong_models::validate_provider(source)?;
+    super::workbuddy_builtin::validate_provider(source)?;
     let upstream = source
         .resolve_upstream_model(model)
         .context("来源不再提供此模型，请重新选择")?;
@@ -130,6 +131,7 @@ pub fn copy(
         .into(),
         capabilities: super::tiangong_models::parameters_for_provider(source)
             .map(|p| p.capabilities())
+            .or_else(|| source.workbuddy_builtin.as_ref().map(|b| b.capabilities.clone()))
             .unwrap_or(json!({})),
         native_files: vec![],
     });
@@ -152,7 +154,7 @@ pub fn public(config: &AiGatewayConfig) -> Value {
         let label = p.desktop_binding.as_ref().map(|b|b.label.as_str()).unwrap_or_else(|| {
             if p.is_workbuddy() || p.is_gmclaw() { p.model_aliases.keys().next().or_else(||p.models.first()).map(String::as_str).unwrap_or("模型配置") } else { &p.name }
         });
-        json!({"routeId":provider_route_id(p),"name":label,"client":client,"type":p.provider_type,"enabled":p.enabled,"models":p.models,"aliases":p.model_aliases,"tiangongBuiltin":p.tiangong_builtin.as_ref().map(|b|b.model_id.as_str())})
+        json!({"routeId":provider_route_id(p),"name":label,"client":client,"type":p.provider_type,"enabled":p.enabled,"models":p.models,"aliases":p.model_aliases,"tiangongBuiltin":p.tiangong_builtin.as_ref().map(|b|b.model_id.as_str()),"workbuddyBuiltin":p.workbuddy_builtin.as_ref().map(|b|b.model_id.as_str())})
     }).collect::<Vec<_>>();
     json!({"copies":copies,"sources":sources})
 }

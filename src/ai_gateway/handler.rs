@@ -354,7 +354,7 @@ pub async fn handle_responses_compact(
             routing_now,
             |p| {
                 !p.is_client_reserved()
-                    && (p.provider_type.is_openai() || p.tiangong_builtin.is_some())
+                    && (p.provider_type.is_openai() || p.tiangong_builtin.is_some() || p.workbuddy_builtin.is_some())
             },
         ) {
             Ok(result) => result,
@@ -415,7 +415,9 @@ pub async fn handle_responses_compact(
     );
 
     let http_client = crate::outbound_http::get();
-    let result = if provider.tiangong_builtin.is_some() {
+    let result = if provider.workbuddy_builtin.is_some() {
+        Err(GatewayError::bad_request("WorkBuddy 内置模型分享暂未适配 Responses 压缩；原历史未替换，请新建会话或使用客户端本地摘要"))
+    } else if provider.tiangong_builtin.is_some() {
         super::providers::tiangong_compact::handle(
             &http_client,
             &ctx,

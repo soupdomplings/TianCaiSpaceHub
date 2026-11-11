@@ -1,5 +1,17 @@
 # 多客户端与外部模型接入：适配规格
 
+## ZCode 增强启动事件积压（V1.0.27 追加修正）
+
+日期：2026-11-11；关联 TC-018。针对用户实测 HTTP 409“ZCode增强启动事件过多，请稍后重试”。根因在 ZCode 与天工共用的 [renderer_cdp.rs](../../src/desktop/renderer_cdp.rs)：启用 `Network` 后，预加载及资源请求会产生大量 `Network.*` 通知；旧 `call()` 在等待命令回复时把所有带 `method` 的通知加入 256 项队列。两个工作区适配器实际仅使用 `Fetch.requestPaused`，无关通知却占满了队列，导致正常启动报错。本轮不重复调整前版登录页探针，也不提高队列上限。
+
+现在 `call()` 等待回复和 `event()` 直接读取使用同一规则，只向工作区消费者保留完整的 `Fetch.requestPaused`。命令间收到的真实暂停响应按原顺序保存，保留请求 ID、响应头等载荷，供后续 `Fetch.getResponseBody`、`Fetch.fulfillRequest` 或 `Fetch.continueRequest` 处理；无关资源及页面通知直接跳过，不挤占暂停响应队列。原 16 MiB 消息大小、8 秒命令超时和 256 项真实暂停响应上限保持，超过真实上限仍明确失败，不静默丢弃已保存的暂停事件。
+
+共享兼容已静态核对 [ZCode 工作区](../../src/desktop/launcher/zcode_workspace.rs) 与 [天工工作区](../../src/gmclaw_runtime/workspace.rs)：两者的 `wait_ready` 和常驻处理均只消费 `Fetch.requestPaused`；缓存设置、失败时释放原响应和最终 `Fetch.disable` 的清理行为保持。其他客户端不使用这份传输层，配置 writer 和模型保存行为不变。
+
+新增一项 Rust 定向回归 `desktop::renderer_cdp::tests::noisy_workspace_notifications_preserve_fetch_pauses_across_calls_and_events`，使用合成本机 WebSocket，分别按 ZCode 和天工连接标签各注入 1792 条无关通知及 4 条交错暂停响应，覆盖等待命令期间与直接事件读取、暂停响应的 FIFO 与完整载荷，以及原 ID 的 fulfill/continue 续行。开发会话已执行定向 `rustfmt` 和差异空白检查；未运行 Cargo、真实客户端、Hub 或模型请求，统一编译和测试由管理会话完成。实机增强启动及 macOS 待用户验收，历史检查不替代本轮结果。
+
+管理会话本批已完成 Windows GUI 测试目标编译，上述事件洪泛用例及原 ZCode 4 项、天工工作区 9 项定向回归通过；天工新增启动壳识别另见 [天工专题](gmclaw.md)。真实客户端未启动，实机结果仍待用户验收。无需配置或安装文件迁移；回滚只需恢复共享传输层的通知筛选。原生登录、已有工作区和草稿保护继续沿下列实现。
+
 ## ZCode 外部模型增强启动（V1.0.26 追加修正）
 
 V1.0.26 继续处理用户实测启动失败。只读核对同一官方 3.17.2 的 `R1n/H1n/U1n`：登录页标题与带 `aria-label="ZCode"` 的原生 logo 先渲染，`login-use-api-key-button` 要等 OAuth 服务目录返回才出现。只认按钮会把已显示的登录首屏误判为未就绪。探针增加这一个原生登录 header 选择器，仍须当前安装的实际主模块与页面吻合；登录进行中、输入、已有工作区继续保留。复选/单选与按钮的默认 value 不算用户文字输入。

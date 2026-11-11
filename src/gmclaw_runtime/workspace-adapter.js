@@ -30,6 +30,17 @@
     const appMatches = [...changed.matchAll(appHeader)];
     const panelHeader = /const ([\w$]+) = \/\* @__PURE__ \*\/ defineComponent\(\{\n  __name: "ChatPanel",/g;
     const panelMatches = [...changed.matchAll(panelHeader)];
+    // Current packages declare a small startup/error shell in index.html. Keep
+    // that shell intact and follow only its unique local renderer import.
+    if (!appMatches.length && !panelMatches.length) {
+      const loaders = [...changed.matchAll(/void __vitePreload\(\(\) => import\("(\.\/main-[\w-]+\.js)"\), true \? __vite__mapDeps\(\[[\d,]+\]\) : void 0, import\.meta\.url\)\.catch\(\(error\) => \{/g)];
+      if (loaders.length === 1 && [...changed.matchAll(/\bimport\s*\(/g)].length === 1 &&
+          changed.includes('document.getElementById("startup-notice")') &&
+          changed.includes('window.addEventListener("app-mounted",') &&
+          changed.includes('function showFailure() {')) {
+        return {source, adapted: false, reason: 'startup_loader', nextModule: loaders[0][1]};
+      }
+    }
     if (appMatches.length !== 1 || panelMatches.length !== 1) return unchanged('unsupported_renderer');
     const appStart = appMatches[0].index;
     const appEnd = changed.indexOf('\nconst App = /* @__PURE__ */ _export_sfc(', appStart);

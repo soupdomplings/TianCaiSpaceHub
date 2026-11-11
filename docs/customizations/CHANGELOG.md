@@ -1,5 +1,16 @@
 # 二开变更记录
 
+## V1.0.27 集成中 · 2026-11-11 · 性格更新与启动／分享修复
+
+关联 TC-002/018/023；基线唯一 `main` / `3daf9ee`。用户新修改性格文档并明确要求下版测试 WorkBuddy 登录模型跨端分享，本批统一一份 Windows 测试包，保留旧包身份。
+
+- 按用户文档同步三套性格的定位、性格、说话和表情习惯，设置下拉框改为三个可见原生单选项；持久 ID、默认值、当前会话及草稿不迁移。
+- ZCode 共享 CDP 只保留两端实际消费的暂停请求事件，避免无关网络通知挤满队列造成 409；天工进一步定位官方启动包装模块，按实际工作区处理内存适配。
+- WorkBuddy 分享由官方宿主维持登录凭据，提供启用、当前账户模型目录、指定客户端配置及停用；具体实现和剩余实机边界见 [分享专题](workbuddy-builtin-sharing-assessment.md)。仅打开面板不启动或启用，实际费用和额度归原账号。
+- MiniMax 官方普通 API 与 M Plan 订阅使用不同 Key／额度，但可使用相同 OpenAI 兼容地址；保留一个厂商预设，不混用凭据或自动回退扣费。
+
+专题：[搭档](genius-buddy.md)、[客户端](desktop-client-adapters.md)、[天工](gmclaw.md)、[厂商预设](desktop-capability-management.md)。必要检查与唯一包身份在 [V27 交付](../releases/v1.0.27.md) 据实补齐；本批不启动实际产品、客户端、安装器或真实模型调用，Windows 实机和 macOS 待用户验收。
+
 2026-11-11 **TC-016/018/019/023 V1.0.26 测试交付**：搭档接入三套性格与完全访问、Hub 内半宽最大化、点阵／等待动效和末字测宽；追问改卡片，专用渠道走原生删除，页面导航等待真实回执。天工内置分享默认隐藏，明确请求才显示。统一提示补正文、四秒倒计时及弹出收回动效，追加模块／页签和公共弹窗过渡及[数据加载反馈](../development/loading-feedback.md)；小分队去掉可用渠道、修首次表格布局和读取等待弹层；ZCode 补官方登录服务加载阶段识别及已建立的本 Hub 启动连接重试。实现／回滚见 [搭档](genius-buddy.md)、[客户端](desktop-client-adapters.md)、[小分队](tiancai-squad-account.md)、[反馈](../development/operation-feedback.md)和[视觉规范](../development/desktop-visual-system.md)。[WorkBuddy 分享评估](workbuddy-builtin-sharing-assessment.md) 仍为静态研究，检查和唯一包状态见 [V26 交付](../releases/v1.0.26.md)。 Windows GUI/release、57 项不同 Rust、12 项 Node 和唯一 MSI `230102` 核验通过，产品源码 `eac0ea2` 已推送；实机待用户验收。
 
 ## V1.0.25 本地测试交付 · 2026-11-11 · 搭档、导入与统一反馈

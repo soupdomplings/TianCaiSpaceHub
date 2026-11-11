@@ -5,6 +5,7 @@ pub mod openai_alpha_search;
 pub mod openai_images;
 pub mod openai_responses;
 pub mod tiangong_compact;
+mod workbuddy_builtin;
 
 #[cfg(test)]
 mod retry_tests;
@@ -136,6 +137,9 @@ async fn execute_provider_request_inner(
 ) -> Result<reqwest::Response, GatewayError> {
     if provider.tiangong_builtin.is_some() {
         return execute_tiangong_request(request, provider, context).await;
+    }
+    if provider.workbuddy_builtin.is_some() {
+        return workbuddy_builtin::execute(request, provider, context).await;
     }
     let alternate = super::endpoint_repair::prepare(provider, &request);
     let original = execute_request_with_retries(

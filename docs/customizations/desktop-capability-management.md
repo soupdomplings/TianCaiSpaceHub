@@ -2,6 +2,8 @@
 
 ## 2026-11-11 MiniMax 厂商预设
 
+V1.0.27 再次核对官方 [M Plan 工具接入](https://platform.minimax.cn/docs/m-plan/other-tools) 与 [Key／计费 FAQ](https://platform.minimax.cn/docs/m-plan/faq)：MiniMax 同时有普通按量 API 与订阅套餐，不能将二者的 Key、额度和费用混同；两类凭据可用同一个 OpenAI 兼容基址，因此 Hub 不需要额外协议或切换地址。现有 MiniMax 入口也能填写订阅 Key。智谱的服务类型还决定专用模型目录（`/api/paas/v4/models` 与 `/api/coding/paas/v4/models`），不能照搬为 MiniMax 必须有两个请求入口。套餐不自动回退到普通 Key。此次为说明核对，不修改预设、持久配置或模型请求，不沿用历史结果声称套餐实测通过。
+
 “模型与渠道 → 新增大模型厂商”增加 MiniMax 选项。默认名称为 `minimax`，使用现有 `ChatCompletions` 和 `compatibility="openai_chat"`；国内地址预填 `https://api.minimax.cn/v1`，国际用户直接改成 `https://api.minimax.io/v1`，并填写对应站点的 API Key。地址、渠道名、模型列表及独立模型目录地址均可编辑，不新增地区开关或协议适配器。
 
 2026-11-11用户追问协议及套餐差异后重新核对官方文档：上述OpenAI兼容接口是MiniMax官方提供的。普通API按量计费与Coding Plan（当前官方文档称M Plan）是两类凭据和额度，订阅Key与普通按量Key相互独立；官方订阅接入同样使用`/v1`的OpenAI兼容入口，也提供`/anthropic`的Anthropic兼容入口。Hub当前预设使用前者，不把套餐当作另一种协议，不新增无实际请求差异的套餐开关，也不因订阅额度用尽自动换普通Key。V1.0.24补充厂商选项/地址提示：使用同站点相应Key，由Key决定费用归属，套餐模型以官方实际允许为准；不改已有渠道、协议或配置格式。官方通用教程推荐支持两种时选Anthropic；现有OpenAI预设仍是官方支持路径，不能据此宣称已经验收所有推理/工具特性。

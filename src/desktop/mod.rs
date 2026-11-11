@@ -26,6 +26,7 @@ pub mod tiangong_resources;
 pub mod tiangong_models;
 pub mod transaction;
 pub mod webstorm_native;
+pub mod workbuddy_builtin;
 
 use std::path::{Path, PathBuf};
 

@@ -144,6 +144,14 @@ const original = [
   'globalThis.makePanel = (props) => ChatPanel.setup(props);',
   'globalThis.sidebarLabel = () => renderSidebar().children;',
 ].join('\n');
+const startupLoader = [
+  'const notice = document.getElementById("startup-notice");',
+  'function showFailure() { notice.hidden = false; }',
+  'window.addEventListener("app-mounted", () => { notice.hidden = true; });',
+  'void __vitePreload(() => import("./main-native.js"), true ? __vite__mapDeps([0,1]) : void 0, import.meta.url).catch((error) => {',
+  '  showFailure();',
+  '});',
+].join('\n');
 const models = [
   {model_id: 'tiangong-builtin', display_name: 'official', is_configured: true},
   {model_id: 'external-a', display_name: 'A'},
@@ -206,6 +214,24 @@ async function main() {
     assert.equal(output.adapted, true);
     assert.equal(adapt(output.source, options).reason, 'already_adapted');
     assert.equal(adapt(output.source, options).source, output.source);
+  });
+  await test('startup shell remains byte-identical and identifies its unique main module', () => {
+    for (const source of [startupLoader, startupLoader.replace(/\n/g, '\r\n')]) {
+      const result = adapt(source, options);
+      assert.equal(result.adapted, false); assert.equal(result.source, source);
+      assert.equal(result.reason, 'startup_loader'); assert.equal(result.nextModule, './main-native.js');
+    }
+  });
+  await test('ambiguous or nonlocal startup imports keep the original unsupported response', () => {
+    for (const source of [startupLoader + '\n' + startupLoader,
+      startupLoader.replace('./main-native.js', '../main-native.js'),
+      startupLoader.replace('./main-native.js', 'https://example.invalid/main-native.js'),
+      startupLoader.replace('startup-notice', 'another-view'),
+      startupLoader + '\nvoid import("./another.js");']) {
+      const result = adapt(source, options);
+      assert.equal(result.adapted, false); assert.equal(result.source, source);
+      assert.equal(result.reason, 'unsupported_renderer'); assert.equal(result.nextModule, undefined);
+    }
   });
   await test('unknown or ambiguous renderer keeps exact original bytes', () => {
     for (const text of [original.replace('const clawLoggedIn', 'const renamedLogin'),
@@ -369,14 +395,24 @@ async function main() {
   });
   const at = process.argv.indexOf('--renderer');
   if (at !== -1) {
-    const renderer = fs.readFileSync(path.resolve(process.argv[at + 1]), 'utf8');
-    await test('installed renderer adapts and parses without executing it', () => {
-      const result = adapt(renderer, options);
+    const rendererPath = path.resolve(process.argv[at + 1]);
+    await test('installed startup route reaches one adapted renderer without executing it', () => {
+      let renderer = fs.readFileSync(rendererPath, 'utf8');
+      let result = adapt(renderer, options);
+      const startupLoaderPreserved = result.reason === 'startup_loader';
+      if (startupLoaderPreserved) {
+        assert.equal(result.adapted, false); assert.equal(result.source, renderer);
+        const parsed = spawnSync(process.execPath, ['--input-type=module', '--check'], {input: result.source, encoding: 'utf8'});
+        assert.equal(parsed.status, 0, 'unchanged installed startup shell must be valid ECMAScript');
+        renderer = fs.readFileSync(path.resolve(path.dirname(rendererPath), result.nextModule), 'utf8');
+        result = adapt(renderer, options);
+      }
       assert.equal(result.adapted, true);
+      assert.equal(result.source.split('/*TIANCAISPACEHUB_EXTERNAL_WORKSPACE_V1*/').length, 2);
       const parsed = spawnSync(process.execPath, ['--input-type=module', '--check'], {input: result.source, encoding: 'utf8'});
       assert.equal(parsed.status, 0, 'adapted installed renderer must be valid ECMAScript');
       // No bundle contents or source excerpts enter logs.
-      process.stdout.write(JSON.stringify({rendererBytes: renderer.length, adaptedBytes: result.source.length, parsePassed: true}) + '\n');
+      process.stdout.write(JSON.stringify({rendererBytes: renderer.length, adaptedBytes: result.source.length, startupLoaderPreserved, parsePassed: true}) + '\n');
     });
   }
   process.stdout.write(JSON.stringify({passed, failed: 0, productStarted: false, realModelCalled: false}) + '\n');

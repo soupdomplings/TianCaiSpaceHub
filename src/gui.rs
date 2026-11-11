@@ -220,6 +220,7 @@ mod usage_view;
 mod visual;
 mod widgets;
 mod workbuddy;
+mod workbuddy_builtin;
 
 use self::ai_gateway::{
     AiGwActionResult, AiGwChannelToggle, AiGwProviderModel, AiGwProviderRow, AiGwProviderRows,
@@ -2914,6 +2915,10 @@ fn show_ai_gw_channel_dialog(
     api: &ApiClient,
     initial: Option<&ProviderConfig>,
 ) -> Option<ProviderConfig> {
+    if initial.is_some_and(|p| p.workbuddy_builtin.is_some()) {
+        workbuddy_builtin::show(parent, api, |_| {});
+        return None;
+    }
     if initial.is_some_and(|p| p.tiangong_builtin.is_some()) {
         tiangong_models::show(parent, api);
         return None;
@@ -4166,6 +4171,7 @@ fn show_ai_gw_channel_dialog(
                 api_key: strip_nul(&key_input.get_value()).trim().to_string(),
                 chatgpt_auth_id: None,
                 tiangong_builtin: initial.and_then(|p| p.tiangong_builtin.clone()),
+                workbuddy_builtin: initial.and_then(|p| p.workbuddy_builtin.clone()),
                 model_aliases,
                 models,
                 prompt_cache_retention: initial

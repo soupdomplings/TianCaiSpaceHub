@@ -369,6 +369,9 @@ pub struct ProviderConfig {
     /// TianGong built-in identity and OS-protected user authorization reference.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tiangong_builtin: Option<crate::desktop::tiangong_models::BuiltinBinding>,
+    /// Non-secret identity of a model shared by a live WorkBuddy host.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workbuddy_builtin: Option<crate::desktop::workbuddy_builtin::BuiltinBinding>,
     /// 该 provider 支持的 model 列表（精确匹配用）。
     pub models: Vec<String>,
     /// Codex 侧 model 到上游 provider model 的映射。
@@ -403,6 +406,7 @@ impl Default for ProviderConfig {
             api_key: String::new(),
             chatgpt_auth_id: None,
             tiangong_builtin: None,
+            workbuddy_builtin: None,
             models: Vec::new(),
             model_aliases: BTreeMap::new(),
             prompt_cache_retention: None,

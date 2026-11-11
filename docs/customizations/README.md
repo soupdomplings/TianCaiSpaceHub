@@ -1,5 +1,7 @@
 # 二开功能总表
 
+2026-11-11 **V1.0.27 集成中（TC-002/018/023）**：搭档按用户新版[性格设定](genius-buddy-personalities-draft.md)同步三套模板，设置页改可见的三项单选；ZCode 修共享 CDP 无关通知积压，天工修未登录启动的真实模块识别；本轮实施 [WorkBuddy 内置模型跨端分享](workbuddy-builtin-sharing-assessment.md)，由宿主保管登录凭据。MiniMax 继续共用 API／订阅预设，按相应 Key 使用不同额度。实现、离线检查、唯一包、GitHub 及用户待验状态见 [V27 交付](../releases/v1.0.27.md)。
+
 2026-11-11 **V1.0.26 测试交付（TC-016/018/019/023）**：搭档接入三套已审核性格、完全访问、半宽最大化、结构化追问、专用模型／渠道删除和真实导航回执；天工内置分享移至搭档显式入口。统一倒计时提示，小分队删除可用渠道页签、修首次使用记录布局并移除菜单读取等待窗；追加模块／页签和公共弹窗过渡、提示收放，见[视觉规范](../development/desktop-visual-system.md)；[加载动态](../development/loading-feedback.md) 复用实际读取，快速完成和后台轮询保持安静。ZCode 补登录加载识别和本 Hub 启动连接重试。[WorkBuddy 自带模型分享](workbuddy-builtin-sharing-assessment.md) 本轮仅完成静态评估，未新增分享能力。行为见 [搭档](genius-buddy.md)、[客户端](desktop-client-adapters.md)、[账户](tiancai-squad-account.md)、[反馈](../development/operation-feedback.md)，检查与唯一包见 [V26 交付](../releases/v1.0.26.md)；不沿用历史检查宣称实机通过。 Windows GUI/release、57 项不同 Rust、12 项 Node 和唯一 MSI `230102` 核验通过，产品源码 `eac0ea2` 已推送；实机待用户验收。
 
 V1.0.25 追加：[统一操作反馈](../development/operation-feedback.md) 与导入文案简化；[搭档统计查询](assistant-usage.md) 直接读取当前小分队账户用量、实际扣费及本机请求，回复简短自然。[性格草案](genius-buddy-personalities-draft.md) 按用户最新决定保留干练搭档、软萌猫娘、温柔女友三套，允许自然使用少量 emoji，待用户审核，产品尚无性格开关。Windows GUI/release、31 项 Rust、10 项 Node 和唯一 MSI `210620` 核验通过，源提交 `8c3b3ed` 已推送；包身份与实机待验范围见 [V25 交付](../releases/v1.0.25.md)。
@@ -173,7 +175,7 @@ GUI 常见登录/检测提示、身份/有效期、确认主内容和帮助有�
 | 编号 | 内容 | 当前行为与必须保留的约束 | 详细说明 |
 | --- | --- | --- | --- |
 | TC-001 | 天才空间品牌与打包 | v0.4.30-3：产品/CLI/可执行文件/App 统一 `TianCaiSpaceHub`，Cargo package 为 `tiancaispacehub`；保留配置目录、协议与安装升级身份，历史包名不回写 | [品牌、桌面与交付](desktop-and-packaging.md) |
-| TC-002 | WorkBuddy 多模型独立接入 | 页签逐条新增/编辑/删除/撤销；专用 `workbuddy` 与 `workbuddy:<entryId>`、独立地址、上游选择、数组/未知字段保留和版本校验；旧单模型入口兼容 | [WorkBuddy](../workbuddy.md) |
+| TC-002 | WorkBuddy 多模型独立接入与登录模型分享 | V27 增加显式启用的登录模型分享测试入口，宿主保管凭据、当前账户确认目录、JSON/SSE 与工具续轮转接；支持停用及切号撤销，首版无远端压缩，实机待验。原页签逐条新增/编辑/删除/撤销、专用 `workbuddy` 与 `workbuddy:<entryId>`、数组/未知字段和版本保护保持兼容 | [WorkBuddy](../workbuddy.md)、[登录模型分享](workbuddy-builtin-sharing-assessment.md) |
 | TC-003 | WorkBuddy 错误重试 | 上游 HTTP 502/503 最多额外重试两次，等待 1 秒、2 秒；与传输错误共用预算，同一上游和请求，流已建立后不重发 | [WorkBuddy](../workbuddy.md) |
 | TC-004 | WorkBuddy 思考强度与缓存 | 模型、别名和协议联动；Claude、GPT-6/GPT-5.6 家族五档至 max，GLM high/max，其他保留四档；保存/加载/转换保留有效默认值；OpenAI 缓存键按优先级回退，Anthropic 用原生 `cache_control` | [WorkBuddy](../workbuddy.md) |
 | TC-005 | 通用 Chat Completions | 新建通用渠道使用 `compatibility=openai_chat`；保留旧 DeepSeek Chat 行为；按渠道关闭推理，不改全局 | [Chat Completions](../openai-chat-completions.md) |

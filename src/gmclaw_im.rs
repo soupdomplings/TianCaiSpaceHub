@@ -1352,6 +1352,7 @@ mod tests {
             desktop_activity: crate::desktop::activity::ActivityStore::default(),
             desktop_mcp_activity: crate::desktop::mcp_activity::McpActivityStore::default(),
             desktop_squad: Mutex::new(Default::default()),
+            workbuddy_builtin: crate::desktop::workbuddy_builtin::Service::default(),
             local_assistance: crate::local_assistance::Service::default(),
             assistant: crate::assistant::AssistantState::default(),
             config_path: PathBuf::from(":memory:"),

@@ -143,7 +143,7 @@ pub(crate) async fn enhance_workspace(options: WorkspaceOptions) -> Result<()> {
                     "天工已进入工作区，本次保留任务和草稿；请正常退出后增强启动");
                 cdp.call("Page.reload", json!({"ignoreCache":true})).await?;
                 let options = options_rx.borrow().clone();
-                wait_ready(&mut cdp, &options).await
+                wait_ready(&mut cdp, &options, &entry).await
             }
         }).await.unwrap_or_else(|_| Err(anyhow::anyhow!(
             "天工增强工作区准备超时，请查看天工页面提示；可以重新使用增强启动"
@@ -155,7 +155,7 @@ pub(crate) async fn enhance_workspace(options: WorkspaceOptions) -> Result<()> {
             while let Ok(event) = cdp.event().await {
                 let options = options_rx.borrow().clone();
                 if event["method"] == "Fetch.requestPaused"
-                    && adapt_response(&mut cdp, &event["params"], &options)
+                    && adapt_response(&mut cdp, &event["params"], &options, &entry)
                         .await
                         .is_err()
                 {
@@ -198,7 +198,7 @@ async fn update_models(cdp: &mut Cdp, options: &WorkspaceOptions) -> Result<()> 
     Ok(())
 }
 
-async fn wait_ready(cdp: &mut Cdp, options: &WorkspaceOptions) -> Result<()> {
+async fn wait_ready(cdp: &mut Cdp, options: &WorkspaceOptions, entry: &str) -> Result<()> {
     let mut adapted = false;
     let mut timer = tokio::time::interval(Duration::from_millis(200));
     loop {
@@ -206,8 +206,7 @@ async fn wait_ready(cdp: &mut Cdp, options: &WorkspaceOptions) -> Result<()> {
             event = cdp.event() => {
                 let event = event?;
                 if event["method"] == "Fetch.requestPaused" {
-                    adapt_response(cdp, &event["params"], options).await?;
-                    adapted = true;
+                    adapted |= adapt_response(cdp, &event["params"], options, entry).await?;
                 }
             }
             _ = timer.tick(), if adapted => {
@@ -222,7 +221,12 @@ async fn wait_ready(cdp: &mut Cdp, options: &WorkspaceOptions) -> Result<()> {
     }
 }
 
-async fn adapt_response(cdp: &mut Cdp, params: &Value, options: &WorkspaceOptions) -> Result<()> {
+async fn adapt_response(
+    cdp: &mut Cdp,
+    params: &Value,
+    options: &WorkspaceOptions,
+    entry: &str,
+) -> Result<bool> {
     let id = params["requestId"]
         .as_str()
         .context("天工增强启动响应缺少标识")?;
@@ -245,6 +249,30 @@ async fn adapt_response(cdp: &mut Cdp, params: &Value, options: &WorkspaceOption
             serde_json::to_string(options)?
         );
         let value = cdp.evaluate(&expression).await?;
+        if value["reason"] == "startup_loader" {
+            // Set the next exact response interception before releasing the
+            // native shell, whose evaluation starts the dynamic main import.
+            // Retain the shell pattern for later manual renderer reloads.
+            ensure!(
+                params["request"]["url"].as_str() == Some(entry),
+                "天工启动模块结构不兼容，已保留普通启动"
+            );
+            let module = value["nextModule"]
+                .as_str()
+                .and_then(|module| startup_renderer_entry(entry, module))
+                .context("天工启动模块地址不兼容，已保留普通启动")?;
+            cdp.call(
+                "Fetch.enable",
+                json!({"patterns":[
+                    {"urlPattern":entry,"requestStage":"Response","resourceType":"Script"},
+                    {"urlPattern":module,"requestStage":"Response","resourceType":"Script"}
+                ]}),
+            )
+            .await?;
+            cdp.call("Fetch.continueRequest", json!({"requestId":id}))
+                .await?;
+            return Ok(false);
+        }
         ensure!(
             value["adapted"] == true,
             "当前天工版本的工作区启动结构暂不兼容，已保留原启动；请使用普通启动"
@@ -275,7 +303,7 @@ async fn adapt_response(cdp: &mut Cdp, params: &Value, options: &WorkspaceOption
             }),
         )
         .await?;
-        Ok(())
+        Ok(true)
     }
     .await;
     if operation.is_err() {
@@ -285,6 +313,26 @@ async fn adapt_response(cdp: &mut Cdp, params: &Value, options: &WorkspaceOption
             .await;
     }
     operation
+}
+
+fn startup_renderer_entry(entry: &str, module: &str) -> Option<String> {
+    let name = module.strip_prefix("./")?.strip_suffix(".js")?;
+    if name.is_empty()
+        || !name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return None;
+    }
+    let entry = Url::parse(entry).ok()?;
+    if entry.scheme() != "file"
+        || entry.query().is_some()
+        || entry.fragment().is_some()
+        || !entry.path().ends_with(".js")
+    {
+        return None;
+    }
+    Some(entry.join(module).ok()?.to_string())
 }
 
 const PROBE: &str = r#"({
@@ -333,6 +381,26 @@ mod tests {
             "file:///D:/App/resources/app.asar/out/renderer/assets/main.js?other=1",
         ] {
             assert!(!same_renderer_entry(page, entry));
+        }
+    }
+
+    #[test]
+    fn startup_module_must_be_a_sibling_script_of_the_verified_entry() {
+        let entry = "file:///D:/App/resources/app.asar/out/renderer/assets/index-loader.js";
+        assert_eq!(
+            startup_renderer_entry(entry, "./main-current.js").as_deref(),
+            Some("file:///D:/App/resources/app.asar/out/renderer/assets/main-current.js")
+        );
+        for module in [
+            "../main-other.js",
+            "./nested/main-other.js",
+            "https://example.invalid/main.js",
+            "file:///D:/Other/main.js",
+            "./main.js?other=1",
+            "./main.js#other",
+            "./main%2Fother.js",
+        ] {
+            assert!(startup_renderer_entry(entry, module).is_none());
         }
     }
 
@@ -475,7 +543,8 @@ mod tests {
             adapt_response(
                 &mut cdp,
                 &json!({"requestId":"fixture","responseStatusCode":200}),
-                &options
+                &options,
+                "file:///fixture/entry.js"
             )
             .await
             .is_err()
@@ -499,11 +568,11 @@ mod tests {
         .await;
         let (config, status) = fixture(true);
         let options = select_options(&config, status, None).unwrap();
-        adapt_response(&mut cdp,&json!({
+        assert!(adapt_response(&mut cdp,&json!({
             "requestId":"fixture","responseStatusCode":200,
             "responseHeaders":[{"name":"Content-Type","value":"text/javascript"},
                 {"name":"Content-Length","value":"16"},{"name":"Content-Encoding","value":"gzip"}]
-        }),&options).await.unwrap();
+        }),&options,"file:///fixture/entry.js").await.unwrap());
         let requests = server.await.unwrap();
         let params = &requests[2]["params"];
         assert_eq!(
@@ -516,5 +585,74 @@ mod tests {
                 .unwrap(),
             b"fixture adapted"
         );
+    }
+
+    #[tokio::test]
+    async fn startup_shell_is_released_unchanged_before_the_exact_main_module_is_adapted() {
+        let entry = "file:///fixture/assets/index-loader.js";
+        let (mut cdp, server) = mock_cdp(vec![
+            (
+                "Fetch.getResponseBody",
+                json!({"body":"native startup shell","base64Encoded":false}),
+            ),
+            (
+                "Runtime.evaluate",
+                json!({"result":{"value":{
+                    "adapted":false,"source":"native startup shell","reason":"startup_loader",
+                    "nextModule":"./main-current.js"
+                }}}),
+            ),
+            ("Fetch.enable", json!({})),
+            ("Fetch.continueRequest", json!({})),
+            (
+                "Fetch.getResponseBody",
+                json!({"body":"native main module","base64Encoded":false}),
+            ),
+            (
+                "Runtime.evaluate",
+                json!({"result":{"value":{
+                    "adapted":true,"source":"adapted main module","reason":"adapted"
+                }}}),
+            ),
+            ("Fetch.fulfillRequest", json!({})),
+        ])
+        .await;
+        let (config, status) = fixture(true);
+        let options = select_options(&config, status, None).unwrap();
+        assert!(
+            !adapt_response(
+                &mut cdp,
+                &json!({
+                    "requestId":"loader","responseStatusCode":200,"request":{"url":entry}
+                }),
+                &options,
+                entry
+            )
+            .await
+            .unwrap()
+        );
+        assert!(
+            adapt_response(
+                &mut cdp,
+                &json!({
+                    "requestId":"main","responseStatusCode":200,
+                    "request":{"url":"file:///fixture/assets/main-current.js"}
+                }),
+                &options,
+                entry
+            )
+            .await
+            .unwrap()
+        );
+        let requests = server.await.unwrap();
+        assert_eq!(
+            requests[2]["params"]["patterns"],
+            json!([
+                {"urlPattern":entry,"requestStage":"Response","resourceType":"Script"},
+                {"urlPattern":"file:///fixture/assets/main-current.js","requestStage":"Response","resourceType":"Script"}
+            ])
+        );
+        assert_eq!(requests[3]["params"], json!({"requestId":"loader"}));
+        assert_eq!(requests[6]["params"]["requestId"], "main");
     }
 }

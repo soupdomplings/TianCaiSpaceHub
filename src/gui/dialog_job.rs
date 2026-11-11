@@ -273,7 +273,7 @@ impl InlineJob {
     ) -> bool {
         self.start_with_feedback(api, title, path, body, true, finished)
     }
-    fn start_with_feedback(
+    pub(super) fn start_with_feedback(
         &self,
         api: ApiClient,
         title: &str,

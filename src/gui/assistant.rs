@@ -4,11 +4,12 @@ use super::{
     api::ApiClient,
     assistant_markdown::MessageBody,
     assistant_questions::QuestionCard,
-    controls::{Button, ButtonKind, Choice, TextCtrl},
+    controls::{Button, ButtonKind, TextCtrl},
     dialog_job,
     shell::{PageId, Shell},
     theme, visual,
 };
+use crate::assistant::personality::Personality;
 use crate::desktop::clients::ClientId;
 use serde_json::{Value, json};
 use std::{
@@ -336,6 +337,112 @@ impl ChatMotion {
     }
 }
 
+/// One native radio group keeps all three styles visible and exposes its
+/// checked state, Tab entry, arrow navigation and Space activation to the OS.
+#[derive(Clone)]
+struct PersonalityChoices {
+    panel: Panel,
+    items: [RadioButton; 3],
+    descriptions: [StaticText; 3],
+    layout_metrics: Rc<Cell<Option<(i32, i32)>>>,
+}
+impl PersonalityChoices {
+    fn new(parent: &impl WxWidget) -> Self {
+        let panel = Panel::builder(parent).build();
+        panel.set_background_color(theme::theme().bg_app);
+        panel.set_min_size(Size::new(0, -1));
+        panel.set_name("对话性格");
+        let column = BoxSizer::builder(Orientation::Vertical).build();
+        let entries = Personality::ALL.map(|style| {
+            let radio = RadioButton::builder(&panel)
+                .with_label(style.label())
+                .with_style(if style == Personality::default() {
+                    RadioButtonStyle::GroupStart
+                } else {
+                    RadioButtonStyle::Default
+                })
+                .build();
+            radio.set_name(style.label());
+            radio.set_font(&theme::font(theme::TextRole::Body));
+            radio.set_background_color(theme::theme().bg_app);
+            radio.set_foreground_color(theme::theme().ink_primary);
+            radio.set_min_size(Size::new(0, panel.from_dip(44)));
+            radio.set_tooltip(style.description());
+            column.add(&radio, 0, SizerFlag::Expand, 0);
+            let description = label(&panel, style.description(), theme::TextRole::Caption);
+            description.set_min_size(Size::new(0, -1));
+            description.set_foreground_color(theme::theme().ink_secondary);
+            column.add(
+                &description,
+                0,
+                SizerFlag::Expand | SizerFlag::Left,
+                panel.from_dip(24),
+            );
+            column.add_spacer(panel.from_dip(8));
+            (radio, description)
+        });
+        panel.set_sizer(column, false);
+        let choices = Self {
+            panel,
+            items: entries.map(|(radio, _)| radio),
+            descriptions: entries.map(|(_, description)| description),
+            layout_metrics: Default::default(),
+        };
+        choices.set_selected(Personality::default());
+        choices
+    }
+    fn set_selected(&self, style: Personality) {
+        for (candidate, radio) in Personality::ALL.into_iter().zip(self.items) {
+            if radio.get_value() != (candidate == style) {
+                radio.set_value(candidate == style);
+            }
+        }
+    }
+    fn selected(&self) -> Personality {
+        self.items
+            .iter()
+            .position(RadioButton::get_value)
+            .map(|index| Personality::ALL[index])
+            .unwrap_or_default()
+    }
+    fn enable(&self, enabled: bool) {
+        self.panel.enable(enabled);
+    }
+    fn layout(&self, width: i32) {
+        let width = (width - self.panel.from_dip(24)).max(1);
+        let metrics = (width, self.panel.from_dip(100));
+        if self.layout_metrics.replace(Some(metrics)) == Some(metrics) {
+            return;
+        }
+        for (style, description) in Personality::ALL.into_iter().zip(self.descriptions) {
+            description.set_label(style.description());
+            description.wrap(width);
+        }
+        self.panel.layout();
+    }
+    fn on_selected(&self, selected: impl Fn(Personality) + 'static) {
+        let selected = Rc::new(selected);
+        for (index, style) in Personality::ALL.into_iter().enumerate() {
+            let radio = self.items[index];
+            let choose = selected.clone();
+            radio.on_selected(move |_| {
+                if radio.get_value() {
+                    choose(style);
+                }
+            });
+            let choose = selected.clone();
+            self.descriptions[index].on_mouse_left_up(move |event| {
+                if radio.is_enabled() && !radio.get_value() {
+                    radio.set_value(true);
+                    radio.set_focus();
+                    choose(style);
+                }
+                event.skip(false);
+            });
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(super) struct AssistantUi {
     pub page: Panel,
@@ -344,7 +451,7 @@ pub(super) struct AssistantUi {
     shell: Shell,
     api: ApiClient,
     enabled: CheckBox,
-    personality: Choice,
+    personality: PersonalityChoices,
     full_access: CheckBox,
     builtin_share: Button,
     runtime: StaticText,
@@ -434,15 +541,13 @@ impl AssistantUi {
         column.add(&access_hint, 0, SizerFlag::Bottom, page.from_dip(20));
         let personality_label = label(&scroll, "对话性格", theme::TextRole::Body);
         column.add(&personality_label, 0, SizerFlag::Bottom, page.from_dip(8));
-        let personality = Choice::builder(&scroll).build();
-        for style in crate::assistant::personality::Personality::ALL {
-            personality.append(style.label());
-        }
-        personality.set_selection(0);
+        let personality = PersonalityChoices::new(&scroll);
         personality.enable(false);
-        personality.set_tooltip("选择会保存并用于下一轮回复，当前对话和执行权限保留");
+        personality
+            .panel
+            .set_tooltip("选择会保存并用于下一轮回复，当前对话和执行权限保留");
         column.add(
-            &personality,
+            &personality.panel,
             0,
             SizerFlag::Expand | SizerFlag::Bottom,
             page.from_dip(20),
@@ -813,20 +918,12 @@ impl AssistantUi {
             u.post("question/answer", body, Action::Question(nonce));
         });
         let u = ui.clone();
-        personality.on_selection_changed(move |_| {
-            if let Some(style) = personality
-                .get_selection()
-                .and_then(|index| {
-                    crate::assistant::personality::Personality::ALL.get(index as usize)
-                })
-                .copied()
-            {
-                u.post(
-                    "settings",
-                    json!({"personality":style}),
-                    Action::Personality,
-                );
-            }
+        ui.personality.on_selected(move |style| {
+            u.post(
+                "settings",
+                json!({"personality":style}),
+                Action::Personality,
+            );
         });
         let u = ui.clone();
         builtin_share.on_click(move |_| {
@@ -961,6 +1058,7 @@ impl AssistantUi {
             for item in [u.runtime, u.account, u.model, u.detail, u.references, note] {
                 item.wrap(width);
             }
+            u.personality.layout(width);
             scroll.layout();
             scroll.fit_inside();
             event.skip(true);
@@ -1516,12 +1614,7 @@ impl AssistantUi {
                             self.state.borrow()["personality"].clone(),
                         )
                         .unwrap_or_default();
-                    self.personality.set_selection(
-                        crate::assistant::personality::Personality::ALL
-                            .iter()
-                            .position(|candidate| *candidate == style)
-                            .unwrap_or(0) as u32,
-                    );
+                    self.personality.set_selected(style);
                     if matches!(action, Action::Settings(true)) {
                         // The setting may have saved before its status read
                         // failed. Check saved readiness before offering setup.
@@ -1575,12 +1668,7 @@ impl AssistantUi {
             value["personality"].clone(),
         )
         .unwrap_or_default();
-        self.personality.set_selection(
-            crate::assistant::personality::Personality::ALL
-                .iter()
-                .position(|candidate| *candidate == style)
-                .unwrap_or(0) as u32,
-        );
+        self.personality.set_selected(style);
         self.builtin_share
             .show(value["tiangongBuiltinShareVisible"] == true);
         self.enabled.enable(true);
@@ -1707,6 +1795,7 @@ impl AssistantUi {
         ] {
             text.wrap(page_width);
         }
+        self.personality.layout(page_width);
         self.page_scroll.layout();
         self.page_scroll.fit_inside();
         self.page.layout();
@@ -1779,6 +1868,17 @@ impl AssistantUi {
             return;
         };
         if self.navigated.borrow().as_deref() == Some(id) {
+            return;
+        }
+        if navigation["page"] == "workbuddy-builtin-share" {
+            if self.acting.load(Ordering::SeqCst) {
+                return;
+            }
+            *self.navigated.borrow_mut() = Some(id.to_string());
+            let (ui, id) = (self.clone(), id.to_string());
+            super::workbuddy_builtin::show(&self.parent, &self.api, move |opened| {
+                ui.post("navigation/ack", json!({"id":id,"opened":opened,"message":if opened {"WorkBuddy 分享面板已打开"} else {"WorkBuddy 分享面板未能打开"}}), Action::Navigate);
+            });
             return;
         }
         if navigation["page"] == "tiangong-builtin-share" {
@@ -1983,6 +2083,151 @@ mod layout_tests {
 
 #[cfg(all(test, windows))]
 #[test]
+fn personality_choices_are_visible_exclusive_and_keep_the_conversation_and_draft() {
+    use std::ffi::c_void;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        BS_OWNERDRAW, BS_RADIOBUTTON, BS_TYPEMASK, GWL_STYLE, GetClassNameW, GetWindowLongPtrW,
+        IsWindow, OBJID_CLIENT, SendMessageW, WM_GETDLGCODE, WS_GROUP, WS_TABSTOP,
+    };
+    use windows_sys::{Win32::Foundation::HWND, core::GUID};
+    // Windows SDK IAccessible::get_accRole/get_accState ABI. Keep this query
+    // local to the fixture instead of adding a product accessibility adapter.
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    union VariantValue {
+        integer: i32,
+        record: [usize; 2],
+    }
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct Variant {
+        kind: u16,
+        reserved: [u16; 3],
+        value: VariantValue,
+    }
+    #[link(name = "oleacc")]
+    unsafe extern "system" {
+        fn AccessibleObjectFromWindow(
+            window: HWND,
+            object_id: u32,
+            iid: *const GUID,
+            object: *mut *mut c_void,
+        ) -> i32;
+    }
+    fn native_role_and_state(radio: RadioButton) -> (i32, i32) {
+        const IID_IACCESSIBLE: GUID = GUID {
+            data1: 0x618736e0,
+            data2: 0x3c3d,
+            data3: 0x11cf,
+            data4: [0x81, 0x0c, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71],
+        };
+        let mut object = std::ptr::null_mut();
+        assert_eq!(
+            unsafe {
+                AccessibleObjectFromWindow(
+                    radio.get_handle(),
+                    OBJID_CLIENT as u32,
+                    &IID_IACCESSIBLE,
+                    &mut object,
+                )
+            },
+            0,
+            "the real radio must expose its Windows accessible object"
+        );
+        assert!(!object.is_null());
+        let vtable = unsafe { *object.cast::<*const usize>() };
+        type Property = unsafe extern "system" fn(*mut c_void, Variant, *mut Variant) -> i32;
+        let get_role: Property = unsafe { std::mem::transmute(*vtable.add(13)) };
+        let get_state: Property = unsafe { std::mem::transmute(*vtable.add(14)) };
+        let release: unsafe extern "system" fn(*mut c_void) -> u32 =
+            unsafe { std::mem::transmute(*vtable.add(2)) };
+        let child_self = Variant {
+            kind: 3,
+            reserved: [0; 3],
+            value: VariantValue { record: [0; 2] },
+        };
+        let mut role = Variant {
+            kind: 0,
+            ..child_self
+        };
+        let mut state = role;
+        let role_result = unsafe { get_role(object, child_self, &mut role) };
+        let state_result = unsafe { get_state(object, child_self, &mut state) };
+        unsafe { release(object) };
+        assert_eq!(role_result, 0);
+        assert_eq!(state_result, 0);
+        assert_eq!(role.kind, 3, "the radio accessibility role must be VT_I4");
+        assert_eq!(state.kind, 3, "the radio accessibility state must be VT_I4");
+        unsafe { (role.value.integer, state.value.integer) }
+    }
+    wxdragon::app::render_offscreen(|| {
+        theme::init(theme::ThemeMode::Light);
+        let frame = Frame::builder().with_title("hidden assistant personality choices").build();
+        let host = Panel::builder(&frame).build();
+        let shell = Shell::new(&host, &frame);
+        let api = ApiClient::new("http://127.0.0.1:1".into(), super::text::GuiText::new(super::text::GuiLocale::ZhCn));
+        let ui = AssistantUi::build(&frame, &shell, api, false);
+        let mut state = json!({"enabled":true,"runtimeReady":true,"loggedIn":true,"modelServiceReady":true,
+            "conversationId":"personality-same-thread","personality":"professional","fullAccess":false,
+            "messages":[{"id":"same-message","role":"assistant","text":"当前对话保留。","status":"completed"}]});
+        ui.apply(state.clone());
+        ui.input.set_value("切换性格时保留的草稿");
+        let handles = ui.personality.items.map(|radio| radio.handle_ptr());
+        let message_handle = ui.cards.borrow()[0].body.primary_text().handle_ptr();
+        for width in [ui.page.from_dip(300), ui.page.from_dip(620)] {
+            ui.personality.panel.set_size(Size::new(width, ui.page.from_dip(260)));
+            ui.personality.layout(width);
+            for (style, radio) in Personality::ALL.into_iter().zip(ui.personality.items) {
+                assert!(radio.is_shown());
+                assert_eq!(radio.get_label().as_deref(), Some(style.label()));
+                assert!(radio.get_size().width <= width);
+                assert!(radio.get_size().height >= radio.from_dip(44));
+                // wx turns a themed radio into BS_OWNERDRAW when its foreground
+                // colour is set. WM_GETDLGCODE then lacks DLGC_RADIOBUTTON;
+                // wxRadioButtonAccessible preserves the actual radio role.
+                let hwnd = radio.get_handle();
+                assert_ne!(unsafe { IsWindow(hwnd) }, 0);
+                let mut class_name = [0u16; 32];
+                let class_len = unsafe { GetClassNameW(hwnd, class_name.as_mut_ptr(), class_name.len() as i32) };
+                assert_eq!(String::from_utf16_lossy(&class_name[..class_len as usize]), "Button");
+                assert_eq!(radio.get_name(), style.label());
+                let button_type = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) as i32 } & BS_TYPEMASK;
+                assert!(matches!(button_type, BS_RADIOBUTTON | BS_OWNERDRAW));
+                let flags = unsafe { SendMessageW(radio.get_handle(), WM_GETDLGCODE, 0, 0) };
+                if button_type == BS_RADIOBUTTON {
+                    assert_ne!(flags & 0x0040, 0, "an unthemed radio must retain its dialog radio code");
+                }
+                let (role, native_state) = native_role_and_state(radio);
+                assert_eq!(role, 0x2d, "the real choice must expose ROLE_SYSTEM_RADIOBUTTON");
+                assert_eq!(native_state & 0x10 != 0, radio.get_value(), "the real accessible checked state must match");
+            }
+        }
+        let native_style = |radio: RadioButton| unsafe { GetWindowLongPtrW(radio.get_handle(), GWL_STYLE) as u32 };
+        assert_ne!(native_style(ui.personality.items[0]) & WS_GROUP, 0);
+        assert!(ui.personality.items.iter().any(|radio| native_style(*radio) & WS_TABSTOP != 0));
+        for selected in Personality::ALL {
+            state["personality"] = serde_json::to_value(selected).unwrap();
+            ui.apply(state.clone());
+            ui.apply(state.clone());
+            assert_eq!(ui.personality.selected(), selected);
+            for (style, radio) in Personality::ALL.into_iter().zip(ui.personality.items) {
+                assert_eq!(radio.get_value(), style == selected);
+                let (role, native_state) = native_role_and_state(radio);
+                assert_eq!(role, 0x2d);
+                assert_eq!(native_state & 0x10 != 0, style == selected);
+            }
+            assert_eq!(ui.personality.items.map(|radio| radio.handle_ptr()), handles);
+            assert_eq!(ui.state.borrow()["conversationId"], "personality-same-thread");
+            assert_eq!(ui.input.get_value(), "切换性格时保留的草稿");
+            assert_eq!(ui.cards.borrow()[0].body.primary_text().handle_ptr(), message_handle);
+        }
+        assert!(!frame.is_shown());
+        frame.destroy();
+    }).unwrap();
+}
+
+#[cfg(all(test, windows))]
+#[test]
 fn assistant_styles_waiting_labels_and_width_keep_one_conversation_and_native_selection() {
     wxdragon::app::render_offscreen(|| {
         theme::init(theme::ThemeMode::Light);
@@ -2015,7 +2260,7 @@ fn assistant_styles_waiting_labels_and_width_keep_one_conversation_and_native_se
         state["personality"]="girlfriend".into(); state["fullAccess"]=true.into();
         ui.apply(state.clone());
         assert_eq!(ui.input.get_value(),"当前未发送草稿");
-        assert_eq!(ui.personality.get_selection(),Some(2));
+        assert_eq!(ui.personality.selected(),Personality::Girlfriend);
         assert!(ui.full_access.is_checked());
         ui.maximized.set(true); ui.position_chat(); ui.layout_chat();
         let area=shell.assistant_overlay_area();

@@ -1,110 +1,101 @@
-# WorkBuddy 登录内置模型跨客户端分享评估
+# WorkBuddy 登录内置模型跨客户端分享
 
-维护日期：2026-11-11。源码审阅基线：`main / 149ee27`（V1.0.26 开发阶段）。关联 TC-002、TC-004、TC-018、TC-021。
+维护日期：2026-11-11。实现基线：`main / 3daf9ee`，V1.0.27 开发批次。关联 TC-002、TC-004、TC-018、TC-021。
 
-状态：**本项为只读评估，未实现分享功能，不单独提升版本或生成测试包**。本轮核对仓库、官方公开文档和本机 WorkBuddy 安装资源；没有读取用户配置、登录凭据或会话，没有启动客户端、模型调用或安装操作。Windows 静态结果如下，macOS 未核对。
+状态：**已实现 Windows 5.9.3 宿主桥接与分享接口，GUI 测试目标编译和本项离线检查通过，真实启动待用户验收**。此前 V1.0.26 只做评估；本轮按用户授权落实端内桥接，不再停留于评估。不单独产包，release、源码提交及唯一测试包由管理会话在 [V27 交付](../releases/v1.0.27.md) 登记。
 
-## 结论
+## 行为与入口
 
-**技术上存在底层通路，当前应标记“受限可行”，尚不能作为稳定的一键分享交付。** WorkBuddy 登录模型由官方云端服务执行，新版客户端已经有“由 WorkBuddy 保管登录凭据、给本机会话代发请求”的内部机制；因此无需预设必须导出账户 token。但现有本机入口主要服务于宿主技能和电脑操控，尚未证明能稳定地把当前账户允许使用的全部普通模型提供给其他客户端。
+天才搭档可通过 `hub_open_page({"page":"workbuddy-builtin-share"})` 打开默认隐藏的分享面板。打开只读取，由用户点击“启用分享”后准备并启动宿主。没有加入通用 Skill/MCP 管理，也不将 IM `/wb` 当作模型推理接口。
 
-最小下一步是验证一个 **WorkBuddy 端内桥接**：先解决宿主授权、真实模型目录和请求透传，再接 Hub 现有协议转换与各端配置 writer。不能仅复制模型名、填写一个官方地址，或将已有自配 API 复用称为“登录内置模型分享”。
+读取成功保持安静，批量保存集中反馈一次；需要先退出 WorkBuddy 时显示具体提示，不弹“启用成功”。宿主已启动但登录或目录未就绪时保留等待说明，只有 `ready=true` 才显示分享已就绪。
 
-| 来源或路线 | 当前判断 | 与本需求的关系 |
+| 操作 | 实际行为 |
+| --- | --- |
+| 打开、重新读取 | 返回进程内状态、当前已确认账户模型目录和目标客户端；不启动 WorkBuddy，不读取其用户资料或凭据 |
+| 启用分享 | 检查安装版本、唯一宿主锚点和启动能力；已有普通 WorkBuddy 进程时提示用户正常退出后再启用，绝不自动关闭任务 |
+| 选择并分享 | 当前账户和临时引用就绪后，从当前目录选模型及目标，生成 Hub 来源并复用既有客户端 writer |
+| 重复分享同模型 | 复用同账户来源与目标副本，保留客户端独立参数；Codex 已移出可见目录的副本重新加入原条目 |
+| 停用 | 关闭 Hub 回调 listener；宿主短时内释放本项独占 ledger/listener。保存的模型配置保留，后续调用明确提示停用；再次启用需先退出 WorkBuddy |
+| 切号、切换组织、退出登录 | 宿主立即同步身份并撤销旧 ledger，Hub 随心跳更新；旧副本不自动借用新账户，需重新选择当前账户模型 |
+| 真正退出 Hub | 回调连接消失，宿主结束本项临时服务；不强杀 WorkBuddy，不影响其原生技能/电脑操控会话 |
+
+费用、限流与权益沿 **WorkBuddy 原账户/组织**，不属于天才搭档管理员承担的客服额度。目录只代表当前可选配置，不能据此保证每项额度或推理已通过；401/403、429 等仍以上游实际结果为准。
+
+## 宿主与凭据边界
+
+关键代码：[分享域](../../src/desktop/workbuddy_builtin/mod.rs)、[只读安装准备](../../src/desktop/workbuddy_builtin/prepare.rs)、[进程内 bootstrap](../../src/desktop/workbuddy_builtin/host-bridge.cjs)、[模型转发](../../src/ai_gateway/providers/workbuddy_builtin.rs)、[本机操作 API](../../src/web/workbuddy_builtin.rs)。
+
+1. 显式启用时，只读安装 `resources/app.asar` 的 `package.json`、`main/server.js`，核对 5.9.3、唯一 `createSkillVlmService` 调用处和执行程序的 Electron FuseV1 启动能力。没有修改安装 ASAR、程序、签名或用户登录文件。
+2. Hub 在自身桌面状态目录 `workbuddy-host/host-bridge.cjs` 保存小型自有适配资源，为本次用户触发的启动追加 `NODE_OPTIONS --require`。只拦截经核对的绝对 server 路径，在 `Module._compile` 中内存接线；锚点不唯一时报告不兼容，不假报就绪。
+3. 以原生 `SkillVlmService` 构造器及其 `deps` 创建**本项独占实例**。它复用宿主身份、刷新与模型代发，但拥有独立临时会话、ledger 和 listener；停止时不关闭原生技能实例。
+4. access/refresh token 始终留在 WorkBuddy。Hub 仅在内存持有原生 `/skills/vlm/chat` 的 loopback URL、随机临时 token 与签名 context；这些字段不写入来源、目标客户端、诊断或操作记录。
+5. 宿主每秒向随机 loopback 回调更新租约和目录。Hub 最后有效心跳超过 4 秒后拒绝引用；宿主回调超时为 2 秒，连接失败/租约关闭时释放独占实例。实际关闭时间受调度及在途回调影响，不承诺固定毫秒数。
+6. 命中接线后移除该进程环境中的 Hub 回调授权，并恢复原 `NODE_OPTIONS`，避免传播到宿主工具。适配文件本身不含秘密；保留它是为了已启动主进程重建 stdio 宿主时不会引用被删除的 preload，属于适配资源而非会话缓存。
+
+普通单空格路径受支持；当前明确拒绝引号、换行和连续两个空格的 preload 路径，保留普通启动。这源于 WorkBuddy 子进程会按空白归一 `NODE_OPTIONS`。没有修改其发行时安全开关。
+
+## 目录、来源与配置兼容
+
+只用宿主 `coordinator.getConfirmedRemoteModelSnapshot()`：其自身要求当前身份一致、远端模型已确认、fresh 且无刷新在途。本项再次要求 fresh，不以安装模板 58 项填充账户目录。
+
+只投影 `id`、`name` 及确实存在的 `contextWindow`、`maxOutputTokens`、`supportsToolCall`、`supportsImages`、`supportsReasoning`。`maxInputTokens` 不当作输入加输出总窗。未知思考档位、默认值及厂商协议不猜测，配置对象的 `url`、`apiKey` 不返回 Hub。
+
+来源新增可选 `workbuddyBuiltin`，只含用户/组织非秘密身份散列、固定 `modelId` 和投影能力。旧配置无此字段时行为不变；天工授权与模型来源仍独立。来源使用本机占位地址，执行时才取内存引用；目标客户端仍只接 Hub 及自身 local token。
+
+来源/副本指纹不含租约 token，轮换不会制造模型配置变化。普通渠道编辑转到分享面板；通用配置保存不可新增/伪造 binding 或误删已有 binding，删除整条及客户端独立参数修改走既有入口。每次真实请求检查当前账户、固定模型 ID 与有效引用。
+
+新账户显式分享时，只停用其他账户的普通 WorkBuddy 来源，避免同模型 ID 的普通路由命中旧账户；旧客户端副本及唯一 Codex alias 保留，使用时明确提示账户已切换。心跳不写配置。
+
+## 协议与接口
+
+原生 `VlmUpstream` 从宿主认证管理器取当前授权，向官方网关 `/v2/chat/completions` POST 原始 body，不在该处覆盖显式 `model`。当前目录 ID 可以进入同一代发链，服务器是否接受仍需实测。
+
+Hub 使用独立 provider 分支，清除客户端/普通渠道认证与 Origin，只向 loopback 发送临时 ledger 授权、context 和 JSON。该连接不走外网代理、不跟随重定向、不自动重发生成。文本 JSON/SSE、工具声明、调用 ID、工具结果续轮复用既有 Chat/Responses 转换；工具由目标客户端执行。取消时断开宿主连接，由原生代理 abort 上游。非成功 HTTP 错误只保留状态与脱敏提示，不留可能回显认证的原始错误体。
+
+**本轮不提供 WorkBuddy Responses `/compact`。** Codex 长会话的远端压缩收到明确暂不支持提示，原历史不替换；可新建会话或用客户端本地摘要。文本/工具通路不等同完整 Responses、加密压缩、所有多模态或专用思考档位验收。
+
+| 本机 POST 路径 | 请求 | 响应 |
 | --- | --- | --- |
-| 已购官方模型 API / Token Plan 的 API Key | 可沿普通模型渠道接入，受对应套餐限制 | 独立 API 凭据和额度，不能证明 WorkBuddy 登录权益已分享 |
-| 用户在 WorkBuddy 自配的外部模型 | Hub 已能管理其自身配置的来源副本；其他自配项需用户提供来源 | 属于外部 API 复用，不是登录内置模型 |
-| 官方 Open API 本地助理或云端任务 | 有公开接入路线；需要独立应用授权 | 调用整个 Agent，不是指定模型的 Chat Completions / Responses 服务 |
-| WorkBuddy 原生会话代理 + Hub 端内桥接 | 有静态技术依据，受宿主会话和版本约束 | 最接近本需求；须先完成小范围验证 |
-| 直接读取/复制登录 token 后发往官方服务 | 本轮未做，也不是建议方案 | 会把刷新、账号切换与秘密存储变成 Hub 的额外责任 |
+| `/api/desktop/workbuddy-builtin/read` | `{}` | 当前 catalog，不启动 |
+| `/api/desktop/workbuddy-builtin/enable` | `{revision}` | 新 catalog，已有普通进程则 `needsRestart=true` |
+| `/api/desktop/workbuddy-builtin/disable` | `{revision}` | 停用后的 catalog |
+| `/api/desktop/workbuddy-builtin/share` | `{revision,modelId,targets}` | 新 catalog 及逐目标 `outcomes` |
 
-## 仓库现状与天工差别
+catalog 为 `revision/enabled/ready/loggedIn/accountName?/needsRestart/detail/models/targets`。只有登录、fresh 目录和本机引用均有效才 `ready=true`；未确认时 `models=[]`。接口沿 Hub 现有可信本机请求规则，share 复用 [既有分享 helper](../../src/web/desktop_models.rs) 与各端 writer。
 
-[WorkBuddy 配置](../../src/workbuddy_config.rs) 为每项生成 `workbuddy:<entryId>` 专用渠道与本机地址；`workbuddy-local` 是本机兼容值，不能代替官方登录凭据。[WorkBuddy 协议层](../../src/ai_gateway/workbuddy.rs) 和 [请求入口](../../src/ai_gateway/handler.rs) 处理的是 **WorkBuddy → Hub → 已配置来源**，现有专用入口没有实现反向借用 WorkBuddy 登录账户。
+## 静态证据与实际验证
 
-[跨端模型接口](../../src/desktop/models.rs) 可以复用 Hub 已知的来源；[路由](../../src/ai_gateway/router.rs) 继续隔离客户端保留渠道。仅将一个 WorkBuddy 条目复制给其他端，不会自动新增账户认证能力。
+本轮只读 `D:\Program Files\WorkBuddy`：WorkBuddy 5.9.3，`@genie/agent-cli` 2.165.0。没有读取 `.workbuddy`、`.codebuddy`、AppData 用户资料、凭据或会话，没有执行安装 JS、启动客户端或发真实模型请求。
 
-[天工内置模型](tiangong-builtin-models.md) 有明确的两个来源 ID、来源参数档案、固定官方模型地址与专用授权适配。[配置结构](../../src/ai_gateway/config.rs) 中也已有 `tiangongBuiltin` 绑定。WorkBuddy 的模型目录和账户权限则受产品配置、登录身份及套餐影响，不能沿用天工认证或假设原生免个人登录。
+独立只读审阅确认：
 
-## 本机安装资源证据
+- `main/server.js` 的 `bootstrapWorkbuddyAppServer` 唯一 `let ye=createSkillVlmService(...)`，持有同一身份/产品管理器、fetch、coordinator。
+- `SkillVlmService` 保存构造 `deps`；`resolveEnv()` 返回四项 `WORKBUDDY_VLM_*`；`syncIdentity()` 撤销旧身份 ledger；独占实例 `close()` 停止自有代理。
+- confirmed snapshot 来自 `main/workbuddy-auth-product-coordinator.js`，现有 `daemon-app-server-main.js` 已使用；会话路径为 `session.auth.accessToken`、`session.account.uid/enterpriseId`。
+- `main/main-bootstrap.js` 用 `spawn(process.execPath,...)` 启动 stdio daemon，继承环境及 `ELECTRON_RUN_AS_NODE=1`；sanitize 保留 `--require` 与引号，归一连续空白；in-main 同样加载 server。
+- 真实程序 FuseV1 的 runAsNode/nodeOptions 均启用，安装 compile cache 没有替换 `_compile`。启动开关及 wire schema 依据 [Electron 官方说明](https://www.electronjs.org/docs/latest/tutorial/fuses)。
+- `VlmUpstream.send` 原样 body，响应流透传且 client-gone/release 中断请求；`kinfra-office-agent` 仅为技能默认值，不覆盖本项显式模型，也不证明普通模型权限。
 
-本次只读取 `D:\Program Files\WorkBuddy` 内的程序资源，未进入 `.workbuddy`、`.codebuddy`、AppData 用户数据或凭据目录。没有执行安装包里的 JavaScript。
-
-| 项目 | 核对结果 |
+| 检查 | 本子任务状态 |
 | --- | --- |
-| Windows 程序版本 | `WorkBuddy.exe` 文件版本 `5.9.3`，产品版本 `5.9.3.0` |
-| 安装包元数据 | `resources/app.asar` 的 `package.json` 为 `5.9.3`；主入口 `main/index.js` |
-| 配套引擎 | 安装资源 `cli/package.json`：`@genie/agent-cli / 2.165.0` |
-| 静态产品模型目录 | `cli/product.json` 中有 58 个模型定义；这是安装模板，不能据此声称当前用户拥有 58 个可用模型 |
-| 历史边界 | [WorkBuddy 专题](../workbuddy.md) 中 5.6.2 / 2.147.0 属旧审阅结果；本次对 5.9.3 重新核对，没有据旧版直接推断新版接口 |
+| Node 合成宿主：fresh 投影、秘密字段排除、目录失效、退出登录、独占服务关闭、精确路径/重复锚点拒绝 | `node --test src/desktop/workbuddy_builtin/host-bridge.test.cjs`，2 项通过 |
+| Rust ASAR 版本/锚点、账户目录/租约、凭据不入配置/防伪造 | 3 项定向用例通过 |
+| Rust 本机 HTTP JSON、SSE、工具结果续轮、取消、错误脱敏/不重放 | 2 项定向用例通过，只有合成本机 HTTP，无真实模型 |
+| 既有天工分享和客户端 writer 回归 | 共用 helper 的 3 项定向回归通过 |
+| 分享表单、只读打开回执、选择身份与重启指导 | 3 项通过，含隐藏浅/深主题表单，不发键鼠输入 |
+| 新文件 rustfmt、限定差异空白 | 已通过；未全树哈希或无变化重跑全部检查 |
+| Windows 真实启动、登录、普通模型权限/额度、长流/真实工具/切号/退出 | 待用户验收，不以夹具替代 |
+| macOS | 本项未适配/构建/验收，接口明确 Windows 优先边界 |
 
-### 云端模型调用确实存在
+集成构建、定向测试、源码及统一包身份以 [V1.0.27 交付记录](../releases/v1.0.27.md) 为准。
 
-`cli/dist/codebuddy-lite-wb.mjs` 的 `axiosToFetchAdapter` 使用当前产品模型配置，处理 `messages`、工具字段及流式响应，并为内部模型附加当前会话身份和请求元数据；自定义模型另有 URL、协议和内部请求头处理。静态 `cli/product.json` 的默认产品地址是 WorkBuddy 官网，官方地址列表包含 WorkBuddy 与腾讯模型网关。
+## 回滚与维护
 
-`main/server.js` 的 `VlmUpstream` 明确构造官方网关 `/v2/chat/completions`，从 WorkBuddy 当前认证管理器读取访问 token，在上游 401 时尝试由宿主刷新。默认网关回退地址为 `https://copilot.tencent.com/v2/chat/completions`。这证明安装包含实际调用路径，**不证明本次账户、任一模型或任一请求格式已经被服务端接受**。
+停用后正常退出当前 WorkBuddy 再普通打开，即回原启动方式；原安装没有修改，无需还原 ASAR/签名。来源/副本移除走现有模型管理或恢复入口，不直接删用户客户端文件。确认 WorkBuddy 已退出后可移除 Hub 自有 `workbuddy-host/host-bridge.cjs`，不删除其用户配置。升级需重新核对受影响宿主契约和夹具，不能仅放宽版本限制后声明兼容。
 
-### 已有会话代理能保留账户凭据在 WorkBuddy 内
+## 官方能力区别
 
-`main/server.js` 中可检索 `VlmProxy`、`VlmSessionLedger`、`SkillVlmService`、`createSkillVlmService`：
+普通 API/Token Plan 使用独立 API Key 与套餐，WorkBuddy 中自配外部模型也属于普通来源，不等同本项登录内置权益。[模型说明](https://www.workbuddy.cn/docs/workbuddy/From-Beginner-to-Expert-Guide/Function-Description/Model)、[Token Plan](https://cloud.tencent.com/document/product/1831/137451)
 
-- 首次需要时监听 `127.0.0.1` 随机端口；宿主为会话分配临时本机 token 和签名 context，上游账户 token 不交给调用方。
-- 技能路径是 `/skills/vlm/chat`，通过 `WORKBUDDY_VLM_CHAT_URL`、`WORKBUDDY_VLM_AUTH_TOKEN`、`WORKBUDDY_VLM_CONTEXT`、`WORKBUDDY_VLM_MODEL` 注入宿主子进程环境；默认技能模型为 `kinfra-office-agent`。
-- 代理把请求体和上游响应字节透传，具备流式传输通路；客户端断开、会话释放或停止代理会中断请求。当前默认上游超时 570 秒、请求体上限 32 MiB。
-- 当前身份改变时撤销已有会话授权；`createSkillVlmService` 从认证管理器取当前身份，并由 WorkBuddy 负责刷新。宿主会话结束及产品退出后，不应继续使用旧引用。
-- `main/daemon-bootstrap.js` 的电脑操控代理使用 `/computer-use/vlm/chat`，默认模型为 `kinfra-cua`，并有独立用户授权门槛。
-
-在审阅的代理透传函数中未见把所有请求强制改为上述默认模型；这只说明本地转发层没有在该处改写模型，**不能推出上游允许任意模型，也不能把技能或电脑操控授权当成跨端调用授权**。当前没有核实一个供 Hub 长期订阅、枚举账户模型并续期的通用宿主接口，也没有为 Hub 取得这些会话引用。
-
-### 另外两条内部路线不足以直接交付
-
-`main/server.js` 的 `createWbRequestPipe` 注册 `wb.request / http.fetch`，由宿主补充官方身份，但方法类型是一次性 `call`：完整收集响应后返回 base64，默认超时 50 秒，响应限制 655,360 字节。它不是 SSE 通道，不适合把长对话、工具流和大上下文请求直接搬上去；能使用同一登录身份也不等于已有稳定外部授权入口。
-
-同文件 `DaemonServer.start` 只设置进程内状态，`getHttpServer` 没有实现监听；桌面使用内部 RPC、stdio 等组合。安装包存在 `--acp` 或 `--serve` 相关代码，不代表独立启动引擎会继承桌面登录、模型权限或会话。`main/daemon-app-server-main.js` 的 `127.0.0.1:52741/v1/chat/completions` 属本地模型运行配置，不能拿它证明云端登录模型已开放。
-
-## 官方公开接口边界
-
-WorkBuddy 官方明确区分内置模型与用户提供 URL/API Key 的第三方模型，模型窗口、思考档位和消耗也按实际模型或任务设置变化。因此产品预设、自配 API、账户内置权益需要分别处理。[官方 WorkBuddy 模型说明](https://www.workbuddy.cn/docs/workbuddy/From-Beginner-to-Expert-Guide/Function-Description/Model)
-
-公开 Open API 支持 OAuth 应用授权后的本地助理消息、云端任务和 ACP。当前公开任务创建字段是任务指令及名称，未列出任意登录模型的独立推理接口；本地助理回复通过消息查询取得。云端 ACP 有流式更新、工具授权和会话，但这些是 Agent 交互，不能把工具执行记录直接当作目标客户端的 `tool_calls`。应用凭据需要服务端保护，不能内置公共 `client_secret`。[官方 Open API](https://open.workbuddy.cn/docs/openapi)、[第三方应用接入](https://open.workbuddy.cn/docs/third-party-app)
-
-另有 `codebuddy --serve` 的 REST/ACP 文档，其产品位置为 CodeBuddy Code。它可以作为独立 Agent 接入研究来源，不能替代 WorkBuddy 桌面原有登录的兼容证据，也没有把其 `/runs` 当通用模型接口。[官方 CodeBuddy Code HTTP API](https://cloud.tencent.com.cn/document/product/1831/137064)
-
-账户内置模型的服务端权限与实际计费仍未验证。即使透传成功，也应按 WorkBuddy 原账户/组织的实际权益计费；不能承诺免费、无限额或自动转为管理员承担。官方 API / Token Plan 则使用另行取得的 API Key 和对应套餐，不能把两类额度合并解释。[官方 Token Plan 配置说明](https://cloud.tencent.com/document/product/1831/137451)
-
-## 最小方案与上线前验证
-
-建议先限定为同一用户、同一电脑、一个普通文本模型的宿主桥接验证，不同时开发全部客户端或完整 Agent 代理：
-
-1. 由 WorkBuddy 当前已登录进程持有账户认证，先确认可用的授权扩展/宿主接入口。现成 VLM 会话机制可作为参考；若必须做增强启动适配，应明确绑定安装版本，不把内部符号当长期公开 API。
-2. 只向 Hub 交付本机受限调用引用与真实可用模型/能力元数据，不读取或导出账户 access/refresh token，不把临时 VLM token 写入普通渠道配置或目标客户端。模型目录必须来自本轮账户，不能以静态 58 项填满列表。
-3. 先验证普通模型确能经授权桥接完成文本 JSON/SSE，随后验证一轮工具调用、目标客户端执行工具、工具结果续轮。工具应由请求该模型的目标客户端执行，避免 WorkBuddy 再执行一遍。
-4. 前述成立后复用 Hub 现有 Chat Completions/Responses 转换及单端 writer，目标客户端只连接 Hub。首批不扩展远程公开服务，也不默认启动 WorkBuddy 或创建占位任务维持授权。
-
-| 必要验证 | 判定要点 |
-| --- | --- |
-| 宿主接入与模型权限 | 取得明确授权的宿主引用；普通模型确实可用；静态配置、账号目录、服务端接受三者分开记录 |
-| 协议与流式 | JSON/SSE 的角色、结束、推理、用量和错误保真；断开及时停止，不重放已开始生成 |
-| 工具续轮 | 名称、参数、调用 ID 和工具结果关联准确；WorkBuddy 不替目标客户端执行工具 |
-| 账号与生命周期 | 退出登录、切换用户或组织、刷新、会话释放、WorkBuddy/Hub 退出后旧引用失效；重新连接显式就绪 |
-| 额度与错误 | 401/403、无模型权限、429、额度耗尽按真实结果呈现；不因同名模型自动换来源，不伪报免费 |
-| 目标端能力 | 仅声明已确认的窗口/输出/推理/图像；Codex 压缩协议另验，不能因可发文本就声明完整兼容 |
-| 版本与平台 | 先限定 Windows 5.9.3；升级后重核宿主契约；macOS 在独立核对前标记未验证 |
-
-以上是下一阶段必要验证清单，本轮均没有真实执行。若宿主未提供可维护的普通模型入口，应停留在受限评估，不通过复制用户凭据或循环维持任务来补齐。
-
-## 可复现静态核对与变更状态
-
-可在上述安装版本中只读解析 ASAR 目录，分别读取 `package.json`、`cli/package.json`、`cli/product.json` 和表列 JavaScript，核对版本及符号。解析过程不需 `require`、`import` 或执行安装脚本；读取 unpacked 条目时仅按 ASAR 内已登记相对路径进入对应安装资源。
-
-| 静态条目 | 可检索定位 |
-| --- | --- |
-| `main/server.js` | `DaemonServer`、`getHttpServer`、`VlmUpstream`、`VlmProxy`、`VlmSessionLedger`、`SkillVlmService`、`createWbRequestPipe` |
-| `main/daemon-bootstrap.js` | `ComputerUseVlmProxy`、`ComputerUseSessionEnv`、`kinfra-cua` |
-| `main/daemon-app-server-main.js` | `resolveConversationAgentExtraEnv`、`skillVlm.resolveEnv`、`52741` |
-| `cli/dist/codebuddy-lite-wb.mjs` | `axiosToFetchAdapter`、`shouldApplyInternalModelRequestHeaders`、`normalizeChatCompletionsUrl` |
-| `cli/product.json` | `models`、`authentication.type`、`officialEndpoints`；仅核对结构和公开元数据 |
-
-本轮已完成上述静态定位、官方资料核对和文档差异检查。未做 Cargo/Node 产品运行、账号接入、真实推理、计费、安装或 macOS 检查；没有创建缓存副本或反复计算安装树哈希。
-
-本项评估只新增本文件，未因此修改产品配置格式、代码、客户端文件或现有包；因此无需配置迁移或产品回滚。同批其他功能由管理会话按 V1.0.26 集成并统一交付，状态见 [V26 交付](../releases/v1.0.26.md)。索引、总表及变更记录由管理会话统一登记，建议状态为“WorkBuddy 登录内置模型分享：受限可行，仅评估”。
+Open API 本地助理/云端任务及 CodeBuddy `--serve` 属完整 Agent 接口；本项没有借其替代指定模型推理协议，也不循环创建占位任务续授权。[Open API](https://open.workbuddy.cn/docs/openapi)、[第三方应用接入](https://open.workbuddy.cn/docs/third-party-app)、[CodeBuddy HTTP API](https://cloud.tencent.com.cn/document/product/1831/137064)
