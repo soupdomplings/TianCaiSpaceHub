@@ -50,6 +50,7 @@ pub(super) fn show(parent: &Frame, text: GuiText, detail: &RequestLogDetail) {
         )
         .with_size(1480, 900)
         .build();
+    super::motion::install_dialog(dialog);
     dialog.set_min_size(Size::new(1120, 760));
     dialog.set_background_color(theme::theme().bg_card_alt);
 
@@ -61,7 +62,11 @@ pub(super) fn show(parent: &Frame, text: GuiText, detail: &RequestLogDetail) {
     let summary = StaticText::builder(&panel)
         .with_label(&format!(
             "来源：{}\n{}",
-            detail.client_id.as_deref().and_then(crate::desktop::request_source::name).unwrap_or("未标记来源"),
+            detail
+                .client_id
+                .as_deref()
+                .and_then(crate::desktop::request_source::name)
+                .unwrap_or("未标记来源"),
             summary_text(&detail.summary),
         ))
         .build();
@@ -74,6 +79,7 @@ pub(super) fn show(parent: &Frame, text: GuiText, detail: &RequestLogDetail) {
     );
 
     let notebook = Notebook::builder(&panel).build();
+    super::motion::install_notebook(notebook);
     apply_notebook_theme(&notebook);
     let codex_request_detail = request_detail_json(
         detail.request_headers_json.as_deref(),

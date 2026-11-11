@@ -983,6 +983,7 @@ fn wait_for_codex_app_to_close(parent: &Frame, text: GuiText, api: &ApiClient) -
         .with_style(DialogStyle::DefaultDialogStyle)
         .with_size(520, 230)
         .build();
+    super::motion::install_dialog(dialog);
     dialog.set_background_color(theme::theme().bg_card);
     let panel = Panel::builder(&dialog).build();
     panel.set_background_color(theme::theme().bg_card);

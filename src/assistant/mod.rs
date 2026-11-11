@@ -2,7 +2,9 @@
 #[cfg(test)]
 mod acceptance;
 pub(crate) mod model;
+pub(crate) mod personality;
 mod proxy;
+mod questions;
 pub(crate) mod settings;
 mod squad_tools;
 mod telemetry;
@@ -40,6 +42,8 @@ struct Message {
 struct Inner {
     conversation: String,
     enabled: bool,
+    personality: personality::Personality,
+    full_access: bool,
     logged_in: bool,
     config: Option<model::Configuration>,
     detail: String,
@@ -52,6 +56,8 @@ struct Inner {
 type Reply = oneshot::Sender<Result<()>>;
 enum Control {
     Settings(bool, Reply),
+    Personality(personality::Personality, Reply),
+    FullAccess(bool, Reply),
     Send(String, Reply),
     Stop(Reply),
     Clear(Reply),
@@ -74,6 +80,7 @@ pub(crate) struct AssistantState {
     tx: mpsc::UnboundedSender<Control>,
     rx: Mutex<Option<mpsc::UnboundedReceiver<Control>>>,
     shutting_down: AtomicBool,
+    share_visible: AtomicBool,
     pub(crate) tools: Mutex<tools::ToolState>,
 }
 impl Default for AssistantState {
@@ -84,6 +91,7 @@ impl Default for AssistantState {
             tx,
             rx: Mutex::new(Some(rx)),
             shutting_down: AtomicBool::new(false),
+            share_visible: AtomicBool::new(false),
             tools: Mutex::new(Default::default()),
         }
     }
@@ -112,6 +120,18 @@ async fn command(state: &SharedState, make: impl FnOnce(Reply) -> Control) -> Re
 pub(crate) async fn configure(state: &SharedState, enabled: bool) -> Result<()> {
     let _setup = state.local_assistance.setup.lock().await;
     command(state, |reply| Control::Settings(enabled, reply)).await
+}
+pub(crate) async fn configure_personality(
+    state: &SharedState,
+    personality: personality::Personality,
+) -> Result<()> {
+    command(state, |reply| Control::Personality(personality, reply)).await
+}
+pub(crate) async fn configure_full_access(state: &SharedState, full_access: bool) -> Result<()> {
+    command(state, |reply| Control::FullAccess(full_access, reply)).await
+}
+pub(super) async fn full_access(state: &SharedState) -> bool {
+    state.assistant.inner.lock().await.full_access
 }
 pub(crate) async fn send(state: &SharedState, text: String) -> Result<()> {
     ensure!(
@@ -183,7 +203,9 @@ pub(crate) async fn test_tool_scope<F: std::future::Future>(
 pub(crate) async fn status(state: &SharedState) -> Result<Value> {
     let inner = state.assistant.inner.lock().await;
     let enabled = inner.enabled;
-    let mut value = json!({"enabled":enabled,"loggedIn":inner.logged_in,"conversationId":inner.conversation,
+    let mut value = json!({"enabled":enabled,"personality":inner.personality,"fullAccess":inner.full_access,
+        "tiangongBuiltinShareVisible":state.assistant.share_visible.load(Ordering::Acquire),
+        "loggedIn":inner.logged_in,"conversationId":inner.conversation,
         "modelServiceReady":inner.config.is_some(),"model":inner.config.as_ref().map(|c|&c.model),
         "billing":{"payer":"administrator","chargeUser":false,"chargeOrganization":false},"notice":inner.config.as_ref().and_then(|c|c.notice.as_deref()),
         "detail":inner.cleanup_error.as_ref().unwrap_or(&inner.detail),"cleanupPending":inner.cleanup_error.is_some(),
@@ -291,6 +313,8 @@ pub(crate) async fn run(state: SharedState) {
         match settings::read(&state.config_path) {
             Ok(settings) => {
                 inner.enabled = settings.enabled;
+                inner.personality = settings.personality;
+                inner.full_access = settings.full_access;
                 inner.detail = if settings.enabled {
                     "正在检查天才搭档"
                 } else {
@@ -324,7 +348,8 @@ pub(crate) async fn run(state: SharedState) {
                     }
                     Control::Settings(enabled,reply)=>{
                         let result=settings::write(&state.config_path,enabled);
-                        if result.is_ok(){
+                        let changed=state.assistant.inner.lock().await.enabled!=enabled;
+                        if result.is_ok() && changed {
                             state.assistant.inner.lock().await.enabled=enabled;
                             if let Some(fetch)=fetch.take(){fetch.abort();}
                             fetch_generation.clear();next_fetch=Instant::now();
@@ -335,6 +360,16 @@ pub(crate) async fn run(state: SharedState) {
                             inner.conversation=uuid::Uuid::new_v4().to_string();
                             inner.detail=if enabled {"正在检查天才搭档"}else{"天才搭档已停用"}.into();
                         }
+                        let _=reply.send(result);
+                    }
+                    Control::Personality(personality,reply)=>{
+                        let result=settings::write_personality(&state.config_path,personality);
+                        if result.is_ok(){state.assistant.inner.lock().await.personality=personality;}
+                        let _=reply.send(result);
+                    }
+                    Control::FullAccess(full_access,reply)=>{
+                        let result=settings::write_full_access(&state.config_path,full_access);
+                        if result.is_ok(){state.assistant.inner.lock().await.full_access=full_access;}
                         let _=reply.send(result);
                     }
                     Control::Clear(reply)=>{
@@ -354,6 +389,21 @@ pub(crate) async fn run(state: SharedState) {
                         let _=reply.send(result);
                     }
                     Control::Send(text,reply)=>{
+                        if personality::opens_tiangong_share(&text) {
+                            let mut inner=state.assistant.inner.lock().await;
+                            let result=if !inner.enabled {Err(anyhow::anyhow!("请先启用天才搭档"))}
+                                else if inner.running {Err(anyhow::anyhow!("请等待当前回复，或先停止"))}
+                                else {
+                                    state.assistant.share_visible.store(true,Ordering::Release);
+                                    inner.messages.push(Message{id:uuid::Uuid::new_v4().to_string(),role:"user",text,status:"completed"});
+                                    inner.messages.push(Message{id:uuid::Uuid::new_v4().to_string(),role:"assistant",text:"已请求打开天工内置模型分享。接入和分享由你在面板中选择。".into(),status:"completed"});
+                                    drop(inner);
+                                    tools::request_builtin_share(&state).await;
+                                    Ok(())
+                                };
+                            let _=reply.send(result);
+                            continue;
+                        }
                         let valid={let inner=state.assistant.inner.lock().await;
                             if !inner.enabled {Err(anyhow::anyhow!("请先启用天才搭档"))}
                             else if let Some(error)=&inner.cleanup_error {Err(anyhow::anyhow!("{error}"))}
@@ -457,7 +507,8 @@ pub(crate) async fn run(state: SharedState) {
         }
         if worker.as_ref().is_some_and(|w| w.ready()) {
             if let Some(text) = queued.take() {
-                if let Err(error) = worker.as_mut().unwrap().turn(&text).await {
+                let personality = state.assistant.inner.lock().await.personality;
+                if let Err(error) = worker.as_mut().unwrap().turn(&text, personality).await {
                     finish(&state, "error", error.to_string()).await;
                 }
             }

@@ -398,8 +398,11 @@ fn native_offset(text: &str) -> i64 {
 mod native_measurement {
     use super::*;
     use windows_sys::Win32::{
-        Foundation::{HWND, RECT},
-        UI::WindowsAndMessaging::{SendMessageW, WM_NOTIFY, WM_USER},
+        Foundation::{HWND, POINT, RECT},
+        UI::WindowsAndMessaging::{
+            SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOREDRAW, SWP_NOZORDER, SendMessageW, SetWindowPos,
+            WM_NOTIFY, WM_USER,
+        },
     };
 
     const EM_GETEVENTMASK: u32 = WM_USER + 59;
@@ -407,6 +410,16 @@ mod native_measurement {
     const EM_SETEVENTMASK: u32 = WM_USER + 69;
     const ENM_REQUESTRESIZE: isize = 0x0004_0000;
     const EN_REQUESTRESIZE: u32 = 0x0701;
+    const EM_GETRECT: u32 = 0x00B2;
+    const EM_SETRECT: u32 = 0x00B3;
+    const EM_SETRECTNP: u32 = 0x00B4;
+    const EM_GETLINECOUNT: u32 = 0x00BA;
+    const EM_LINEINDEX: u32 = 0x00BB;
+    const EM_LINELENGTH: u32 = 0x00C1;
+    const EM_EXLINEFROMCHAR: u32 = WM_USER + 54;
+    const EM_POSFROMCHAR: u32 = WM_USER + 38;
+    const EM_GETSCROLLPOS: u32 = WM_USER + 221;
+    const EM_SETSCROLLPOS: u32 = WM_USER + 222;
 
     #[repr(C)]
     struct NotifyHeader {
@@ -489,6 +502,137 @@ mod native_measurement {
             RemoveWindowSubclass(parent, Some(receive_size), id);
         }
         (measurement.height > 0).then_some(measurement.height)
+    }
+
+    pub(super) fn horizontal_inset(editor: MessageText) -> i32 {
+        let mut rectangle = RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        unsafe {
+            SendMessageW(
+                editor.get_handle(),
+                EM_GETRECT,
+                0,
+                &mut rectangle as *mut RECT as isize,
+            );
+        }
+        // RichEdit's formatting rectangle excludes its own inner margins even
+        // with BorderNone. Bubble padding is outside this separate rectangle.
+        if rectangle.right <= rectangle.left {
+            return 0;
+        }
+        (editor.get_client_size().width - (rectangle.right - rectangle.left)).max(0)
+    }
+
+    /// Measure the control's actual glyph runs at a wide native window size.
+    /// Changing only EM_SETRECTNP leaves already laid out soft lines intact in
+    /// RichEdit; WM_SIZE must invalidate those runs first. Neither resize is
+    /// drawn, and the exact size, formatting rectangle and scroll position are
+    /// restored before returning. Callers cache this until text/metrics change.
+    pub(super) fn unwrapped_width(editor: MessageText) -> Option<i32> {
+        let handle = editor.get_handle();
+        let mut original = RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        let mut scroll = POINT { x: 0, y: 0 };
+        let size = editor.get_size();
+        let inset = horizontal_inset(editor);
+        // WM_SIZE packs its dimensions into 16-bit coordinates. This is far
+        // wider than a chat bubble without overflowing RichEdit's layout units.
+        let measurement_width = 32_760;
+        let resize_flags = SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOREDRAW;
+        unsafe {
+            SendMessageW(handle, EM_GETRECT, 0, &mut original as *mut RECT as isize);
+            SendMessageW(
+                handle,
+                EM_GETSCROLLPOS,
+                0,
+                &mut scroll as *mut POINT as isize,
+            );
+        }
+        let mut wide = original;
+        wide.right = wide.left + measurement_width - inset;
+        unsafe {
+            SendMessageW(handle, EM_SETRECTNP, 0, &wide as *const RECT as isize);
+            if SetWindowPos(
+                handle,
+                std::ptr::null_mut(),
+                0,
+                0,
+                measurement_width,
+                size.height,
+                resize_flags,
+            ) == 0
+            {
+                SendMessageW(handle, EM_SETRECTNP, 0, &original as *const RECT as isize);
+                return None;
+            }
+        }
+        let lines = unsafe { SendMessageW(handle, EM_GETLINECOUNT, 0, 0) };
+        let mut width = 0;
+        for line in 0..lines {
+            let start = unsafe { SendMessageW(handle, EM_LINEINDEX, line as usize, 0) };
+            if start < 0 {
+                continue;
+            }
+            let length = unsafe { SendMessageW(handle, EM_LINELENGTH, start as usize, 0) };
+            let end_line = unsafe { SendMessageW(handle, EM_EXLINEFROMCHAR, 0, start + length) };
+            let mut first = POINT { x: 0, y: 0 };
+            let mut last = POINT { x: 0, y: 0 };
+            unsafe {
+                SendMessageW(
+                    handle,
+                    EM_POSFROMCHAR,
+                    &mut first as *mut POINT as usize,
+                    start,
+                );
+                SendMessageW(
+                    handle,
+                    EM_POSFROMCHAR,
+                    &mut last as *mut POINT as usize,
+                    start + length,
+                );
+            }
+            // A paragraph longer than the native measurement window may still
+            // wrap. Its line end then belongs to the following row; retain the
+            // wide-window lower bound instead of treating that x reset as zero.
+            // Compare native line indices, not glyph y: mixed font sizes can
+            // have different glyph tops on the same baseline.
+            width = width.max(if end_line > line {
+                measurement_width - inset
+            } else {
+                last.x.saturating_sub(first.x)
+            });
+        }
+        unsafe {
+            SendMessageW(handle, EM_SETRECTNP, 0, &original as *const RECT as isize);
+            SetWindowPos(
+                handle,
+                std::ptr::null_mut(),
+                0,
+                0,
+                size.width,
+                size.height,
+                resize_flags,
+            );
+            // Apply the final rectangle after the native size is restored.
+            // EM_SETRECTNP alone can leave hidden RichEdit controls reporting
+            // the wide layout even though EM_GETRECT already reports this one.
+            SendMessageW(handle, EM_SETRECT, 0, &original as *const RECT as isize);
+        }
+        // REQUESTRESIZE synchronously settles pending glyph layout; restore the
+        // saved viewport only after its original soft line breaks exist again.
+        let _ = content_height(editor);
+        unsafe {
+            SendMessageW(handle, EM_SETSCROLLPOS, 0, &scroll as *const POINT as isize);
+        }
+        (width > 0).then_some(width + inset)
     }
 }
 
@@ -1013,6 +1157,7 @@ pub(super) struct MessageBody {
     background: Colour,
     transcript: ScrolledWindow,
     escape: Option<Rc<dyn Fn()>>,
+    preferred_width: Cell<Option<((i32, i32), i32)>>,
 }
 
 impl MessageBody {
@@ -1038,6 +1183,7 @@ impl MessageBody {
             background,
             transcript,
             escape: None,
+            preferred_width: Cell::new(None),
         }
     }
 
@@ -1093,6 +1239,7 @@ impl MessageBody {
             ));
         }
         self.source = text.into();
+        self.preferred_width.set(None);
     }
 
     /// Width and returned height are physical pixels, matching MessageCard.
@@ -1120,6 +1267,31 @@ impl MessageBody {
 
     pub(super) fn primary_text(&self) -> MessageText {
         self.blocks[0].controls()[0]
+    }
+
+    pub(super) fn preferred_text_width(&self) -> i32 {
+        let editor = self.primary_text();
+        let metrics = (editor.from_dip(100), editor.get_char_height());
+        if let Some((cached_metrics, width)) = self.preferred_width.get()
+            && cached_metrics == metrics
+        {
+            return width;
+        }
+        let width = self
+            .source
+            .lines()
+            .map(|line| editor.get_text_extent(line).width)
+            .max()
+            .unwrap_or(0);
+        #[cfg(windows)]
+        let inset = native_measurement::horizontal_inset(editor);
+        #[cfg(not(windows))]
+        let inset = editor.from_dip(6);
+        let width = width + inset;
+        #[cfg(windows)]
+        let width = width.max(native_measurement::unwrapped_width(editor).unwrap_or(0));
+        self.preferred_width.set(Some((metrics, width)));
+        width
     }
 }
 
@@ -1202,7 +1374,7 @@ mod tests {
     #[test]
     fn native_text_height_contains_mixed_fonts_wrapping_and_preserves_selection() {
         use windows_sys::Win32::{
-            Foundation::POINT,
+            Foundation::{POINT, RECT},
             UI::WindowsAndMessaging::{SendMessageW, WM_USER},
         };
 
@@ -1226,12 +1398,34 @@ mod tests {
             larger.set_font(&Font::builder().with_point_size(32).build().unwrap());
             leaf.editor.set_style(0, native_offset("中文"), &larger);
             leaf.editor.set_selection(0, native_offset("中文"));
+            let native_snapshot = || {
+                let mut rectangle = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+                let mut scroll = POINT { x: 0, y: 0 };
+                unsafe {
+                    SendMessageW(leaf.editor.get_handle(), 0x00b2, 0, &mut rectangle as *mut RECT as isize);
+                    SendMessageW(leaf.editor.get_handle(), WM_USER + 221, 0, &mut scroll as *mut POINT as isize);
+                }
+                (
+                    leaf.editor.get_size(), leaf.editor.is_shown(),
+                    (rectangle.left, rectangle.top, rectangle.right, rectangle.bottom),
+                    (scroll.x, scroll.y), leaf.editor.get_selection(),
+                )
+            };
 
             for dip_width in [430, 210, 530] {
                 let width = host.from_dip(dip_width);
                 let height = leaf.layout(width);
                 let requested = native_measurement::content_height(leaf.editor)
                     .expect("RichEdit must return its requested content size while hidden");
+                let wrapped_lines = leaf.editor.get_number_of_lines();
+                let before = native_snapshot();
+                let preferred = native_measurement::unwrapped_width(leaf.editor)
+                    .expect("RichEdit must measure its unwrapped glyph runs while hidden");
+                assert!(preferred > width, "actual long paragraph must exceed {width}px, got {preferred}px");
+                assert!(preferred < 32_760, "the fixture's long paragraph must fit inside the native measurement window");
+                assert_eq!(native_snapshot(), before, "measurement must restore size, visibility, formatting rectangle, scroll and selection");
+                assert_eq!(leaf.editor.get_number_of_lines(), wrapped_lines);
+                assert_eq!(native_measurement::content_height(leaf.editor), Some(requested));
                 assert!(height >= requested);
                 assert_eq!(leaf.editor.get_client_size().height, height);
                 assert!(

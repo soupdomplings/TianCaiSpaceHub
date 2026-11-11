@@ -65,6 +65,16 @@ impl Button {
     pub fn selected(&self) -> bool {
         self.native.presentation() & 0x10000 != 0
     }
+    pub fn set_activity_frame(&self, frame: Option<u8>) {
+        let current = self.native.presentation();
+        let activity = frame
+            .map(|frame| 0x8000_0000 | ((u32::from(frame) & 31) << 24))
+            .unwrap_or(0);
+        let next = (current & !0x9f00_0000) | activity;
+        if current != next {
+            self.native.set_presentation(next);
+        }
+    }
 }
 impl WxWidget for Button {
     fn handle_ptr(&self) -> *mut wxdragon::ffi::wxd_Window_t {
@@ -403,6 +413,17 @@ pub(super) fn draw_button(
                 None
             },
         );
+    }
+    if p & 0x8000_0000 != 0 {
+        let phase = ((p >> 24) & 31) as f64 / 32.0 * std::f64::consts::TAU;
+        let radius = 7.5 + phase.sin() * 1.5;
+        for index in 0..12 {
+            let angle = index as f64 / 12.0 * std::f64::consts::TAU;
+            let x = r.x + r.width / 2 + (radius * angle.cos()).round() as i32;
+            let y = r.y + r.height / 2 + (radius * angle.sin()).round() as i32;
+            c.rounded(Rect::new(x - 1, y - 1, 3, 3), 2, text, None);
+        }
+        return;
     }
     if kind == ButtonKind::Tab as u32 {
         if hover || focus {

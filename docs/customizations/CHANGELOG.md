@@ -1,5 +1,7 @@
 # 二开变更记录
 
+2026-11-11 **TC-016/018/019/023 V1.0.26 集成中**：搭档接入三套性格与完全访问、Hub 内半宽最大化、点阵／等待动效和末字测宽；追问改卡片，专用渠道走原生删除，页面导航等待真实回执。天工内置分享默认隐藏，明确请求才显示。统一提示补正文、四秒倒计时及弹出收回动效，追加模块／页签和公共弹窗过渡及[数据加载反馈](../development/loading-feedback.md)；小分队去掉可用渠道、修首次表格布局和读取等待弹层；ZCode 补官方登录服务加载阶段识别及已建立的本 Hub 启动连接重试。实现／回滚见 [搭档](genius-buddy.md)、[客户端](desktop-client-adapters.md)、[小分队](tiancai-squad-account.md)、[反馈](../development/operation-feedback.md)和[视觉规范](../development/desktop-visual-system.md)。[WorkBuddy 分享评估](workbuddy-builtin-sharing-assessment.md) 仍为静态研究，检查和唯一包状态见 [V26 交付](../releases/v1.0.26.md)。
+
 ## V1.0.25 本地测试交付 · 2026-11-11 · 搭档、导入与统一反馈
 
 关联 TC-016/018/023，基线唯一 `main` / `eaf1dd9`，保留 V24 包身份。本批统一一个测试包，不启动用户实际客户端、安装器或真实模型调用。

@@ -1,5 +1,7 @@
 # TianCaiSpaceHub 文档总入口
 
+2026-11-11 **V1.0.26 集成中**：[搭档](customizations/genius-buddy.md) 接入三套已审核性格、完全访问、Hub 内半宽最大化、选择／填写追问、专用模型删除及导航回执；[操作反馈](development/operation-feedback.md) 与[小分队](customizations/tiancai-squad-account.md) 处理空提示、倒计时、首屏布局和闪烁等待窗。本批追加模块／页签、公共弹窗及提示收放的[轻量动态](development/desktop-visual-system.md)，数据加载动态单独在页内提示。[ZCode](customizations/desktop-client-adapters.md) 补登录服务加载时的探针与本 Hub 连接重试；[WorkBuddy 模型分享](customizations/workbuddy-builtin-sharing-assessment.md) 仅静态评估。源码、必要检查、唯一测试包和实机待验范围见 [V26 交付](releases/v1.0.26.md)，以下 V25 草案和检查保留当时状态。
+
 2026-11-11 本批追加：[统一操作反馈](development/operation-feedback.md) 将操作结果集中为右上小浮窗并取消关闭到托盘提醒；[搭档用量查询](customizations/assistant-usage.md) 复用当前账户扣费、Token 和本机请求能力。[三套性格草案](customizations/genius-buddy-personalities-draft.md) 保留干练搭档、软萌猫娘、温柔女友，允许自然使用少量 emoji，供用户编辑审核，暂未接入产品。Windows GUI/release、31 项 Rust、10 项 Node 和唯一 MSI `210620` 核验通过，源提交 `8c3b3ed` 已推送；包身份及实机待验范围见 [V25 交付](releases/v1.0.25.md)。
 
 2026-11-11 **V1.0.25 用户反馈修复**：ZCode 启动探针处理资源计时条目缺失时的 HTTP 409；同批处理搭档回复裁切、Ctrl+Enter 发送残留、可见滚动条，以及助手保存后的模型/渠道刷新和专用客户端模型名称显示。实现见 [客户端](customizations/desktop-client-adapters.md)、[搭档](customizations/genius-buddy.md) 和 [视觉](development/desktop-visual-system.md)；本批检查、唯一新包和实机待验范围见 [V25 交付](releases/v1.0.25.md)。下列历史结果保留原版本归属。
@@ -45,6 +47,7 @@
 - [V1.0.11 本地测试交付](releases/v1.0.11.md)：筛选、广场、按端模型表单、登录恢复及原版本验证/包身份。
 - [V1 桌面使用与验收指南](v1-desktop-guide.zh-CN.md)：新导航、运行/用量、七端模型复用、真实 Skill/MCP、账户和测试顺序。
 - [V1 实施记录](development/v1-implementation.md)：代码、接口、配置兼容、回滚、验证边界及已知限制。
+- [数据加载反馈](development/loading-feedback.md)：页内文字／按钮动态、快速完成不闪、背景刷新及减少动画边界。
 - [二开功能总表](customizations/README.md) · [变更记录](customizations/CHANGELOG.md) · [文档规范](development/documentation.md)。
 - [客户端适配](customizations/desktop-client-adapters.md) · [模型/Skill/MCP](customizations/desktop-capability-management.md) · [天才小分队账户](customizations/tiancai-squad-account.md)。
 - [Skill 广场与共用仓库](customizations/skill-marketplace.md)：真实公共仓库、固定提交完整包、使用客户端、容量和回退规则。

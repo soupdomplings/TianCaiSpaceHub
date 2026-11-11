@@ -142,6 +142,10 @@ fn startup_protects_existing_workspace_input_and_oauth() {
     probe["loginOpen"] = false.into();
     assert!(!safe_to_reload(&probe));
     assert!(!safe_to_reload(&json!({})));
+    assert!(startup_wait_message(&json!({"databaseStarting":true})).contains("本机数据"));
+    assert!(startup_wait_message(&json!({"startupLoading":true})).contains("恢复启动状态"));
+    assert!(startup_wait_message(&json!({"module":null})).contains("主界面脚本"));
+    assert!(startup_wait_message(&json!({"module":"styles.js"})).contains("当前页面"));
 }
 
 #[test]

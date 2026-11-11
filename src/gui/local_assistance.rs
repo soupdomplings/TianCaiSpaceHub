@@ -32,6 +32,7 @@ pub(super) fn fields(parent: &Frame, view: &Value) -> Fields {
         .with_style(DialogStyle::DefaultDialogStyle | DialogStyle::ResizeBorder)
         .with_size(parent.from_dip(620), parent.from_dip(650))
         .build();
+    super::motion::install_dialog(dialog);
     dialog.set_background_color(theme::theme().bg_card);
     dialog.set_font(&theme::font(theme::TextRole::Body));
     let col = BoxSizer::builder(Orientation::Vertical).build();

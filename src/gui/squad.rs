@@ -3,6 +3,7 @@ use super::controls::{Button, ButtonKind};
 use super::{
     api::ApiClient,
     dialog_job,
+    loading::LoadingIndicator,
     shell::{PageId, Shell},
     squad_account::AccountBadge,
     squad_browser::BrowserLogin,
@@ -47,6 +48,8 @@ pub(super) struct SquadPage {
     capability_checked: Rc<Cell<bool>>,
     heading: StaticText,
     status: StaticText,
+    loading: LoadingIndicator,
+    inline_loading: LoadingIndicator,
     invoice: Button,
     primary: Button,
     edit: Button,
@@ -132,6 +135,8 @@ impl SquadPage {
             capability_checked: Default::default(),
             heading,
             status,
+            loading: LoadingIndicator::for_button(&page, refresh),
+            inline_loading: LoadingIndicator::new(&page, status),
             invoice,
             primary,
             edit,
@@ -315,6 +320,33 @@ impl SquadPage {
                 );
             }
         });
+        let scope = ui.clone();
+        let busy = ui.clone();
+        let refresh = ui.clone();
+        dialog_job::install_async_host(
+            ui.frame,
+            ui.workspace.page,
+            ui.status,
+            ui.inline_loading.clone(),
+            move || {
+                if !scope.active.get() || !scope.ready.get() || scope.inline_busy.get() {
+                    return None;
+                }
+                let state = scope.state.borrow();
+                (state["signedIn"] == true).then(|| json!({
+                    "serial":scope.serial.get(),
+                    "account":{"userId":state["user"]["id"],"generation":state["accountGeneration"]}
+                }))
+            },
+            move |running, _title| {
+                busy.inline_busy.set(running);
+                busy.inline_controls(!running);
+                if !running {
+                    busy.render();
+                }
+            },
+            move || refresh.load(),
+        );
         let timer = Timer::new(&page);
         let u = ui.clone();
         timer.on_tick(move |_| {
@@ -329,6 +361,7 @@ impl SquadPage {
                 if serial != u.serial.get() {
                     return;
                 }
+                u.loading.finish();
                 match result {
                     Ok((state, data, key)) => {
                         *u.state.borrow_mut() = state;
@@ -568,7 +601,7 @@ impl SquadPage {
         }
         self.inline_controls(false);
         self.inline_notice.borrow_mut().take();
-        self.workspace.notice(&format!("正在{title}…"));
+        self.inline_loading.start(&format!("正在{title}…"));
         let expected = json!({"userId":self.state.borrow()["user"]["id"],"generation":self.state.borrow()["accountGeneration"]});
         let (api, slot, serial, path, title) = (
             self.api.clone(),
@@ -601,6 +634,7 @@ impl SquadPage {
     fn inline_tick(&self) {
         let result = self.inline_pending.lock().ok().and_then(|mut s| s.take());
         if let Some((serial, kind, title, result)) = result {
+            self.inline_loading.finish();
             self.inline_busy.set(false);
             self.inline_controls(true);
             if serial != self.serial.get() {
@@ -693,7 +727,7 @@ impl SquadPage {
         }
         let serial = self.serial.get() + 1;
         self.serial.set(serial);
-        self.status.set_label("读取中…");
+        self.loading.start("读取中…");
         let (api, slot, key, page, start, end) = (
             self.api.clone(),
             self.pending.clone(),
@@ -856,39 +890,43 @@ impl SquadPage {
                 &self.state.borrow()["pending"],
                 crate::desktop::squad_money::Money::state(&self.state.borrow()),
             );
-            self.load();
             return;
         }
         if action == "invoice" {
-            let scope = if key == "orders" && id.is_some() {
-                let Some(scopes) = query(
+            if key == "orders" && id.is_some() {
+                let ui = self.clone();
+                query_async(
                     &self.frame,
                     self.api.clone(),
                     "读取订单开票范围",
                     &format!("/invoices/orders/{}", id.unwrap()),
-                ) else {
-                    return;
-                };
-                let rows = scopes
-                    .as_array()
-                    .cloned()
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|mut s| {
-                        s["name"] = format!(
-                            "组织 {} / 部门 {}",
-                            s["business_unit_id"], s["department_id"]
-                        )
-                        .into();
-                        s
-                    })
-                    .collect::<Vec<_>>();
-                let Some(scope) = organization::choose(&self.frame, "选择开票范围", &rows, "name")
-                else {
-                    return;
-                };
-                scope
-            } else if key == "organization" && row["business_unit_id"].as_u64().is_some() {
+                    move |scopes| {
+                        let Some(scopes) = scopes else { return };
+                        let rows = scopes
+                            .as_array()
+                            .cloned()
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(|mut s| {
+                                s["name"] = format!(
+                                    "组织 {} / 部门 {}",
+                                    s["business_unit_id"], s["department_id"]
+                                )
+                                .into();
+                                s
+                            })
+                            .collect::<Vec<_>>();
+                        let Some(scope) =
+                            organization::choose(&ui.frame, "选择开票范围", &rows, "name")
+                        else {
+                            return;
+                        };
+                        finance::invoices(&ui.frame, ui.api.clone(), scope);
+                    },
+                );
+                return;
+            }
+            let scope = if key == "organization" && row["business_unit_id"].as_u64().is_some() {
                 json!({"business_unit_id":row["business_unit_id"],"department_id":row["department_id"]})
             } else {
                 json!({"business_unit_id":0,"department_id":0})
@@ -1042,13 +1080,20 @@ fn endpoint(key: &str) -> &str {
         _ => "/user/profile",
     }
 }
-fn query(frame: &Frame, api: ApiClient, title: &str, path: &str) -> Option<Value> {
-    dialog_job::run(
+fn query_async(
+    frame: &Frame,
+    api: ApiClient,
+    title: &str,
+    path: &str,
+    finished: impl FnOnce(Option<Value>) + 'static,
+) -> bool {
+    dialog_job::run_async(
         frame,
         api,
         title,
         "/api/desktop/squad/request",
         json!({"method":"GET","path":path}),
+        finished,
     )
 }
 fn pending(
@@ -1057,41 +1102,54 @@ fn pending(
     items: &Value,
     money: crate::desktop::squad_money::Money,
 ) {
-    let Some(items) = items.as_array() else {
+    let items = items.as_array().cloned().unwrap_or_default();
+    pending_next(*frame, api, items.into_iter(), money);
+}
+fn pending_next(
+    frame: Frame,
+    api: ApiClient,
+    mut items: std::vec::IntoIter<Value>,
+    money: crate::desktop::squad_money::Money,
+) {
+    let Some(item) = items.next() else {
+        dialog_job::refresh_async_host(&frame);
         return;
     };
-    for item in items {
-        let path = item["path"].as_str().unwrap_or("");
-        let Some(read_path) = crate::desktop::squad::result_path(path) else {
+    let path = item["path"].as_str().unwrap_or("");
+    let read_path = crate::desktop::squad::result_path(path);
+    let request_path = read_path.clone();
+    let request_api = api.clone();
+    let inspect = move |value: Option<Value>| {
+        if let Some(value) = value {
+            forms::inspect_money(&frame, "站点当前结果", &value, money);
+        } else if read_path.is_some() {
+            pending_next(frame, api, items, money);
+            return;
+        } else {
             super::show_info(
-                frame,
+                &frame,
                 "请先到站内核对该操作的实际结果，此处不会重新提交。确认后再移除待确认标记。",
             );
-            if super::external_import::confirm(frame, "已在站内核对实际结果，移除此待确认标记？")
-            {
-                dialog_job::run(
-                    frame,
-                    api.clone(),
-                    "移除确认标记",
-                    "/api/desktop/squad/confirmed",
-                    json!({"id":item["id"]}),
-                );
-            }
-            continue;
-        };
-        if let Some(value) = query(frame, api.clone(), "核对操作结果", &read_path) {
-            forms::inspect_money(frame, "站点当前结果", &value, money);
-            if super::external_import::confirm(frame, "已核对站点当前结果，移除此待确认标记？")
-            {
-                dialog_job::run(
-                    frame,
-                    api.clone(),
-                    "移除确认标记",
-                    "/api/desktop/squad/confirmed",
-                    json!({"id":item["id"]}),
-                );
-            }
         }
+        if super::external_import::confirm(&frame, "已核对站点实际结果，移除此待确认标记？")
+        {
+            let next_api = api.clone();
+            dialog_job::run_async(
+                &frame,
+                api,
+                "移除确认标记",
+                "/api/desktop/squad/confirmed",
+                json!({"id":item["id"]}),
+                move |_| pending_next(frame, next_api, items, money),
+            );
+        } else {
+            pending_next(frame, api, items, money);
+        }
+    };
+    if let Some(read_path) = request_path {
+        query_async(&frame, request_api, "核对操作结果", &read_path, inspect);
+    } else {
+        inspect(None);
     }
 }
 fn security(frame: &Frame, api: ApiClient) {
@@ -1120,9 +1178,21 @@ fn security(frame: &Frame, api: ApiClient) {
     }
 }
 fn notify_email(frame: &Frame, api: ApiClient) {
-    let Some(profile) = query(frame, api.clone(), "读取通知邮箱", "/user/profile") else {
-        return;
-    };
+    let parent = *frame;
+    query_async(
+        frame,
+        api.clone(),
+        "读取通知邮箱",
+        "/user/profile",
+        move |profile| {
+            if let Some(profile) = profile {
+                notify_email_loaded(&parent, api, profile);
+                dialog_job::refresh_async_host(&parent);
+            }
+        },
+    );
+}
+fn notify_email_loaded(frame: &Frame, api: ApiClient, profile: Value) {
     let rows = profile["balance_notify_extra_emails"]
         .as_array()
         .cloned()
@@ -1227,33 +1297,59 @@ fn notify_email(frame: &Frame, api: ApiClient) {
         });
     }
     chrome.finish();
-    let accepted = dialog.show_modal() == ID_OK;
+    let accepted = chrome.show_modal() == ID_OK;
     let selection = if accepted { selected.get() } else { None };
+    dialog_job::finish_dialog(dialog);
     dialog.destroy();
     match selection {
         Some((0, _)) => {
             let email = forms::prompt(frame, "添加通知邮箱", "email", "");
             if let Some(email) = email {
-                if dialog_job::run(frame,api.clone(),"发送验证码","/api/desktop/squad/request",json!({"method":"POST","path":"/user/notify-email/send-code","body":{"email":email}})).is_some(){forms::edit(frame,api,"验证通知邮箱","POST","/user/notify-email/verify",json!({"email":email,"code":""}));}
+                let parent = *frame;
+                let follow = api.clone();
+                dialog_job::run_async(
+                    frame,
+                    api,
+                    "发送验证码",
+                    "/api/desktop/squad/request",
+                    json!({"method":"POST","path":"/user/notify-email/send-code","body":{"email":email}}),
+                    move |value| {
+                        if value.is_some() {
+                            forms::edit(
+                                &parent,
+                                follow,
+                                "验证通知邮箱",
+                                "POST",
+                                "/user/notify-email/verify",
+                                json!({"email":email,"code":""}),
+                            );
+                            dialog_job::refresh_async_host(&parent);
+                        }
+                    },
+                );
             }
         }
         Some((operation @ (1 | 2), index)) => {
             if let Some(row) = rows.get(index) {
                 if operation == 1 {
-                    dialog_job::run(
+                    let parent = *frame;
+                    dialog_job::run_async(
                         frame,
                         api,
                         "调整邮箱通知",
                         "/api/desktop/squad/request",
                         json!({"method":"PUT","path":"/user/notify-email/toggle","body":{"email":row["email"],"disabled":row["disabled"]!=true}}),
+                        move |_| dialog_job::refresh_async_host(&parent),
                     );
                 } else if super::external_import::confirm(frame, "移除此通知邮箱？") {
-                    dialog_job::run(
+                    let parent = *frame;
+                    dialog_job::run_async(
                         frame,
                         api,
                         "移除邮箱",
                         "/api/desktop/squad/request",
                         json!({"method":"DELETE","path":"/user/notify-email","body":{"email":row["email"]}}),
+                        move |_| dialog_job::refresh_async_host(&parent),
                     );
                 }
             }
@@ -1262,10 +1358,22 @@ fn notify_email(frame: &Frame, api: ApiClient) {
     }
 }
 fn key_form(frame: &Frame, api: ApiClient, row: Option<&Value>) {
-    let Some(groups) = query(frame, api.clone(), "读取可用渠道分组", "/groups/available")
-    else {
-        return;
-    };
+    let parent = *frame;
+    let row = row.cloned();
+    query_async(
+        frame,
+        api.clone(),
+        "读取可用渠道分组",
+        "/groups/available",
+        move |groups| {
+            if let Some(groups) = groups {
+                key_form_loaded(&parent, api, row.as_ref(), groups);
+                dialog_job::refresh_async_host(&parent);
+            }
+        },
+    );
+}
+fn key_form_loaded(frame: &Frame, api: ApiClient, row: Option<&Value>, groups: Value) {
     let rows = groups
         .as_array()
         .or_else(|| groups["items"].as_array())
@@ -1396,6 +1504,7 @@ fn key_details(frame: &Frame, key: &Value) {
     });
     chrome.finish();
     dialog.show_modal();
+    dialog_job::finish_dialog(dialog);
     dialog.destroy();
 }
 fn funding_order(frame: &Frame, api: ApiClient, state: &Value) {
@@ -1544,6 +1653,7 @@ fn funding_order(frame: &Frame, api: ApiClient, state: &Value) {
     chrome.finish();
     dialog.show_modal();
     drop(job);
+    dialog_job::finish_dialog(dialog);
     dialog.destroy();
 }
 

@@ -3,7 +3,8 @@
 use super::{
     api::ApiClient,
     assistant_markdown::MessageBody,
-    controls::{Button, ButtonKind, TextCtrl},
+    assistant_questions::QuestionCard,
+    controls::{Button, ButtonKind, Choice, TextCtrl},
     dialog_job,
     shell::{PageId, Shell},
     theme, visual,
@@ -27,6 +28,9 @@ use wxdragon::{dc::GraphicsDC, prelude::*, timer::Timer};
 enum Action {
     Status,
     Settings(bool),
+    Personality,
+    FullAccess,
+    Question(String),
     Prepare,
     Uninstall,
     Send(String),
@@ -67,6 +71,7 @@ struct ChatMessage {
     id: String,
     role: String,
     text: String,
+    running: bool,
 }
 
 fn chat_messages(state: &Value) -> Vec<ChatMessage> {
@@ -77,13 +82,15 @@ fn chat_messages(state: &Value) -> Vec<ChatMessage> {
         .enumerate()
         .filter_map(|(index, item)| {
             let text = item["text"].as_str().unwrap_or_default();
-            (!text.is_empty()).then(|| ChatMessage {
+            let running = item["status"] == "running" && item["role"] == "assistant";
+            (!text.is_empty() || running).then(|| ChatMessage {
                 id: item["id"]
                     .as_str()
                     .map(str::to_owned)
                     .unwrap_or_else(|| index.to_string()),
                 role: item["role"].as_str().unwrap_or("assistant").to_owned(),
                 text: text.to_owned(),
+                running,
             })
         })
         .collect()
@@ -111,6 +118,7 @@ struct MessageCard {
     bubble: Panel,
     body: MessageBody,
     caption: Option<StaticText>,
+    dots: StaticText,
     layout_width: Cell<i32>,
 }
 
@@ -121,8 +129,10 @@ impl MessageCard {
         let background = if user { t.accent } else { t.bg_card_alt };
         let foreground = if user { t.on_accent } else { t.ink_primary };
         let row = Panel::builder(parent).build();
+        row.add_style(WindowStyle::ClipChildren);
         row.set_background_color(t.bg_card);
         let bubble = Panel::builder(&row).build();
+        bubble.add_style(WindowStyle::ClipChildren);
         paint_chat_surface(bubble, background, None);
         let content = BoxSizer::builder(Orientation::Vertical).build();
         let caption = match message.role.as_str() {
@@ -151,6 +161,17 @@ impl MessageCard {
             SizerFlag::Expand | SizerFlag::All,
             bubble.from_dip(12),
         );
+        let dots = label(&bubble, "......", theme::TextRole::Caption);
+        dots.set_background_color(background);
+        dots.set_foreground_color(t.ink_secondary);
+        dots.set_min_size(Size::new(bubble.from_dip(40), dots.get_best_size().height));
+        dots.show(message.running);
+        content.add(
+            &dots,
+            0,
+            SizerFlag::Left | SizerFlag::Right | SizerFlag::Bottom,
+            bubble.from_dip(12),
+        );
         bubble.set_sizer(content, false);
         let line = BoxSizer::builder(Orientation::Horizontal).build();
         if user {
@@ -172,11 +193,16 @@ impl MessageCard {
             bubble,
             body,
             caption,
+            dots,
             layout_width: Cell::new(0),
         }
     }
 
     fn update(&mut self, message: ChatMessage) {
+        if self.message.running != message.running {
+            self.dots.show(message.running);
+            self.layout_width.set(0);
+        }
         if self.message.text != message.text {
             self.body.update(&message.text);
             self.layout_width.set(0);
@@ -190,14 +216,7 @@ impl MessageCard {
         }
         let padding = self.row.from_dip(24);
         let max_width = (width - self.row.from_dip(40)).max(1);
-        let primary = self.body.primary_text();
-        let text_width = self
-            .message
-            .text
-            .lines()
-            .map(|line| primary.get_text_extent(line).width)
-            .max()
-            .unwrap_or(0);
+        let text_width = self.body.preferred_text_width();
         let bubble_width = (text_width + padding)
             .max(self.row.from_dip(92))
             .min(max_width);
@@ -210,7 +229,12 @@ impl MessageCard {
                 caption.get_best_size().height + self.bubble.from_dip(12)
             })
             .unwrap_or(0);
-        let bubble_height = height + padding + caption_height;
+        let dots_height = if self.message.running {
+            self.dots.get_min_size().height + self.bubble.from_dip(12)
+        } else {
+            0
+        };
+        let bubble_height = height + padding + caption_height + dots_height;
         self.bubble
             .set_min_size(Size::new(bubble_width, bubble_height));
         self.row.set_min_size(Size::new(-1, bubble_height));
@@ -257,6 +281,19 @@ fn fit_chat(area: Rect, preferred: Size) -> Rect {
         area.y + area.height - height,
         width,
         height,
+    )
+}
+
+fn fit_chat_mode(area: Rect, preferred: Size, frame_width: i32, maximized: bool) -> Rect {
+    if !maximized {
+        return fit_chat(area, preferred);
+    }
+    let width = (frame_width / 2).max(1).min(area.width);
+    Rect::new(
+        area.x + area.width - width,
+        area.y,
+        width,
+        area.height.max(1),
     )
 }
 
@@ -307,6 +344,9 @@ pub(super) struct AssistantUi {
     shell: Shell,
     api: ApiClient,
     enabled: CheckBox,
+    personality: Choice,
+    full_access: CheckBox,
+    builtin_share: Button,
     runtime: StaticText,
     account: StaticText,
     model: StaticText,
@@ -319,6 +359,7 @@ pub(super) struct AssistantUi {
     chat: Panel,
     chat_status: StaticText,
     transcript: ScrolledWindow,
+    question: QuestionCard,
     welcome: Panel,
     welcome_text: StaticText,
     cards: Rc<RefCell<Vec<MessageCard>>>,
@@ -326,6 +367,9 @@ pub(super) struct AssistantUi {
     send: Button,
     stop: Button,
     clear: Button,
+    maximize: Button,
+    maximized: Rc<Cell<bool>>,
+    busy_text: StaticText,
     pending: Panel,
     pending_scroll: ScrolledWindow,
     pending_text: StaticText,
@@ -338,10 +382,13 @@ pub(super) struct AssistantUi {
     acting: Arc<AtomicBool>,
     timer: Rc<RefCell<Option<Timer<Panel>>>>,
     motion_timer: Rc<RefCell<Option<Timer<Panel>>>>,
+    activity_timer: Rc<RefCell<Option<Timer<Button>>>>,
+    activity_frame: Rc<Cell<u8>>,
     motion: Rc<Cell<ChatMotion>>,
     last_poll: Rc<Cell<Instant>>,
     active: Rc<Cell<bool>>,
     navigated: Rc<RefCell<Option<String>>>,
+    answered_question: Rc<RefCell<Option<String>>>,
     configuration_revision: Rc<RefCell<Option<String>>>,
     configuration_changed: Rc<RefCell<Option<Rc<dyn Fn()>>>>,
     installation_offer: Rc<RefCell<InstallationOffer>>,
@@ -373,6 +420,33 @@ impl AssistantUi {
         enabled.set_background_color(t.bg_app);
         enabled.enable(false);
         column.add(&enabled, 0, SizerFlag::Bottom, page.from_dip(20));
+        let full_access = CheckBox::builder(&scroll).with_label("完全访问").build();
+        full_access.set_background_color(t.bg_app);
+        full_access.set_foreground_color(t.ink_primary);
+        full_access.enable(false);
+        column.add(&full_access, 0, SizerFlag::Bottom, page.from_dip(6));
+        let access_hint = label(
+            &scroll,
+            "允许搭档直接执行删除等配置操作",
+            theme::TextRole::Caption,
+        );
+        access_hint.set_foreground_color(t.ink_secondary);
+        column.add(&access_hint, 0, SizerFlag::Bottom, page.from_dip(20));
+        let personality_label = label(&scroll, "对话性格", theme::TextRole::Body);
+        column.add(&personality_label, 0, SizerFlag::Bottom, page.from_dip(8));
+        let personality = Choice::builder(&scroll).build();
+        for style in crate::assistant::personality::Personality::ALL {
+            personality.append(style.label());
+        }
+        personality.set_selection(0);
+        personality.enable(false);
+        personality.set_tooltip("选择会保存并用于下一轮回复，当前对话和执行权限保留");
+        column.add(
+            &personality,
+            0,
+            SizerFlag::Expand | SizerFlag::Bottom,
+            page.from_dip(20),
+        );
         let runtime = label(&scroll, "天才搭档 Server · 正在检查", theme::TextRole::Body);
         let account = label(&scroll, "小分队账户 · 正在读取", theme::TextRole::Body);
         let model = label(&scroll, "模型服务 · 正在读取", theme::TextRole::Body);
@@ -424,6 +498,12 @@ impl AssistantUi {
             SizerFlag::Expand | SizerFlag::Top,
             page.from_dip(6),
         );
+        let builtin_share = Button::builder(&scroll)
+            .with_label("天工内置模型分享")
+            .with_kind(ButtonKind::Secondary)
+            .build();
+        builtin_share.hide();
+        column.add(&builtin_share, 0, SizerFlag::Top, page.from_dip(12));
         let detail = label(&scroll, "正在读取状态…", theme::TextRole::Body);
         detail.set_foreground_color(t.ink_secondary);
         column.add(
@@ -434,7 +514,7 @@ impl AssistantUi {
         );
         let note = label(
             &scroll,
-            "可读取及调整模型、渠道和客户端配置，也可询问 Hub 与小分队的使用方法。删除配置会集中确认一次，密钥通过本机表单输入。\n\n收起可继续当前对话；停止会中断执行。真正退出 Hub 后清理本次临时内容，已保存的模型配置和主动另存的成果保留。",
+            "可读取及调整模型、渠道和客户端配置，也可询问 Hub 与小分队的使用方法。默认删除前确认；开启完全访问后可直接处理。密钥通过本机表单输入。\n\n收起可继续当前对话；停止会中断执行。真正退出 Hub 后清理本次临时内容，已保存的模型配置和主动另存的成果保留。",
             theme::TextRole::Body,
         );
         note.set_foreground_color(t.ink_secondary);
@@ -477,6 +557,13 @@ impl AssistantUi {
             .build();
         clear.set_name("清空本次对话");
         clear.set_tooltip("清空本次对话；正在执行的任务会先停止");
+        let maximize = Button::builder(&root)
+            .with_icon(visual::Icon::WindowMaximize)
+            .with_kind(ButtonKind::Ghost)
+            .with_size(Size::new(32, 32))
+            .build();
+        maximize.set_name("放大对话");
+        maximize.set_tooltip("放大至 Hub 半宽和内容区全高");
         let collapse = Button::builder(&root)
             .with_icon(visual::Icon::WindowMinimize)
             .with_kind(ButtonKind::Ghost)
@@ -491,6 +578,12 @@ impl AssistantUi {
             SizerFlag::AlignCenterVertical | SizerFlag::Right,
             root.from_dip(4),
         );
+        bar.add(
+            &maximize,
+            0,
+            SizerFlag::AlignCenterVertical | SizerFlag::Right,
+            root.from_dip(4),
+        );
         bar.add(&collapse, 0, SizerFlag::AlignCenterVertical, 0);
         col.add_sizer(
             &bar,
@@ -501,6 +594,7 @@ impl AssistantUi {
         let transcript = ScrolledWindow::builder(&root)
             .with_style(ScrolledWindowStyle::VScroll)
             .build();
+        transcript.add_style(WindowStyle::ClipChildren);
         transcript.set_name("assistant-conversation");
         transcript.set_background_color(t.bg_card);
         transcript.set_scroll_rate(0, root.from_dip(8));
@@ -551,6 +645,13 @@ impl AssistantUi {
             &transcript,
             1,
             SizerFlag::Expand | SizerFlag::All,
+            root.from_dip(12),
+        );
+        let question = QuestionCard::new(&root);
+        col.add(
+            &question.panel,
+            0,
+            SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Bottom,
             root.from_dip(12),
         );
         let pending = Panel::builder(&root).build();
@@ -617,6 +718,19 @@ impl AssistantUi {
             .with_kind(ButtonKind::Primary)
             .build();
         row.add(&shortcut, 0, SizerFlag::AlignCenterVertical, 0);
+        let busy_text = label(&root, "......", theme::TextRole::Caption);
+        busy_text.set_foreground_color(t.ink_secondary);
+        busy_text.set_min_size(Size::new(
+            root.from_dip(40),
+            busy_text.get_best_size().height,
+        ));
+        busy_text.hide();
+        row.add(
+            &busy_text,
+            0,
+            SizerFlag::AlignCenterVertical | SizerFlag::Left,
+            root.from_dip(8),
+        );
         row.add_stretch_spacer(1);
         row.add(&stop, 0, SizerFlag::default(), 0);
         row.add(&send, 0, SizerFlag::default(), 0);
@@ -635,6 +749,9 @@ impl AssistantUi {
             shell: shell.clone(),
             api,
             enabled,
+            personality,
+            full_access,
+            builtin_share,
             runtime,
             account,
             model,
@@ -647,6 +764,7 @@ impl AssistantUi {
             chat,
             chat_status,
             transcript,
+            question,
             welcome,
             welcome_text,
             cards: Default::default(),
@@ -654,6 +772,9 @@ impl AssistantUi {
             send,
             stop,
             clear,
+            maximize,
+            maximized: Default::default(),
+            busy_text,
             pending,
             pending_scroll,
             pending_text,
@@ -666,10 +787,13 @@ impl AssistantUi {
             acting: Default::default(),
             timer: Default::default(),
             motion_timer: Default::default(),
+            activity_timer: Default::default(),
+            activity_frame: Default::default(),
             motion: Default::default(),
             last_poll: Rc::new(Cell::new(Instant::now() - Duration::from_secs(30))),
             active: Default::default(),
             navigated: Default::default(),
+            answered_question: Default::default(),
             configuration_revision: Default::default(),
             configuration_changed: Default::default(),
             installation_offer: Default::default(),
@@ -683,7 +807,42 @@ impl AssistantUi {
                 Action::Settings(enabled.is_checked()),
             )
         });
+        let u = ui.clone();
+        ui.question.set_submit_handler(move |body| {
+            let nonce = body["nonce"].as_str().unwrap_or_default().to_owned();
+            u.post("question/answer", body, Action::Question(nonce));
+        });
+        let u = ui.clone();
+        personality.on_selection_changed(move |_| {
+            if let Some(style) = personality
+                .get_selection()
+                .and_then(|index| {
+                    crate::assistant::personality::Personality::ALL.get(index as usize)
+                })
+                .copied()
+            {
+                u.post(
+                    "settings",
+                    json!({"personality":style}),
+                    Action::Personality,
+                );
+            }
+        });
+        let u = ui.clone();
+        builtin_share.on_click(move |_| {
+            if u.state.borrow()["tiangongBuiltinShareVisible"] == true {
+                super::tiangong_models::show_builtin_share(&u.parent, &u.api);
+            }
+        });
         let nav = shell.clone();
+        let u = ui.clone();
+        full_access.on_toggled(move |_| {
+            u.post(
+                "settings",
+                json!({"fullAccess":full_access.is_checked()}),
+                Action::FullAccess,
+            )
+        });
         login.on_click(move |_| nav.navigate(PageId::Squad));
         let u = ui.clone();
         shell.assistant_launcher.on_click(move |_| {
@@ -695,6 +854,22 @@ impl AssistantUi {
         });
         let u = ui.clone();
         open.on_click(move |_| u.show_chat());
+        let u = ui.clone();
+        maximize.on_click(move |_| {
+            u.maximized.set(!u.maximized.get());
+            u.maximize.set_icon(if u.maximized.get() {
+                visual::Icon::WindowRestore
+            } else {
+                visual::Icon::WindowMaximize
+            });
+            u.maximize.set_tooltip(if u.maximized.get() {
+                "还原为小对话框"
+            } else {
+                "放大至 Hub 半宽和内容区全高"
+            });
+            u.finish_chat_motion();
+            u.layout_chat();
+        });
         for (button, prompt) in suggestions {
             let u = ui.clone();
             button.on_click(move |_| {
@@ -806,7 +981,12 @@ impl AssistantUi {
         let u = ui.clone();
         timer.on_tick(move |_| u.tick_chat_motion());
         ui.motion_timer.borrow_mut().replace(timer);
+        let timer = Timer::new(&shell.assistant_launcher);
+        let u = ui.clone();
+        timer.on_tick(move |_| u.tick_activity());
+        ui.activity_timer.borrow_mut().replace(timer);
         let timer_slot = ui.motion_timer.clone();
+        let activity_timer = ui.activity_timer.clone();
         let motion = ui.motion.clone();
         let chat_ptr = chat.handle_ptr();
         chat.on_destroy(move |event| {
@@ -815,6 +995,7 @@ impl AssistantUi {
                 if raw.get_event_object().is_some_and(|object| object.as_ptr() == chat_ptr));
             if own_destroy {
                 timer_slot.borrow_mut().take();
+                activity_timer.borrow_mut().take();
                 motion.set(ChatMotion::default());
             }
             event.skip(true);
@@ -909,6 +1090,68 @@ impl AssistantUi {
         }
     }
 
+    fn tick_activity(&self) {
+        let running = self.state.borrow()["running"] == true;
+        let visible = self.parent.is_shown() && !self.parent.is_iconized();
+        if !running || !visible || !theme::motion_enabled() {
+            if let Some(timer) = self.activity_timer.borrow().as_ref() {
+                timer.stop();
+            }
+            self.paint_activity(0, running);
+            return;
+        }
+        let frame = self.activity_frame.get().wrapping_add(1) % 32;
+        self.activity_frame.set(frame);
+        self.paint_activity(frame, true);
+    }
+
+    fn paint_activity(&self, frame: u8, running: bool) {
+        self.shell
+            .assistant_launcher
+            .set_activity_frame(running.then_some(frame));
+        // Only short native labels change. MessageBody, RichEdit selections,
+        // cached measurements and the transcript scroll position are untouched.
+        let dots = if !theme::motion_enabled() {
+            "......"
+        } else {
+            [".", "..", "...", "....", ".....", "......"][(frame as usize / 3) % 6]
+        };
+        if self.busy_text.get_label() != dots {
+            self.busy_text.set_label(dots);
+        }
+        for card in self
+            .cards
+            .borrow()
+            .iter()
+            .filter(|card| card.message.running)
+        {
+            if card.dots.get_label() != dots {
+                card.dots.set_label(dots);
+            }
+        }
+    }
+
+    fn update_activity(&self) {
+        let running = self.state.borrow()["running"] == true;
+        let changed = self.busy_text.is_shown() != running;
+        self.busy_text.show(running);
+        self.paint_activity(self.activity_frame.get(), running);
+        let animate = running
+            && theme::motion_enabled()
+            && self.parent.is_shown()
+            && !self.parent.is_iconized();
+        if let Some(timer) = self.activity_timer.borrow().as_ref() {
+            if animate {
+                timer.start(80, false);
+            } else {
+                timer.stop();
+            }
+        }
+        if changed {
+            self.chat.layout();
+        }
+    }
+
     fn finish_chat_motion(&self) {
         if let Some(timer) = self.motion_timer.borrow().as_ref() {
             timer.stop();
@@ -934,7 +1177,12 @@ impl AssistantUi {
 
     fn position_chat(&self) {
         let area = self.shell.assistant_overlay_area();
-        let mut bounds = fit_chat(area, visual::dip_size(&self.chat, 420, 560));
+        let mut bounds = fit_chat_mode(
+            area,
+            visual::dip_size(&self.chat, 420, 560),
+            self.parent.get_client_size().width,
+            self.maximized.get(),
+        );
         // Move only through unused space above the final bounds. Small Hub
         // windows keep the full message/input area and all chrome reachable.
         let travel = self.chat.from_dip(14).min((bounds.y - area.y).max(0));
@@ -968,6 +1216,11 @@ impl AssistantUi {
         self.welcome_text.wrap(width);
         self.welcome.layout();
         self.pending_text.wrap(width);
+        self.question.layout(
+            width,
+            (self.chat.get_client_size().height / 3)
+                .clamp(self.chat.from_dip(72), self.chat.from_dip(220)),
+        );
         let pending_height = (self.chat.get_client_size().height / 6)
             .clamp(self.chat.from_dip(48), self.chat.from_dip(96));
         self.pending_scroll
@@ -1053,6 +1306,7 @@ impl AssistantUi {
         drop(cards);
         self.layout_chat_preserving(follow, scroll);
         self.transcript.thaw();
+        self.transcript.refresh(false, None);
     }
 
     fn fetch(&self) {
@@ -1133,10 +1387,12 @@ impl AssistantUi {
             return;
         }
         self.installation_offer.borrow_mut().pending = false;
-        let accepted = super::feedback::confirm(&self.parent,
+        let accepted = super::feedback::confirm(
+            &self.parent,
             "安装天才搭档 Server",
             "将从已有兼容程序准备共享的天才搭档 Server；本机没有可用来源时，从官方下载安装。\n\n天才搭档和天工协助共用这一份运行端，安装后长期保留。现在准备？",
-            "准备");
+            "准备",
+        );
         self.installation_prompt_open.set(false);
         if accepted {
             self.detail.set_label("正在准备天才搭档 Server…");
@@ -1164,10 +1420,12 @@ impl AssistantUi {
             return;
         }
         drop(state);
-        let accepted = super::feedback::confirm(&self.parent,
+        let accepted = super::feedback::confirm(
+            &self.parent,
             "移除天才搭档 Server",
             "移除 Hub 自管的天才搭档 Server？\n\n系统中原有的运行程序、已保存模型配置和用户文件都会保留。以后再次启用时，需要由你确认重新准备。",
-            "移除");
+            "移除",
+        );
         if accepted {
             self.post_path(
                 "/api/desktop/assistance/uninstall",
@@ -1194,6 +1452,13 @@ impl AssistantUi {
             }
             match result {
                 Ok(value) => {
+                    if let Action::Question(nonce) = &action {
+                        *self.answered_question.borrow_mut() = Some(nonce.clone());
+                        let mut current = self.state.borrow_mut();
+                        if current["pendingQuestion"]["nonce"] == nonce.as_str() {
+                            current["pendingQuestion"] = Value::Null;
+                        }
+                    }
                     if let Action::Send(text) = &action {
                         if self.input.get_value() == *text {
                             self.input.clear();
@@ -1212,6 +1477,8 @@ impl AssistantUi {
                         Action::Clear => Some("搭档临时内容已清理"),
                         Action::Prepare => Some("天才搭档 Server 已准备就绪"),
                         Action::Uninstall => Some("天才搭档 Server 已移除"),
+                        Action::Personality => Some("对话性格已保存，将用于下一轮回复"),
+                        Action::FullAccess => Some("完全访问设置已保存"),
                         _ => None,
                     };
                     if let Some(notice) = notice {
@@ -1242,6 +1509,19 @@ impl AssistantUi {
                     // Restore the saved switch after a failed settings request.
                     self.enabled
                         .set_value(self.state.borrow()["enabled"] == true);
+                    self.full_access
+                        .set_value(self.state.borrow()["fullAccess"] == true);
+                    let style =
+                        serde_json::from_value::<crate::assistant::personality::Personality>(
+                            self.state.borrow()["personality"].clone(),
+                        )
+                        .unwrap_or_default();
+                    self.personality.set_selection(
+                        crate::assistant::personality::Personality::ALL
+                            .iter()
+                            .position(|candidate| *candidate == style)
+                            .unwrap_or(0) as u32,
+                    );
                     if matches!(action, Action::Settings(true)) {
                         // The setting may have saved before its status read
                         // failed. Check saved readiness before offering setup.
@@ -1264,7 +1544,15 @@ impl AssistantUi {
         }
     }
 
-    fn apply(&self, value: Value) {
+    fn apply(&self, mut value: Value) {
+        // A status read started before submission can return after its ACK.
+        // Do not reopen the just-answered card from that one stale snapshot.
+        if value["pendingQuestion"]["nonce"]
+            .as_str()
+            .is_some_and(|nonce| self.answered_question.borrow().as_deref() == Some(nonce))
+        {
+            value["pendingQuestion"] = Value::Null;
+        }
         let configuration_revision = value["configurationRevision"]
             .as_str()
             .filter(|revision| !revision.is_empty())
@@ -1282,6 +1570,19 @@ impl AssistantUi {
         }
         drop(old);
         self.enabled.set_value(enabled);
+        self.full_access.set_value(value["fullAccess"] == true);
+        let style = serde_json::from_value::<crate::assistant::personality::Personality>(
+            value["personality"].clone(),
+        )
+        .unwrap_or_default();
+        self.personality.set_selection(
+            crate::assistant::personality::Personality::ALL
+                .iter()
+                .position(|candidate| *candidate == style)
+                .unwrap_or(0) as u32,
+        );
+        self.builtin_share
+            .show(value["tiangongBuiltinShareVisible"] == true);
         self.enabled.enable(true);
         self.runtime.set_label(if ready {
             "天才搭档 Server · 已就绪"
@@ -1458,9 +1759,18 @@ impl AssistantUi {
         self.reject.enable(!busy);
         self.credential.enable(!busy);
         self.enabled.enable(value.get("enabled").is_some() && !busy);
-        if actions_changed {
+        self.personality
+            .enable(value.get("enabled").is_some() && !busy);
+        self.full_access
+            .enable(value.get("enabled").is_some() && !busy);
+        self.builtin_share
+            .enable(value["tiangongBuiltinShareVisible"] == true && !busy);
+        let question_shown = self.question.panel.is_shown();
+        self.question.apply(&value["pendingQuestion"], busy);
+        if actions_changed || question_shown != self.question.panel.is_shown() {
             self.layout_chat();
         }
+        self.update_activity();
     }
 
     fn apply_navigation(&self) {
@@ -1469,6 +1779,16 @@ impl AssistantUi {
             return;
         };
         if self.navigated.borrow().as_deref() == Some(id) {
+            return;
+        }
+        if navigation["page"] == "tiangong-builtin-share" {
+            if self.acting.load(Ordering::SeqCst) {
+                return;
+            }
+            *self.navigated.borrow_mut() = Some(id.to_string());
+            let opened = self.state.borrow()["tiangongBuiltinShareVisible"] == true
+                && super::tiangong_models::show_builtin_share(&self.parent, &self.api);
+            self.post("navigation/ack", json!({"id":id,"opened":opened,"message":if opened {"分享面板已打开"} else {"分享面板未能打开，请检查天工配置后重试"}}), Action::Navigate);
             return;
         }
         let page = match navigation["page"].as_str() {
@@ -1490,7 +1810,15 @@ impl AssistantUi {
             }
             *self.navigated.borrow_mut() = Some(id.to_string());
             self.shell.navigate(page);
-            self.post("navigation/ack", json!({"id":id}), Action::Navigate);
+            let opened = self.shell.current() == page;
+            self.post("navigation/ack", json!({"id":id,"opened":opened,"message":if opened {"页面已打开"} else {"该页面当前不可见或尚未注册"}}), Action::Navigate);
+        } else if !self.acting.load(Ordering::SeqCst) {
+            *self.navigated.borrow_mut() = Some(id.to_string());
+            self.post(
+                "navigation/ack",
+                json!({"id":id,"opened":false,"message":"不支持打开此页面"}),
+                Action::Navigate,
+            );
         }
     }
 
@@ -1634,6 +1962,77 @@ mod layout_tests {
             Rect::new(20, 56, 300, 270)
         );
     }
+    #[test]
+    fn maximized_chat_uses_half_frame_width_and_restores_the_small_bounds() {
+        for (area, preferred, frame_width) in [
+            (Rect::new(20, 56, 940, 710), Size::new(420, 560), 1200),
+            (Rect::new(20, 56, 300, 270), Size::new(420, 560), 520),
+            (Rect::new(30, 84, 990, 585), Size::new(630, 840), 1800),
+            (Rect::new(20, 56, 200, 270), Size::new(420, 560), 800),
+        ] {
+            let original = fit_chat(area, preferred);
+            let large = fit_chat_mode(area, preferred, frame_width, true);
+            assert_eq!(large.width, (frame_width / 2).min(area.width));
+            assert_eq!(large.y, area.y);
+            assert_eq!(large.height, area.height);
+            assert_eq!(large.x + large.width, area.x + area.width);
+            assert_eq!(fit_chat_mode(area, preferred, frame_width, false), original);
+        }
+    }
+}
+
+#[cfg(all(test, windows))]
+#[test]
+fn assistant_styles_waiting_labels_and_width_keep_one_conversation_and_native_selection() {
+    wxdragon::app::render_offscreen(|| {
+        theme::init(theme::ThemeMode::Light);
+        let parent=Frame::builder().with_title("hidden assistant style and layout fixture").build();
+        parent.set_size(Size::new(1180,800));
+        let host=Panel::builder(&parent).build();
+        let shell=Shell::new(&host,&parent);
+        let row=BoxSizer::builder(Orientation::Vertical).build(); row.add(&shell.panel,1,SizerFlag::Expand,0); host.set_sizer(row,false);
+        let outer=BoxSizer::builder(Orientation::Vertical).build(); outer.add(&host,1,SizerFlag::Expand,0); parent.set_sizer(outer,false);
+        let api=ApiClient::new("http://127.0.0.1:1".into(),super::text::GuiText::new(super::text::GuiLocale::ZhCn));
+        let ui=AssistantUi::build(&parent,&shell,api,false);
+        let mut state=json!({"enabled":true,"runtimeReady":true,"loggedIn":true,"modelServiceReady":true,
+            "conversationId":"same-conversation","running":true,"personality":"catgirl","fullAccess":false,
+            "messages":[{"id":"u1","role":"user","text":"现在workbuddy都有哪些模型","status":"completed"},
+                {"id":"a1","role":"assistant","text":"","status":"running"}]});
+        ui.apply(state.clone());
+        ui.chat.show(true); parent.layout(); ui.position_chat(); ui.layout_chat();
+        assert!(!ui.builtin_share.is_shown());
+        assert!(ui.busy_text.is_shown());
+        assert_eq!(ui.cards.borrow().len(),2);
+        let editor=ui.cards.borrow()[0].body.primary_text();
+        assert_eq!(editor.get_number_of_lines(),1,"a short sentence must include RichEdit's own inner margins");
+        editor.set_selection(0,2);
+        let handle=editor.handle_ptr(); let selection=editor.get_selection(); let scroll=ui.transcript.view_start();
+        ui.input.set_value("当前未发送草稿");
+        for frame in [0,4,8,16,24,31] { ui.paint_activity(frame,true); }
+        assert_eq!(ui.cards.borrow()[0].body.primary_text().handle_ptr(),handle);
+        assert_eq!(editor.get_selection(),selection);
+        assert_eq!(ui.transcript.view_start(),scroll);
+        state["personality"]="girlfriend".into(); state["fullAccess"]=true.into();
+        ui.apply(state.clone());
+        assert_eq!(ui.input.get_value(),"当前未发送草稿");
+        assert_eq!(ui.personality.get_selection(),Some(2));
+        assert!(ui.full_access.is_checked());
+        ui.maximized.set(true); ui.position_chat(); ui.layout_chat();
+        let area=shell.assistant_overlay_area();
+        assert_eq!(ui.chat.get_size().width,(parent.get_client_size().width/2).min(area.width));
+        assert_eq!(ui.chat.get_size().height,area.height);
+        ui.maximized.set(false); ui.position_chat(); ui.layout_chat();
+        assert_eq!(ui.input.get_value(),"当前未发送草稿");
+        assert_eq!(ui.cards.borrow()[0].body.primary_text().handle_ptr(),handle);
+        assert_eq!(editor.get_selection(),selection);
+        state["running"]=false.into(); state["messages"][1]["status"]="completed".into(); state["messages"][1]["text"]="已读取模型。".into();
+        ui.apply(state);
+        assert!(!ui.busy_text.is_shown());
+        assert!(!ui.cards.borrow()[1].dots.is_shown());
+        assert_eq!(ui.state.borrow()["conversationId"],"same-conversation");
+        assert!(!parent.is_shown());
+        parent.destroy();
+    }).unwrap();
 }
 
 #[cfg(test)]
@@ -1689,7 +2088,9 @@ mod installation_tests {
 fn assistant_composer_acknowledgement_preserves_drafts_and_refreshes_configuration() {
     wxdragon::app::render_offscreen(|| {
         theme::init(theme::ThemeMode::Light);
-        let parent = Frame::builder().with_title("hidden assistant composer").build();
+        let parent = Frame::builder()
+            .with_title("hidden assistant composer")
+            .build();
         let host = Panel::builder(&parent).build();
         let shell = Shell::new(&host, &parent);
         let api = ApiClient::new(
@@ -1713,18 +2114,50 @@ fn assistant_composer_acknowledgement_preserves_drafts_and_refreshes_configurati
         let sent = "帮我检查模型配置";
         ui.input.set_value(sent);
         ui.last_poll.set(Instant::now());
-        ui.inbox.lock().unwrap().push((Action::Send(sent.into()), Ok(state.clone())));
+        ui.inbox
+            .lock()
+            .unwrap()
+            .push((Action::Send(sent.into()), Ok(state.clone())));
         ui.poll();
         assert!(ui.input.get_value().is_empty());
         ui.input.set_value("下一条新草稿");
-        ui.inbox.lock().unwrap().push((Action::Send(sent.into()), Ok(state.clone())));
+        ui.inbox
+            .lock()
+            .unwrap()
+            .push((Action::Send(sent.into()), Ok(state.clone())));
         ui.poll();
         assert_eq!(ui.input.get_value(), "下一条新草稿");
-        ui.inbox.lock().unwrap().push((Action::Send(sent.into()), Err("合成发送失败".into())));
+        ui.inbox
+            .lock()
+            .unwrap()
+            .push((Action::Send(sent.into()), Err("合成发送失败".into())));
         ui.poll();
-        assert_eq!(ui.input.get_value(), "下一条新草稿", "failure must retain the draft");
+        assert_eq!(
+            ui.input.get_value(),
+            "下一条新草稿",
+            "failure must retain the draft"
+        );
 
-        state.as_object_mut().unwrap().remove("configurationRevision");
+        state["pendingQuestion"] = json!({"nonce":"answered-question","questions":[
+            {"id":"source","title":"选择渠道","options":[{"id":"a","label":"渠道A"}]}]});
+        ui.apply(state.clone());
+        assert!(ui.question.panel.is_shown());
+        ui.fetching.store(true, Ordering::SeqCst);
+        ui.inbox.lock().unwrap().push((
+            Action::Question("answered-question".into()),
+            Ok(json!({"accepted":true})),
+        ));
+        ui.poll();
+        ui.apply(state.clone());
+        assert!(
+            !ui.question.panel.is_shown(),
+            "a late poll must not reopen an answered card"
+        );
+
+        state
+            .as_object_mut()
+            .unwrap()
+            .remove("configurationRevision");
         ui.apply(state.clone());
         assert_eq!(refreshes.get(), 1, "missing revision must be ignored");
         state["configurationRevision"] = "revision-a".into();
@@ -1733,10 +2166,15 @@ fn assistant_composer_acknowledgement_preserves_drafts_and_refreshes_configurati
         state["configurationRevision"] = "revision-b".into();
         state["running"] = true.into();
         ui.apply(state);
-        assert_eq!(refreshes.get(), 2, "refresh must not wait for turn completion");
+        assert_eq!(
+            refreshes.get(),
+            2,
+            "refresh must not wait for turn completion"
+        );
         assert!(!ui.chat.is_shown() && !parent.is_shown());
         parent.destroy();
-    }).unwrap();
+    })
+    .unwrap();
 }
 
 #[cfg(all(test, windows))]
@@ -1761,7 +2199,9 @@ fn assistant_composer_native_shortcut_and_scroll_without_indicators() {
 
     wxdragon::app::render_offscreen(|| {
         theme::init(theme::ThemeMode::Light);
-        let parent = Frame::builder().with_title("hidden synthetic composer input").build();
+        let parent = Frame::builder()
+            .with_title("hidden synthetic composer input")
+            .build();
         let host = Panel::builder(&parent).build();
         let shell = Shell::new(&host, &parent);
         let api = ApiClient::new(
@@ -1793,19 +2233,30 @@ fn assistant_composer_native_shortcut_and_scroll_without_indicators() {
             SendMessageW(editor, WM_CHAR, 10, 1);
         }
         drop(previous);
-        assert_eq!(ui.input.get_value(), sent, "submit inserted a native newline");
+        assert_eq!(
+            ui.input.get_value(),
+            sent,
+            "submit inserted a native newline"
+        );
 
         ui.input.set_size(visual::dip_size(&ui.input, 300, 90));
         ui.input.layout();
-        let long_draft = (0..40).map(|index| format!("第 {index} 行草稿\n")).collect::<String>();
+        let long_draft = (0..40)
+            .map(|index| format!("第 {index} 行草稿\n"))
+            .collect::<String>();
         ui.input.set_value(&long_draft);
         ui.input.set_insertion_point_end();
-        assert_eq!(unsafe { GetWindowLongPtrW(editor, GWL_STYLE) } & WS_VSCROLL as isize, 0);
+        assert_eq!(
+            unsafe { GetWindowLongPtrW(editor, GWL_STYLE) } & WS_VSCROLL as isize,
+            0
+        );
         let first_line = unsafe { SendMessageW(editor, 0xce, 0, 0) };
         assert!(first_line > 0);
         unsafe { SendMessageW(editor, WM_MOUSEWHEEL, 120usize << 16, 0) };
-        assert!(unsafe { SendMessageW(editor, 0xce, 0, 0) } < first_line,
-            "hidden scrollbar must retain native multiline wheel scrolling");
+        assert!(
+            unsafe { SendMessageW(editor, 0xce, 0, 0) } < first_line,
+            "hidden scrollbar must retain native multiline wheel scrolling"
+        );
         ui.input.set_selection(0, 2);
         unsafe { SendMessageW(editor, 0xb7, 0, 0) };
         assert_eq!(unsafe { SendMessageW(editor, 0xce, 0, 0) }, 0);
@@ -1813,7 +2264,8 @@ fn assistant_composer_native_shortcut_and_scroll_without_indicators() {
         assert_eq!(ui.input.get_value(), long_draft);
         assert!(!ui.chat.is_shown() && !parent.is_shown());
         parent.destroy();
-    }).unwrap();
+    })
+    .unwrap();
 }
 
 #[cfg(all(test, windows))]

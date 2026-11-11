@@ -124,6 +124,7 @@ pub(super) fn show_channel_dialog(
         .with_style(DialogStyle::DefaultDialogStyle | DialogStyle::ResizeBorder)
         .with_size(dialog_size.width, dialog_size.height)
         .build();
+    super::motion::install_dialog(dialog);
     dialog.set_min_size(Size::new(minimum_width, 360.min(dialog_size.height)));
     let panel = ScrolledWindow::builder(&dialog)
         .with_style(ScrolledWindowStyle::VScroll)

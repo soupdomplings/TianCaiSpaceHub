@@ -26,6 +26,7 @@ pub(super) struct RequestBrowser {
     rows: Rc<RefCell<Vec<Value>>>,
     table: ListCtrl,
     status: StaticText,
+    loading: super::loading::LoadingIndicator,
     previous: Button,
     next: Button,
     api: ApiClient,
@@ -35,9 +36,11 @@ pub(super) struct RequestBrowser {
     timer: Rc<RefCell<Option<Timer<Panel>>>>,
     serial: Rc<Cell<u64>>,
     queued: Rc<Cell<bool>>,
+    feedback_requested: Rc<Cell<bool>>,
     last: Rc<Cell<std::time::Instant>>,
     technical: Rc<Cell<bool>>,
     total: Rc<Cell<u64>>,
+    rendered: Rc<Cell<Option<(usize, bool, u64)>>>,
     search: TextCtrl,
     client: Choice,
     result: Choice,
@@ -96,6 +99,7 @@ impl RequestBrowser {
             rows: Default::default(),
             table,
             status,
+            loading: super::loading::LoadingIndicator::new(&page, status),
             previous,
             next,
             api,
@@ -105,9 +109,11 @@ impl RequestBrowser {
             timer: Default::default(),
             serial: Default::default(),
             queued: Default::default(),
+            feedback_requested: Default::default(),
             last: Rc::new(Cell::new(std::time::Instant::now())),
             technical: Default::default(),
             total: Default::default(),
+            rendered: Default::default(),
             search,
             client,
             result,
@@ -202,6 +208,7 @@ impl RequestBrowser {
             let pending = v.pending.lock().ok().and_then(|mut s| s.take());
             if let Some((serial, result)) = pending {
                 v.busy.store(false, Ordering::SeqCst);
+                v.loading.finish();
                 if serial == v.serial.get() {
                     match result {
                         Ok(value) => v.render(value),
@@ -225,7 +232,7 @@ impl RequestBrowser {
                 && v.last.get().elapsed() > Duration::from_secs(5)
                 && !v.busy.load(Ordering::SeqCst)
             {
-                v.refresh();
+                v.refresh_inner(false);
             }
         });
         view.timer.borrow_mut().replace(timer);
@@ -269,6 +276,12 @@ impl RequestBrowser {
         self.refresh();
     }
     pub fn refresh(&self) {
+        self.refresh_inner(true);
+    }
+    fn refresh_inner(&self, feedback: bool) {
+        if feedback {
+            self.feedback_requested.set(true);
+        }
         self.serial.set(self.serial.get() + 1);
         if self.busy.load(Ordering::SeqCst) {
             self.queued.set(true);
@@ -282,7 +295,9 @@ impl RequestBrowser {
             return;
         }
         self.last.set(std::time::Instant::now());
-        self.status.set_label("读取中…");
+        if self.feedback_requested.replace(false) {
+            self.loading.start("读取中…");
+        }
         let (api, slot, filter, serial) = (
             self.api.clone(),
             self.pending.clone(),
@@ -321,6 +336,15 @@ impl RequestBrowser {
     }
     fn render(&self, value: Value) {
         let rows = value["rows"].as_array().cloned().unwrap_or_default();
+        let total = value["total"].as_u64().unwrap_or(0);
+        let offset = self.filter.borrow().offset;
+        let rendered = (offset, self.technical.get(), total);
+        if self.rendered.get() == Some(rendered) && *self.rows.borrow() == rows {
+            self.status
+                .set_label(&format!("{} 条 · 第 {} 页", total, offset / 50 + 1));
+            return;
+        }
+        self.rendered.set(Some(rendered));
         self.table.freeze();
         self.table.clear_all();
         for (i, (title, width)) in [
@@ -398,9 +422,7 @@ impl RequestBrowser {
         }
         self.table.thaw();
         fit_columns(self.table, self.technical.get());
-        let total = value["total"].as_u64().unwrap_or(0);
         self.total.set(total);
-        let offset = self.filter.borrow().offset;
         self.status
             .set_label(&format!("{} 条 · 第 {} 页", total, offset / 50 + 1));
         self.previous.enable(offset > 0);
@@ -414,6 +436,7 @@ pub(super) fn show(frame: Frame, api: ApiClient, text: GuiText, filter: LogFilte
         .with_size(size.width, size.height)
         .with_style(DialogStyle::DefaultDialogStyle | DialogStyle::ResizeBorder)
         .build();
+    super::motion::install_dialog(dialog);
     let browser = RequestBrowser::new(&dialog, frame, api, text, filter);
     let s = BoxSizer::builder(Orientation::Vertical).build();
     s.add(&browser.page, 1, SizerFlag::Expand, 0);

@@ -28,6 +28,8 @@ pub(crate) struct ToolState {
     deletion: Option<Pending<bool>>,
     credential: Option<Pending<String>>,
     navigation: Option<Value>,
+    navigation_response: Option<oneshot::Sender<NavigationAck>>,
+    pub(super) question: Option<super::questions::Pending>,
 }
 struct Credential {
     secret: String,
@@ -49,8 +51,9 @@ pub(crate) fn router() -> Router<SharedState> {
             "/api/desktop/assistant/navigation/ack",
             post(navigation_ack),
         )
+        .merge(super::questions::router())
 }
-fn trusted(headers: &HeaderMap) -> Result<()> {
+pub(super) fn trusted(headers: &HeaderMap) -> Result<()> {
     ensure!(
         headers.get("origin").is_none()
             && headers
@@ -61,7 +64,7 @@ fn trusted(headers: &HeaderMap) -> Result<()> {
     );
     Ok(())
 }
-fn response(value: Result<Value>) -> Response {
+pub(super) fn response(value: Result<Value>) -> Response {
     match value {
         Ok(v) => Json(v).into_response(),
         Err(e) => (StatusCode::CONFLICT, Json(json!({"error":e.to_string()}))).into_response(),
@@ -74,6 +77,7 @@ pub(crate) async fn public_status(state: &SharedState) -> Value {
     let tools = state.assistant.tools.lock().await;
     json!({"pendingDeletion":tools.deletion.as_ref().map(|p|&p.view),
         "pendingCredential":tools.credential.as_ref().map(|p|&p.view),
+        "pendingQuestion":tools.question.as_ref().map(|p|p.view()),
         "credentialReferences":tools.credentials.iter().map(|(reference,c)|json!({"reference":reference,"mask":c.mask,"label":c.label})).collect::<Vec<_>>(),
         "navigation":tools.navigation,"configurationRevision":revision})
 }
@@ -92,6 +96,15 @@ pub(crate) async fn cancel_pending(state: &SharedState) {
     tools.deletion = None;
     tools.credential = None;
     tools.navigation = None;
+    tools.navigation_response = None;
+    tools.question = None;
+}
+pub(super) async fn request_builtin_share(state: &SharedState) {
+    let mut tools = state.assistant.tools.lock().await;
+    tools.navigation_response = None;
+    tools.navigation = Some(json!({
+        "id":uuid::Uuid::new_v4().to_string(),"page":"tiangong-builtin-share"
+    }));
 }
 #[derive(Deserialize)]
 struct Confirmation {
@@ -191,6 +204,8 @@ async fn credential(
 #[derive(Deserialize)]
 struct NavigationAck {
     id: String,
+    opened: bool,
+    message: Option<String>,
 }
 async fn navigation_ack(
     State(state): State<SharedState>,
@@ -201,14 +216,18 @@ async fn navigation_ack(
         async {
             trusted(&headers)?;
             let mut tools = state.assistant.tools.lock().await;
-            if tools
+            if !tools
                 .navigation
                 .as_ref()
                 .is_some_and(|v| v["id"] == input.id)
             {
-                tools.navigation = None;
+                return Ok(json!({"accepted":false}));
             }
-            Ok(json!({"ok":true}))
+            tools.navigation = None;
+            if let Some(pending) = tools.navigation_response.take() {
+                let _ = pending.send(input);
+            }
+            Ok(json!({"accepted":true}))
         }
         .await,
     )
@@ -279,7 +298,7 @@ pub(crate) fn definitions() -> Vec<Value> {
         ),
         spec(
             "hub_delete_configurations",
-            "集中删除明确列出的渠道、渠道内模型、客户端模型。Hub 只弹一次本机批量确认，必须等待真人决定。kind=channel 用 channel；kind=source_model 用 channel/model；kind=client_model 用 id 或 client/entryId，Codex 用 model。不可用通配符。",
+            "集中删除明确列出的渠道、渠道内模型、客户端模型，包括专用渠道及其原生模型。普通模式只弹一次本机批量确认；用户已开启完全访问时直接按明确指令执行。kind=channel 用 channel；kind=source_model 用 channel/model；kind=client_model 可用 client/model 或读取结果的 id、entryId。未找到或歧义时返回 candidates，须先询问用户选定，不能猜选。不可用通配符。",
             json!({"items":{"type":"array","minItems":1,"maxItems":32,"items":{"type":"object","properties":{"kind":{"type":"string","enum":["channel","source_model","client_model"]},"channel":{"type":"string"},"model":{"type":"string"},"id":{"type":"string"},"client":{"type":"string"},"entryId":{"type":"string"}},"required":["kind"],"additionalProperties":false}}}),
             &["items"],
         ),
@@ -291,7 +310,7 @@ pub(crate) fn definitions() -> Vec<Value> {
         ),
         spec(
             "hub_open_page",
-            "请求 Hub 界面打开相关页面；queued 表示已提交导航意图，不能断言用户已看到。page=client时必须传client。",
+            "打开 Hub 相关页面并等待桌面实际切页回执；仅 opened=true 表示已打开。未打开、超时或不支持时如实说明。page=client时必须传client。",
             json!({"page":{"type":"string","enum":["overview","squad","sources","client","settings","help","assistant"]},"client":{"type":"string"}}),
             &["page"],
         ),
@@ -304,6 +323,7 @@ pub(crate) fn definitions() -> Vec<Value> {
     ];
     definitions.extend(super::squad_tools::definitions());
     definitions.extend(super::usage_tools::definitions());
+    definitions.push(super::questions::definition());
     definitions
 }
 /// Store an imported key only in the current assistant's ephemeral credential map.
@@ -1227,6 +1247,285 @@ impl DeleteItem {
         )
     }
 }
+enum DeleteTarget {
+    Channel(String),
+    SourceModel {
+        channel: String,
+        model: String,
+    },
+    Binding {
+        id: String,
+        target_id: String,
+    },
+    Native {
+        client: ClientId,
+        entry_id: String,
+        before: Value,
+    },
+    CodexModel {
+        model: String,
+    },
+}
+struct ResolvedDelete {
+    label: String,
+    candidate: Value,
+    target: DeleteTarget,
+}
+impl ResolvedDelete {
+    fn key(&self) -> String {
+        match &self.target {
+            DeleteTarget::Channel(channel) => format!("channel:{channel}"),
+            DeleteTarget::SourceModel { channel, model } => format!("source:{channel}/{model}"),
+            DeleteTarget::Binding { id, .. } => format!("binding:{id}"),
+            DeleteTarget::Native {
+                client, entry_id, ..
+            } => format!("{}:{entry_id}", client.key()),
+            DeleteTarget::CodexModel { model } => format!("codex:{model}"),
+        }
+    }
+}
+fn model_named(actual: &str, requested: &str) -> bool {
+    !actual.is_empty() && actual.eq_ignore_ascii_case(requested.trim())
+}
+fn binding_deletion(provider: &ProviderConfig) -> Option<ResolvedDelete> {
+    let binding = provider.desktop_binding.as_ref()?;
+    Some(ResolvedDelete {
+        label: format!(
+            "{}：{} / {}",
+            binding.client.name(),
+            binding.label,
+            binding.model
+        ),
+        candidate: json!({"kind":"client_model","client":binding.client,"model":binding.model,
+            "label":binding.label,"id":binding.id,"targetId":binding.target_id,"channel":provider.name}),
+        target: DeleteTarget::Binding {
+            id: binding.id.clone(),
+            target_id: binding.target_id.clone(),
+        },
+    })
+}
+async fn native_delete_candidates(
+    state: &SharedState,
+    config: &AppConfig,
+    client: ClientId,
+    item: &DeleteItem,
+    cache: &mut HashMap<ClientId, Value>,
+) -> Result<Vec<ResolvedDelete>> {
+    if !cache.contains_key(&client) {
+        let native = api(
+            state,
+            if client == ClientId::WorkBuddy {
+                "workbuddy_read"
+            } else {
+                "tiangong_read"
+            },
+            Value::Null,
+        )
+        .await?;
+        cache.insert(client, native);
+    }
+    let native = &cache[&client];
+    let mut found = Vec::new();
+    for row in native["entries"]
+        .as_array()
+        .context("客户端没有返回原生模型列表")?
+    {
+        let entry_id = row["entryId"].as_str().context("客户端条目缺少身份")?;
+        let channel_name = if client == ClientId::WorkBuddy {
+            crate::ai_gateway::config::workbuddy_provider_name(entry_id)
+        } else {
+            crate::ai_gateway::config::gmclaw_provider_name(entry_id)
+        }
+        .context("客户端条目身份无效")?;
+        if item
+            .channel
+            .as_deref()
+            .is_some_and(|name| !channel_name.eq_ignore_ascii_case(name))
+            || item
+                .entry_id
+                .as_deref()
+                .is_some_and(|entry| entry != entry_id)
+        {
+            continue;
+        }
+        let model = if client == ClientId::WorkBuddy {
+            row["model"]["providerModel"].as_str()
+        } else {
+            row["model"]["modelName"].as_str()
+        }
+        .unwrap_or_default();
+        let label = row["model"]["name"]
+            .as_str()
+            .filter(|name| !name.is_empty())
+            .unwrap_or(model);
+        let provider = config
+            .ai_gateway
+            .providers
+            .iter()
+            .find(|p| p.name.eq_ignore_ascii_case(&channel_name));
+        if let Some(requested) = &item.model {
+            let matches = [
+                model,
+                label,
+                row["model"]["id"].as_str().unwrap_or_default(),
+                row["modelId"].as_str().unwrap_or_default(),
+            ]
+            .into_iter()
+            .any(|name| model_named(name, requested))
+                || provider
+                    .and_then(|p| p.resolve_upstream_model(model))
+                    .is_some_and(|upstream| model_named(upstream, requested));
+            if !matches {
+                continue;
+            }
+        }
+        found.push(ResolvedDelete {
+            label: format!("{}：{} / {}", client.name(), label, model),
+            candidate: json!({"kind":"client_model","client":client,"model":model,"label":label,
+                "entryId":entry_id,"channel":channel_name,"sourceChannel":row["sourceProvider"]}),
+            target: DeleteTarget::Native {
+                client,
+                entry_id: entry_id.to_string(),
+                before: row.clone(),
+            },
+        });
+    }
+    Ok(found)
+}
+async fn resolve_deletion(
+    state: &SharedState,
+    config: &AppConfig,
+    item: &DeleteItem,
+    cache: &mut HashMap<ClientId, Value>,
+) -> Result<Vec<ResolvedDelete>> {
+    match item.kind.as_str() {
+        "channel" | "source_model" => {
+            let name = item.channel.as_deref().context("缺少渠道名称")?;
+            let matching = config
+                .ai_gateway
+                .providers
+                .iter()
+                .filter(|p| p.name == name)
+                .collect::<Vec<_>>();
+            ensure!(
+                matching.len() <= 1,
+                "有重名渠道，请先在模型与渠道页调整名称"
+            );
+            let Some(provider) = matching.first() else {
+                return Ok(vec![]);
+            };
+            if item.kind == "source_model" {
+                let requested = item.model.as_deref().context("缺少模型名称")?;
+                if !provider.matches_model(requested) {
+                    return Ok(vec![]);
+                }
+            }
+            if let Some(binding) = binding_deletion(provider) {
+                return Ok(vec![binding]);
+            }
+            if provider.is_workbuddy() || provider.is_gmclaw() {
+                return native_delete_candidates(
+                    state,
+                    config,
+                    if provider.is_workbuddy() {
+                        ClientId::WorkBuddy
+                    } else {
+                        ClientId::Tiangong
+                    },
+                    item,
+                    cache,
+                )
+                .await;
+            }
+            Ok(vec![ResolvedDelete {
+                label: item.label(),
+                candidate: json!({"kind":item.kind,"channel":name,"model":item.model}),
+                target: if item.kind == "channel" {
+                    DeleteTarget::Channel(name.into())
+                } else {
+                    DeleteTarget::SourceModel {
+                        channel: name.into(),
+                        model: item.model.clone().unwrap(),
+                    }
+                },
+            }])
+        }
+        "client_model" => {
+            let client = item.client.as_deref().map(models::client).transpose()?;
+            if let Some(id) = &item.id {
+                return Ok(config
+                    .ai_gateway
+                    .providers
+                    .iter()
+                    .filter(|p| {
+                        p.desktop_binding.as_ref().is_some_and(|b| {
+                            b.id == *id
+                                && client.is_none_or(|client| b.client == client)
+                                && item.model.as_deref().is_none_or(|model| {
+                                    model_named(&b.model, model)
+                                        || model_named(&b.label, model)
+                                        || p.resolve_upstream_model(&b.model)
+                                            .is_some_and(|name| model_named(name, model))
+                                })
+                        })
+                    })
+                    .filter_map(binding_deletion)
+                    .collect());
+            }
+            let client = client.context("缺少客户端")?;
+            ensure!(
+                item.model
+                    .as_deref()
+                    .is_some_and(|model| !model.trim().is_empty())
+                    || item.entry_id.as_deref().is_some_and(|id| !id.is_empty()),
+                "请提供客户端模型名称或 entryId"
+            );
+            if matches!(client, ClientId::WorkBuddy | ClientId::Tiangong) {
+                return native_delete_candidates(state, config, client, item, cache).await;
+            }
+            ensure!(item.entry_id.is_none(), "此客户端请使用模型名称或 id");
+            let model = item.model.as_deref().context("缺少模型名称")?;
+            if client == ClientId::Codex {
+                return Ok(config
+                    .ai_gateway
+                    .codex_visible_models
+                    .iter()
+                    .filter(|visible| {
+                        model_named(visible, model)
+                            || config.ai_gateway.providers.iter().any(|p| {
+                                p.name.starts_with("Codex · ")
+                                    && p.resolve_upstream_model(visible)
+                                        .is_some_and(|name| model_named(name, model))
+                            })
+                    })
+                    .map(|visible| ResolvedDelete {
+                        label: format!("{}：{}", client.name(), visible),
+                        candidate: json!({"kind":"client_model","client":client,"model":visible}),
+                        target: DeleteTarget::CodexModel {
+                            model: visible.clone(),
+                        },
+                    })
+                    .collect());
+            }
+            Ok(config
+                .ai_gateway
+                .providers
+                .iter()
+                .filter(|p| {
+                    p.desktop_binding.as_ref().is_some_and(|b| {
+                        b.client == client
+                            && (model_named(&b.model, model)
+                                || model_named(&b.label, model)
+                                || p.resolve_upstream_model(&b.model)
+                                    .is_some_and(|name| model_named(name, model)))
+                    })
+                })
+                .filter_map(binding_deletion)
+                .collect())
+        }
+        _ => bail!("不支持的删除类型"),
+    }
+}
 async fn delete_configurations(state: &SharedState, args: &Value) -> Result<Value> {
     let items: Vec<DeleteItem> =
         serde_json::from_value(args["items"].clone()).context("删除项目格式无效")?;
@@ -1235,78 +1534,52 @@ async fn delete_configurations(state: &SharedState, args: &Value) -> Result<Valu
         "请明确选择 1 至 32 个删除项目"
     );
     let snapshot = configuration(state).await?;
-    // Validate identities before presenting a single human confirmation.
+    let mut resolved = Vec::new();
+    let mut unresolved = Vec::new();
+    let mut native = HashMap::new();
     for item in &items {
-        match item.kind.as_str() {
-            "channel" | "source_model" => {
-                let provider =
-                    channel(&snapshot, item.channel.as_deref().context("缺少渠道名称")?)?;
-                ordinary(provider)?;
-                if item.kind == "source_model" {
-                    ensure!(
-                        provider.matches_model(item.model.as_deref().context("缺少模型名称")?),
-                        "渠道中没有所选模型"
-                    );
-                }
+        let mut candidates = resolve_deletion(state, &snapshot, item, &mut native).await?;
+        if candidates.len() == 1 {
+            let target = candidates.pop().unwrap();
+            if !resolved
+                .iter()
+                .any(|old: &ResolvedDelete| old.key() == target.key())
+            {
+                resolved.push(target);
             }
-            "client_model" => {
-                if let Some(id) = &item.id {
-                    ensure!(
-                        snapshot
-                            .ai_gateway
-                            .providers
-                            .iter()
-                            .any(|p| p.desktop_binding.as_ref().is_some_and(|b| b.id == *id)),
-                        "客户端模型已不存在"
-                    );
-                } else {
-                    let client = models::client(item.client.as_deref().context("缺少客户端")?)?;
-                    ensure!(
-                        matches!(
-                            client,
-                            ClientId::Codex | ClientId::Tiangong | ClientId::WorkBuddy
-                        ),
-                        "请用读取结果中的模型 id"
-                    );
-                    if client == ClientId::Codex {
-                        ensure!(
-                            snapshot
-                                .ai_gateway
-                                .codex_visible_models
-                                .contains(item.model.as_ref().context("缺少模型名称")?),
-                            "可见列表中没有此模型"
-                        );
-                    } else {
-                        ensure!(
-                            item.entry_id.as_ref().is_some_and(|s| !s.is_empty()),
-                            "缺少 entryId"
-                        );
-                    }
-                }
-            }
-            _ => bail!("不支持的删除类型"),
+        } else {
+            unresolved.push(json!({"item":item.label(),"code":if candidates.is_empty(){"not_found"}else{"ambiguous"},
+                "candidates":candidates.into_iter().map(|c|c.candidate).collect::<Vec<_>>()}));
         }
     }
-    let summary = items
+    if !unresolved.is_empty() {
+        return Ok(
+            json!({"deleted":false,"canDelete":false,"needsSelection":unresolved.iter().any(|item|item["code"]=="ambiguous"),
+            "candidates":unresolved.iter().flat_map(|item|item["candidates"].as_array().unwrap().clone()).collect::<Vec<_>>(),
+            "unresolved":unresolved,"message":"未执行删除；请根据候选确认准确条目，未找到的项目请重新读取配置"}),
+        );
+    }
+    let summary = resolved
         .iter()
-        .map(DeleteItem::label)
+        .map(|item| item.label.clone())
         .collect::<Vec<_>>()
         .join("\n");
-    let (send, receive) = oneshot::channel();
-    let generation = {
+    let generation = generation(state).await;
+    if !super::full_access(state).await {
+        let (send, receive) = oneshot::channel();
         let mut tools = state.assistant.tools.lock().await;
         ensure!(tools.deletion.is_none(), "已有删除确认正在等待用户");
         let nonce = uuid::Uuid::new_v4().to_string();
         tools.deletion = Some(Pending {
-            view: json!({"nonce":nonce,"summary":summary,"items":items.iter().map(DeleteItem::label).collect::<Vec<_>>()}),
+            view: json!({"nonce":nonce,"summary":summary,"items":resolved.iter().map(|item|&item.label).collect::<Vec<_>>()}),
             nonce,
             response: send,
         });
-        tools.generation
-    };
-    let approved = receive.await.context("删除确认已取消")?;
-    if !approved {
-        return Ok(json!({"deleted":false,"message":"用户取消删除，配置保留"}));
+        drop(tools);
+        let approved = receive.await.context("删除确认已取消")?;
+        if !approved {
+            return Ok(json!({"deleted":false,"message":"用户取消删除，配置保留"}));
+        }
     }
     super::ensure_current_account(state).await?;
     ensure!(
@@ -1318,87 +1591,128 @@ async fn delete_configurations(state: &SharedState, args: &Value) -> Result<Valu
         "等待确认期间配置已变化，请重新读取后提交删除"
     );
     let mut results = Vec::new();
-    for item in items {
+    for item in resolved {
         // Each native writer is atomic for its target. Report partial failures
         // without retrying or asking for a second confirmation of the same list.
         let result = delete_one(state, &item).await;
         results.push(match result {
-            Ok(_) => json!({"item":item.label(),"deleted":true}),
-            Err(e) => json!({"item":item.label(),"deleted":false,"error":e.to_string()}),
+            Ok(_) => json!({"item":item.label,"deleted":true}),
+            Err(e) => json!({"item":item.label,"deleted":false,"error":e.to_string()}),
         });
     }
     Ok(json!({"results":results}))
 }
-async fn delete_one(state: &SharedState, item: &DeleteItem) -> Result<Value> {
+fn remove_codex_models(config: &mut AppConfig, models: &[String]) {
+    config
+        .ai_gateway
+        .codex_visible_models
+        .retain(|model| !models.contains(model));
+    config
+        .ai_gateway
+        .codex_model_profiles
+        .retain(|profile| !models.contains(&profile.id));
+}
+async fn delete_one(state: &SharedState, item: &ResolvedDelete) -> Result<Value> {
     let mut config = configuration(state).await?;
-    match item.kind.as_str() {
-        "channel" => {
-            let name = item.channel.as_deref().unwrap();
-            ordinary(channel(&config, name)?)?;
-            config.ai_gateway.providers.retain(|p| p.name != name);
+    match &item.target {
+        DeleteTarget::Channel(name) => {
+            let provider = channel(&config, name)?;
+            if provider.name.starts_with("Codex · ") {
+                let aliases = provider.model_aliases.keys().cloned().collect::<Vec<_>>();
+                remove_codex_models(&mut config, &aliases);
+            }
+            config.ai_gateway.providers.retain(|p| p.name != *name);
             save(state, config).await
         }
-        "source_model" => {
-            let name = item.channel.as_deref().unwrap();
-            let model = item.model.as_deref().unwrap();
-            ordinary(channel(&config, name)?)?;
+        DeleteTarget::SourceModel {
+            channel: name,
+            model,
+        } => {
+            let provider = channel(&config, name)?;
+            let codex = provider.name.starts_with("Codex · ");
+            let aliases = provider
+                .model_aliases
+                .iter()
+                .filter(|(alias, upstream)| *alias == model || *upstream == model)
+                .map(|(alias, _)| alias.clone())
+                .collect::<Vec<_>>();
             let provider = config
                 .ai_gateway
                 .providers
                 .iter_mut()
-                .find(|p| p.name == name)
+                .find(|p| p.name == *name)
                 .unwrap();
             provider.models.retain(|m| m != model);
-            provider.model_aliases.remove(model);
+            provider.model_aliases.retain(|alias, upstream| {
+                alias.as_str() != model.as_str() && upstream.as_str() != model.as_str()
+            });
+            if codex {
+                remove_codex_models(&mut config, &aliases);
+                config.ai_gateway.providers.retain(|p| {
+                    p.name != *name || !p.models.is_empty() || !p.model_aliases.is_empty()
+                });
+            }
             save(state, config).await
         }
-        "client_model" => {
-            if let Some(id) = &item.id {
-                let binding = config
-                    .ai_gateway
-                    .providers
-                    .iter()
-                    .filter_map(|p| p.desktop_binding.as_ref())
-                    .find(|b| b.id == *id)
-                    .context("模型已不存在")?;
-                api(state,"use",json!({"revision":config.revision,"id":id,"targetId":binding.target_id,"using":false})).await
-            } else {
-                match models::client(item.client.as_deref().unwrap())? {
-                    ClientId::Codex => {
-                        config
-                            .ai_gateway
-                            .codex_visible_models
-                            .retain(|m| Some(m) != item.model.as_ref());
-                        save(state, config).await
-                    }
-                    ClientId::Tiangong | ClientId::WorkBuddy => {
-                        let tiangong = item.client.as_deref() == Some("tiangong");
-                        let native = api(
-                            state,
-                            if tiangong {
-                                "tiangong_read"
-                            } else {
-                                "workbuddy_read"
-                            },
-                            Value::Null,
-                        )
-                        .await?;
-                        api(
-                            state,
-                            if tiangong {
-                                "tiangong_delete"
-                            } else {
-                                "workbuddy_delete"
-                            },
-                            json!({"entryId":item.entry_id,"revision":native["revision"]}),
-                        )
-                        .await
-                    }
-                    _ => bail!("客户端不支持此删除方式"),
-                }
-            }
+        DeleteTarget::Binding { id, target_id } => {
+            api(
+                state,
+                "use",
+                json!({"revision":config.revision,"id":id,"targetId":target_id,"using":false}),
+            )
+            .await
         }
-        _ => bail!("删除项目无效"),
+        DeleteTarget::CodexModel { model } => {
+            remove_codex_models(&mut config, std::slice::from_ref(model));
+            for provider in config
+                .ai_gateway
+                .providers
+                .iter_mut()
+                .filter(|p| p.name.starts_with("Codex · "))
+            {
+                provider.model_aliases.remove(model);
+            }
+            config.ai_gateway.providers.retain(|p| {
+                !p.name.starts_with("Codex · ")
+                    || !p.models.is_empty()
+                    || !p.model_aliases.is_empty()
+            });
+            save(state, config).await
+        }
+        DeleteTarget::Native {
+            client,
+            entry_id,
+            before,
+        } => {
+            let tiangong = *client == ClientId::Tiangong;
+            let native = api(
+                state,
+                if tiangong {
+                    "tiangong_read"
+                } else {
+                    "workbuddy_read"
+                },
+                Value::Null,
+            )
+            .await?;
+            ensure!(
+                native["entries"]
+                    .as_array()
+                    .and_then(|rows| rows.iter().find(|row| row["entryId"] == *entry_id))
+                    == Some(before),
+                "等待确认期间客户端模型已变化，未删除；请重新读取配置"
+            );
+            api(
+                state,
+                if tiangong {
+                    "tiangong_delete"
+                } else {
+                    "workbuddy_delete"
+                },
+                json!({"entryId":entry_id,"revision":native["revision"]}),
+            )
+            .await
+        }
     }
 }
 async fn request_credential(state: &SharedState, args: &Value) -> Result<Value> {
@@ -1418,6 +1732,63 @@ async fn request_credential(state: &SharedState, args: &Value) -> Result<Value> 
     let value = tools.credentials.get(&reference).context("凭据已清理")?;
     Ok(json!({"reference":reference,"mask":value.mask,"label":value.label}))
 }
+async fn open_page(
+    state: &SharedState,
+    args: &Value,
+    timeout: std::time::Duration,
+) -> Result<Value> {
+    let page = text(args, "page")?;
+    ensure!(
+        [
+            "overview",
+            "squad",
+            "sources",
+            "client",
+            "settings",
+            "help",
+            "assistant"
+        ]
+        .contains(&page),
+        "不支持打开此页面"
+    );
+    if page == "client" && !models::client(text(args, "client")?)?.is_visible() {
+        return Ok(
+            json!({"opened":false,"page":page,"client":args["client"],"code":"unsupported","message":"此客户端页面当前隐藏，未打开"}),
+        );
+    }
+    let id = uuid::Uuid::new_v4().to_string();
+    let (send, receive) = oneshot::channel();
+    {
+        let mut tools = state.assistant.tools.lock().await;
+        ensure!(
+            tools.navigation_response.is_none(),
+            "已有页面跳转正在等待桌面响应"
+        );
+        tools.navigation = Some(json!({"id":id,"page":page,"client":args["client"]}));
+        tools.navigation_response = Some(send);
+    }
+    match tokio::time::timeout(timeout, receive).await {
+        Ok(Ok(ack)) => Ok(
+            json!({"opened":ack.opened,"page":page,"client":args["client"],
+            "message":ack.message.unwrap_or_else(|| if ack.opened {"页面已打开"}else{"桌面未能打开此页面"}.into())}),
+        ),
+        outcome => {
+            let timed_out = outcome.is_err();
+            let mut tools = state.assistant.tools.lock().await;
+            if tools
+                .navigation
+                .as_ref()
+                .is_some_and(|intent| intent["id"] == id)
+            {
+                tools.navigation = None;
+                tools.navigation_response = None;
+            }
+            Ok(json!({"opened":false,"page":page,"client":args["client"],
+                "code":if timed_out{"navigation_timeout"}else{"navigation_cancelled"},
+                "message":if timed_out{"未收到桌面切页回执，无法确认页面已打开"}else{"页面跳转已取消"}}))
+        }
+    }
+}
 pub(crate) async fn call(state: &SharedState, name: &str, args: Value) -> Result<Value> {
     super::ensure_current_account(state).await?;
     let mut result = match name {
@@ -1430,39 +1801,19 @@ pub(crate) async fn call(state: &SharedState, name: &str, args: Value) -> Result
         "hub_set_model_parameters" => set_parameters(state, &args).await?,
         "hub_delete_configurations" => delete_configurations(state, &args).await?,
         "hub_request_credential" => request_credential(state, &args).await?,
+        "hub_ask_user" => super::questions::ask(state, args).await?,
         "hub_squad_list_api_keys" => super::squad_tools::list_keys(state, args).await?,
         "hub_squad_key_options" => super::squad_tools::key_options(state, args).await?,
         "hub_squad_create_api_key" => super::squad_tools::create_key(state, args).await?,
         "hub_squad_prepare_api_key" => super::squad_tools::prepare_key(state, args).await?,
         "hub_query_usage" => super::usage_tools::usage(state, args).await?,
         "hub_query_requests" => super::usage_tools::requests(state, args).await?,
-        "hub_open_page" => {
-            let page = text(&args, "page")?;
-            ensure!(
-                [
-                    "overview",
-                    "squad",
-                    "sources",
-                    "client",
-                    "settings",
-                    "help",
-                    "assistant"
-                ]
-                .contains(&page),
-                "不支持打开此页面"
-            );
-            if page == "client" {
-                models::client(text(&args, "client")?)?;
-            }
-            state.assistant.tools.lock().await.navigation = Some(
-                json!({"id":uuid::Uuid::new_v4().to_string(),"page":page,"client":args["client"]}),
-            );
-            json!({"queued":true,"page":page,"client":args["client"],"message":"已请求 Hub 界面打开页面"})
-        }
+        "hub_open_page" => open_page(state, &args, std::time::Duration::from_secs(15)).await?,
         "hub_help" => {
-            json!({"assistant":"天才搭档可直接查询用量、实际扣费和请求记录，读取配置、添加修改普通渠道/模型、调整支持参数、配置到客户端；删除会集中确认一次。可选当前小分队密钥或按要求新建后准备导入，外部凭据用本机表单输入。",
-            "capabilities":{"usage":"hub_query_usage：今天/近周月/自定日期，按模型、当前用户密钥/分组筛选；squad实际人民币账单，hub本机Token/请求统计","requests":"hub_query_requests：按来源、日期及模型等分页查询记录，默认不返回正文和凭据","configuration":"hub_read_configuration、hub_resolve_model、hub_read_channel_models、hub_save_channel、hub_add_model、hub_configure_client、hub_set_model_parameters、hub_delete_configurations","accountKeys":"hub_squad_list_api_keys、hub_squad_key_options、hub_squad_create_api_key、hub_squad_prepare_api_key","navigation":"hub_open_page；只有用户要求看页面或工具确实无法完成时才打开，不替代已经支持的查询和配置"},
+            json!({"assistant":"天才搭档可直接查询用量、实际扣费和请求记录，读取配置、添加修改普通渠道/模型、调整支持参数、配置到客户端及删除专用渠道/客户端模型。普通模式删除集中确认一次，用户开启完全访问后按明确指令直接执行；模型有歧义仍先询问选择。可选当前小分队密钥或按要求新建后准备导入，外部凭据用本机表单输入。",
+            "capabilities":{"usage":"hub_query_usage：今天/近周月/自定日期，按模型、当前用户密钥/分组筛选；squad实际人民币账单，hub本机Token/请求统计","requests":"hub_query_requests：按来源、日期及模型等分页查询记录，默认不返回正文和凭据","configuration":"hub_read_configuration、hub_resolve_model、hub_read_channel_models、hub_save_channel、hub_add_model、hub_configure_client、hub_set_model_parameters、hub_delete_configurations","questions":"hub_ask_user：必要的目标和参数选择使用本机结构化选项，不代替删除授权或凭据表单","accountKeys":"hub_squad_list_api_keys、hub_squad_key_options、hub_squad_create_api_key、hub_squad_prepare_api_key","navigation":"hub_open_page：等待桌面实际切页回执，opened=true才算已打开；只有用户要求看页面或工具确实无法完成时才打开，不替代已经支持的查询和配置"},
             "workGuide":WORK_GUIDE,
+            "localActions":{"tiangongBuiltinShare":"用户明确说‘打开天工内置模型分享’时由本机打开专用面板；默认隐藏。这里只打开界面，原生接入、登录及分享必须在现成表单中由用户选择。不能用hub_open_page或其他配置工具自动开启这个入口。"},
             "hub":"天才空间 Hub 统一连接模型渠道与多个桌面客户端；客户端模型配置为独立副本，修改来源不会自动同步副本。",
             "navigation":{"models":"左侧模型与渠道；各客户端的模型页管理独立副本","squad":"天才小分队：登录、账户、密钥、使用记录、充值和订阅；按账户权限显示组织功能","tiangongAssistance":"天工 Work → 接入设置 → 本机协助","dumpling":"左侧 Dumpling-MCP 独立入口"},
             "billing":"天才搭档模型由小分队管理员指定并承担费用；天工协助沿用其原模型来源。",
@@ -2133,9 +2484,8 @@ mod tests {
         );
 
         let work = state.clone();
-        let deleted_entry = entry.clone();
         let task = tokio::spawn(async move {
-            call(&work,"hub_delete_configurations",json!({"items":[{"kind":"client_model","client":"workbuddy","entryId":deleted_entry}]})).await
+            call(&work,"hub_delete_configurations",json!({"items":[{"kind":"client_model","client":"workbuddy","model":"gpt-6-astra"}]})).await
         });
         let nonce = pending_deletion(&state).await;
         assert_eq!(
@@ -2161,6 +2511,14 @@ mod tests {
         .unwrap();
         assert!(view["client"]["entries"].as_array().unwrap().is_empty());
         assert!(
+            !AppConfig::load_or_default(&state.config_path)
+                .unwrap()
+                .ai_gateway
+                .providers
+                .iter()
+                .any(|p| p.name == format!("workbuddy:{entry}"))
+        );
+        assert!(
             AppConfig::load_or_default(&state.config_path)
                 .unwrap()
                 .ai_gateway
@@ -2170,28 +2528,145 @@ mod tests {
         );
     }
     #[tokio::test]
-    async fn help_describes_current_capabilities_and_navigation_only_queues_an_intent() {
+    async fn help_and_navigation_report_only_the_actual_desktop_acknowledgement() {
         let (_temp, state) = fixture();
         let help = call(&state, "hub_help", json!({})).await.unwrap();
         assert_eq!(help["workGuide"], WORK_GUIDE);
-        let result = call(
+        assert!(
+            help["localActions"]["tiangongBuiltinShare"]
+                .as_str()
+                .unwrap()
+                .contains("用户明确")
+        );
+        let work = state.clone();
+        let task = tokio::spawn(async move {
+            call(
+                &work,
+                "hub_open_page",
+                json!({"page":"client","client":"tiangong"}),
+            )
+            .await
+        });
+        let id = pending_navigation(&state).await;
+        assert!(
+            !task.is_finished(),
+            "queued navigation is not proof of an opened page"
+        );
+        let wrong = navigation_ack(
+            State(state.clone()),
+            headers(),
+            Json(NavigationAck {
+                id: "other-request".into(),
+                opened: true,
+                message: None,
+            }),
+        )
+        .await;
+        assert_eq!(wrong.status(), StatusCode::OK);
+        assert_eq!(public_status(&state).await["navigation"]["id"], id);
+        navigation_ack(
+            State(state.clone()),
+            headers(),
+            Json(NavigationAck {
+                id,
+                opened: true,
+                message: Some("天工页面已打开".into()),
+            }),
+        )
+        .await;
+        let result = task.await.unwrap().unwrap();
+        assert_eq!(result["opened"], true);
+        assert_eq!(result["message"], "天工页面已打开");
+        assert!(result.get("queued").is_none());
+        assert!(public_status(&state).await["navigation"].is_null());
+
+        let work = state.clone();
+        let task =
+            tokio::spawn(
+                async move { call(&work, "hub_open_page", json!({"page":"settings"})).await },
+            );
+        let id = pending_navigation(&state).await;
+        navigation_ack(
+            State(state.clone()),
+            headers(),
+            Json(NavigationAck {
+                id,
+                opened: false,
+                message: Some("桌面拒绝切换".into()),
+            }),
+        )
+        .await;
+        let refused = task.await.unwrap().unwrap();
+        assert_eq!(refused["opened"], false);
+        assert_eq!(refused["message"], "桌面拒绝切换");
+        let hidden = call(
             &state,
             "hub_open_page",
-            json!({"page":"client","client":"tiangong"}),
+            json!({"page":"client","client":"vscode"}),
         )
         .await
         .unwrap();
-        assert_eq!(result["queued"], true);
-        assert!(result.get("opened").is_none());
-        assert_eq!(
-            public_status(&state).await["navigation"]["client"],
-            "tiangong"
-        );
+        assert_eq!(hidden["opened"], false);
+        assert_eq!(hidden["code"], "unsupported");
         assert!(
             call(&state, "hub_open_page", json!({"page":"payment"}))
                 .await
                 .is_err()
         );
+    }
+    async fn pending_navigation(state: &SharedState) -> String {
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if let Some(id) = public_status(state).await["navigation"]["id"].as_str() {
+                    break id.to_string();
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap()
+    }
+    #[tokio::test]
+    async fn navigation_timeout_stop_and_builtin_share_do_not_claim_a_page_opened() {
+        let (_temp, state) = fixture();
+        let expired = open_page(
+            &state,
+            &json!({"page":"help"}),
+            std::time::Duration::from_millis(1),
+        )
+        .await
+        .unwrap();
+        assert_eq!(expired["opened"], false);
+        assert_eq!(expired["code"], "navigation_timeout");
+        assert!(public_status(&state).await["navigation"].is_null());
+        let work = state.clone();
+        let task =
+            tokio::spawn(
+                async move { call(&work, "hub_open_page", json!({"page":"settings"})).await },
+            );
+        pending_navigation(&state).await;
+        cancel_pending(&state).await;
+        let stopped = task.await.unwrap().unwrap();
+        assert_eq!(stopped["opened"], false);
+        assert_eq!(stopped["code"], "navigation_cancelled");
+        request_builtin_share(&state).await;
+        assert_eq!(
+            public_status(&state).await["navigation"]["page"],
+            "tiangong-builtin-share"
+        );
+        let id = pending_navigation(&state).await;
+        navigation_ack(
+            State(state.clone()),
+            headers(),
+            Json(NavigationAck {
+                id,
+                opened: false,
+                message: None,
+            }),
+        )
+        .await;
+        assert!(public_status(&state).await["navigation"].is_null());
+        assert!(serde_json::from_value::<NavigationAck>(json!({"id":"missing-result"})).is_err());
     }
     #[tokio::test]
     async fn client_configuration_returns_the_actual_independent_codex_alias_without_secrets() {
@@ -2296,6 +2771,333 @@ mod tests {
         let config = AppConfig::load_or_default(&state.config_path).unwrap();
         assert!(channel(&config, "fixture-channel").is_err());
         assert!(channel(&config, "keep-channel").is_ok());
+    }
+    #[tokio::test]
+    async fn dedicated_workbuddy_deletion_resolves_candidates_cancellation_and_full_access() {
+        if isolated_native_test(
+            "dedicated_workbuddy_deletion_resolves_candidates_cancellation_and_full_access",
+        ) {
+            return;
+        }
+        let (_temp, state) = fixture();
+        let view = call(
+            &state,
+            "hub_read_configuration",
+            json!({"client":"workbuddy"}),
+        )
+        .await
+        .unwrap();
+        let target = view["targets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|target| target["client"] == "workbuddy")
+            .unwrap()["targetId"]
+            .clone();
+        let mut entries = Vec::new();
+        for _ in 0..2 {
+            let copy = call(
+                &state,
+                "hub_configure_client",
+                json!({"targetId":target,"channel":"fixture-channel","model":"old-model"}),
+            )
+            .await
+            .unwrap();
+            entries.push(copy["entryId"].as_str().unwrap().to_string());
+        }
+        let before_config = std::fs::read(&state.config_path).unwrap();
+        let native_path = crate::workbuddy_config::config_path();
+        let before_native = std::fs::read(&native_path).unwrap();
+        let ambiguous = call(
+            &state,
+            "hub_delete_configurations",
+            json!({"items":[{"kind":"client_model","client":"workbuddy","model":"old-model"}]}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(ambiguous["deleted"], false);
+        assert_eq!(ambiguous["needsSelection"], true);
+        assert_eq!(ambiguous["candidates"].as_array().unwrap().len(), 2);
+        assert!(
+            ambiguous["candidates"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|candidate| candidate["model"] == "old-model"
+                    && candidate["entryId"].is_string())
+        );
+        let missing = call(
+            &state,
+            "hub_delete_configurations",
+            json!({"items":[{"kind":"client_model","client":"workbuddy","model":"missing-model"}]}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(missing["unresolved"][0]["code"], "not_found");
+        assert!(public_status(&state).await["pendingDeletion"].is_null());
+
+        let name = format!("workbuddy:{}", entries[0]);
+        let work = state.clone();
+        let requested = name.clone();
+        let task = tokio::spawn(async move {
+            call(
+                &work,
+                "hub_delete_configurations",
+                json!({"items":[{"kind":"channel","channel":requested}]}),
+            )
+            .await
+        });
+        let nonce = pending_deletion(&state).await;
+        confirm(
+            State(state.clone()),
+            headers(),
+            Json(Confirmation {
+                nonce,
+                approved: false,
+            }),
+        )
+        .await;
+        assert_eq!(task.await.unwrap().unwrap()["deleted"], false);
+        assert_eq!(std::fs::read(&state.config_path).unwrap(), before_config);
+        assert_eq!(std::fs::read(&native_path).unwrap(), before_native);
+
+        let work = state.clone();
+        let requested = name.clone();
+        let task = tokio::spawn(async move {
+            call(
+                &work,
+                "hub_delete_configurations",
+                json!({"items":[{"kind":"channel","channel":requested}]}),
+            )
+            .await
+        });
+        let nonce = pending_deletion(&state).await;
+        confirm(
+            State(state.clone()),
+            headers(),
+            Json(Confirmation {
+                nonce,
+                approved: true,
+            }),
+        )
+        .await;
+        assert_eq!(task.await.unwrap().unwrap()["results"][0]["deleted"], true);
+        let native = api(&state, "workbuddy_read", Value::Null).await.unwrap();
+        assert_eq!(native["entries"].as_array().unwrap().len(), 1);
+        assert_eq!(native["entries"][0]["entryId"], entries[1]);
+        let config = AppConfig::load_or_default(&state.config_path).unwrap();
+        assert!(channel(&config, &name).is_err());
+        assert!(channel(&config, "fixture-channel").is_ok());
+
+        state.assistant.inner.lock().await.full_access = true;
+        let direct = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            call(
+                &state,
+                "hub_delete_configurations",
+                json!({"items":[{"kind":"client_model","client":"workbuddy","model":"old-model"}]}),
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(direct["results"][0]["deleted"], true);
+        assert!(public_status(&state).await["pendingDeletion"].is_null());
+        assert!(
+            api(&state, "workbuddy_read", Value::Null).await.unwrap()["entries"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            !AppConfig::load_or_default(&state.config_path)
+                .unwrap()
+                .ai_gateway
+                .providers
+                .iter()
+                .any(ProviderConfig::is_workbuddy)
+        );
+    }
+    #[tokio::test]
+    async fn dedicated_tiangong_channel_removes_native_model_and_route_together() {
+        if isolated_native_test(
+            "dedicated_tiangong_channel_removes_native_model_and_route_together",
+        ) {
+            return;
+        }
+        let (_temp, state) = fixture();
+        let database = crate::gmclaw_config::config_path();
+        std::fs::create_dir_all(database.parent().unwrap()).unwrap();
+        let connection = rusqlite::Connection::open(&database).unwrap();
+        connection.execute_batch("CREATE TABLE model_configs (model_id TEXT PRIMARY KEY,provider TEXT NOT NULL DEFAULT 'openai',base_url TEXT NOT NULL DEFAULT '',model_name TEXT NOT NULL DEFAULT '',api_key TEXT NOT NULL DEFAULT '',max_tokens INTEGER DEFAULT 128000,temperature REAL DEFAULT 0.7,is_active INTEGER NOT NULL DEFAULT 0,extra_params TEXT DEFAULT '{}',created_at TEXT NOT NULL DEFAULT (datetime('now')),updated_at TEXT NOT NULL DEFAULT (datetime('now')));").unwrap();
+        drop(connection);
+        let view = call(
+            &state,
+            "hub_read_configuration",
+            json!({"client":"tiangong"}),
+        )
+        .await
+        .unwrap();
+        let target = view["targets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|target| target["client"] == "tiangong")
+            .unwrap()["targetId"]
+            .clone();
+        let copy = call(
+            &state,
+            "hub_configure_client",
+            json!({"targetId":target,"channel":"fixture-channel","model":"old-model"}),
+        )
+        .await
+        .unwrap();
+        let name =
+            crate::ai_gateway::config::gmclaw_provider_name(copy["entryId"].as_str().unwrap())
+                .unwrap();
+        state.assistant.inner.lock().await.full_access = true;
+        let deleted = call(
+            &state,
+            "hub_delete_configurations",
+            json!({"items":[{"kind":"channel","channel":name}]}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(deleted["results"][0]["deleted"], true);
+        assert!(
+            api(&state, "tiangong_read", Value::Null).await.unwrap()["entries"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        let config = AppConfig::load_or_default(&state.config_path).unwrap();
+        assert!(channel(&config, &name).is_err());
+        assert!(channel(&config, "fixture-channel").is_ok());
+    }
+    #[tokio::test]
+    async fn client_and_dedicated_codex_deletion_remove_the_owned_copy_without_source_changes() {
+        if isolated_native_test(
+            "client_and_dedicated_codex_deletion_remove_the_owned_copy_without_source_changes",
+        ) {
+            return;
+        }
+        let (_temp, state) = fixture();
+        state.assistant.inner.lock().await.full_access = true;
+        let view = call(&state, "hub_read_configuration", json!({}))
+            .await
+            .unwrap();
+        for (client, by_channel) in [
+            ("zcode", true),
+            ("zcode", false),
+            ("codex", true),
+            ("codex", false),
+        ] {
+            let target = view["targets"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|target| target["client"] == client)
+                .unwrap()["targetId"]
+                .clone();
+            let copy = call(
+                &state,
+                "hub_configure_client",
+                json!({"targetId":target,"channel":"fixture-channel","model":"old-model"}),
+            )
+            .await
+            .unwrap();
+            let mut config = AppConfig::load_or_default(&state.config_path).unwrap();
+            if client == "codex" {
+                config.ai_gateway.codex_model_profiles.push(
+                    crate::ai_gateway::config::CodexModelProfile {
+                        id: copy["model"].as_str().unwrap().to_string(),
+                        ..Default::default()
+                    },
+                );
+                config.save(&state.config_path).unwrap();
+            }
+            let provider = config
+                .ai_gateway
+                .providers
+                .iter()
+                .find(|provider| {
+                    if client == "codex" {
+                        provider.name.starts_with("Codex · ")
+                            && provider.matches_model(copy["model"].as_str().unwrap())
+                    } else {
+                        provider
+                            .desktop_binding
+                            .as_ref()
+                            .is_some_and(|binding| Some(binding.id.as_str()) == copy["id"].as_str())
+                    }
+                })
+                .unwrap();
+            let name = provider.name.clone();
+            let args = if by_channel {
+                json!({"items":[{"kind":"channel","channel":name}]})
+            } else {
+                json!({"items":[{"kind":"client_model","client":client,"model":copy["model"]}]})
+            };
+            let deleted = call(&state, "hub_delete_configurations", args)
+                .await
+                .unwrap();
+            assert_eq!(
+                deleted["results"][0]["deleted"], true,
+                "{client}: {deleted}"
+            );
+            let config = AppConfig::load_or_default(&state.config_path).unwrap();
+            assert!(channel(&config, &name).is_err());
+            assert!(channel(&config, "fixture-channel").is_ok());
+            if client == "codex" {
+                assert!(
+                    config
+                        .ai_gateway
+                        .codex_model_profiles
+                        .iter()
+                        .all(|profile| Some(profile.id.as_str()) != copy["model"].as_str())
+                );
+                assert!(
+                    !config
+                        .ai_gateway
+                        .codex_visible_models
+                        .contains(&copy["model"].as_str().unwrap().to_string())
+                );
+                assert!(
+                    config
+                        .ai_gateway
+                        .codex_visible_models
+                        .contains(&"old-model".to_string())
+                );
+            }
+        }
+    }
+    #[tokio::test]
+    async fn approved_deletion_from_a_replaced_account_does_not_write_configuration() {
+        let (_temp, state) = fixture();
+        let before = std::fs::read(&state.config_path).unwrap();
+        let work = state.clone();
+        let task = tokio::spawn(async move {
+            call(
+                &work,
+                "hub_delete_configurations",
+                json!({"items":[{"kind":"channel","channel":"fixture-channel"}]}),
+            )
+            .await
+        });
+        let nonce = pending_deletion(&state).await;
+        state.assistant.inner.lock().await.bridge = None;
+        confirm(
+            State(state.clone()),
+            headers(),
+            Json(Confirmation {
+                nonce,
+                approved: true,
+            }),
+        )
+        .await;
+        assert!(task.await.unwrap().is_err());
+        assert_eq!(std::fs::read(&state.config_path).unwrap(), before);
+        assert!(public_status(&state).await["pendingDeletion"].is_null());
     }
     #[tokio::test]
     async fn local_credential_form_exposes_only_a_reference_and_mask_to_tools() {

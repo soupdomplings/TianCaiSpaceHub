@@ -301,6 +301,12 @@ impl Workspace {
         table.on_item_selected(move |_| u.enable_actions());
         let u = ui.clone();
         table.on_item_deselected(move |_| u.enable_actions());
+        let u = ui.clone();
+        page.on_size(move |event| {
+            u.filter_bar.reflow(page.get_client_size().width);
+            page.layout();
+            event.skip(true);
+        });
         for p in [toolbar, filters, footer, ui.dashboard.panel] {
             p.hide();
         }
@@ -358,6 +364,7 @@ impl Workspace {
         self.enable_actions();
         let menus = state["menus"].as_array().cloned().unwrap_or_default();
         self.navigation.render(&menus, key);
+        let previous_body = self.body.selection();
         if *self.key.borrow() != key {
             self.key.replace(key.into());
             self.table.hide();
@@ -382,6 +389,7 @@ impl Workspace {
             });
         }
         self.page.layout();
+        super::motion::page_changed(self.body, previous_body);
     }
     pub fn error(&self, error: &str) {
         self.available.set(false);
@@ -486,6 +494,7 @@ impl Workspace {
                 || self.fallback.is_shown(),
         );
         self.filter_bar.mode(None, data::date_filter(key));
+        self.filter_bar.reflow(self.page.get_client_size().width);
         let columns = data::columns(key);
         let rows = if columns.is_empty() {
             vec![]
@@ -499,6 +508,7 @@ impl Workspace {
             .panel
             .show(failed || key != "account" && key != "purchase" && !table);
         self.purchase.panel.show(!failed && key == "purchase");
+        let previous_body = self.body.selection();
         self.body.change_selection(
             (if failed {
                 BodyPage::Summary
@@ -597,6 +607,7 @@ impl Workspace {
         self.enable_actions();
         self.page.layout();
         self.fit_columns();
+        super::motion::page_changed(self.body, previous_body);
     }
     fn fit_columns(&self) {
         let columns = data::columns(&self.key.borrow());
@@ -675,6 +686,47 @@ pub(super) fn query(key: &str, page: usize, start: String, end: String) -> Vec<(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn hidden_usage_first_render_keeps_filters_compact_and_table_below_them() {
+        wxdragon::app::render_offscreen(|| {
+            theme::init(theme::ThemeMode::Light);
+            let frame = Frame::builder().with_title("hidden first account usage").build();
+            let book = SimpleBook::builder(&frame).build();
+            let login = Panel::builder(&book).build();
+            book.add_page(&login, "登录", true, None);
+            let view = Workspace::new(&book);
+            book.add_page(&view.page, "账户", false, None);
+            let outer = BoxSizer::builder(Orientation::Vertical).build();
+            outer.add(&book, 1, SizerFlag::Expand, 0);
+            frame.set_sizer(outer, false);
+            let state = serde_json::json!({"menus":[
+                {"id":"account","label":"账户"},
+                {"id":"usage","label":"使用记录"},
+                {"id":"channels","label":"可用渠道"}
+            ]});
+            let value = serde_json::json!({"items":[
+                {"id":1,"created_at":"2026-11-11T12:00:00Z","model":"synthetic","input_tokens":10,"output_tokens":4,"actual_cost":0.01}
+            ],"total":1});
+            view.loading("usage", &state);
+            view.render("usage", &state, &value, 0);
+            for width in [1380, 680, 1380] {
+                frame.set_client_size(visual::dip_size(&frame, width, 780));
+                book.change_selection(1);
+                frame.layout();
+                view.page.layout();
+                let filter_bottom = view.filters.get_position().y + view.filters.get_size().height;
+                let table_top = view.page.screen_to_client(view.table.client_to_screen(Point::new(0, 0))).y;
+                assert!(table_top >= filter_bottom);
+                assert!(table_top - filter_bottom <= view.page.from_dip(16));
+                assert!(view.filters.get_size().height <= view.page.from_dip(if width > 1000 { 100 } else { 200 }));
+                assert!(view.table.get_size().height >= view.page.get_client_size().height / 2);
+            }
+            assert!(!frame.is_shown());
+            frame.destroy();
+        }).unwrap();
+    }
     #[test]
     fn fresh_checkout_rejects_price_fee_method_and_plan_changes_before_any_write() {
         use serde_json::json;

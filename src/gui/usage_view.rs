@@ -297,6 +297,7 @@ pub(super) fn choose_filters(
     let dialog = Dialog::builder(parent, "筛选用量")
         .with_size(430, 265)
         .build();
+    super::motion::install_dialog(dialog);
     dialog.set_background_color(theme::theme().bg_app);
     let column = BoxSizer::builder(Orientation::Vertical).build();
     let fields = std::array::from_fn::<_, 2, _>(|i| {

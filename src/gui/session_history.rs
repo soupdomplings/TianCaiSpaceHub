@@ -392,6 +392,7 @@ fn prompt_target_provider(
     let dialog = Dialog::builder(frame, text.session_target_provider_title())
         .with_size(520, 240)
         .build();
+    super::motion::install_dialog(dialog);
     dialog.set_background_color(theme::theme().bg_card);
 
     let panel = Panel::builder(&dialog).build();

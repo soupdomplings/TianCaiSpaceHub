@@ -54,6 +54,7 @@ pub(super) fn prompt_telegram_bot_token(parent: &Frame, text: GuiText) -> Option
         .with_style(DialogStyle::DefaultDialogStyle | DialogStyle::ResizeBorder)
         .with_size(520, 300)
         .build();
+    super::motion::install_dialog(dialog);
     dialog.set_min_size(Size::new(520, 280));
     dialog.set_background_color(theme::theme().bg_card);
 
@@ -163,6 +164,7 @@ pub(super) fn show_feishu_onboard_dialog(parent: &Frame, text: GuiText, api: Api
         .with_style(DialogStyle::DefaultDialogStyle | DialogStyle::ResizeBorder)
         .with_size(660, 760)
         .build();
+    super::motion::install_dialog(dialog);
     dialog.set_min_size(Size::new(560, 660));
     dialog.set_background_color(theme::theme().bg_card);
 
@@ -298,6 +300,7 @@ pub(super) fn show_wechat_onboard_dialog(parent: &Frame, text: GuiText, api: Api
         .with_style(DialogStyle::DefaultDialogStyle | DialogStyle::ResizeBorder)
         .with_size(660, 760)
         .build();
+    super::motion::install_dialog(dialog);
     dialog.set_min_size(Size::new(560, 660));
     dialog.set_background_color(theme::theme().bg_card);
 
@@ -489,6 +492,7 @@ pub(super) fn show_wecom_onboard_dialog(parent: &Frame, text: GuiText, api: ApiC
         .with_style(DialogStyle::DefaultDialogStyle | DialogStyle::ResizeBorder)
         .with_size(660, 720)
         .build();
+    super::motion::install_dialog(dialog);
     dialog.set_min_size(Size::new(560, 620));
     dialog.set_background_color(theme::theme().bg_card);
     let panel = Panel::builder(&dialog).build();

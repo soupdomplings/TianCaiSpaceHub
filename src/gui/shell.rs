@@ -481,6 +481,7 @@ impl Shell {
             return;
         };
         self.back.hide();
+        let previous = self.book.selection();
         self.book.change_selection(index);
         self.current.set(id);
         self.title.set_label(id.title());
@@ -499,6 +500,7 @@ impl Shell {
         if let Some(callback) = self.changed.borrow().clone() {
             callback(id);
         }
+        super::motion::page_changed(self.book, previous);
     }
     fn refresh_navigation(&self) {
         let t = theme::theme();

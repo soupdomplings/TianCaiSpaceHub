@@ -91,6 +91,7 @@ pub(super) struct NvwaTab {
     secret_status: StaticText,
     factor_code: TextCtrl,
     status: StaticText,
+    loading: super::loading::LoadingIndicator,
     identity: StaticText,
     tools: TextCtrl,
     save: Button,
@@ -1251,6 +1252,7 @@ pub(super) fn create(parent: &dyn WxWidget, text: GuiText) -> NvwaTab {
         factor_code,
         status,
         identity,
+        loading: super::loading::LoadingIndicator::new(&page, status),
         tools,
         save,
         login,
@@ -1364,6 +1366,7 @@ fn start(
     } else if tab.busy.swap(true, Ordering::SeqCst) {
         return;
     }
+    tab.loading.start(tr(tab.text, "处理中…", "Working…"));
     {
         let mut state = tab.state.borrow_mut();
         state.active_login = matches!(action, Action::Login);
@@ -1413,11 +1416,6 @@ fn start(
     let profile_id = tab.state.borrow().selected_id.clone();
     if let Some(kind) = action.client_kind() {
         set_client_feedback(tab, kind, tr(tab.text, "处理中…", "Working…"));
-    } else if !matches!(
-        action,
-        Action::ResetAuthentication | Action::LoadCredential { .. }
-    ) {
-        tab.status.set_label("处理中");
     }
     update_controls(tab);
     let path = path.to_string();
@@ -2022,6 +2020,7 @@ pub(super) fn apply_result(
         return;
     }
     tab.busy.store(false, Ordering::SeqCst);
+    tab.loading.finish();
     tab.state.borrow_mut().active_login = false;
     if !matches!(
         result.action,

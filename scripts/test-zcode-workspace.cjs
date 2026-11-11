@@ -51,6 +51,27 @@ test('startup retains resource timing fallback and does not confuse stylesheets 
   assert.equal(inspectPage({ resources }).module, module);
   assert.equal(inspectPage({ links: [{ href: resources[0] }] }).module, null);
 });
+test('native login header is ready while provider discovery has not rendered its buttons', () => {
+  const module = new URL('assets/styles-provider-loading.js', page).href;
+  const result = inspectPage({ links: [{ href: module }],
+    selectors: ['main > section header [role="img"][aria-label="ZCode"]'] });
+  assert.equal(result.loginOpen, true);
+  assert.equal(result.workspaceOpen, false);
+  assert.equal(result.oauthPending, false);
+  assert.equal(result.hasInput, false);
+  const active = inspectPage({ links: [{ href: module }],
+    selectors: ['main > section header [role="img"][aria-label="ZCode"]', '[data-testid="oauth-cancel"]'],
+    inputs: [{ value: 'unfinished login input' }] });
+  assert.equal(active.oauthPending, true);
+  assert.equal(active.hasInput, true);
+});
+test('native database and root loading screens remain separate from a login ready to adapt', () => {
+  const result = inspectPage({selectors: ['[data-testid="root-startup-loading"]','[data-testid="database-startup-silent"]']});
+  assert.equal(result.startupLoading, true);
+  assert.equal(result.databaseStarting, true);
+  assert.equal(result.loginOpen, false);
+  assert.equal(result.workspaceOpen, false);
+});
 const providerId = 'tiancai-hub-11111111-2222-3333-4444-555555555555';
 const options = { models: [{ providerId, modelId: 'fixture-model' }] };
 const native = `

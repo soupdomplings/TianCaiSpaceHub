@@ -107,6 +107,7 @@ fn show(parent: &Frame, en: bool) {
     .with_style(DialogStyle::DefaultDialogStyle | DialogStyle::ResizeBorder)
     .with_size(size.width, size.height)
     .build();
+    super::motion::install_dialog(dialog);
     dialog.set_min_size(Size::new(500.min(size.width), 350.min(size.height)));
     dialog.set_escape_id(ID_NONE);
     dialog.set_background_color(theme::theme().bg_card);

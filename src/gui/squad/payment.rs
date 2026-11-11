@@ -11,10 +11,20 @@ use wxdragon::{
 };
 
 pub(super) fn with_base(frame: &Frame, api: ApiClient, base: Value) {
-    let Some(checkout) = query(frame, api.clone(), "读取支付方式", "/payment/checkout-info")
-    else {
-        return;
-    };
+    let parent = *frame;
+    query_async(
+        frame,
+        api.clone(),
+        "读取支付方式",
+        "/payment/checkout-info",
+        move |checkout| {
+            if let Some(checkout) = checkout {
+                with_checkout(&parent, api, base, checkout);
+            }
+        },
+    );
+}
+fn with_checkout(frame: &Frame, api: ApiClient, base: Value, checkout: Value) {
     let methods = checkout["methods"]
         .as_object()
         .map(|m| {
@@ -272,7 +282,7 @@ pub(super) fn with_base(frame: &Frame, api: ApiClient, base: Value) {
     });
     chrome.finish();
     update();
-    let accepted = dialog.show_modal() == ID_OK;
+    let accepted = chrome.show_modal() == ID_OK;
     let result = job.result.borrow().clone();
     drop(job);
     dialog.destroy();
@@ -301,16 +311,21 @@ pub(super) fn continue_order(frame: &Frame, api: ApiClient, order: &Value) {
         );
         return;
     };
-    let Some(merged) = dialog_job::run(
+    let parent = *frame;
+    dialog_job::run_async(
         frame,
         api.clone(),
         "读取已有订单",
         "/api/desktop/squad/payment-recovery",
         json!({"id":id}),
-    )
-    .filter(|v| v["order_id"].as_u64() == Some(id)) else {
-        return;
-    };
+        move |merged| {
+            if let Some(merged) = merged.filter(|v| v["order_id"].as_u64() == Some(id)) {
+                continue_recovered_order(&parent, api, merged);
+            }
+        },
+    );
+}
+fn continue_recovered_order(frame: &Frame, api: ApiClient, merged: Value) {
     let chrome = SquadDialog::new(
         frame,
         "完成已有订单",
@@ -407,7 +422,7 @@ pub(super) fn continue_order(frame: &Frame, api: ApiClient, order: &Value) {
         },
     );
     chrome.finish();
-    dialog.show_modal();
+    chrome.show_modal();
     drop(verify_job);
     dialog.destroy();
 }
@@ -438,15 +453,29 @@ pub(super) fn official_window(
         super::super::show_error(frame, "站点返回的地址无效，请重新读取订单");
         return;
     }
-    let Some(seed) = dialog_job::run(
+    let parent = *frame;
+    let (title, raw, order) = (title.to_string(), raw.to_string(), order.cloned());
+    dialog_job::run_async(
         frame,
         api,
         "准备安全窗口",
         "/api/desktop/squad/browser-session",
         json!({}),
-    ) else {
-        return;
-    };
+        move |seed| {
+            if let Some(seed) = seed {
+                show_official_window(&parent, &title, &raw, url, order.as_ref(), seed);
+            }
+        },
+    );
+}
+fn show_official_window(
+    frame: &Frame,
+    title: &str,
+    raw: &str,
+    url: url::Url,
+    order: Option<&Value>,
+    seed: Value,
+) {
     let chrome = SquadDialog::new(
         frame,
         title,
@@ -463,6 +492,7 @@ pub(super) fn official_window(
             WebViewBackend::WebKit
         },
     ) else {
+        dialog_job::finish_dialog(dialog);
         dialog.destroy();
         super::super::show_error(frame, "安全窗口不可用，请修复 WebView2 Runtime 后重试");
         return;
@@ -521,7 +551,7 @@ pub(super) fn official_window(
     };
     view.load_url(&target);
     chrome.finish();
-    dialog.show_modal();
+    chrome.show_modal();
     view.stop();
     view.remove_all_user_scripts();
     dialog.destroy();

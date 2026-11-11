@@ -48,6 +48,7 @@ struct Tab {
     available: Button,
     browsing: Rc<Cell<bool>>,
     status: StaticText,
+    loading: super::loading::LoadingIndicator,
     add: Button,
     retry: Button,
     scan: Button,
@@ -357,8 +358,7 @@ impl ResourceUi {
             return;
         }
         *self.last_request.borrow_mut() = None;
-        tab.status.set_label("正在读取客户端配置…");
-        tab.status.show(true);
+        tab.loading.start("正在读取客户端配置…");
         self.set_enabled(false);
         self.scanned_at.set(Some(Instant::now()));
         let (api, tx) = (self.api.clone(), self.tx.clone());
@@ -377,8 +377,7 @@ impl ResourceUi {
         }
         *self.last_request.borrow_mut() = Some((path.into(), body.clone()));
         self.set_enabled(false);
-        tab.status.set_label("正在更新配置…");
-        tab.status.show(true);
+        tab.loading.start("正在更新配置…");
         tab.picker.summary.set_label("正在应用更改…");
         let (api, tx, path) = (self.api.clone(), self.tx.clone(), path.to_string());
         std::thread::spawn(move || {
@@ -389,6 +388,11 @@ impl ResourceUi {
     }
     pub fn apply(&self, event: ResourceEvent) {
         self.busy.store(false, Ordering::SeqCst);
+        self.skills.loading.finish();
+        self.mcp.loading.finish();
+        for tab in self.client_tabs.borrow().iter() {
+            tab.loading.finish();
+        }
         self.set_enabled(true);
         let result = match event {
             ResourceEvent::Result(result) => result,
@@ -837,6 +841,7 @@ impl ResourceUi {
             return;
         }
         self.set_enabled(false);
+        tab.loading.start("正在读取配置…");
         let (api, tx, id) = (self.api.clone(), self.tx.clone(), row.resource.id);
         std::thread::spawn(move || {
             let result = api.desktop_post("/api/desktop/mcp/read", &json!({"resourceId":id}));
@@ -1021,6 +1026,7 @@ impl Tab {
             available,
             browsing: Default::default(),
             status,
+            loading: super::loading::LoadingIndicator::new(&page, status),
             add,
             retry,
             scan,

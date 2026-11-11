@@ -9,7 +9,7 @@ const GROUPS: [(&str, &str); 5] = [
 ];
 fn group(key: &str) -> &str {
     match key {
-        "account" | "profile" | "channels" => "account",
+        "account" | "profile" => "account",
         "keys" => "keys",
         "usage" => "usage",
         "purchase" => "billing",
@@ -97,6 +97,12 @@ impl Navigation {
         self.select.replace(Some(Rc::new(f)));
     }
     pub fn render(&self, menus: &[Value], key: &str) {
+        let visible = menus
+            .iter()
+            .filter(|item| item["id"] != "channels")
+            .cloned()
+            .collect::<Vec<_>>();
+        let menus = visible.as_slice();
         if *self.menus.borrow() != menus {
             for (_, button) in self.items.borrow_mut().drain(..) {
                 button.destroy();
@@ -169,7 +175,6 @@ mod tests {
             "profile",
             "keys",
             "usage",
-            "channels",
             "organization",
             "organization-admin",
             "organization-usage",
@@ -179,7 +184,7 @@ mod tests {
             assert!(GROUPS.iter().any(|g| g.0 == group(key)));
         }
         assert_eq!(group("profile"), "account");
-        assert_eq!(group("channels"), "account");
+        assert_eq!(group("channels"), "removed");
         assert_eq!(group("models"), "removed");
         assert_eq!(group("organization-usage"), "organization");
     }

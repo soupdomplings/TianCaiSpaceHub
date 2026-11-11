@@ -160,6 +160,7 @@ mod ai_gateway;
 mod api;
 mod assistant;
 mod assistant_markdown;
+mod assistant_questions;
 mod browser;
 mod chatgpt;
 mod client_header;
@@ -176,10 +177,12 @@ mod external_import;
 mod feedback;
 mod gmclaw;
 mod im_accounts;
+mod loading;
 mod local_assistance;
 mod mcp_editor;
 mod model_fields;
 mod model_list;
+mod motion;
 #[cfg(all(test, windows))]
 mod native_model_review;
 mod nvwa;
@@ -2110,6 +2113,7 @@ fn build_ui(
         let resource_ui = resource_ui.clone();
         let request_browser = request_browser.clone();
         frame.on_idle(move |event| {
+            loading::refresh_pending();
             // Kick off any toggles queued from the data views.
             process_pending_im_toggle(
                 &api,
@@ -2927,6 +2931,7 @@ fn show_ai_gw_channel_dialog(
         .with_style(DialogStyle::DefaultDialogStyle | DialogStyle::ResizeBorder)
         .with_size(dialog_size.width, dialog_size.height)
         .build();
+    motion::install_dialog(dialog);
     dialog.set_min_size(Size::new(minimum_width, 360.min(dialog_size.height)));
     dialog.set_background_color(theme::theme().bg_card_alt);
 
@@ -3227,6 +3232,7 @@ fn show_ai_gw_channel_dialog(
     let fetch_models_button = Button::builder(&form_panel)
         .with_label(text.ai_gw_fetch_models())
         .build();
+    let fetch_models_loading = loading::LoadingIndicator::for_button(&dialog, fetch_models_button);
     let add_model_button = Button::builder(&form_panel)
         .with_label(text.ai_gw_add_model())
         .build();
@@ -3892,6 +3898,7 @@ fn show_ai_gw_channel_dialog(
         let fetch_models_in_flight = fetch_models_in_flight.clone();
         let fetch_models_closed = fetch_models_closed.clone();
         let save_after_fetch = save_after_fetch.clone();
+        let fetch_models_loading = fetch_models_loading.clone();
         Rc::new(move |auto_save| {
             if fetch_models_closed.load(Ordering::SeqCst) {
                 return;
@@ -3933,10 +3940,10 @@ fn show_ai_gw_channel_dialog(
                 return;
             }
             save_after_fetch.set(auto_save);
+            fetch_models_loading.start(text.ai_gw_fetching_models());
             panel.enable(false);
             save_button.enable(false);
             fetch_models_button.enable(false);
-            fetch_models_button.set_label(text.ai_gw_fetching_models());
             if auto_save {
                 save_button.set_label(text.ai_gw_fetching_models());
             }
@@ -3983,6 +3990,7 @@ fn show_ai_gw_channel_dialog(
         let model_mapping_rows = model_mapping_rows.clone();
         let model_mapping_model = model_mapping_model.clone();
         let current_ai_gw_provider_template = current_ai_gw_provider_template.clone();
+        let fetch_models_loading = fetch_models_loading.clone();
         fetch_models_timer.on_tick(move |_| {
             if fetch_models_closed.load(Ordering::SeqCst) {
                 return;
@@ -3994,6 +4002,7 @@ fn show_ai_gw_channel_dialog(
             else {
                 return;
             };
+            fetch_models_loading.finish();
             fetch_models_button.set_label(text.ai_gw_fetch_models());
             fetch_models_button.enable(true);
             panel.enable(true);
@@ -7005,6 +7014,7 @@ fn show_about_dialog(parent: &Frame) {
         .with_style(DialogStyle::DefaultDialogStyle)
         .with_size(520, 260)
         .build();
+    motion::install_dialog(dialog);
     dialog.set_icon(&app_icon_bitmap(48));
     dialog.set_background_color(theme::theme().bg_card);
 

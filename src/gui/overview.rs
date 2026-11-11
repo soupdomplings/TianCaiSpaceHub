@@ -252,7 +252,7 @@ impl Overview {
                     ui.reset_scene();
                 }
                 ui.mode.set(i);
-                book.change_selection(i);
+                super::motion::change_page(book, i);
                 run.set_selected(i == 0);
                 stats_button.set_selected(i == 1);
                 run.set_foreground_color(if i == 0 {

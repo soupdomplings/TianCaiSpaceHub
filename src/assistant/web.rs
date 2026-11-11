@@ -52,8 +52,11 @@ async fn status(State(state): State<SharedState>, headers: HeaderMap) -> Respons
     )
 }
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct Settings {
-    enabled: bool,
+    enabled: Option<bool>,
+    personality: Option<super::personality::Personality>,
+    full_access: Option<bool>,
 }
 async fn settings(
     State(state): State<SharedState>,
@@ -63,7 +66,15 @@ async fn settings(
     response(
         async {
             trusted(&headers)?;
-            super::configure(&state, input.enabled).await?;
+            if let Some(personality) = input.personality {
+                super::configure_personality(&state, personality).await?;
+            }
+            if let Some(full_access) = input.full_access {
+                super::configure_full_access(&state, full_access).await?;
+            }
+            if let Some(enabled) = input.enabled {
+                super::configure(&state, enabled).await?;
+            }
             super::status(&state).await
         }
         .await,

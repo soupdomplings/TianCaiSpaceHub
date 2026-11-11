@@ -238,6 +238,7 @@ fn target_editor(frame: &Frame, api: ApiClient) {
     let dialog = Dialog::builder(frame, "其他客户端配置位置")
         .with_size(680, 360)
         .build();
+    super::motion::install_dialog(dialog);
     let s = BoxSizer::builder(Orientation::Vertical).build();
     let client = Choice::builder(&dialog)
         .with_choices(

@@ -64,12 +64,7 @@ struct ModelDraft {
 #[derive(Clone)]
 pub(super) struct GmClawTab {
     pub(super) page: Panel,
-    account: super::tiangong_models::AccountBar,
-    selected_builtin: Rc<RefCell<Option<String>>>,
     section: Panel,
-    builtin_panel: Panel,
-    builtin_title: StaticText,
-    share_builtin: Button,
     editor_scroll: ScrolledWindow,
     entry: super::model_list::ModelList,
     delete_button: Button,
@@ -81,6 +76,7 @@ pub(super) struct GmClawTab {
     temperature_mode: Choice,
     temperature: TextCtrl,
     status: StaticText,
+    loading: super::loading::LoadingIndicator,
     display_status: StaticText,
     selection_hint: StaticText,
     parameter_hint: StaticText,
@@ -141,13 +137,6 @@ pub(super) fn create_with_settings(
     let page = Panel::builder(parent).build();
     page.set_background_color(theme::theme().bg_app);
     let root = BoxSizer::builder(Orientation::Vertical).build();
-    let account = super::tiangong_models::AccountBar::new(&page);
-    root.add(
-        &account.panel,
-        0,
-        SizerFlag::Expand | SizerFlag::Bottom,
-        page.from_dip(8),
-    );
     let editor_scroll = ScrolledWindow::builder(&page)
         .with_style(ScrolledWindowStyle::VScroll)
         .build();
@@ -293,40 +282,6 @@ pub(super) fn create_with_settings(
     );
     let field_col = BoxSizer::builder(Orientation::Vertical).build();
     field_col.add(&section, 0, SizerFlag::Expand, 0);
-    let builtin_panel = Panel::builder(&editor_scroll).build();
-    builtin_panel.set_background_color(theme::theme().bg_card);
-    super::controls::paint_surface(builtin_panel, theme::SURFACE_RADIUS);
-    let builtin_col = BoxSizer::builder(Orientation::Vertical).build();
-    let builtin_title = StaticText::builder(&builtin_panel)
-        .with_label("天工内置模型")
-        .build();
-    builtin_title.set_font(&theme::font(theme::TextRole::Title));
-    builtin_title.set_foreground_color(theme::theme().ink_primary);
-    builtin_col.add(&builtin_title, 0, SizerFlag::All, page.from_dip(20));
-    let note = StaticText::builder(&builtin_panel)
-        .with_label("模型参数随天工客户端读取。\n分享后继续沿用来源参数，个人登录可选。")
-        .build();
-    note.set_foreground_color(theme::theme().ink_secondary);
-    note.wrap(page.from_dip(390));
-    builtin_col.add(
-        &note,
-        0,
-        SizerFlag::Left | SizerFlag::Right | SizerFlag::Bottom,
-        page.from_dip(20),
-    );
-    let share_builtin = Button::builder(&builtin_panel)
-        .with_label("分享给其他客户端")
-        .with_icon(super::visual::Icon::Plus)
-        .build();
-    builtin_col.add(
-        &share_builtin,
-        0,
-        SizerFlag::Left | SizerFlag::Right | SizerFlag::Bottom,
-        page.from_dip(20),
-    );
-    builtin_panel.set_sizer(builtin_col, false);
-    builtin_panel.hide();
-    field_col.add(&builtin_panel, 0, SizerFlag::Expand, 0);
     editor_scroll.set_sizer(field_col, true);
     editor.add(&editor_scroll, 1, SizerFlag::Expand, 0);
     root.add_sizer(&editor, 1, SizerFlag::Expand, 0);
@@ -456,12 +411,7 @@ pub(super) fn create_with_settings(
     }
     let tab = GmClawTab {
         page,
-        account,
-        selected_builtin: Default::default(),
         section,
-        builtin_panel,
-        builtin_title,
-        share_builtin,
         editor_scroll,
         entry,
         delete_button,
@@ -473,6 +423,7 @@ pub(super) fn create_with_settings(
         temperature_mode,
         temperature,
         status,
+        loading: super::loading::LoadingIndicator::new(&page, status),
         display_status,
         selection_hint,
         parameter_hint,
@@ -543,26 +494,6 @@ fn bind_editor_events(tab: &GmClawTab, text: GuiText) {
             return;
         }
         capture_draft(&entry_tab);
-        let count = entry_tab
-            .state
-            .borrow()
-            .status
-            .as_ref()
-            .map(|s| s.entries.len())
-            .unwrap_or(0);
-        let selected = entry_tab.entry.get_selection().unwrap_or(u32::MAX) as usize;
-        let builtin = selected
-            .checked_sub(count)
-            .and_then(|i| entry_tab.account.models().get(i).cloned());
-        if let Some(builtin) = builtin {
-            *entry_tab.selected_builtin.borrow_mut() = builtin["id"].as_str().map(str::to_string);
-            entry_tab
-                .builtin_title
-                .set_label(builtin["name"].as_str().unwrap_or("天工内置模型"));
-            update_controls(&entry_tab);
-            return;
-        }
-        entry_tab.selected_builtin.borrow_mut().take();
         let mut status = match entry_tab.state.borrow().status.clone() {
             Some(status) => status,
             None => return,
@@ -612,43 +543,6 @@ pub(super) fn bind_actions(
     text: GuiText,
     gui_tx: &tokio::sync::mpsc::UnboundedSender<super::GuiMessage>,
 ) {
-    {
-        let (tab, api, frame) = (tab.clone(), api.clone(), *frame);
-        tab.account.test.on_click(move |_| {
-            if !tab.in_flight.load(Ordering::SeqCst) {
-                super::tiangong_models::show_identity_test(&frame, &api);
-            }
-        });
-    }
-    {
-        let (tab, api, tx, frame) = (tab.clone(), api.clone(), gui_tx.clone(), *frame);
-        let button = tab.account.login;
-        button.on_click(move |_| {
-            if tab.in_flight.load(Ordering::SeqCst) {
-                return;
-            }
-            if super::tiangong_models::show(&frame, &api) {
-                refresh(&tab, &api, text, &tx, false, false);
-            }
-        });
-    }
-    {
-        let (tab, api, tx, frame) = (tab.clone(), api.clone(), gui_tx.clone(), *frame);
-        let button = tab.share_builtin;
-        button.on_click(move |_| {
-            let selected = tab.selected_builtin.borrow().clone();
-            let model = tab
-                .account
-                .models()
-                .into_iter()
-                .find(|m| m["id"].as_str() == selected.as_deref());
-            if let Some(model) = model {
-                if super::tiangong_models::share(&frame, &api, &model) {
-                    refresh(&tab, &api, text, &tx, false, false);
-                }
-            }
-        });
-    }
     for (button, enhanced) in [(tab.start_button, true), (tab.normal_start_button, false)] {
         let start_tab = tab.clone();
         let start_api = api.clone();
@@ -846,24 +740,7 @@ pub(super) fn refresh(
         let mut result =
             Err(tr(text, "Hub 服务尚未就绪", "The Hub service is not ready").to_string());
         for attempt in 0..attempts {
-            result = api.get_app_config().and_then(|mut config| {
-                let mut builtins = api
-                    .desktop_post("/api/desktop/tiangong-models/read", &serde_json::json!({}))
-                    .unwrap_or_else(|e| serde_json::json!({"accountError":e}));
-                if builtins["parametersCurrent"] != true
-                    && builtins["models"].as_array().is_some_and(|m| !m.is_empty())
-                {
-                    match api.desktop_post(
-                        "/api/desktop/tiangong-models/connect",
-                        &serde_json::json!({"revision":config.revision,"native":true}),
-                    ) {
-                        Ok(view) => {
-                            builtins = view;
-                            config = api.get_app_config()?;
-                        }
-                        Err(e) => builtins["accountError"] = e.into(),
-                    }
-                }
+            result = api.get_app_config().and_then(|config| {
                 api.get_gmclaw_config(None).map(|mut status| {
                     if let Some(selected) = &entry_id {
                         let entry = status
@@ -888,7 +765,11 @@ pub(super) fn refresh(
                             .map(|entry| entry.local_url.clone())
                             .unwrap_or_default();
                     }
-                    (provider_options_with_copies(&config), status, builtins)
+                    (
+                        provider_options_with_copies(&config),
+                        status,
+                        serde_json::Value::Null,
+                    )
                 })
             });
             if result.is_ok() || attempt + 1 == attempts {
@@ -914,6 +795,7 @@ pub(super) fn apply_result(
 ) {
     // Keep the model action busy until its result reaches the GUI thread.
     tab.in_flight.store(false, Ordering::SeqCst);
+    tab.loading.finish();
     let queued = tab.refresh_pending.borrow_mut().take();
     if matches!(&result, GmClawActionResult::Refresh(..)) && queued.is_some() {
         refresh(tab, api, text, gui_tx, false, queued.unwrap());
@@ -931,7 +813,7 @@ pub(super) fn apply_result(
                 Err(error) => show_error(frame, &error),
             }
         }
-        GmClawActionResult::Refresh(Ok((providers, status, builtins)), rebase) => {
+        GmClawActionResult::Refresh(Ok((providers, status, _)), rebase) => {
             let preserved = preserved_editor(tab, rebase);
             let changed = preserved
                 .as_ref()
@@ -942,7 +824,6 @@ pub(super) fn apply_result(
                     .iter()
                     .any(|entry| entry.entry_id == editor.entry_id)
             });
-            tab.account.apply(builtins);
             if rebase || (tab.draft.borrow().is_none() && preserved.is_none()) {
                 tab.state.borrow_mut().providers = providers;
             }
@@ -968,9 +849,6 @@ pub(super) fn apply_result(
                         status.selected_entry_id = Some(entry_id);
                     }
                 }
-                // A removed edited row must not become a newly created model
-                // or silently switch the form to a built-in model.
-                tab.selected_builtin.borrow_mut().take();
                 let index = tab.state.borrow().providers.iter().position(|provider| {
                     Some(provider.name.as_str()) == values["provider"].as_str()
                 });
@@ -1159,12 +1037,6 @@ fn apply_status(
             )
         })
         .collect::<Vec<_>>();
-    let builtin_models = tab.account.models();
-    labels.extend(
-        builtin_models
-            .iter()
-            .map(|m| m["name"].as_str().unwrap_or("天工内置模型").to_string()),
-    );
     if tab.draft.borrow().is_some() {
         labels.push("新建模型".into());
     }
@@ -1175,34 +1047,9 @@ fn apply_status(
             .iter()
             .position(|entry| &entry.entry_id == id)
     });
-    let native_selected = tab
-        .selected_builtin
-        .borrow()
-        .as_ref()
-        .and_then(|id| builtin_models.iter().position(|m| m["id"] == id.as_str()));
-    if native_selected.is_none() {
-        tab.selected_builtin.borrow_mut().take();
-    }
-    let first_builtin =
-        selected.is_none() && tab.draft.borrow().is_none() && !builtin_models.is_empty();
-    if first_builtin {
-        *tab.selected_builtin.borrow_mut() = builtin_models[0]["id"].as_str().map(str::to_string);
-        tab.builtin_title
-            .set_label(builtin_models[0]["name"].as_str().unwrap_or("天工内置模型"));
-    }
-    let index = if let Some(i) = native_selected {
-        status.entries.len() + i
-    } else if first_builtin {
-        status.entries.len()
-    } else {
-        selected.unwrap_or(status.entries.len() + builtin_models.len())
-    };
     tab.entry.set_selection(
-        index as u32,
-        selected.is_some()
-            || tab.draft.borrow().is_some()
-            || native_selected.is_some()
-            || first_builtin,
+        selected.unwrap_or(status.entries.len()) as u32,
+        selected.is_some() || tab.draft.borrow().is_some(),
     );
     let saved_effort = status.parameters.reasoning_effort.clone();
     tab.temperature_mode
@@ -1314,7 +1161,7 @@ fn preserved_editor(
     tab: &GmClawTab,
     rebase: bool,
 ) -> Option<super::configuration_refresh::PreservedEditor> {
-    if rebase || tab.selected_builtin.borrow().is_some() {
+    if rebase {
         return None;
     }
     let entry_id = tab
@@ -1611,20 +1458,16 @@ fn begin_action(tab: &GmClawTab, message: &str) -> bool {
     if tab.in_flight.swap(true, Ordering::SeqCst) {
         return false;
     }
-    tab.status.set_label(message);
+    tab.loading.start(message);
     update_controls(tab);
     true
 }
 
 fn update_controls(tab: &GmClawTab) {
     let busy = tab.in_flight.load(Ordering::SeqCst);
-    let builtin = tab.selected_builtin.borrow().is_some();
-    tab.section.show(!builtin);
-    tab.builtin_panel.show(builtin);
-    tab.save_button.show(!builtin);
-    tab.delete_button.show(!builtin);
-    tab.account.login.enable(!busy);
-    tab.share_builtin.enable(!busy);
+    tab.section.show(true);
+    tab.save_button.show(true);
+    tab.delete_button.show(true);
     let state = tab.state.borrow();
     let ready = !busy
         && state.fresh
@@ -1646,12 +1489,6 @@ fn update_controls(tab: &GmClawTab) {
     tab.start_button.enable(!busy);
     tab.normal_start_button.enable(!busy);
     tab.entry.enable(ready);
-    if builtin {
-        tab.entry.enable(!busy);
-    }
-    if builtin {
-        tab.status.set_label("天工内置模型 · 沿用来源参数");
-    }
     let selected = state
         .status
         .as_ref()
@@ -1703,8 +1540,7 @@ fn select_entry(status: &mut GmClawConfigStatus, index: usize) {
     status.configured = entry.as_ref().is_some_and(|e| e.configured);
 }
 fn is_draft(tab: &GmClawTab) -> bool {
-    tab.selected_builtin.borrow().is_none()
-        && tab.draft.borrow().is_some()
+    tab.draft.borrow().is_some()
         && tab
             .state
             .borrow()
@@ -1744,7 +1580,6 @@ pub(super) fn begin_model_draft(tab: &GmClawTab, text: GuiText) {
     if is_draft(tab) {
         return;
     }
-    tab.selected_builtin.borrow_mut().take();
     if tab.draft.borrow().is_none() {
         *tab.draft.borrow_mut() = Some(ModelDraft {
             revision: status.revision.clone(),
@@ -1913,11 +1748,9 @@ pub(super) fn review_inline_draft(
             .as_deref(),
         Some("saved-entry")
     );
-    assert!(tab.selected_builtin.borrow().is_none());
     assert!(tab.entry.get_selection().is_none());
     assert!(build_request(&tab, text).is_err());
     assert!(tab.reload_button.is_shown());
-    tab.account.apply(serde_json::Value::Null);
     tab.state.borrow_mut().providers = original_providers;
     apply_status(&tab, text, status, true);
     update_controls(&tab);
@@ -2055,51 +1888,11 @@ pub(super) fn review_inline_draft(
         virtual_size.height <= viewport.height + tab.page.from_dip(2),
         "complete TianGong draft must fit: {virtual_size:?} {viewport:?}"
     );
-    // Exercise actual model-list command callbacks across native rows and the
-    // existing unsaved draft. Neither a login refresh nor sharing may save it.
-    tab.account.apply(
-        serde_json::json!({"loggedIn":true,"accountName":"合成天工账号","models":[
-        {"id":"tiangong-builtin","name":"天工内置-外网","configured":true},
-        {"id":"tiangong-builtin-intranet","name":"天工内置-内网","configured":true}]}),
-    );
-    let current = tab.state.borrow().status.clone().unwrap();
-    let native_index = current.entries.len();
-    apply_status(&tab, text, current, true);
-    update_controls(&tab);
-    let command = |index: usize| {
-        let button = tab
-            .page
-            .find_window_by_name(&format!("client-model-{index}"))
-            .unwrap();
-        super::native_model_review::click(&button);
-    };
-    command(native_index);
-    assert_eq!(
-        tab.selected_builtin.borrow().as_deref(),
-        Some("tiangong-builtin")
-    );
-    assert!(tab.builtin_panel.is_shown());
-    assert!(!tab.section.is_shown());
-    assert!(!tab.save_button.is_shown());
-    assert!(!is_draft(&tab));
-    assert_eq!(tab.draft.borrow().as_ref().unwrap().max_tokens, "32768");
-    super::native_model_review::capture(
-        &tab.page,
-        if theme::theme().is_dark {
-            "tiangong-builtins-dark"
-        } else {
-            "tiangong-builtins-light"
-        },
-    );
-    command(native_index + 1);
-    assert_eq!(
-        tab.selected_builtin.borrow().as_deref(),
-        Some("tiangong-builtin-intranet")
-    );
-    command(native_index + 2);
+    // Daily TianGong editing contains only external entries and its draft.
+    assert_eq!(tab.entry.get_selection(), Some(1));
+    assert!(tab.page.find_window_by_name("client-model-2").is_none());
     assert!(is_draft(&tab));
     assert!(tab.section.is_shown());
-    assert!(tab.save_button.is_shown());
     assert_eq!(build_request(&tab, text).unwrap().max_tokens, 32768);
 }
 

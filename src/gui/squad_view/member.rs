@@ -180,6 +180,19 @@ impl Member {
     pub fn current(&self) -> usize {
         self.current.get()
     }
+    pub fn set_loading(&self, loading: bool) {
+        for tab in &self.tabs {
+            tab.enable(!loading);
+        }
+        self.reset.enable(!loading);
+        self.unlock.enable(!loading);
+        if loading {
+            self.save.enable(false);
+            self.status.set_label("正在读取成员资料…");
+        } else {
+            self.select(self.current());
+        }
+    }
     pub fn select(&self, i: usize) {
         if i >= self.sections.len() {
             return;

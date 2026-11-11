@@ -263,7 +263,9 @@ impl Acceptance {
                 status: "running",
             });
         }
-        self.worker.turn(prompt).await?;
+        self.worker
+            .turn(prompt, super::personality::Personality::Professional)
+            .await?;
         let deadline = Instant::now() + Duration::from_secs(180);
         let mut interrupted = false;
         while self.state.assistant.inner.lock().await.running {

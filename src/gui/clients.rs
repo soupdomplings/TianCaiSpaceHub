@@ -44,6 +44,7 @@ pub(super) struct ClientPage {
     state_label: StaticText,
     error: StaticText,
     action_job: Rc<dialog_job::InlineJob>,
+    model_loading: super::loading::LoadingIndicator,
     model_list: super::model_list::ModelList,
     model_fields: Option<super::model_fields::ModelFields>,
     model_view: super::model_fields::ModelPage,
@@ -161,6 +162,7 @@ impl ClientPage {
             page.from_dip(10),
         );
         let action_job = Rc::new(dialog_job::InlineJob::new(page, action_status));
+        let model_loading = super::loading::LoadingIndicator::for_button(&page, reload);
         page.set_sizer(column, true);
         shell.register(PageId::Client(id), &page);
         let ui = Self {
@@ -177,6 +179,7 @@ impl ClientPage {
             state_label,
             error,
             action_job,
+            model_loading,
             model_list,
             model_fields,
             model_view,
@@ -220,6 +223,7 @@ impl ClientPage {
         if !matches!(id, ClientId::WorkBuddy | ClientId::Tiangong) {
             let u = ui.clone();
             reload.on_click(move |_| {
+                u.refresh_pending.set(true);
                 u.refresh_legacy_models(true);
                 u.fetch();
             });
@@ -528,6 +532,7 @@ impl ClientPage {
                 // replacement; a hidden page must not keep its busy flag set.
                 self.apply_pending();
                 if entering {
+                    self.refresh_pending.set(true);
                     self.refresh_legacy_models(false);
                 }
                 timer.start(160, false);
@@ -557,6 +562,9 @@ impl ClientPage {
     fn fetch_models(&self) {
         if self.busy.replace(true) {
             return;
+        }
+        if self.refresh_pending.get() || self.models.borrow()["revision"].is_null() {
+            self.model_loading.start("读取模型中…");
         }
         self.refresh_pending.set(false);
         let (api, slot) = (self.api.clone(), self.pending.clone());
@@ -605,6 +613,7 @@ impl ClientPage {
         for message in messages {
             match message {
                 ClientUpdate::Models(result) => {
+                    self.model_loading.finish();
                     self.busy.set(false);
                     if self.refresh_pending.replace(false) {
                         // A save happened during this read. Discard its stale
@@ -1272,6 +1281,7 @@ impl ClientPage {
         if matches!(index, 2 | 3) {
             return;
         }
+        let previous = self.book.selection();
         self.book.change_selection(index);
         if index == 1 {
             let draft = self.selected().is_some_and(|r| r["draft"] == true);
@@ -1287,6 +1297,7 @@ impl ClientPage {
         } else {
             super::controls::ButtonKind::Secondary
         });
+        super::motion::page_changed(self.book, previous);
     }
 }
 

@@ -5,10 +5,24 @@ use super::{
     theme,
     visual::{Canvas, Icon},
 };
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+    time::{Duration, Instant},
+};
 use wxdragon::{dc::GraphicsDC, prelude::*, timer::Timer, window::WxWidgetDowncast};
 
-const SUCCESS_MILLISECONDS: i32 = 4_000;
+const NOTICE_MILLISECONDS: i32 = 4_000;
+const COUNTDOWN_TICK_MILLISECONDS: i32 = 50;
+
+fn countdown_remaining(started: Option<Instant>, now: Instant) -> f64 {
+    let Some(started) = started else { return 0.0 };
+    let duration = Duration::from_millis(NOTICE_MILLISECONDS as u64);
+    duration
+        .saturating_sub(now.saturating_duration_since(started))
+        .as_secs_f64()
+        / duration.as_secs_f64()
+}
 
 thread_local! {
     static NOTICES: RefCell<Vec<Rc<Notice>>> = const { RefCell::new(Vec::new()) };
@@ -86,7 +100,7 @@ pub(super) fn install(frame: Frame, area: Panel) {
 pub(super) fn dismiss_all() {
     let notices = NOTICES.with(|slot| slot.borrow().clone());
     for notice in notices {
-        notice.dismiss();
+        notice.dismiss_now();
     }
 }
 
@@ -151,10 +165,13 @@ struct Notice {
     owner: Owner,
     panel: Panel,
     message: StaticText,
+    progress: Panel,
     close: Button,
     full: RefCell<String>,
     error: std::cell::Cell<bool>,
+    started: Cell<Option<Instant>>,
     timer: RefCell<Option<Timer<Panel>>>,
+    motion: super::motion::PositionMotion,
 }
 impl Notice {
     fn new(owner: Owner) -> Rc<Self> {
@@ -167,7 +184,9 @@ impl Notice {
         panel.set_background_style(BackgroundStyle::Paint);
         panel.set_font(&theme::font(theme::TextRole::Body));
         let message = StaticText::builder(&panel).build();
-        message.set_min_size(Size::new(0, 0));
+        // Horizontal shrinking permits wrapping. A zero vertical minimum
+        // overrides the native text height and collapses the entire label.
+        message.set_min_size(Size::new(0, -1));
         message.set_foreground_color(theme::theme().ink_primary);
         let close = Button::builder(&panel)
             .with_label("关闭")
@@ -192,16 +211,60 @@ impl Notice {
             SizerFlag::Expand | SizerFlag::All,
             panel.from_dip(12),
         );
+        let progress = Panel::builder(&panel)
+            .with_style(PanelStyle::BorderNone)
+            .build();
+        progress.set_name("operation-notice-countdown");
+        progress.set_min_size(Size::new(0, panel.from_dip(3)));
+        progress.set_background_style(BackgroundStyle::Paint);
+        col.add(
+            &progress,
+            0,
+            SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Bottom,
+            panel.from_dip(8),
+        );
         panel.set_sizer(col, false);
         let ui = Rc::new(Self {
             id: owner.handle_ptr() as usize,
             owner,
             panel,
             message,
+            progress,
             close,
             full: Default::default(),
             error: Default::default(),
+            started: Default::default(),
             timer: Default::default(),
+            motion: super::motion::PositionMotion::new(&panel),
+        });
+        let weak = Rc::downgrade(&ui);
+        progress.on_paint(move |_| {
+            let Some(ui) = weak.upgrade() else { return };
+            let dc = AutoBufferedPaintDC::new(&progress);
+            let graphics = GraphicsDC::new(&dc);
+            let scale = super::visual::scale(&progress);
+            let c = Canvas::new(&graphics, scale);
+            let size = progress.get_client_size();
+            let width = (size.width as f64 / scale) as i32;
+            let height = (size.height as f64 / scale) as i32;
+            c.clear(theme::theme().bg_card);
+            c.rounded(
+                Rect::new(0, 0, width, height),
+                1,
+                theme::theme().divider,
+                None,
+            );
+            let remaining = countdown_remaining(ui.started.get(), Instant::now());
+            c.rounded(
+                Rect::new(0, 0, (width as f64 * remaining).ceil() as i32, height),
+                1,
+                if ui.error.get() {
+                    theme::theme().error
+                } else {
+                    theme::theme().ok
+                },
+                None,
+            );
         });
         let weak = Rc::downgrade(&ui);
         panel.on_paint(move |_| {
@@ -230,7 +293,7 @@ impl Notice {
             } else {
                 theme::theme().ok
             };
-            let mid = (size.height as f64 / scale) as i32 / 2;
+            let mid = ((size.height - panel.from_dip(11)) as f64 / scale) as i32 / 2;
             c.dot(24, mid, 9, color);
             c.dot(24, mid, 7, theme::theme().bg_card);
             if ui.error.get() {
@@ -263,25 +326,33 @@ impl Notice {
             }
         });
         let weak = Rc::downgrade(&ui);
-        message.on_mouse_left_up(move |_| {
+        message.on_mouse_left_up(move |event| {
             if let Some(ui) = weak.upgrade() {
-                let message = ui.full.borrow().clone();
-                details(
-                    &ui.owner,
-                    if ui.error.get() {
-                        "操作未完成"
-                    } else {
-                        "操作结果"
-                    },
-                    &message,
-                );
+                ui.show_details();
+            }
+            event.skip(false);
+        });
+        let weak = Rc::downgrade(&ui);
+        panel.on_mouse_left_up(move |event| {
+            let source = match &event {
+                WindowEventData::MouseButton(mouse) => mouse.event.event.get_event_object(),
+                WindowEventData::General(raw) => raw.get_event_object(),
+                _ => None,
+            };
+            if source.is_some_and(|window| window.as_ptr() == panel.handle_ptr()) {
+                if let Some(ui) = weak.upgrade() {
+                    ui.show_details();
+                }
+                event.skip(false);
+            } else {
+                event.skip(true);
             }
         });
         let weak = Rc::downgrade(&ui);
         let timer = Timer::new(&panel);
         timer.on_tick(move |_| {
             if let Some(ui) = weak.upgrade() {
-                ui.dismiss();
+                ui.tick(Instant::now());
             }
         });
         ui.timer.borrow_mut().replace(timer);
@@ -289,6 +360,7 @@ impl Notice {
         owner.on_size(move |event| {
             if let Some(ui) = weak.upgrade() {
                 if ui.panel.is_shown() {
+                    ui.motion.finish();
                     ui.position();
                 }
             }
@@ -303,6 +375,7 @@ impl Notice {
                     if let Some(ui) = weak.upgrade()
                         && ui.panel.is_shown()
                     {
+                        ui.motion.finish();
                         ui.position();
                     }
                     event.skip(true);
@@ -335,15 +408,41 @@ impl Notice {
         }
         self.full.replace(message.into());
         self.error.set(error);
+        self.started.set(Some(Instant::now()));
         self.message.set_label(&summary(message));
         self.message.set_tooltip("点击查看完整信息");
         self.position();
-        self.panel.show(true);
+        self.motion.enter(
+            self.panel,
+            self.panel.get_position(),
+            Point::new(self.panel.from_dip(12), 0),
+            super::motion::POPUP_MS,
+        );
         self.panel.raise_child_overlay();
         self.panel.refresh(false, None);
-        if !error && let Some(timer) = self.timer.borrow().as_ref() {
-            timer.start(SUCCESS_MILLISECONDS, true);
+        self.progress.refresh(false, None);
+        if let Some(timer) = self.timer.borrow().as_ref() {
+            timer.start(COUNTDOWN_TICK_MILLISECONDS, false);
         }
+    }
+    fn tick(&self, now: Instant) {
+        if countdown_remaining(self.started.get(), now) == 0.0 {
+            self.dismiss();
+        } else {
+            self.progress.refresh(false, None);
+        }
+    }
+    fn show_details(&self) {
+        let message = self.full.borrow().clone();
+        details(
+            &self.owner,
+            if self.error.get() {
+                "操作未完成"
+            } else {
+                "操作结果"
+            },
+            &message,
+        );
     }
     fn position(&self) {
         let size = self.owner.get_client_size();
@@ -368,8 +467,8 @@ impl Notice {
         let content_width = (width - self.panel.from_dip(98)).max(1);
         self.message.set_label(&summary(&self.full.borrow()));
         self.message.wrap(content_width);
-        let height = (self.message.get_best_size().height + self.panel.from_dip(24))
-            .max(self.panel.from_dip(56));
+        let height = (self.message.get_best_size().height + self.panel.from_dip(35))
+            .max(self.panel.from_dip(67));
         self.panel.set_size_with_pos(
             area.x + area.width - width - inset,
             area.y + inset,
@@ -382,7 +481,21 @@ impl Notice {
         if let Some(timer) = self.timer.borrow().as_ref() {
             timer.stop();
         }
-        self.panel.hide();
+        if self.started.take().is_some() {
+            self.motion.exit(
+                self.panel,
+                self.panel.get_position(),
+                Point::new(self.panel.from_dip(12), 0),
+                super::motion::POPUP_MS,
+            );
+        }
+    }
+    fn dismiss_now(&self) {
+        if let Some(timer) = self.timer.borrow().as_ref() {
+            timer.stop();
+        }
+        self.started.set(None);
+        self.motion.hide_now(&self.panel);
     }
 }
 
@@ -405,6 +518,7 @@ fn build_prompt(parent: &dyn WxWidget, title: &str, message: &str, action: Optio
         .with_size(width, height)
         .with_style(DialogStyle::DefaultDialogStyle | DialogStyle::ResizeBorder)
         .build();
+    super::motion::install_dialog(dialog);
     dialog.set_background_color(theme::theme().bg_app);
     dialog.set_font(&theme::font(theme::TextRole::Body));
     let outer = BoxSizer::builder(Orientation::Vertical).build();
@@ -514,6 +628,55 @@ mod tests {
         assert!(result.ends_with('…'));
         assert!(source.len() > result.len());
     }
+    #[test]
+    fn result_countdown_expires_and_restarts_for_success_and_error() {
+        let start = Instant::now();
+        assert_eq!(countdown_remaining(None, start), 0.0);
+        assert_eq!(countdown_remaining(Some(start), start), 1.0);
+        assert_eq!(
+            countdown_remaining(Some(start), start + Duration::from_secs(2)),
+            0.5
+        );
+        assert_eq!(
+            countdown_remaining(Some(start), start + Duration::from_secs(4)),
+            0.0
+        );
+        let next = start + Duration::from_secs(3);
+        assert_eq!(countdown_remaining(Some(next), next), 1.0);
+    }
+    #[cfg(windows)]
+    #[test]
+    fn hidden_result_notice_has_readable_text_details_area_and_expiring_progress() {
+        wxdragon::app::render_offscreen(|| {
+            for mode in [theme::ThemeMode::Light, theme::ThemeMode::Dark] {
+                theme::init(mode);
+                let frame = Frame::builder().with_title("hidden result layout").build();
+                frame.set_client_size(Size::new(760, 540));
+                let notice = Notice::new(Owner::Frame(frame));
+                for error in [false, true] {
+                    let full = "合成操作结果：这段正文应正常显示。\n完整原因、处理建议和可复制的说明保留。";
+                    notice.present(full, error);
+                    let label = notice.message.get_size();
+                    assert!(label.width > 0 && label.height >= notice.message.get_char_height());
+                    let point = notice.message.get_position();
+                    assert!(point.x > 0 && point.y >= 0);
+                    assert!(point.y + label.height <= notice.progress.get_position().y);
+                    assert_eq!(notice.message.get_label(), summary(full));
+                    assert_eq!(*notice.full.borrow(), full);
+                    assert!(notice.progress.get_size().width > 0);
+                    assert!(notice.timer.borrow().as_ref().unwrap().is_running());
+                    let start = notice.started.get().unwrap();
+                    notice.tick(start + Duration::from_secs(2));
+                    assert!(notice.panel.is_shown());
+                    notice.tick(start + Duration::from_secs(4));
+                    assert!(!notice.panel.is_shown());
+                    assert!(!notice.timer.borrow().as_ref().unwrap().is_running());
+                }
+                assert!(!frame.is_shown());
+                frame.destroy();
+            }
+        }).unwrap();
+    }
     #[cfg(windows)]
     #[test]
     #[ignore = "isolated hidden operation feedback controls; run with --test-threads=1"]
@@ -544,7 +707,7 @@ mod tests {
                 assert!(point.x >= anchor.get_position().x);
                 assert!(point.x + size.width <= frame.get_client_size().width);
                 notice.present("合成操作失败\n完整原因与处理建议保留在本机详情中。", true);
-                assert!(!notice.timer.borrow().as_ref().unwrap().is_running());
+                assert!(notice.timer.borrow().as_ref().unwrap().is_running());
                 assert!(notice.close.is_shown());
                 notice.dismiss();
                 assert!(!notice.panel.is_shown());

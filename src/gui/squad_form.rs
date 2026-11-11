@@ -372,6 +372,7 @@ pub(super) fn edit_checked_money(
     let accepted = dialog.show_modal() == ID_OK;
     let result = job.result.borrow().clone();
     drop(job);
+    dialog_job::finish_dialog(dialog);
     dialog.destroy();
     if accepted { result } else { None }
 }
@@ -861,6 +862,7 @@ pub(super) fn choice(parent: &Frame, title: &str, choices: &[&str]) -> Option<us
     chrome.finish();
     let ok = dialog.show_modal() == ID_OK;
     let result = if ok { selected.get() } else { None };
+    dialog_job::finish_dialog(dialog);
     dialog.destroy();
     result
 }
@@ -873,6 +875,7 @@ pub(super) fn select(parent: &Frame, title: &str, labels: Vec<String>, multi: bo
         .with_size(size.width, size.height)
         .with_style(DialogStyle::DefaultDialogStyle | DialogStyle::ResizeBorder)
         .build();
+    super::motion::install_dialog(dialog);
     dialog.set_background_color(theme::theme().bg_app);
     dialog.set_font(&theme::font(theme::TextRole::Body));
     let view = super::squad_view::selection::Selection::new(&dialog, title, labels, multi);
@@ -888,6 +891,7 @@ pub(super) fn select(parent: &Frame, title: &str, labels: Vec<String>, multi: bo
     view.accept.on_click(move |_| dialog.end_modal(ID_OK));
     let accepted = dialog.show_modal() == ID_OK;
     let result = if accepted { view.indices() } else { vec![] };
+    dialog_job::finish_dialog(dialog);
     dialog.destroy();
     result
 }
@@ -913,6 +917,7 @@ pub(super) fn prompt(parent: &Frame, title: &str, key: &str, value: &str) -> Opt
     });
     let accepted = dialog.show_modal() == ID_OK;
     let text = result.borrow().clone();
+    dialog_job::finish_dialog(dialog);
     dialog.destroy();
     if accepted { text } else { None }
 }
@@ -992,6 +997,7 @@ pub(super) fn inspect_action(
     }
     chrome.finish();
     let accepted = dialog.show_modal() == ID_OK;
+    dialog_job::finish_dialog(dialog);
     dialog.destroy();
     accepted
 }
@@ -1087,6 +1093,7 @@ mod native_review_tests {
                         &form.dialog,
                         &format!("squad-grouped-form-{width}-{suffix}"),
                     );
+                    dialog_job::finish_dialog(form.dialog);
                     form.dialog.destroy();
                     parent.destroy();
                 }

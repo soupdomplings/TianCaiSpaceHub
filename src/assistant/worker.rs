@@ -495,12 +495,16 @@ impl Worker {
         );
         Ok(())
     }
-    pub(super) async fn turn(&mut self, text: &str) -> Result<()> {
+    pub(super) async fn turn(
+        &mut self,
+        text: &str,
+        personality: personality::Personality,
+    ) -> Result<()> {
         ensure!(self.ready(), "天才搭档会话正在准备");
         self.turn_error = None;
         let params = crate::remote_control_backend::turn_start_params(
             self.thread.as_deref().context("天才搭档会话尚未就绪")?,
-            text,
+            &personality.turn_text(text),
             &[],
         );
         self.request("turn/start", params, Pending::Turn).await
@@ -583,7 +587,7 @@ impl Worker {
                         params["sandbox"] = "read-only".into();
                         params["ephemeral"] = true.into();
                         params["dynamicTools"] = tools::definitions().into();
-                        params["developerInstructions"] = tools::WORK_GUIDE.into();
+                        params["developerInstructions"] = personality::work_guide().into();
                         self.request("thread/start", params, Pending::Thread)
                             .await?;
                     }
@@ -938,7 +942,10 @@ mod tests {
         assert_eq!(start["params"]["approvalPolicy"], "never");
         assert_eq!(start["params"]["modelProvider"], "tiancai_buddy");
         assert_eq!(start["params"]["model"], "fixture-model");
-        assert_eq!(start["params"]["developerInstructions"], tools::WORK_GUIDE);
+        assert_eq!(
+            start["params"]["developerInstructions"],
+            personality::work_guide()
+        );
         assert_eq!(
             start["params"]["config"]["model_reasoning_effort"],
             "medium"
@@ -954,8 +961,11 @@ mod tests {
             )
             .await
             .unwrap();
-        for turn in ["turn-one", "turn-two"] {
-            worker.turn("请说明操作入口").await.unwrap();
+        for (turn, style) in [
+            ("turn-one", personality::Personality::Catgirl),
+            ("turn-two", personality::Personality::Girlfriend),
+        ] {
+            worker.turn("请说明操作入口", style).await.unwrap();
             let request = frame(&mut reader).await;
             assert_eq!(request["method"], "turn/start");
             assert_eq!(request["params"]["threadId"], "one-thread");
@@ -963,7 +973,7 @@ mod tests {
                 request["params"],
                 crate::remote_control_backend::turn_start_params(
                     "one-thread",
-                    "请说明操作入口",
+                    &style.turn_text("请说明操作入口"),
                     &[]
                 )
             );
@@ -1032,7 +1042,10 @@ mod tests {
                 .unwrap();
             assert!(worker.ready());
         }
-        worker.turn("测试失败提示").await.unwrap();
+        worker
+            .turn("测试失败提示", personality::Personality::Professional)
+            .await
+            .unwrap();
         let request = frame(&mut reader).await;
         worker
             .event(

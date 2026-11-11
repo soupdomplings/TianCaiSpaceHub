@@ -1,4 +1,4 @@
-//! TianGong account and built-in model actions within its model workspace.
+//! Explicitly opened TianGong built-in sharing, plus its existing forms.
 use super::{
     api::ApiClient,
     controls::{Button, ButtonKind, Choice, TextCtrl},
@@ -472,6 +472,227 @@ struct ShareFields {
     save: Button,
     selected: Rc<RefCell<BTreeSet<String>>>,
     tiles: Vec<(String, Button)>,
+}
+
+#[derive(Clone)]
+struct BuiltinSharePanel {
+    dialog: Dialog,
+    account: AccountBar,
+    models: super::controls::Choice,
+    status: StaticText,
+    read: Button,
+    prepare: Button,
+    share: Button,
+    view: Rc<RefCell<Value>>,
+}
+impl BuiltinSharePanel {
+    fn selected(&self) -> Option<Value> {
+        let index = self.models.get_selection()? as usize;
+        self.view.borrow()["models"].as_array()?.get(index).cloned()
+    }
+    fn apply(&self, view: Value) {
+        let selected = self
+            .selected()
+            .and_then(|model| model["id"].as_str().map(str::to_owned));
+        self.account.apply(view.clone());
+        self.models.clear();
+        let rows = view["models"].as_array().cloned().unwrap_or_default();
+        for model in &rows {
+            self.models
+                .append(model["name"].as_str().unwrap_or("天工内置模型"));
+        }
+        if !rows.is_empty() {
+            let index = selected
+                .and_then(|id| rows.iter().position(|model| model["id"] == id))
+                .unwrap_or(0);
+            self.models.set_selection(index as u32);
+        }
+        self.prepare.enable(!rows.is_empty());
+        self.share.enable(
+            self.models
+                .get_selection()
+                .and_then(|index| rows.get(index as usize))
+                .is_some_and(|model| model["configured"] == true),
+        );
+        self.status.set_label(if rows.is_empty() {
+            "未发现内置模型，请检查天工安装及配置。"
+        } else if view["parametersCurrent"] == true {
+            "已读取现有配置。选择模型后分享，已有配置保留。"
+        } else {
+            "可先接入原生模型，再选择客户端分享；个人登录可选。"
+        });
+        self.status.wrap(self.dialog.from_dip(520));
+        *self.view.borrow_mut() = view;
+        self.dialog.layout();
+    }
+}
+
+fn builtin_share_panel(parent: &Frame, view: Value) -> BuiltinSharePanel {
+    let dialog = Dialog::builder(parent, "天工内置模型分享")
+        .with_style(DialogStyle::DefaultDialogStyle | DialogStyle::ResizeBorder)
+        .with_size(parent.from_dip(620), parent.from_dip(370))
+        .build();
+    dialog.set_background_color(theme::theme().bg_card);
+    dialog.set_font(&theme::font(theme::TextRole::Body));
+    let col = BoxSizer::builder(Orientation::Vertical).build();
+    let account = AccountBar::new(&dialog);
+    col.add(
+        &account.panel,
+        0,
+        SizerFlag::Expand | SizerFlag::All,
+        dialog.from_dip(20),
+    );
+    let name = StaticText::builder(&dialog).with_label("内置模型").build();
+    name.set_foreground_color(theme::theme().ink_secondary);
+    col.add(
+        &name,
+        0,
+        SizerFlag::Left | SizerFlag::Right,
+        dialog.from_dip(20),
+    );
+    let models = super::controls::Choice::builder(&dialog).build();
+    col.add(
+        &models,
+        0,
+        SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Top,
+        dialog.from_dip(20),
+    );
+    let status = StaticText::builder(&dialog).build();
+    status.set_foreground_color(theme::theme().ink_secondary);
+    col.add(
+        &status,
+        1,
+        SizerFlag::Expand | SizerFlag::All,
+        dialog.from_dip(20),
+    );
+    let row = BoxSizer::builder(Orientation::Horizontal).build();
+    let read = Button::builder(&dialog)
+        .with_label("重新读取")
+        .with_kind(ButtonKind::Ghost)
+        .build();
+    read.set_name("tiangong-share-read");
+    let prepare = Button::builder(&dialog)
+        .with_label("接入原生模型")
+        .with_kind(ButtonKind::Secondary)
+        .build();
+    let share = Button::builder(&dialog)
+        .with_label("选择客户端并分享")
+        .build();
+    row.add(&read, 0, SizerFlag::Right, dialog.from_dip(8));
+    row.add(&prepare, 0, SizerFlag::Right, dialog.from_dip(8));
+    row.add_stretch_spacer(1);
+    row.add(&share, 0, SizerFlag::default(), 0);
+    col.add_sizer(
+        &row,
+        0,
+        SizerFlag::Expand | SizerFlag::All,
+        dialog.from_dip(20),
+    );
+    dialog.set_sizer(col, false);
+    let panel = BuiltinSharePanel {
+        dialog,
+        account,
+        models,
+        status,
+        read,
+        prepare,
+        share,
+        view: Default::default(),
+    };
+    panel.apply(view);
+    panel
+}
+
+/// Called only after a deliberate local assistant open request or its revealed button.
+/// Reading this panel never connects, logs in, changes credentials or shares models.
+pub(super) fn show_builtin_share(parent: &Frame, api: &ApiClient) -> bool {
+    let Some(view) = dialog_job::run(
+        parent,
+        api.clone(),
+        "读取天工内置模型",
+        "/api/desktop/tiangong-models/read",
+        json!({}),
+    ) else {
+        return false;
+    };
+    let panel = builtin_share_panel(parent, view);
+    let selection = panel.clone();
+    panel.models.on_selection_changed(move |_| {
+        selection.share.enable(
+            selection
+                .selected()
+                .is_some_and(|model| model["configured"] == true),
+        )
+    });
+    // The existing job owns all reads/preparation on this dialog, so repeated
+    // clicks cannot start overlapping writes or competing owner timers.
+    let prepare_requested = Rc::new(std::cell::Cell::new(false));
+    let requested = prepare_requested.clone();
+    let current = panel.view.clone();
+    let applied = panel.clone();
+    let job = dialog_job::bind_open(
+        panel.dialog,
+        panel.read,
+        panel.status,
+        api.clone(),
+        move || {
+            if requested.replace(false) {
+                Ok((
+                    "/api/desktop/tiangong-models/connect".into(),
+                    json!({"revision":current.borrow()["revision"],"native":true}),
+                ))
+            } else {
+                Ok(("/api/desktop/tiangong-models/read".into(), json!({})))
+            }
+        },
+        move |value| applied.apply(value),
+    );
+    let start = job.start.clone();
+    panel.prepare.on_click(move |_| {
+        prepare_requested.set(true);
+        start();
+    });
+    let start = job.start.clone();
+    let (parent, api_login) = (*parent, api.clone());
+    panel.account.login.on_click(move |_| {
+        if show(&parent, &api_login) {
+            start();
+        }
+    });
+    let api_test = api.clone();
+    panel
+        .account
+        .test
+        .on_click(move |_| show_identity_test(&parent, &api_test));
+    let (share_panel, api_share, start) = (panel.clone(), api.clone(), job.start.clone());
+    panel.share.on_click(move |_| {
+        if let Some(model) = share_panel.selected() {
+            if share(&parent, &api_share, &model) {
+                start();
+            }
+        }
+    });
+    panel.dialog.centre();
+    panel.dialog.show_modal();
+    drop(job);
+    panel.dialog.destroy();
+    true
+}
+
+#[cfg(all(test, windows))]
+#[test]
+fn hidden_builtin_share_panel_reads_state_without_preparing_or_changing_existing_shares() {
+    wxdragon::app::render_offscreen(|| {
+        theme::init(theme::ThemeMode::Light);
+        let parent=Frame::builder().with_title("hidden builtin share state").build();
+        let view=json!({"revision":"unchanged","models":[{"id":"tiangong-builtin","name":"内置模型","configured":false}],
+            "shares":[{"modelId":"tiangong-builtin","targetId":"existing-target"}]});
+        let panel=builtin_share_panel(&parent,view.clone());
+        assert_eq!(*panel.view.borrow(),view);
+        assert!(panel.prepare.is_enabled()); assert!(!panel.share.is_enabled());
+        assert!(!panel.dialog.is_shown());
+        panel.dialog.destroy(); parent.destroy();
+    }).unwrap();
 }
 fn share_fields(
     parent: &Frame,

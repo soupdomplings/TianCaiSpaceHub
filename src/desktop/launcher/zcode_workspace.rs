@@ -41,7 +41,7 @@ struct ModelIdentity {
     model_id: String,
 }
 struct WorkspaceSession {
-    task: JoinHandle<()>,
+    task: Option<JoinHandle<()>>,
     options: watch::Sender<WorkspaceOptions>,
     socket: Url,
     executable: PathBuf,
@@ -121,7 +121,10 @@ pub(super) async fn open(path: &Path, config: AppConfig) -> Result<Value> {
             .context("未找到 ZCode 程序，请到接入设置选择程序位置")?;
     let mut previous = SESSION.lock().await;
     if let Some(session) = previous.as_ref()
-        && !session.task.is_finished()
+        && session
+            .task
+            .as_ref()
+            .is_some_and(|task| !task.is_finished())
         && session.executable == executable
     {
         let mut cdp = Cdp::connect(&session.socket, "ZCode").await?;
@@ -149,27 +152,50 @@ pub(super) async fn open(path: &Path, config: AppConfig) -> Result<Value> {
         let _ = cdp.socket.close(None).await;
         return operation;
     }
-    if let Some(session) = previous.take() {
-        session.task.abort();
-    }
-    let program = executable.clone();
-    ensure!(
-        !tokio::task::spawn_blocking(move || running(&program)).await??,
-        "ZCode 已在运行，当前任务和草稿已保留；首次增强启动请正常退出 ZCode，再从 Hub 启动"
-    );
-    let port = {
-        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
-        listener.local_addr()?.port()
+    // A slow first boot can reach the login page after our bounded wait. Keep
+    // the socket belonging to this Hub launch so Retry can finish preparing it
+    // without treating it as an unrelated instance or discarding its drafts.
+    let reused = if let Some(session) = previous.as_ref().filter(|s| s.executable == executable) {
+        Cdp::connect(&session.socket, "ZCode")
+            .await
+            .ok()
+            .map(|cdp| (session.socket.clone(), cdp))
+    } else {
+        None
     };
-    let program = executable.clone();
-    tokio::task::spawn_blocking(move || start(&program, port)).await??;
-    let socket = tokio::time::timeout(Duration::from_secs(15), find_target(&executable, port))
-        .await
-        .context("ZCode 启动连接尚未就绪，请查看客户端后重试")??;
-    let mut cdp = Cdp::connect(&socket, "ZCode").await?;
-    let probe = tokio::time::timeout(Duration::from_secs(15), startup_probe(&mut cdp))
-        .await
-        .context("ZCode 启动页面尚未就绪，请查看客户端后重试")??;
+    if let Some(session) = previous.take() {
+        if let Some(task) = session.task {
+            task.abort();
+        }
+    }
+    let (socket, mut cdp) = if let Some(owned) = reused {
+        owned
+    } else {
+        let program = executable.clone();
+        ensure!(
+            !tokio::task::spawn_blocking(move || running(&program)).await??,
+            "ZCode 已在运行，当前任务和草稿已保留；首次增强启动请正常退出 ZCode，再从 Hub 启动"
+        );
+        let port = {
+            let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
+            listener.local_addr()?.port()
+        };
+        let program = executable.clone();
+        tokio::task::spawn_blocking(move || start(&program, port)).await??;
+        let socket = tokio::time::timeout(Duration::from_secs(15), find_target(&executable, port))
+            .await
+            .context("ZCode 启动连接尚未就绪，请查看客户端后重试")??;
+        let cdp = Cdp::connect(&socket, "ZCode").await?;
+        (socket, cdp)
+    };
+    let (options_tx, options_rx) = watch::channel(options);
+    *previous = Some(WorkspaceSession {
+        task: None,
+        options: options_tx,
+        socket: socket.clone(),
+        executable: executable.clone(),
+    });
+    let probe = startup_probe(&mut cdp).await?;
     let entry = probe["module"]
         .as_str()
         .context("当前 ZCode 启动脚本暂不兼容，已保留普通启动")?;
@@ -188,7 +214,6 @@ pub(super) async fn open(path: &Path, config: AppConfig) -> Result<Value> {
         );
     }
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
-    let (options_tx, options_rx) = watch::channel(options);
     let task = tokio::spawn(async move {
         let outcome = tokio::time::timeout(READY_TIMEOUT, async {
             cdp.call("Network.enable", json!({})).await?;
@@ -221,12 +246,7 @@ pub(super) async fn open(path: &Path, config: AppConfig) -> Result<Value> {
         }
         cleanup(&mut cdp).await;
     });
-    *previous = Some(WorkspaceSession {
-        task,
-        options: options_tx,
-        socket,
-        executable,
-    });
+    previous.as_mut().unwrap().task = Some(task);
     drop(previous);
     ready_rx
         .await
@@ -258,6 +278,7 @@ fn safe_to_reload(probe: &Value) -> bool {
 }
 
 async fn startup_probe(cdp: &mut Cdp) -> Result<Value> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     loop {
         let probe = cdp.evaluate(PROBE).await?;
         if probe["module"].is_string()
@@ -265,7 +286,26 @@ async fn startup_probe(cdp: &mut Cdp) -> Result<Value> {
         {
             return Ok(probe);
         }
+        ensure!(
+            probe["oauthPending"] != true,
+            "ZCode 正在处理登录，请完成或取消登录后重试；当前页面已保留"
+        );
+        if tokio::time::Instant::now() >= deadline {
+            anyhow::bail!("{}", startup_wait_message(&probe));
+        }
         tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+fn startup_wait_message(probe: &Value) -> &'static str {
+    if probe["databaseStarting"] == true {
+        "ZCode 正在准备本机数据，请等客户端准备完成后再点启动"
+    } else if probe["startupLoading"] == true {
+        "ZCode 正在恢复启动状态，请稍后再点启动；当前页面已保留"
+    } else if !probe["module"].is_string() {
+        "ZCode 尚未加载主界面脚本，请查看客户端启动提示后重试"
+    } else {
+        "ZCode 当前页面尚不支持增强启动，请查看客户端提示；当前页面和输入已保留"
     }
 }
 
@@ -494,9 +534,14 @@ const PROBE: &str = r#"(() => {
   installed: state?.version === 1,
   available: state?.available === true,
   workspaceOpen: !!document.querySelector('[data-testid="sidebar-primary-navigation"],[data-testid="sidebar-task-list-region"],[data-testid="chat-model-select-trigger"],[data-testid="composer-provider-trigger"]'),
-  loginOpen: !!document.querySelector('[data-testid="login-use-api-key-button"]'),
+  // The official header is rendered before OAuth provider discovery finishes.
+  // Waiting for its API-key button makes a slow provider lookup look like an
+  // unsupported page even though the untouched native login gate is present.
+  loginOpen: !!document.querySelector('[data-testid="login-use-api-key-button"],main > section header [role="img"][aria-label="ZCode"]'),
   oauthPending: !!document.querySelector('[data-testid="oauth-cancel"]'),
-  hasInput: [...document.querySelectorAll('textarea,input:not([type="hidden"]),[contenteditable="true"]')].some(e => !!(e.value ?? e.textContent)?.trim()),
+  hasInput: [...document.querySelectorAll('textarea,input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([type="button"]):not([type="submit"]),[contenteditable="true"]')].some(e => !!(e.value ?? e.textContent)?.trim()),
+  startupLoading: !!document.querySelector('[data-testid="root-startup-loading"]'),
+  databaseStarting: !!document.querySelector('[data-testid="database-startup-status"],[data-testid="database-startup-silent"]'),
   module: module ?? null,
   page: location.href
  };

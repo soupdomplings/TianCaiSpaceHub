@@ -1,6 +1,7 @@
 //! Common account dialog chrome. Business controls stay native and local to
 //! their feature; only the body scrolls, keeping feedback and actions visible.
 use super::{controls::paint_surface, theme};
+use std::{cell::Cell, rc::Rc};
 use wxdragon::prelude::*;
 
 pub(super) struct SquadDialog {
@@ -9,6 +10,7 @@ pub(super) struct SquadDialog {
     pub content: BoxSizer,
     pub status: StaticText,
     pub actions: BoxSizer,
+    pub alive: Rc<Cell<bool>>,
 }
 
 impl SquadDialog {
@@ -31,6 +33,7 @@ impl SquadDialog {
             .with_size(width, height)
             .with_style(DialogStyle::DefaultDialogStyle | DialogStyle::ResizeBorder)
             .build();
+        super::motion::install_dialog(dialog);
         let t = theme::theme();
         dialog.set_background_color(t.bg_app);
         dialog.set_font(&theme::font(theme::TextRole::Body));
@@ -99,13 +102,20 @@ impl SquadDialog {
             body.fit_inside();
             event.skip(true);
         });
+        let alive = super::dialog_job::track_dialog(dialog);
         Self {
             dialog,
             body,
             content,
             status,
             actions,
+            alive,
         }
+    }
+    pub fn show_modal(&self) -> i32 {
+        let result = self.dialog.show_modal();
+        super::dialog_job::finish_dialog(self.dialog);
+        result
     }
 
     /// Return the card as the parent for all of its controls.

@@ -62,6 +62,7 @@ pub(super) struct WorkBuddyTab {
     reload_button: Button,
     start_button: Button,
     status: StaticText,
+    loading: super::loading::LoadingIndicator,
     in_flight: Arc<AtomicBool>,
     refresh_pending: Rc<RefCell<super::configuration_refresh::PendingRefresh>>,
     provider_options: WorkBuddyProviderOptions,
@@ -262,6 +263,7 @@ pub(super) fn create_with_settings(
         reload_button,
         start_button,
         status,
+        loading: super::loading::LoadingIndicator::new(&page, status),
         in_flight: Arc::new(AtomicBool::new(false)),
         refresh_pending: Default::default(),
         provider_options: Rc::new(RefCell::new(Vec::new())),
@@ -472,6 +474,7 @@ pub(super) fn apply_result(
 ) {
     // Only release the busy state after applying the reply on the GUI thread.
     tab.in_flight.store(false, Ordering::SeqCst);
+    tab.loading.finish();
     let queued = tab.refresh_pending.borrow_mut().take();
     if matches!(&result, WorkBuddyActionResult::Refresh(..)) && queued.is_some() {
         refresh_configuration(tab, api, gui_tx, false, queued.unwrap());
@@ -1084,7 +1087,7 @@ fn begin_action(tab: &WorkBuddyTab, message: &str) -> bool {
     if tab.in_flight.swap(true, Ordering::SeqCst) {
         return false;
     }
-    tab.status.set_label(message);
+    tab.loading.start(message);
     update_controls(tab);
     true
 }

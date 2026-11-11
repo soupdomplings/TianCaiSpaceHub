@@ -169,40 +169,22 @@ pub(super) fn invoices(frame: &Frame, api: ApiClient, scope: Value) {
     let data: Rc<RefCell<Value>> = Default::default();
     let rows: Rc<RefCell<Vec<Value>>> = Default::default();
     let page = Rc::new(Cell::new(1usize));
-    let (a, f, d, r, s, p) = (
-        api.clone(),
-        *frame,
-        data.clone(),
-        rows.clone(),
-        scope.clone(),
-        page.clone(),
-    );
-    let load = Rc::new(move || {
-        let query = vec![
-            ("business_unit_id", s["business_unit_id"].to_string()),
-            ("department_id", s["department_id"].to_string()),
-        ];
-        let Some(mut value) = dialog_job::run(
-            &f,
-            a.clone(),
-            "读取发票",
-            "/api/desktop/squad/request",
-            json!({"method":"GET","path":"/invoices/overview","query":query}),
-        ) else {
+    let loading = Rc::new(Cell::new(false));
+    let (pending, p, r) = (loading.clone(), page.clone(), rows.clone());
+    let set_busy = Rc::new(move |busy: bool| {
+        pending.set(busy);
+        for button in [add, details, files, cancel, remove] {
+            button.enable(!busy);
+        }
+        previous.enable(!busy && p.get() > 1);
+        next.enable(!busy && r.borrow().len() >= 50);
+    });
+    let (d, r, p, busy) = (data.clone(), rows.clone(), page.clone(), set_busy.clone());
+    let apply = Rc::new(move |value: Option<Value>, page_number: usize| {
+        let Some(value) = value else {
+            busy(false);
             return;
         };
-        if p.get() > 1 {
-            let Some(items) = dialog_job::run(
-                &f,
-                a.clone(),
-                "读取申请记录",
-                "/api/desktop/squad/request",
-                json!({"method":"GET","path":"/invoices","query":[["business_unit_id",s["business_unit_id"].to_string()],["department_id",s["department_id"].to_string()],["page",p.get().to_string()]]}),
-            ) else {
-                return;
-            };
-            value["applications"] = items;
-        }
         let sources = value["sources"].as_array().cloned().unwrap_or_default();
         let sum =
             |key: &str| sources.iter().filter_map(|v| v[key].as_i64()).sum::<i64>() as f64 / 100.;
@@ -237,11 +219,66 @@ pub(super) fn invoices(frame: &Frame, api: ApiClient, scope: Value) {
                 table.set_item_text_by_column(i as i64, j as i32 + 1, text);
             }
         }
-        previous.enable(p.get() > 1);
-        next.enable(items.len() >= 50);
-        status.set_label(&format!("第 {} 页 · {} 条申请", p.get(), items.len()));
+        p.set(page_number);
+        status.set_label(&format!("第 {page_number} 页 · {} 条申请", items.len()));
         *r.borrow_mut() = items;
         *d.borrow_mut() = value;
+        busy(false);
+    });
+    let (a, f, s, pending, busy) = (
+        api.clone(),
+        *frame,
+        scope.clone(),
+        loading.clone(),
+        set_busy.clone(),
+    );
+    let load = Rc::new(move |page_number: usize| {
+        if pending.get() {
+            return;
+        }
+        let query = vec![
+            ("business_unit_id", s["business_unit_id"].to_string()),
+            ("department_id", s["department_id"].to_string()),
+        ];
+        let (api, scope, finished) = (a.clone(), s.clone(), apply.clone());
+        busy(true);
+        if !dialog_job::run_async(
+            &f,
+            a.clone(),
+            "读取发票",
+            "/api/desktop/squad/request",
+            json!({"method":"GET","path":"/invoices/overview","query":query}),
+            move |value| {
+                let Some(mut value) = value else {
+                    finished(None, page_number);
+                    return;
+                };
+                if page_number == 1 {
+                    finished(Some(value), page_number);
+                    return;
+                }
+                let done = finished.clone();
+                if !dialog_job::run_async(
+                    &f,
+                    api,
+                    "读取申请记录",
+                    "/api/desktop/squad/request",
+                    json!({"method":"GET","path":"/invoices","query":[["business_unit_id",scope["business_unit_id"].to_string()],["department_id",scope["department_id"].to_string()],["page",page_number.to_string()]]}),
+                    move |items| {
+                        if let Some(items) = items {
+                            value["applications"] = items;
+                            done(Some(value), page_number);
+                        } else {
+                            done(None, page_number);
+                        }
+                    },
+                ) {
+                    finished(None, page_number);
+                }
+            },
+        ) {
+            busy(false);
+        }
     });
     let r = rows.clone();
     let selected = Rc::new(move || {
@@ -252,16 +289,17 @@ pub(super) fn invoices(frame: &Frame, api: ApiClient, scope: Value) {
             r.borrow().get(i as usize).cloned()
         }
     });
-    let (a, f, d, s, l) = (
+    let (a, f, d, s, l, p) = (
         api.clone(),
         *frame,
         data.clone(),
         scope.clone(),
         load.clone(),
+        page.clone(),
     );
     add.on_click(move |_| {
         apply_invoice(&f, a.clone(), &s, &d.borrow());
-        l();
+        l(p.get());
     });
     let (s, f) = (selected.clone(), *frame);
     details.on_click(move |_| {
@@ -270,8 +308,47 @@ pub(super) fn invoices(frame: &Frame, api: ApiClient, scope: Value) {
         }
     });
     for (operation, b) in [("cancel", cancel), ("remove", remove)] {
-        let (s, a, f, l) = (selected.clone(), api.clone(), *frame, load.clone());
-        b.on_click(move |_|{let Some(row)=s()else{return;};let required=if operation=="cancel"{"pending"}else{"rejected"};if row["status"]!=required{super::super::show_info(&f,if operation=="cancel"{"只能撤销待处理申请"}else{"只能删除已退回的申请"});return;}if super::super::external_import::confirm(&f,if operation=="cancel"{"撤销此开票申请？"}else{"删除此退回申请？"}){dialog_job::run(&f,a.clone(),"更新开票申请","/api/desktop/squad/request",json!({"method":if operation=="cancel"{"PATCH"}else{"DELETE"},"path":format!("/invoices/{}",row["id"]),"body":{"status":"cancelled"}}));l();}});
+        let (s, a, f, l, p, busy) = (
+            selected.clone(),
+            api.clone(),
+            *frame,
+            load.clone(),
+            page.clone(),
+            set_busy.clone(),
+        );
+        b.on_click(move |_| {
+            let Some(row) = s() else { return };
+            let required = if operation == "cancel" { "pending" } else { "rejected" };
+            if row["status"] != required {
+                super::super::show_info(
+                    &f,
+                    if operation == "cancel" { "只能撤销待处理申请" } else { "只能删除已退回的申请" },
+                );
+                return;
+            }
+            if super::super::external_import::confirm(
+                &f,
+                if operation == "cancel" { "撤销此开票申请？" } else { "删除此退回申请？" },
+            ) {
+                let (refresh, page, done) = (l.clone(), p.clone(), busy.clone());
+                busy(true);
+                if !dialog_job::run_async(
+                    &f,
+                    a.clone(),
+                    "更新开票申请",
+                    "/api/desktop/squad/request",
+                    json!({"method":if operation=="cancel"{"PATCH"}else{"DELETE"},"path":format!("/invoices/{}",row["id"]),"body":{"status":"cancelled"}}),
+                    move |result| {
+                        done(false);
+                        if result.is_some() {
+                            refresh(page.get());
+                        }
+                    },
+                ) {
+                    busy(false);
+                }
+            }
+        });
     }
     let (s, a, f) = (selected.clone(), api.clone(), *frame);
     files.on_click(move |_| {
@@ -311,13 +388,12 @@ pub(super) fn invoices(frame: &Frame, api: ApiClient, scope: Value) {
     for (delta, b) in [(-1i32, previous), (1, next)] {
         let (p, l) = (page.clone(), load.clone());
         b.on_click(move |_| {
-            p.set((p.get() as i32 + delta).max(1) as usize);
-            l();
+            l((p.get() as i32 + delta).max(1) as usize);
         });
     }
     chrome.finish();
-    load();
-    dialog.show_modal();
+    load(1);
+    chrome.show_modal();
     dialog.destroy();
 }
 fn apply_invoice(frame: &Frame, api: ApiClient, scope: &Value, overview: &Value) {
@@ -472,16 +548,18 @@ pub(super) fn download(frame: &Frame, api: ApiClient, path: &str, name: &str) {
         .with_default_file(name)
         .with_style(FileDialogStyle::Save | FileDialogStyle::OverwritePrompt)
         .build();
-    if picker.show_modal() == ID_OK {
-        if let Some(destination) = picker.get_path() {
-            dialog_job::run(
-                frame,
-                api,
-                "保存文件",
-                "/api/desktop/squad/download",
-                json!({"path":path,"destination":destination}),
-            );
-        }
-    }
+    let destination = (picker.show_modal() == ID_OK)
+        .then(|| picker.get_path())
+        .flatten();
     picker.destroy();
+    if let Some(destination) = destination {
+        dialog_job::run_async(
+            frame,
+            api,
+            "保存文件",
+            "/api/desktop/squad/download",
+            json!({"path":path,"destination":destination}),
+            |_| {},
+        );
+    }
 }

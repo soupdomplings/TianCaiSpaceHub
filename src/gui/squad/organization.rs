@@ -16,9 +16,11 @@ fn workspace_dialog(frame: &Frame, title: &str, preferred: Size) -> Dialog {
         .with_size(size.width, size.height)
         .with_style(DialogStyle::DefaultDialogStyle | DialogStyle::ResizeBorder)
         .build();
+    super::super::motion::install_dialog(dialog);
     dialog.set_background_color(theme::theme().bg_app);
     dialog.set_foreground_color(theme::theme().ink_primary);
     dialog.set_font(&theme::font(theme::TextRole::Body));
+    dialog_job::track_dialog(dialog);
     dialog
 }
 
@@ -63,6 +65,7 @@ pub(super) fn show(
     let dialog = workspace_dialog(frame, &title, Size::new(1120, 740));
     let entries = sections(menu);
     if entries.is_empty() {
+        dialog_job::finish_dialog(dialog);
         dialog.destroy();
         return;
     }
@@ -168,7 +171,9 @@ pub(super) fn show(
         let u = ui.clone();
         b.on_click(move |_| {
             u.action(action);
-            u.load();
+            if u.ready.get() {
+                u.load();
+            }
         });
     }
     let u = ui.clone();
@@ -218,6 +223,7 @@ pub(super) fn show(
     dialog.centre();
     dialog.show_modal();
     timer.stop();
+    dialog_job::finish_dialog(dialog);
     dialog.destroy();
 }
 impl Workspace {
@@ -527,15 +533,64 @@ impl Workspace {
             forms::inspect_money(&self.frame, self.section().name, &row, self.money);
         }
     }
-    fn save(&self, title: &str, method: &str, path: &str, fields: Value) -> Option<Value> {
-        let mut options = enum_options();
+    fn action_request(
+        &self,
+        title: &str,
+        body: Value,
+        finished: impl FnOnce(&Self, Value) + 'static,
+    ) {
+        let ui = self.clone();
+        let serial = self.serial.get();
+        self.ready.set(false);
+        self.enable_actions();
+        if !dialog_job::run_async(
+            &self.frame,
+            self.api.clone(),
+            title,
+            "/api/desktop/squad/request",
+            body,
+            move |value| {
+                if ui.serial.get() != serial {
+                    return;
+                }
+                ui.ready.set(true);
+                ui.enable_actions();
+                if let Some(value) = value {
+                    finished(&ui, value);
+                }
+                if ui.ready.get() {
+                    ui.load();
+                }
+            },
+        ) {
+            self.ready.set(true);
+            self.enable_actions();
+        }
+    }
+    fn save(&self, title: &str, method: &str, path: &str, fields: Value) {
         if fields.get("recipient_user_ids").is_some() {
-            let members = query(
-                &self.frame,
-                self.api.clone(),
+            let (title, method, path) = (title.to_owned(), method.to_owned(), path.to_owned());
+            self.action_request(
                 "读取接收成员",
-                &format!("{}/memberships", self.prefix()),
-            )?;
+                json!({"method":"GET","path":format!("{}/memberships", self.prefix())}),
+                move |ui, members| {
+                    ui.save_loaded(&title, &method, &path, fields, Some(members));
+                },
+            );
+        } else {
+            self.save_loaded(title, method, path, fields, None);
+        }
+    }
+    fn save_loaded(
+        &self,
+        title: &str,
+        method: &str,
+        path: &str,
+        fields: Value,
+        members: Option<Value>,
+    ) {
+        let mut options = enum_options();
+        if let Some(members) = members {
             let mut choices = Vec::new();
             for row in members
                 .as_array()
@@ -578,16 +633,14 @@ impl Workspace {
             fields,
             options,
             self.money,
-        )
+        );
     }
-    fn send(&self, title: &str, method: &str, path: &str, body: Value) -> Option<Value> {
-        dialog_job::run(
-            &self.frame,
-            self.api.clone(),
+    fn send(&self, title: &str, method: &str, path: &str, body: Value) {
+        self.action_request(
             title,
-            "/api/desktop/squad/request",
             json!({"method":method,"path":path,"body":body}),
-        )
+            |_, _| {},
+        );
     }
     fn action(&self, action: &str) {
         let section = self.section();
@@ -618,27 +671,20 @@ impl Workspace {
             ("departments", "batch") => {
                 reorder_departments(&self.frame, self.api.clone(), &prefix, &self.rows.borrow())
             }
-            ("memberships" | "member-limit-details", "batch") => batch_members(
-                &self.frame,
-                self.api.clone(),
-                &prefix,
-                self.unit["can_manage"] == true,
-                self.money,
-            ),
+            ("memberships" | "member-limit-details", "batch") => batch_members(self),
             ("memberships" | "department-admins", "add") => {
-                let Some(user) = choose_user(&self.frame, self.api.clone(), &prefix) else {
+                let Some(term) = forms::prompt(&self.frame, "查找成员", "query", "") else {
                     return;
                 };
-                let Some(department) = choose_department(&self.frame, self.api.clone(), &prefix)
-                else {
-                    return;
-                };
-                self.send(
-                    "加入组织",
-                    "POST",
-                    &path,
-                    json!({"user_id":user,"department_id":department}),
-                );
+                self.action_request("查找成员", json!({"method":"GET","path":format!("{prefix}/member-candidates"),"query":[["query",term],["limit","500"]]}), move |ui, candidates| {
+                    let rows = candidates.as_array().or_else(|| candidates["items"].as_array()).cloned().unwrap_or_default();
+                    let Some(user) = choose(&ui.frame, "选择成员", &rows, "email").map(|row| row["user_id"].clone()) else { return };
+                    ui.action_request("读取部门", json!({"method":"GET","path":format!("{prefix}/departments")}), move |ui, departments| {
+                        let rows = departments.as_array().or_else(|| departments["items"].as_array()).cloned().unwrap_or_default();
+                        let Some(department) = choose(&ui.frame, "选择部门", &rows, "name").map(|row| row["id"].clone()) else { return };
+                        ui.send("加入组织", "POST", &path, json!({"user_id":user,"department_id":department}));
+                    });
+                });
             }
             ("memberships", "remove") if !row.is_null() => {
                 if super::super::external_import::confirm(&self.frame, "移除此组织成员？") {
@@ -677,7 +723,7 @@ impl Workspace {
                 self.save("结算规则","PUT",&format!("{prefix}/settlement/policy"),json!({"period_type":row["period_type"].as_str().unwrap_or("monthly"),"boundary_day":row["boundary_day"].as_i64().unwrap_or(1),"timezone":row["timezone"].as_str().unwrap_or("Asia/Shanghai"),"grace_days":row["grace_days"].as_i64().unwrap_or(7),"enforcement_enabled":row["enforcement_enabled"].as_bool().unwrap_or(false)}));
             }
             ("settlement", "more") if !row.is_null() && section.rows == "lines" => {
-                statement(&self.frame, self.api.clone(), &self.unit, &row)
+                statement(self, &row)
             }
             ("settlement/prepayment", "edit") if !row.is_null() && data["can_adjust"] == true => {
                 self.save("调整组织财务","POST",&format!("{path}/adjust"),json!({"kind":"balance","department_id":row["department_id"],"amount_cents":0,"reason":"","request_key":uuid::Uuid::new_v4().to_string()}));
@@ -699,7 +745,10 @@ pub(super) fn pick(data: &Value, keys: &[&str]) -> Value {
         .collect::<serde_json::Map<String, Value>>()
         .into()
 }
-fn statement(frame: &Frame, api: ApiClient, unit: &Value, row: &Value) {
+fn statement(ui: &Workspace, row: &Value) {
+    let frame = &ui.frame;
+    let api = ui.api.clone();
+    let unit = &ui.unit;
     let Some(id) = row["statement_id"].as_u64() else {
         return;
     };
@@ -719,10 +768,13 @@ fn statement(frame: &Frame, api: ApiClient, unit: &Value, row: &Value) {
     };
     match action["id"].as_u64() {
         Some(0) => {
-            if let Some(value) = query(frame, api, "账单明细", &format!("{prefix}/statements/{id}"))
-            {
-                forms::inspect(frame, "账单明细", &value);
-            }
+            ui.action_request(
+                "账单明细",
+                json!({"method":"GET","path":format!("{prefix}/statements/{id}")}),
+                |ui, value| {
+                    forms::inspect(&ui.frame, "账单明细", &value);
+                },
+            );
         }
         Some(1) => finance::download(
             frame,
@@ -740,14 +792,9 @@ fn statement(frame: &Frame, api: ApiClient, unit: &Value, row: &Value) {
             }
         }
         Some(3) => {
-            let Some(wallets) = query(
-                frame,
-                api.clone(),
-                "读取预存余额",
-                &format!("{prefix}/prepayment"),
-            ) else {
-                return;
-            };
+            let row = row.clone();
+            ui.action_request("读取预存余额", json!({"method":"GET","path":format!("{prefix}/prepayment")}), move |ui, wallets| {
+            let frame = &ui.frame;
             let rows = wallets["wallets"].as_array().cloned().unwrap_or_default();
             let Some(wallet) = choose(frame, "选择抵扣资金的部门", &rows, "department_name")
             else {
@@ -770,14 +817,9 @@ fn statement(frame: &Frame, api: ApiClient, unit: &Value, row: &Value) {
                     amount as f64 / 100.
                 ),
             ) {
-                dialog_job::run(
-                    frame,
-                    api,
-                    "预存抵扣",
-                    "/api/desktop/squad/request",
-                    json!({"method":"POST","path":format!("{prefix}/prepayment/repay"),"body":body}),
-                );
+                ui.send("预存抵扣", "POST", &format!("{prefix}/prepayment/repay"), body);
             }
+            });
         }
         Some(4) => finance::invoices(
             frame,
@@ -809,6 +851,7 @@ fn edit_allocation(frame: &Frame, api: ApiClient, path: &str, data: &Value) {
     dialog.centre();
     dialog.show_modal();
     drop(job);
+    dialog_job::finish_dialog(dialog);
     dialog.destroy();
 }
 pub(super) fn enum_options() -> std::collections::BTreeMap<String, Vec<(String, Value)>> {
@@ -869,28 +912,6 @@ pub(super) fn enum_options() -> std::collections::BTreeMap<String, Vec<(String, 
     })
     .collect()
 }
-fn choose_department(frame: &Frame, api: ApiClient, prefix: &str) -> Option<Value> {
-    let data = query(frame, api, "读取部门", &format!("{prefix}/departments"))?;
-    choose(
-        frame,
-        "选择部门",
-        data.as_array().or_else(|| data["items"].as_array())?,
-        "name",
-    )
-    .map(|r| r["id"].clone())
-}
-fn choose_user(frame: &Frame, api: ApiClient, prefix: &str) -> Option<Value> {
-    let query_text = forms::prompt(frame, "查找成员", "query", "")?;
-    let data = dialog_job::run(
-        frame,
-        api,
-        "查找成员",
-        "/api/desktop/squad/request",
-        json!({"method":"GET","path":format!("{prefix}/member-candidates"),"query":[["query",query_text],["limit","500"]]}),
-    )?;
-    let rows = data.as_array().or_else(|| data["items"].as_array())?;
-    choose(frame, "选择成员", rows, "email").map(|r| r["user_id"].clone())
-}
 pub(super) fn choose(frame: &Frame, title: &str, rows: &[Value], name: &str) -> Option<Value> {
     if rows.is_empty() {
         super::super::show_info(frame, "没有可选条目");
@@ -933,6 +954,7 @@ fn member(
     dialog.centre();
     if !editable {
         dialog.show_modal();
+        dialog_job::finish_dialog(dialog);
         dialog.destroy();
         return;
     }
@@ -944,73 +966,88 @@ fn member(
             v.status.set_label("");
             return;
         }
-        let Some((suffix, _)) = v.sections.get(index) else {
+        let Some(&(suffix, _)) = v.sections.get(index) else {
             return;
         };
         let path = format!("{b}/{suffix}");
-        let data = if *suffix == "profile" {
-            r.clone()
-        } else {
-            let Some(data) = query(&f, a.clone(), "读取成员资料", &path) else {
-                v.save.enable(false);
-                return;
-            };
-            data
-        };
-        let mut options = enum_options();
-        let fields = match *suffix {
-            "profile" => json!({"username":data["username"]}),
-            "balance" => json!({"balance":data["balance"]}),
-            "limits" => {
-                let mut fields = pick(
+        let populated = v.clone();
+        let loaded_path = path.clone();
+        let populate = move |data: Value| {
+            let v = populated;
+            let path = loaded_path;
+            let mut options = enum_options();
+            let fields = match suffix {
+                "profile" => json!({"username":data["username"]}),
+                "balance" => json!({"balance":data["balance"]}),
+                "limits" => {
+                    let mut fields = pick(
+                        &data,
+                        &[
+                            "daily_enabled",
+                            "daily_limit",
+                            "weekly_enabled",
+                            "weekly_limit",
+                            "monthly_enabled",
+                            "monthly_limit",
+                            "gradient",
+                        ],
+                    );
+                    if !data["updated_at"].is_null() {
+                        fields["expected_updated_at"] = data["updated_at"].clone();
+                    }
+                    fields
+                }
+                "menu-access" => pick(
                     &data,
                     &[
-                        "daily_enabled",
-                        "daily_limit",
-                        "weekly_enabled",
-                        "weekly_limit",
-                        "monthly_enabled",
-                        "monthly_limit",
-                        "gradient",
+                        "can_view_structure",
+                        "can_view_billing",
+                        "can_view_accounts",
                     ],
-                );
-                if !data["updated_at"].is_null() {
-                    fields["expected_updated_at"] = data["updated_at"].clone();
+                ),
+                _ => {
+                    options.insert(
+                        "membership_id".into(),
+                        data["memberships"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .map(|m| {
+                                (
+                                    m["department_name"].as_str().unwrap_or("组织部门").into(),
+                                    m["id"].clone(),
+                                )
+                            })
+                            .collect(),
+                    );
+                    json!({"membership_id":data["active_department_membership_id"],"locked":data["control_mode"] == "admin_locked","reason":data["lock_reason"].as_str().unwrap_or("")})
                 }
-                fields
-            }
-            "menu-access" => pick(
-                &data,
-                &[
-                    "can_view_structure",
-                    "can_view_billing",
-                    "can_view_accounts",
-                ],
-            ),
-            _ => {
-                options.insert(
-                    "membership_id".into(),
-                    data["memberships"]
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .map(|m| {
-                            (
-                                m["department_name"].as_str().unwrap_or("组织部门").into(),
-                                m["id"].clone(),
-                            )
-                        })
-                        .collect(),
-                );
-                json!({"membership_id":data["active_department_membership_id"],"locked":data["control_mode"] == "admin_locked","reason":data["lock_reason"].as_str().unwrap_or("")})
-            }
+            };
+            v.populate(index, &path, &fields, &options);
+            v.status.set_label(if suffix == "balance" {
+                "金额单位：人民币"
+            } else {
+                ""
+            });
         };
-        v.populate(index, &path, &fields, &options);
-        v.status.set_label(if *suffix == "balance" {
-            "金额单位：人民币"
+        if suffix == "profile" {
+            populate(r.clone());
         } else {
-            ""
-        });
+            v.set_loading(true);
+            let loaded = v.clone();
+            if !query_async(&f, a.clone(), "读取成员资料", &path, move |data| {
+                loaded.set_loading(false);
+                if let Some(data) = data {
+                    populate(data);
+                } else {
+                    loaded
+                        .status
+                        .set_label("未能读取成员资料，可重新选择后重试");
+                }
+            }) {
+                v.set_loading(false);
+            }
+        }
     });
     let l = load.clone();
     view.on_select(move |i| l(i, false));
@@ -1059,16 +1096,26 @@ fn member(
         );
         button.on_click(move |_| {
             if super::super::external_import::confirm(&f, message) {
-                if dialog_job::run(
+                let loaded = l.clone();
+                let selected = v.clone();
+                v.set_loading(true);
+                v.status.set_label("正在更新成员资料…");
+                if !dialog_job::run_async(
                     &f,
                     a.clone(),
                     "更新成员资料",
                     "/api/desktop/squad/request",
                     json!({"method":method,"path":format!("{b}/{suffix}"),"body":{}}),
-                )
-                .is_some()
-                {
-                    l(v.current(), true);
+                    move |result| {
+                        selected.set_loading(false);
+                        selected.status.set_label("");
+                        if result.is_some() {
+                            loaded(selected.current(), true);
+                        }
+                    },
+                ) {
+                    v.set_loading(false);
+                    v.status.set_label("");
                 }
             }
         });
@@ -1076,6 +1123,7 @@ fn member(
     load(0, false);
     dialog.show_modal();
     drop(job);
+    dialog_job::finish_dialog(dialog);
     dialog.destroy();
 }
 
@@ -1158,16 +1206,13 @@ fn reorder_departments(frame: &Frame, api: ApiClient, prefix: &str, rows: &[Valu
     chrome.finish();
     dialog.show_modal();
     drop(job);
+    dialog_job::finish_dialog(dialog);
     dialog.destroy();
 }
-fn batch_members(
-    frame: &Frame,
-    api: ApiClient,
-    prefix: &str,
-    manage: bool,
-    money: crate::desktop::squad_money::Money,
-) {
-    let actions = if manage {
+fn batch_members(ui: &Workspace) {
+    let frame = &ui.frame;
+    let prefix = ui.prefix();
+    let actions = if ui.unit["can_manage"] == true {
         vec![
             "批量加入部门",
             "批量设置限额",
@@ -1186,34 +1231,17 @@ fn batch_members(
     let Some(action) = choose(frame, "成员批量设置", &options, "name") else {
         return;
     };
-    let action = action["name"].as_str().unwrap_or("");
-    let rows = if action == "批量加入部门" {
+    let action = action["name"].as_str().unwrap_or("").to_owned();
+    let request = if action == "批量加入部门" {
         let term = forms::prompt(frame, "查找要加入的成员", "query", "");
         let Some(term) = term else {
             return;
         };
-        let Some(data) = dialog_job::run(
-            frame,
-            api.clone(),
-            "查找成员",
-            "/api/desktop/squad/request",
-            json!({"method":"GET","path":format!("{prefix}/member-candidates"),"query":[["query",term],["limit","500"]]}),
-        ) else {
-            return;
-        };
-        data.as_array()
-            .or_else(|| data["items"].as_array())
-            .cloned()
-            .unwrap_or_default()
+        json!({"method":"GET","path":format!("{prefix}/member-candidates"),"query":[["query",term],["limit","500"]]})
     } else {
-        let Some(data) = query(
-            frame,
-            api.clone(),
-            "读取成员",
-            &format!("{prefix}/memberships"),
-        ) else {
-            return;
-        };
+        json!({"method":"GET","path":format!("{prefix}/memberships")})
+    };
+    ui.action_request("读取成员", request, move |ui, data| {
         let mut rows = Vec::new();
         for row in data
             .as_array()
@@ -1225,8 +1253,14 @@ fn batch_members(
                 rows.push(row.clone());
             }
         }
-        rows
-    };
+        batch_members_loaded(ui, &action, rows);
+    });
+}
+fn batch_members_loaded(ui: &Workspace, action: &str, rows: Vec<Value>) {
+    let frame = &ui.frame;
+    let api = ui.api.clone();
+    let prefix = ui.prefix();
+    let money = ui.money;
     if rows.is_empty() {
         super::super::show_info(frame, "没有可选成员");
         return;
@@ -1252,24 +1286,19 @@ fn batch_members(
         return;
     }
     if action == "批量加入部门" {
-        let Some(department) = choose_department(frame, api.clone(), prefix) else {
-            return;
-        };
+        ui.action_request("读取部门", json!({"method":"GET","path":format!("{prefix}/departments")}), move |ui, data| {
+        let rows = data.as_array().or_else(|| data["items"].as_array()).cloned().unwrap_or_default();
+        let Some(department) = choose(&ui.frame, "选择部门", &rows, "name").map(|row| row["id"].clone()) else { return };
         let body = json!({"items":ids.iter().map(|id|json!({"user_id":id,"department_id":department})).collect::<Vec<_>>()});
         if super::super::external_import::confirm(
-            frame,
+            &ui.frame,
             &format!("将 {} 位成员加入所选部门？", ids.len()),
         ) {
-            if let Some(result) = dialog_job::run(
-                frame,
-                api,
-                "批量加入部门",
-                "/api/desktop/squad/request",
-                json!({"method":"POST","path":format!("{prefix}/memberships/batch"),"body":body}),
-            ) {
-                forms::inspect(frame, "批量加入结果", &result);
-            }
+            ui.action_request("批量加入部门", json!({"method":"POST","path":format!("{prefix}/memberships/batch"),"body":body}), |ui, result| {
+                forms::inspect(&ui.frame, "批量加入结果", &result);
+            });
         }
+        });
         return;
     }
     if action == "批量重置用量" {
@@ -1277,12 +1306,11 @@ fn batch_members(
             frame,
             &format!("重置所选 {} 位成员本期已用额度？", ids.len()),
         ) {
-            dialog_job::run(
-                frame,
-                api,
+            ui.send(
                 action,
-                "/api/desktop/squad/request",
-                json!({"method":"POST","path":format!("{prefix}/members/limits/reset-batch"),"body":{"user_ids":ids}}),
+                "POST",
+                &format!("{prefix}/members/limits/reset-batch"),
+                json!({"user_ids":ids}),
             );
         }
         return;

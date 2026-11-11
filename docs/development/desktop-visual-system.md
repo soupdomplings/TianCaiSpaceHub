@@ -1,5 +1,30 @@
 # V1 桌面视觉与组件规范
 
+## V1.0.26 页面与公共弹窗短转场
+
+用户要求功能切换和弹窗不再一闪跳变。共用 `src/gui/motion.rs` 对整个原生容器作短距离位置过渡，不逐字段重排或缩放正文，不保存页面截图或新增等待窗口。入场使用三次缓出曲线；页面及表单为 150 ms / 8 DIP，结果提示为 130 ms / 12 DIP。选中状态、业务回调、请求和模态结果仍立即按原流程执行，动画不等待网络，也不延迟确认或关闭结果。
+
+本批覆盖路径：
+
+| 入口 | 实际覆盖 |
+| --- | --- |
+| `shell.rs::Shell::navigate` | 左侧模块、客户端主入口与已有跳转，完成同步布局和原 changed 回调后整体内容入场。 |
+| `clients.rs::select`、`overview.rs` | 客户端状态/模型/接入设置页签，概览运行状态/使用统计；原草稿、选择和设置更新保持。 |
+| `squad_view.rs` | 账户运行期间正文在加载摘要、表格、账户概览与购买页之间切换；相同正文页后台刷新不重复播放。 |
+| `request_log_detail.rs` 的原生 Notebook | 请求、上游、响应及错误详情页签，继续使用原生页签和编辑控件。 |
+| `SquadDialog::new`、`squad_form::select`、组织 `workspace_dialog` | 小分队表单/选择、组织和成员复合页面共用入场。 |
+| `feedback::build_prompt` | 共用删除/安装/移除确认与说明详情表单入场。 |
+| `chatgpt.rs`、`local_assistance.rs`、`codex_tab.rs`、`usage_view.rs`、`preferences.rs`、`session_history.rs`、`onboarding.rs` | 渠道配置、本机协助、增强启动等待关闭、用量筛选、客户端配置位置、会话目标选择及四种聊天登录配置自绘窗口。 |
+| `feedback::Notice` | 成功和失败结果卡片入场、自动到期和手动收回；新结果可打断旧退出，并从当前进度继续。 |
+
+主渠道编辑、关于、请求浏览和 ChatGPT 检查修复窗口已由管理会话在 `gui.rs` / `request_browser.rs` / `startup_repair.rs` 接入同一 `install_dialog`，最终集成结果以 [V26 交付](../releases/v1.0.26.md) 为准。助手浮层及[数据加载忙态](loading-feedback.md)由各自入口维护，不把它们描述为本节公共模态自动覆盖。系统文件/目录、文字输入和单选窗口沿系统行为；隐藏的通用 Skill/MCP 管理页及旧通用等待 Dialog 没有扩展动画，其他未接公共入口的原生窗口也不宣称已覆盖。
+
+`theme::motion_enabled()` 统一控制：用户选择减少动画或现行 Windows 系统设置关闭动画时直接呈现终态；隐藏、最小化与销毁停止相关计时，隐藏窗口不会因动画完成重新显示。Timer 只由独立隐藏 Panel 托管，不占用业务轮询 owner；同一页面再次被选择不重播，快速切页以最后逻辑目标为准。连续结果替换从当前路径续接，旧收回不能隐藏新提示；用户实际移动窗口或父布局重新定位时停止过渡，尊重新位置。模态首版只有入场，关闭即时执行原结果，避免延迟保存和选择流程。
+
+本次 `ui-ux-pro-max` 定向查询 `animation continuity reduced-motion desktop` 命中 Reduced Motion、Excessive Motion、Duration Timing 和 Motion Sensitivity：采用统一短时长、少量整体运动及减少动画终态；没有套用 CSS 或网页滚动效果。无持久格式、业务接口或依赖迁移，回退 `motion.rs` 与接线即可恢复即时显示，保存配置和用户成果保留。
+
+新增纯路径用例 `gui::motion::tests::interrupted_position_path_continues_from_current_point_and_finishes_latest_target`；两项隐藏原生夹具 `hidden_native_motion_skips_timers_and_reduced_motion_uses_final_state`、`hidden_page_switches_keep_latest_target_and_new_notice_cancels_pending_exit` 检查私有 Timer、隐藏/减少动画终态、连续页签最终选择及旧提示退出被替换。三项均在 `gui::motion::tests`，隐藏夹具不显示 Frame、不发键鼠输入、不调用真实服务。开发阶段仅定向格式化和差异检查，编译、定向执行和唯一包由管理会话统一记录；真实 Windows 动态观感、DPI/多屏和 macOS 待用户验收，没有扩展 Linux。
+
 ## V1.0.25 助手保存后的列表刷新与专用渠道名称
 
 用户反馈搭档已报告新增 WorkBuddy 模型，但 Hub 需要多次切换页面才显示，同时模型、渠道页面感觉迟滞。本轮复用已有配置 `revision`：助手状态返回 `configurationRevision`，界面在首次取得有效值及后续变化时通知客户端页和概览刷新；缺少该字段时忽略，不创建额外计数、哈希或磁盘扫描。当前可见客户端立即读取通用列表和对应原生列表，隐藏页只标记待更新，下一次进入先消费已完成响应再请求最新状态，不必靠反复导航释放旧的忙碌状态。

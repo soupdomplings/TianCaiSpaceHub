@@ -176,6 +176,14 @@ impl Filters {
         self.error.hide();
         self.panel.layout();
     }
+    /// Give the wrapping row its actual width before the page asks for its
+    /// height; a hidden book page may still carry the narrow creation width.
+    pub fn reflow(&self, width: i32) {
+        let height = self.panel.get_size().height;
+        self.panel.set_size(Size::new(width.max(1), height));
+        self.panel.layout();
+        self.panel.set_min_size(Size::new(-1, -1));
+    }
     fn submit(&self) {
         let error = if self.start.is_shown() {
             validate(&self.start.get_value(), &self.end.get_value()).err()
