@@ -1,6 +1,6 @@
 # 二开功能总表
 
-2026-11-11 **V1.0.27 集成中（TC-002/018/023）**：搭档按用户新版[性格设定](genius-buddy-personalities-draft.md)同步三套模板，设置页改可见的三项单选；ZCode 修共享 CDP 无关通知积压，天工修未登录启动的真实模块识别；本轮实施 [WorkBuddy 内置模型跨端分享](workbuddy-builtin-sharing-assessment.md)，由宿主保管登录凭据。MiniMax 继续共用 API／订阅预设，按相应 Key 使用不同额度。实现、离线检查、唯一包、GitHub 及用户待验状态见 [V27 交付](../releases/v1.0.27.md)。
+2026-11-12 **V1.0.27 测试交付（TC-002/018/023）**：搭档按用户新版[性格设定](genius-buddy-personalities-draft.md)同步三套模板，设置页改可见的三项单选；ZCode 修共享 CDP 无关通知积压，天工修未登录启动的真实模块识别；新增 [WorkBuddy 内置模型跨端分享](workbuddy-builtin-sharing-assessment.md)，由宿主保管登录凭据。MiniMax 继续共用 API／订阅预设，按相应 Key 使用不同额度。Windows GUI/release、58 项不同 Rust、23 项 Node 和唯一 MSI `001105` 核验通过，产品源码 `67fda53` 已推送；实机和 macOS 待验，详情见 [V27 交付](../releases/v1.0.27.md)。
 
 2026-11-11 **V1.0.26 测试交付（TC-016/018/019/023）**：搭档接入三套已审核性格、完全访问、半宽最大化、结构化追问、专用模型／渠道删除和真实导航回执；天工内置分享移至搭档显式入口。统一倒计时提示，小分队删除可用渠道页签、修首次使用记录布局并移除菜单读取等待窗；追加模块／页签和公共弹窗过渡、提示收放，见[视觉规范](../development/desktop-visual-system.md)；[加载动态](../development/loading-feedback.md) 复用实际读取，快速完成和后台轮询保持安静。ZCode 补登录加载识别和本 Hub 启动连接重试。[WorkBuddy 自带模型分享](workbuddy-builtin-sharing-assessment.md) 本轮仅完成静态评估，未新增分享能力。行为见 [搭档](genius-buddy.md)、[客户端](desktop-client-adapters.md)、[账户](tiancai-squad-account.md)、[反馈](../development/operation-feedback.md)，检查与唯一包见 [V26 交付](../releases/v1.0.26.md)；不沿用历史检查宣称实机通过。 Windows GUI/release、57 项不同 Rust、12 项 Node 和唯一 MSI `230102` 核验通过，产品源码 `eac0ea2` 已推送；实机待用户验收。
 

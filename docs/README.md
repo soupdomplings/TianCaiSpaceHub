@@ -1,6 +1,6 @@
 # TianCaiSpaceHub 文档总入口
 
-2026-11-11 **V1.0.27 集成中**：同步用户修改的[搭档性格](customizations/genius-buddy-personalities-draft.md)，设置页改三项直接选择；修 ZCode 事件积压 409，补查天工未登录增强启动包装模块适配；按用户要求实施 [WorkBuddy 登录模型分享](customizations/workbuddy-builtin-sharing-assessment.md) 首个可测试版本。MiniMax [API／订阅说明](customizations/desktop-capability-management.md)核对同地址、不同 Key 和额度。当前分工、必要检查、唯一测试包及实机边界统一见 [V27 交付](releases/v1.0.27.md)，下列历史记录保持原版本归属。
+2026-11-12 **V1.0.27 测试交付**：同步用户修改的[搭档性格](customizations/genius-buddy-personalities-draft.md)，设置页改三项直接选择；修 ZCode 事件积压 409 和天工未登录增强启动的模块识别；新增 [WorkBuddy 登录模型分享](customizations/workbuddy-builtin-sharing-assessment.md) 首个可测试版本。MiniMax [API／订阅说明](customizations/desktop-capability-management.md)核对同地址、不同 Key 和额度。Windows GUI/release、58 项不同 Rust、23 项 Node 和唯一 MSI `001105` 核验通过，产品源码 `67fda53` 已推送；用户实机和 macOS 待验。包身份、分工及边界见 [V27 交付](releases/v1.0.27.md)，下列历史记录保持原版本归属。
 
 2026-11-11 **V1.0.26 测试交付**：[搭档](customizations/genius-buddy.md) 接入三套已审核性格、完全访问、Hub 内半宽最大化、选择／填写追问、专用模型删除及导航回执；[操作反馈](development/operation-feedback.md) 与[小分队](customizations/tiancai-squad-account.md) 处理空提示、倒计时、首屏布局和闪烁等待窗。本批追加模块／页签、公共弹窗及提示收放的[轻量动态](development/desktop-visual-system.md)，数据加载动态单独在页内提示。[ZCode](customizations/desktop-client-adapters.md) 补登录服务加载时的探针与本 Hub 连接重试；[WorkBuddy 模型分享](customizations/workbuddy-builtin-sharing-assessment.md) 仅静态评估。源码、必要检查、唯一测试包和实机待验范围见 [V26 交付](releases/v1.0.26.md)，以下 V25 草案和检查保留当时状态。 Windows GUI/release、57 项不同 Rust、12 项 Node 和唯一 MSI `230102` 核验通过，产品源码 `eac0ea2` 已推送；实机待用户验收。
 
