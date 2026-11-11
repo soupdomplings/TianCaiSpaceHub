@@ -68,11 +68,14 @@ fn response(value: Result<Value>) -> Response {
     }
 }
 pub(crate) async fn public_status(state: &SharedState) -> Value {
+    // Reuse the writer's current revision; polling must not re-read or hash
+    // configuration files just to notify the desktop of a completed save.
+    let revision = state.config.lock().await.revision.clone();
     let tools = state.assistant.tools.lock().await;
     json!({"pendingDeletion":tools.deletion.as_ref().map(|p|&p.view),
         "pendingCredential":tools.credential.as_ref().map(|p|&p.view),
         "credentialReferences":tools.credentials.iter().map(|(reference,c)|json!({"reference":reference,"mask":c.mask,"label":c.label})).collect::<Vec<_>>(),
-        "navigation":tools.navigation})
+        "navigation":tools.navigation,"configurationRevision":revision})
 }
 pub(crate) async fn clear(state: &SharedState) {
     let mut tools = state.assistant.tools.lock().await;
@@ -300,6 +303,7 @@ pub(crate) fn definitions() -> Vec<Value> {
         ),
     ];
     definitions.extend(super::squad_tools::definitions());
+    definitions.extend(super::usage_tools::definitions());
     definitions
 }
 /// Store an imported key only in the current assistant's ephemeral credential map.
@@ -1430,6 +1434,8 @@ pub(crate) async fn call(state: &SharedState, name: &str, args: Value) -> Result
         "hub_squad_key_options" => super::squad_tools::key_options(state, args).await?,
         "hub_squad_create_api_key" => super::squad_tools::create_key(state, args).await?,
         "hub_squad_prepare_api_key" => super::squad_tools::prepare_key(state, args).await?,
+        "hub_query_usage" => super::usage_tools::usage(state, args).await?,
+        "hub_query_requests" => super::usage_tools::requests(state, args).await?,
         "hub_open_page" => {
             let page = text(&args, "page")?;
             ensure!(
@@ -1454,13 +1460,14 @@ pub(crate) async fn call(state: &SharedState, name: &str, args: Value) -> Result
             json!({"queued":true,"page":page,"client":args["client"],"message":"已请求 Hub 界面打开页面"})
         }
         "hub_help" => {
-            json!({"assistant":"天才搭档可读取配置、添加修改普通渠道/模型、调整支持参数、配置到客户端；删除会集中确认一次。可选当前小分队密钥或按要求新建后准备导入，外部凭据用本机表单输入。",
+            json!({"assistant":"天才搭档可直接查询用量、实际扣费和请求记录，读取配置、添加修改普通渠道/模型、调整支持参数、配置到客户端；删除会集中确认一次。可选当前小分队密钥或按要求新建后准备导入，外部凭据用本机表单输入。",
+            "capabilities":{"usage":"hub_query_usage：今天/近周月/自定日期，按模型、当前用户密钥/分组筛选；squad实际人民币账单，hub本机Token/请求统计","requests":"hub_query_requests：按来源、日期及模型等分页查询记录，默认不返回正文和凭据","configuration":"hub_read_configuration、hub_resolve_model、hub_read_channel_models、hub_save_channel、hub_add_model、hub_configure_client、hub_set_model_parameters、hub_delete_configurations","accountKeys":"hub_squad_list_api_keys、hub_squad_key_options、hub_squad_create_api_key、hub_squad_prepare_api_key","navigation":"hub_open_page；只有用户要求看页面或工具确实无法完成时才打开，不替代已经支持的查询和配置"},
             "workGuide":WORK_GUIDE,
             "hub":"天才空间 Hub 统一连接模型渠道与多个桌面客户端；客户端模型配置为独立副本，修改来源不会自动同步副本。",
             "navigation":{"models":"左侧模型与渠道；各客户端的模型页管理独立副本","squad":"天才小分队：登录、账户、密钥、使用记录、充值和订阅；按账户权限显示组织功能","tiangongAssistance":"天工 Work → 接入设置 → 本机协助","dumpling":"左侧 Dumpling-MCP 独立入口"},
             "billing":"天才搭档模型由小分队管理员指定并承担费用；天工协助沿用其原模型来源。",
             "temporary":"收起保留对话；停止中断执行；清空删除临时内容；真正退出 Hub 结束后台并清理，已保存配置和主动另存成果保留。",
-            "boundary":"助手只能读取当前用户密钥/分组、按要求创建密钥并准备导入；不能修改或撤销已有站点密钥、安装或移除运行端、启动或修复客户端、修改账户资料/组织/支付、管理Skill/MCP、删除任意文件、执行系统命令或发起模型连通性测试；可说明步骤并请求打开对应页面。"})
+            "boundary":"助手可查询本机用量/请求及当前账户用量/扣费，读取当前用户密钥/分组、按要求创建密钥并准备导入；不能修改或撤销已有站点密钥、安装或移除运行端、启动或修复客户端、修改账户资料/组织/支付、管理Skill/MCP、删除任意文件、执行系统命令或发起模型连通性测试；可说明步骤并请求打开对应页面。"})
         }
         _ => bail!("天才搭档不支持工具 {name}"),
     };

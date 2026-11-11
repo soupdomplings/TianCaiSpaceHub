@@ -484,7 +484,12 @@ fn same_renderer_module(page: &Value, entry: &str) -> bool {
 
 const PROBE: &str = r#"(() => {
  const state = window.__tiancaiZCodeWorkspace;
- const module = performance.getEntriesByType('resource').map(e => e.name).find(e => /\/assets\/styles-[^/]+\.js$/.test(e));
+ // Native modulepreloads can exceed the resource timing buffer. The page's
+ // declarations remain available even when timing entries are absent.
+ const isModule = url => /\/assets\/styles-[^/]+\.js$/.test(url);
+ const module = [...document.querySelectorAll('link[rel="modulepreload"][href],script[src]')]
+  .map(e => e.href || e.src).find(isModule)
+  ?? performance.getEntriesByType('resource').map(e => e.name).find(isModule);
  return {
   installed: state?.version === 1,
   available: state?.available === true,

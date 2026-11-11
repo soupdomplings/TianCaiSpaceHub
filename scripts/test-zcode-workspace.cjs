@@ -5,6 +5,52 @@ const test = require('node:test');
 const vm = require('node:vm');
 const adapt = vm.runInNewContext(readFileSync(resolve(__dirname,
   '../src/desktop/launcher/zcode-workspace-adapter.js'), 'utf8'));
+const probe = readFileSync(resolve(__dirname,
+  '../src/desktop/launcher/zcode_workspace.rs'), 'utf8')
+  .match(/const PROBE: &str = r#"([\s\S]*?)"#;/)[1];
+const page = 'file:///D:/Program%20Files/ZCode/resources/app.asar/out/renderer/index.html';
+function inspectPage({ links = [], resources = [], selectors = [], inputs = [] } = {}) {
+  return vm.runInNewContext(probe, {
+    window: {}, location: { href: page },
+    performance: { getEntriesByType: () => resources.map(name => ({ name })) },
+    document: {
+      querySelector: query => query.split(',').some(value => selectors.includes(value)) ? {} : null,
+      querySelectorAll: query => query.includes('modulepreload') ? links : inputs
+    }
+  });
+}
+
+test('startup finds the native preload beyond a full resource timing buffer', () => {
+  // ZCode 3.17.2 index.html preloads 316 modules; styles is the last one.
+  const links = Array.from({ length: 315 }, (_, i) => ({ href: new URL(`assets/chunk-${i}.js`, page).href }));
+  const module = new URL('assets/styles-fixture.js', page).href;
+  links.push({ href: module });
+  const result = inspectPage({ links, resources: links.slice(0, 250).map(link => link.href),
+    selectors: ['[data-testid="login-use-api-key-button"]'] });
+  assert.equal(result.module, module);
+  assert.equal(result.loginOpen, true);
+  assert.equal(result.workspaceOpen, false);
+  assert.equal(result.page, page);
+});
+
+test('startup recognizes a cached preload without resource timing and keeps page protections', () => {
+  const module = new URL('assets/styles-cached.js', page).href;
+  const result = inspectPage({ links: [{ href: module }],
+    selectors: ['[data-testid="sidebar-primary-navigation"]', '[data-testid="oauth-cancel"]'],
+    inputs: [{ value: 'unsent draft' }] });
+  assert.equal(result.module, module);
+  assert.equal(result.workspaceOpen, true);
+  assert.equal(result.loginOpen, false);
+  assert.equal(result.oauthPending, true);
+  assert.equal(result.hasInput, true);
+});
+
+test('startup retains resource timing fallback and does not confuse stylesheets with scripts', () => {
+  const module = new URL('assets/styles-dynamic.js', page).href;
+  const resources = [new URL('assets/styles-fixture.css', page).href, module];
+  assert.equal(inspectPage({ resources }).module, module);
+  assert.equal(inspectPage({ links: [{ href: resources[0] }] }).module, null);
+});
 const providerId = 'tiancai-hub-11111111-2222-3333-4444-555555555555';
 const options = { models: [{ providerId, modelId: 'fixture-model' }] };
 const native = `

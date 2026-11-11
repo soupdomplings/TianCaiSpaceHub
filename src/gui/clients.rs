@@ -22,15 +22,12 @@ use std::{
 };
 use wxdragon::dc::GraphicsDC;
 use wxdragon::{prelude::*, timer::Timer, widgets::SimpleBook};
-type Slot = Arc<
-    Mutex<
-        Option<(
-            Result<Value, String>,
-            Result<Value, String>,
-            Result<Value, String>,
-        )>,
-    >,
->;
+enum ClientUpdate {
+    Models(Result<Value, String>),
+    Activity(Result<Value, String>),
+    Library(Result<Value, String>),
+}
+type Slot = Arc<Mutex<Vec<ClientUpdate>>>;
 
 #[derive(Clone)]
 pub(super) struct ClientPage {
@@ -67,7 +64,10 @@ pub(super) struct ClientPage {
     api: ApiClient,
     frame: Frame,
     active: Rc<Cell<bool>>,
-    busy: Arc<AtomicBool>,
+    busy: Rc<Cell<bool>>,
+    refresh_pending: Rc<Cell<bool>>,
+    activity_busy: Arc<AtomicBool>,
+    library_busy: Arc<AtomicBool>,
     pending: Slot,
     timer: Rc<RefCell<Option<Timer<Panel>>>>,
     last: Rc<Cell<Instant>>,
@@ -198,6 +198,9 @@ impl ClientPage {
             frame,
             active: Default::default(),
             busy: Default::default(),
+            refresh_pending: Default::default(),
+            activity_busy: Default::default(),
+            library_busy: Default::default(),
             pending: Default::default(),
             timer: Default::default(),
             last: Rc::new(Cell::new(Instant::now() - Duration::from_secs(30))),
@@ -319,37 +322,7 @@ impl ClientPage {
             if u.models_render_pending.replace(false) {
                 u.render();
             }
-            if let Some(result) = u.pending.lock().ok().and_then(|mut s| s.take()) {
-                u.busy.store(false, Ordering::SeqCst);
-                let (models, activity, library) = result;
-                let mut errors = Vec::new();
-                match models {
-                    Ok(v) => *u.models.borrow_mut() = v,
-                    Err(e) => errors.push(e),
-                };
-                add.enable(!u.models.borrow()["revision"].is_null());
-                match activity {
-                    Ok(v) => {
-                        *u.activity.borrow_mut() = v;
-                        u.fresh.set(Instant::now());
-                    }
-                    Err(e) => {
-                        *u.activity.borrow_mut() = Value::Null;
-                        errors.push(e);
-                    }
-                };
-                match library {
-                    Ok(v) => *u.library.borrow_mut() = v,
-                    Err(e) => {
-                        *u.library.borrow_mut() = Value::Null;
-                        errors.push(e);
-                    }
-                };
-                u.error.set_label(&errors.join("\n"));
-                u.error.wrap(700);
-                u.error.show(!errors.is_empty());
-                u.render();
-            }
+            u.apply_pending();
             if u.last.get().elapsed() > Duration::from_secs(5) {
                 u.fetch();
             }
@@ -547,12 +520,16 @@ impl ClientPage {
     }
     pub fn enter(&self, page: PageId) {
         let active = page == PageId::Client(self.id);
-        if active && !self.active.get() {
-            self.refresh_legacy_models(false);
-        }
+        let entering = active && !self.active.get();
         self.active.set(active);
         if let Some(timer) = self.timer.borrow().as_ref() {
             if active {
+                // Consume a read completed while hidden before requesting its
+                // replacement; a hidden page must not keep its busy flag set.
+                self.apply_pending();
+                if entering {
+                    self.refresh_legacy_models(false);
+                }
                 timer.start(160, false);
                 self.fetch();
             } else {
@@ -560,34 +537,114 @@ impl ClientPage {
             }
         }
     }
+    pub fn configuration_changed(&self) {
+        self.refresh_pending.set(true);
+        if self.active.get() {
+            self.refresh_legacy_models(false);
+            self.fetch_models();
+        }
+    }
     fn fetch(&self) {
-        if self.busy.swap(true, Ordering::SeqCst) {
+        self.last.set(Instant::now());
+        self.fetch_models();
+        // Model lists must not wait for process/resource discovery. Those
+        // snapshots are only needed by the client's visible overview.
+        if self.book.get_page(0).is_some_and(|page| page.is_shown()) {
+            self.fetch_auxiliary(false);
+            self.fetch_auxiliary(true);
+        }
+    }
+    fn fetch_models(&self) {
+        if self.busy.replace(true) {
             return;
         }
-        self.last.set(Instant::now());
+        self.refresh_pending.set(false);
         let (api, slot) = (self.api.clone(), self.pending.clone());
         std::thread::spawn(move || {
-            let result = std::thread::scope(|s| {
-                let models =
-                    s.spawn(|| api.get_with_timeout("/api/desktop/models", Duration::from_secs(8)));
-                let library = s.spawn(|| {
-                    api.get_with_timeout("/api/desktop/library", Duration::from_secs(10))
-                });
-                let activity =
-                    api.get_with_timeout("/api/desktop/activity", Duration::from_secs(5));
-                (
-                    models.join().unwrap_or_else(|_| Err("模型读取中断".into())),
-                    activity,
-                    library
-                        .join()
-                        .unwrap_or_else(|_| Err("资源读取中断".into())),
-                )
-            });
-            if let Ok(mut s) = slot.lock() {
-                *s = Some(result);
+            let result = api.get_with_timeout("/api/desktop/models", Duration::from_secs(8));
+            if let Ok(mut messages) = slot.lock() {
+                messages.push(ClientUpdate::Models(result));
             }
             wxdragon::wake_up_idle();
         });
+    }
+    fn fetch_auxiliary(&self, library: bool) {
+        let flag = if library {
+            self.library_busy.clone()
+        } else {
+            self.activity_busy.clone()
+        };
+        if flag.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let (api, slot) = (self.api.clone(), self.pending.clone());
+        std::thread::spawn(move || {
+            let update = if library {
+                ClientUpdate::Library(
+                    api.get_with_timeout("/api/desktop/library", Duration::from_secs(10)),
+                )
+            } else {
+                ClientUpdate::Activity(
+                    api.get_with_timeout("/api/desktop/activity", Duration::from_secs(5)),
+                )
+            };
+            if let Ok(mut messages) = slot.lock() {
+                messages.push(update);
+            }
+            flag.store(false, Ordering::SeqCst);
+            wxdragon::wake_up_idle();
+        });
+    }
+    fn apply_pending(&self) {
+        let messages = self
+            .pending
+            .lock()
+            .map(|mut messages| std::mem::take(&mut *messages))
+            .unwrap_or_default();
+        let mut render = false;
+        for message in messages {
+            match message {
+                ClientUpdate::Models(result) => {
+                    self.busy.set(false);
+                    if self.refresh_pending.replace(false) {
+                        // A save happened during this read. Discard its stale
+                        // model view and read once more, without losing drafts.
+                        self.fetch_models();
+                        continue;
+                    }
+                    match result {
+                        Ok(value) => {
+                            render |= *self.models.borrow() != value;
+                            *self.models.borrow_mut() = value;
+                            self.model_view
+                                .add
+                                .enable(!self.models.borrow()["revision"].is_null());
+                            self.error.hide();
+                        }
+                        Err(error) => {
+                            self.error.set_label(&error);
+                            self.error.wrap(700);
+                            self.error.show(true);
+                        }
+                    }
+                }
+                ClientUpdate::Activity(result) => {
+                    if let Ok(value) = result {
+                        *self.activity.borrow_mut() = value;
+                        self.fresh.set(Instant::now());
+                        render = true;
+                    }
+                }
+                ClientUpdate::Library(result) => {
+                    if let Ok(value) = result {
+                        *self.library.borrow_mut() = value;
+                    }
+                }
+            }
+        }
+        if render {
+            self.render();
+        }
     }
     fn render(&self) {
         self.settings.set_targets(&self.models.borrow(), self.id);

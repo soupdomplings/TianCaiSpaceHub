@@ -1,6 +1,6 @@
 //! Keep editable drafts open on failure; only confirmed saves close the dialog.
-use super::api::ApiClient;
 use super::controls::Button;
+use super::{api::ApiClient, feedback};
 use serde_json::Value;
 use std::{
     cell::{Cell, RefCell},
@@ -55,7 +55,7 @@ impl InlineJob {
                 Ok(_) => format!("{}完成", operation.borrow()),
                 Err(error) => error.clone(),
             };
-            inline_feedback(owner, status, &message, outcome.is_err());
+            operation_feedback(owner, status, &message, outcome.is_err());
             let completed = callback.borrow_mut().take();
             if let Some(finished) = completed {
                 finished(outcome);
@@ -76,7 +76,7 @@ impl InlineJob {
         self.running.get()
     }
     pub fn feedback(&self, message: &str, error: bool) {
-        inline_feedback(self.owner, self.status, message, error);
+        operation_feedback(self.owner, self.status, message, error);
     }
     pub fn start(
         &self,
@@ -91,7 +91,11 @@ impl InlineJob {
         }
         *self.title.borrow_mut() = title.into();
         *self.finished.borrow_mut() = Some(Box::new(finished));
-        self.feedback(&format!("正在{title}…"), false);
+        self.status.set_label(&format!("正在{title}…"));
+        self.status
+            .set_foreground_color(super::theme::theme().ink_secondary);
+        self.status.show(true);
+        self.owner.layout();
         let (pending, path) = (self.pending.clone(), path.to_string());
         std::thread::spawn(move || {
             let result = api.desktop_post(&path, &body);
@@ -113,16 +117,15 @@ impl Drop for InlineJob {
         }
     }
 }
-fn inline_feedback(owner: Panel, status: StaticText, message: &str, error: bool) {
-    status.set_label(message);
-    status.set_foreground_color(if error {
-        super::theme::theme().error
-    } else {
-        super::theme::theme().ink_secondary
-    });
-    status.wrap((owner.get_client_size().width - owner.from_dip(40)).max(100));
-    status.show(!message.is_empty());
+fn operation_feedback(owner: Panel, status: StaticText, message: &str, error: bool) {
+    status.set_label("");
+    status.hide();
     owner.layout();
+    if error {
+        feedback::error(&owner, message);
+    } else {
+        feedback::success(&owner, message);
+    }
 }
 fn action_error(title: &str, error: &str) -> String {
     if error.trim().is_empty() {
@@ -225,21 +228,24 @@ fn bind_job(
                 match outcome {
                     Ok(value) => {
                         *result.borrow_mut() = Some(value.clone());
+                        status.set_label("");
+                        status.hide();
                         if let Some(saved) = &on_saved {
-                            status.set_label("已保存");
-                            status.set_foreground_color(super::theme::theme().ok);
+                            feedback::success(&dialog, "操作完成");
                             saved(value);
                         } else {
                             dialog.end_modal(ID_OK);
+                            if let Some(parent) = dialog.get_parent() {
+                                feedback::success(&parent, "操作完成");
+                            }
                         }
                     }
                     Err(error) => {
                         let error = action_error("保存", &error);
                         on_error(&error);
-                        status.set_label(&error);
-                        status.set_foreground_color(super::theme::theme().error);
-                        status
-                            .wrap((dialog.get_client_size().width - dialog.from_dip(40)).max(100));
+                        status.set_label("");
+                        status.hide();
+                        feedback::error(&dialog, &error);
                         dialog.layout();
                     }
                 }
@@ -258,6 +264,7 @@ fn bind_job(
                 Err(e) => {
                     let e = action_error("保存", &e);
                     status.set_label(&e);
+                    status.show(true);
                     status.set_foreground_color(super::theme::theme().error);
                     status.wrap((dialog.get_client_size().width - dialog.from_dip(40)).max(100));
                     dialog.layout();
@@ -268,6 +275,7 @@ fn bind_job(
             dialog.enable(false);
             button.enable(false);
             status.set_foreground_color(super::theme::theme().ink_secondary);
+            status.show(true);
             status.set_label(if path == "/api/desktop/assistance/prepare" {
                 "正在准备天才搭档 Server，请稍候…"
             } else if path == "/api/desktop/assistance" {

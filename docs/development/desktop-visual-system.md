@@ -1,5 +1,21 @@
 # V1 桌面视觉与组件规范
 
+## V1.0.25 助手保存后的列表刷新与专用渠道名称
+
+用户反馈搭档已报告新增 WorkBuddy 模型，但 Hub 需要多次切换页面才显示，同时模型、渠道页面感觉迟滞。本轮复用已有配置 `revision`：助手状态返回 `configurationRevision`，界面在首次取得有效值及后续变化时通知客户端页和概览刷新；缺少该字段时忽略，不创建额外计数、哈希或磁盘扫描。当前可见客户端立即读取通用列表和对应原生列表，隐藏页只标记待更新，下一次进入先消费已完成响应再请求最新状态，不必靠反复导航释放旧的忙碌状态。
+
+通用模型读取现在独立返回，不再等活动发现和资源库读取全部完成后才交给界面；后两项只在客户端概览可见时请求。相同模型快照不重建列表。概览配置读取共用一个运行中的 worker，期间的多次更新合并为后续最新读取；WorkBuddy、天工原生编辑器也只保留一次待刷新，明确的“载入更新”优先于普通通知。完成读取和清除忙碌状态采用同一份刷新状态，避免旧读取覆盖新保存或失去刷新请求。
+
+刷新列表时继续保留新建草稿。已有条目存在未保存输入时，同样保留所选渠道、模型和支持的参数，以及原保存基准；外部配置已改变时显示“载入更新”，明确载入后采用最新配置，避免把旧输入直接写回新的保存基准。外部移除正在编辑的条目时保留输入、取消列表选中并暂停保存，不能将其悄悄转为另一条目、新建模型或天工内置模型。新建草稿的显式载入仍沿既有流程保留输入并更新保存基准。没有改变后端原生 writer 的 revision 核对。
+
+模型／渠道页中的客户端专用渠道采用真实显示名称：普通桌面副本先用已保存的标签，再用模型；WorkBuddy、天工专用渠道用真实上游模型，兼容仅有别名映射的旧配置。别名键可能是原生条目 UUID，不能当模型显示。内部渠道名、条目身份、路由及复制来源继续按原标识操作；复制模型的来源选项显示“客户端 · 模型”，不暴露内部 UUID 作为主名称。
+
+WorkBuddy、天工的启动、保存、删除和撤销结果接入统一成功／错误反馈，取消同一结果在页底重复出现；连接是否配置、输入校验、读取错误、草稿及“载入更新”等业务状态继续保留。共用反馈的样式和其他页面整理由本批统一反馈实现记录，不以此次刷新修改扩大其范围。
+
+关键入口：`src/assistant/tools.rs::public_status`、`src/gui/assistant.rs::on_configuration_changed`、`src/gui.rs::force_dashboard_refresh`、`src/gui/clients.rs`、`src/gui/configuration_refresh.rs`、`src/gui/workbuddy.rs`、`src/gui/gmclaw.rs` 与 `src/gui/ai_gateway.rs::provider_display_name`。只增加助手状态响应字段及内存刷新／编辑状态，不迁移持久配置；旧状态接口不带该字段仍可显示原有内容。回退相关 GUI 和状态通知字段即可，保留所有已保存渠道、客户端模型和用户成果。
+
+新增定向用例：`gui::configuration_refresh::tests::repeated_invalidations_merge_and_explicit_rebase_is_not_lost`、`gui::ai_gateway::display_tests::dedicated_channels_display_real_models_and_keep_internal_identity`。原隐藏合成夹具 `gui::native_model_review::native_existing_model_lists_keep_complete_unsaved_drafts_and_original_revisions` 增加两端已存条目编辑遇到外部新增／删除、显式更新及旧 revision 保留检查，沿用完整草稿和跨端副本断言，不调用实际服务。开发阶段 `rustfmt --check`、定向 `git diff --check` 已通过；GUI 编译、用例执行和唯一测试包由管理会话统一登记到 [V25 交付](../releases/v1.0.25.md)。此处不将源码就绪写作实机通过，真实助手保存后的显示、交互延迟、Windows 缩放和 macOS 待用户验收。
+
 ## V1.0.24 导航与模型同步
 
 左栏固定展示五个可见客户端，不再维护最近三个位置、更多或收起，旧 `recent-clients.json` 留在本机但不读取/写入。Nav、Tab、Segment 的逻辑选中立即切换，原生按钮自持 160 ms 颜色/指示线过渡；不移动按钮边界，不延后业务动作，可从当前值反向。普通按钮不套用该动画，减少动画设置直接取终态；隐藏或销毁停止计时。入口为 `controls.rs` 和 vendor `button.cpp`。

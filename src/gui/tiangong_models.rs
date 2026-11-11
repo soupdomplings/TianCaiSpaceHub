@@ -56,16 +56,12 @@ pub(super) fn bind_download(button: Button) {
             };
             let text = super::text::GuiText::new(super::text::GuiLocale::ZhCn);
             if let Err(error) = super::browser::open_url_in_browser(text, url) {
-                MessageDialog::builder(
+                super::feedback::error(
                     &parent,
                     &format!(
                         "{error}\n可在浏览器访问：https://tiangong.jiuqi.com.cn/tiangongwork/"
                     ),
-                    "无法打开天工下载",
-                )
-                .with_style(MessageDialogStyle::OK | MessageDialogStyle::IconError)
-                .build()
-                .show_modal();
+                );
             }
         });
         let position = button.client_to_screen(Point::new(0, button.get_size().height));

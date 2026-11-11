@@ -342,6 +342,8 @@ pub(super) struct AssistantUi {
     last_poll: Rc<Cell<Instant>>,
     active: Rc<Cell<bool>>,
     navigated: Rc<RefCell<Option<String>>>,
+    configuration_revision: Rc<RefCell<Option<String>>>,
+    configuration_changed: Rc<RefCell<Option<Rc<dyn Fn()>>>>,
     installation_offer: Rc<RefCell<InstallationOffer>>,
     installation_prompt_open: Rc<Cell<bool>>,
 }
@@ -502,6 +504,7 @@ impl AssistantUi {
         transcript.set_name("assistant-conversation");
         transcript.set_background_color(t.bg_card);
         transcript.set_scroll_rate(0, root.from_dip(8));
+        transcript.show_scroll_indicators(false);
         let welcome = Panel::builder(&transcript).build();
         welcome.set_background_color(t.bg_card);
         let intro = BoxSizer::builder(Orientation::Vertical).build();
@@ -590,7 +593,7 @@ impl AssistantUi {
             root.from_dip(16),
         );
         let input = TextCtrl::builder(&root)
-            .with_style(TextCtrlStyle::MultiLine)
+            .with_style(TextCtrlStyle::MultiLine | TextCtrlStyle::NoVScroll)
             .with_size(Size::new(-1, 68))
             .build();
         input.set_name("assistant-message-input");
@@ -667,6 +670,8 @@ impl AssistantUi {
             last_poll: Rc::new(Cell::new(Instant::now() - Duration::from_secs(30))),
             active: Default::default(),
             navigated: Default::default(),
+            configuration_revision: Default::default(),
+            configuration_changed: Default::default(),
             installation_offer: Default::default(),
             installation_prompt_open: Default::default(),
         };
@@ -709,12 +714,18 @@ impl AssistantUi {
         input.on_key_down(move |event| {
             if matches!(&event, WindowEventData::Keyboard(key) if key.get_key_code() == Some(13) && key.cmd_down()) {
                 u.send_message();
+                // wxDragon starts callbacks with Skip(true). Consume the
+                // shortcut so the native editor cannot append a newline and
+                // invalidate the successful-send draft comparison.
+                event.skip(false);
             } else if matches!(&event, WindowEventData::Keyboard(key) if key.get_key_code() == Some(27)) {
                 u.collapse();
+                event.skip(false);
             } else if matches!(&event, WindowEventData::Keyboard(key) if key.get_key_code() == Some(9) && !key.shift_down())
                 && !u.send.is_enabled() && !u.stop.is_enabled()
             {
                 if u.clear.is_enabled() { u.clear.set_focus(); } else { collapse.set_focus(); }
+                event.skip(false);
             } else {
                 event.skip(true);
             }
@@ -1109,6 +1120,10 @@ impl AssistantUi {
         self.post("send", json!({"text":text}), Action::Send(text));
     }
 
+    pub(super) fn on_configuration_changed(&self, callback: impl Fn() + 'static) {
+        *self.configuration_changed.borrow_mut() = Some(Rc::new(callback));
+    }
+
     fn confirm_install(&self) {
         if self.state.borrow()["enabled"] != true
             || runtime_ready(&self.state.borrow())
@@ -1118,12 +1133,10 @@ impl AssistantUi {
             return;
         }
         self.installation_offer.borrow_mut().pending = false;
-        let prompt = MessageDialog::builder(&self.parent,
+        let accepted = super::feedback::confirm(&self.parent,
+            "安装天才搭档 Server",
             "将从已有兼容程序准备共享的天才搭档 Server；本机没有可用来源时，从官方下载安装。\n\n天才搭档和天工协助共用这一份运行端，安装后长期保留。现在准备？",
-            "安装天才搭档 Server")
-            .with_style(MessageDialogStyle::YesNo | MessageDialogStyle::IconQuestion).build();
-        let accepted = prompt.show_modal() == ID_YES;
-        prompt.destroy();
+            "准备");
         self.installation_prompt_open.set(false);
         if accepted {
             self.detail.set_label("正在准备天才搭档 Server…");
@@ -1151,12 +1164,10 @@ impl AssistantUi {
             return;
         }
         drop(state);
-        let prompt = MessageDialog::builder(&self.parent,
+        let accepted = super::feedback::confirm(&self.parent,
+            "移除天才搭档 Server",
             "移除 Hub 自管的天才搭档 Server？\n\n系统中原有的运行程序、已保存模型配置和用户文件都会保留。以后再次启用时，需要由你确认重新准备。",
-            "移除天才搭档 Server")
-            .with_style(MessageDialogStyle::YesNo | MessageDialogStyle::IconQuestion).build();
-        let accepted = prompt.show_modal() == ID_YES;
-        prompt.destroy();
+            "移除");
         if accepted {
             self.post_path(
                 "/api/desktop/assistance/uninstall",
@@ -1197,6 +1208,15 @@ impl AssistantUi {
                     } else {
                         self.last_poll.set(Instant::now() - Duration::from_secs(30));
                     }
+                    let notice = match action {
+                        Action::Clear => Some("搭档临时内容已清理"),
+                        Action::Prepare => Some("天才搭档 Server 已准备就绪"),
+                        Action::Uninstall => Some("天才搭档 Server 已移除"),
+                        _ => None,
+                    };
+                    if let Some(notice) = notice {
+                        super::feedback::success(&self.parent, notice);
+                    }
                     if matches!(action, Action::Status | Action::Settings(_)) {
                         let offer = self.installation_offer.borrow_mut().after_status(
                             &self.state.borrow(),
@@ -1211,6 +1231,9 @@ impl AssistantUi {
                     }
                 }
                 Err(error) => {
+                    if !matches!(action, Action::Status) {
+                        super::feedback::error(&self.parent, &error);
+                    }
                     self.detail.set_label(&error);
                     self.detail.set_foreground_color(theme::theme().error);
                     self.chat_status.set_label("暂时无法完成，请重试");
@@ -1242,6 +1265,10 @@ impl AssistantUi {
     }
 
     fn apply(&self, value: Value) {
+        let configuration_revision = value["configurationRevision"]
+            .as_str()
+            .filter(|revision| !revision.is_empty())
+            .map(str::to_owned);
         let enabled = value["enabled"] == true;
         let ready = runtime_ready(&value);
         let logged_in = value["loggedIn"] == true;
@@ -1386,6 +1413,16 @@ impl AssistantUi {
         self.layout_chat();
         self.update_buttons();
         self.apply_navigation();
+        if let Some(revision) = configuration_revision {
+            let changed = self.configuration_revision.borrow().as_ref() != Some(&revision);
+            if changed {
+                *self.configuration_revision.borrow_mut() = Some(revision);
+                let callback = self.configuration_changed.borrow().clone();
+                if let Some(callback) = callback {
+                    callback();
+                }
+            }
+        }
     }
 
     fn update_buttons(&self) {
@@ -1645,6 +1682,138 @@ mod installation_tests {
             assert!(offer.after_status(&state, false, true));
         }
     }
+}
+
+#[cfg(all(test, windows))]
+#[test]
+fn assistant_composer_acknowledgement_preserves_drafts_and_refreshes_configuration() {
+    wxdragon::app::render_offscreen(|| {
+        theme::init(theme::ThemeMode::Light);
+        let parent = Frame::builder().with_title("hidden assistant composer").build();
+        let host = Panel::builder(&parent).build();
+        let shell = Shell::new(&host, &parent);
+        let api = ApiClient::new(
+            "http://127.0.0.1:1".into(),
+            super::text::GuiText::new(super::text::GuiLocale::ZhCn),
+        );
+        let ui = AssistantUi::build(&parent, &shell, api, false);
+        let refreshes = Rc::new(Cell::new(0));
+        let observed = refreshes.clone();
+        ui.on_configuration_changed(move || observed.set(observed.get() + 1));
+        let mut state = json!({
+            "enabled":true,"runtimeReady":true,"loggedIn":true,
+            "modelServiceReady":true,"running":false,"conversationId":"composer",
+            "messages":[],"configurationRevision":"revision-a"
+        });
+        ui.apply(state.clone());
+        assert_eq!(refreshes.get(), 1);
+        ui.apply(state.clone());
+        assert_eq!(refreshes.get(), 1);
+
+        let sent = "帮我检查模型配置";
+        ui.input.set_value(sent);
+        ui.last_poll.set(Instant::now());
+        ui.inbox.lock().unwrap().push((Action::Send(sent.into()), Ok(state.clone())));
+        ui.poll();
+        assert!(ui.input.get_value().is_empty());
+        ui.input.set_value("下一条新草稿");
+        ui.inbox.lock().unwrap().push((Action::Send(sent.into()), Ok(state.clone())));
+        ui.poll();
+        assert_eq!(ui.input.get_value(), "下一条新草稿");
+        ui.inbox.lock().unwrap().push((Action::Send(sent.into()), Err("合成发送失败".into())));
+        ui.poll();
+        assert_eq!(ui.input.get_value(), "下一条新草稿", "failure must retain the draft");
+
+        state.as_object_mut().unwrap().remove("configurationRevision");
+        ui.apply(state.clone());
+        assert_eq!(refreshes.get(), 1, "missing revision must be ignored");
+        state["configurationRevision"] = "revision-a".into();
+        ui.apply(state.clone());
+        assert_eq!(refreshes.get(), 1);
+        state["configurationRevision"] = "revision-b".into();
+        state["running"] = true.into();
+        ui.apply(state);
+        assert_eq!(refreshes.get(), 2, "refresh must not wait for turn completion");
+        assert!(!ui.chat.is_shown() && !parent.is_shown());
+        parent.destroy();
+    }).unwrap();
+}
+
+#[cfg(all(test, windows))]
+#[test]
+#[ignore = "Explicit synthetic native keyboard/wheel input; not part of offline layout checks"]
+fn assistant_composer_native_shortcut_and_scroll_without_indicators() {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GW_CHILD, GWL_STYLE, GetWindow, GetWindowLongPtrW, SendMessageW, WM_CHAR, WM_KEYDOWN,
+        WM_MOUSEWHEEL, WS_VSCROLL,
+    };
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn GetKeyboardState(state: *mut u8) -> i32;
+        fn SetKeyboardState(state: *const u8) -> i32;
+    }
+    struct KeyboardState([u8; 256]);
+    impl Drop for KeyboardState {
+        fn drop(&mut self) {
+            unsafe { SetKeyboardState(self.0.as_ptr()) };
+        }
+    }
+
+    wxdragon::app::render_offscreen(|| {
+        theme::init(theme::ThemeMode::Light);
+        let parent = Frame::builder().with_title("hidden synthetic composer input").build();
+        let host = Panel::builder(&parent).build();
+        let shell = Shell::new(&host, &parent);
+        let api = ApiClient::new(
+            "http://127.0.0.1:1".into(),
+            super::text::GuiText::new(super::text::GuiLocale::ZhCn),
+        );
+        let ui = AssistantUi::build(&parent, &shell, api, false);
+        ui.apply(json!({
+            "enabled":true,"runtimeReady":true,"loggedIn":true,
+            "modelServiceReady":true,"running":false,"conversationId":"composer",
+            "messages":[]
+        }));
+        let sent = "帮我检查模型配置";
+        ui.input.set_value(sent);
+        ui.input.set_insertion_point_end();
+        // Only this GUI thread's keyboard state changes. No SendInput,
+        // visible window, backend post, product or model is used.
+        let mut previous = KeyboardState([0; 256]);
+        assert_ne!(unsafe { GetKeyboardState(previous.0.as_mut_ptr()) }, 0);
+        let mut control = [0; 256];
+        control[0x11] = 0x80; // VK_CONTROL
+        control[0xa2] = 0x80; // VK_LCONTROL
+        assert_ne!(unsafe { SetKeyboardState(control.as_ptr()) }, 0);
+        ui.acting.store(true, Ordering::SeqCst);
+        let editor = unsafe { GetWindow(ui.input.get_handle(), GW_CHILD) };
+        assert!(!editor.is_null());
+        unsafe {
+            SendMessageW(editor, WM_KEYDOWN, 13, 1);
+            SendMessageW(editor, WM_CHAR, 10, 1);
+        }
+        drop(previous);
+        assert_eq!(ui.input.get_value(), sent, "submit inserted a native newline");
+
+        ui.input.set_size(visual::dip_size(&ui.input, 300, 90));
+        ui.input.layout();
+        let long_draft = (0..40).map(|index| format!("第 {index} 行草稿\n")).collect::<String>();
+        ui.input.set_value(&long_draft);
+        ui.input.set_insertion_point_end();
+        assert_eq!(unsafe { GetWindowLongPtrW(editor, GWL_STYLE) } & WS_VSCROLL as isize, 0);
+        let first_line = unsafe { SendMessageW(editor, 0xce, 0, 0) };
+        assert!(first_line > 0);
+        unsafe { SendMessageW(editor, WM_MOUSEWHEEL, 120usize << 16, 0) };
+        assert!(unsafe { SendMessageW(editor, 0xce, 0, 0) } < first_line,
+            "hidden scrollbar must retain native multiline wheel scrolling");
+        ui.input.set_selection(0, 2);
+        unsafe { SendMessageW(editor, 0xb7, 0, 0) };
+        assert_eq!(unsafe { SendMessageW(editor, 0xce, 0, 0) }, 0);
+        assert_eq!(ui.input.get_selection(), (0, 2));
+        assert_eq!(ui.input.get_value(), long_draft);
+        assert!(!ui.chat.is_shown() && !parent.is_shown());
+        parent.destroy();
+    }).unwrap();
 }
 
 #[cfg(all(test, windows))]

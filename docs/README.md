@@ -1,5 +1,9 @@
 # TianCaiSpaceHub 文档总入口
 
+2026-11-11 本批追加：[统一操作反馈](development/operation-feedback.md) 将操作结果集中为右上小浮窗并取消关闭到托盘提醒；[搭档用量查询](customizations/assistant-usage.md) 复用当前账户扣费、Token 和本机请求能力。[四套性格草案](customizations/genius-buddy-personalities-draft.md) 供用户编辑审核，暂未接入产品。
+
+2026-11-11 **V1.0.25 用户反馈修复**：ZCode 启动探针处理资源计时条目缺失时的 HTTP 409；同批处理搭档回复裁切、Ctrl+Enter 发送残留、可见滚动条，以及助手保存后的模型/渠道刷新和专用客户端模型名称显示。实现见 [客户端](customizations/desktop-client-adapters.md)、[搭档](customizations/genius-buddy.md) 和 [视觉](development/desktop-visual-system.md)；本批检查、唯一新包和实机待验范围见 [V25 交付](releases/v1.0.25.md)。下列历史结果保留原版本归属。
+
 2026-11-11 **V1.0.24 统一集成**：搭档滚轮、Markdown、真实模型解析和保存回读；Codex 模型页同步、五端全展示及轻量动画；小分队统一弹窗和多模型/多客户端导入；ZCode 外部模型免登录启动与天工可见错误反馈。实现见 [搭档](customizations/genius-buddy.md)、[视觉](development/desktop-visual-system.md)、[导入](hub-external-import.md)、[账户](customizations/tiancai-squad-account.md) 和 [客户端](customizations/desktop-client-adapters.md)。最终检查、唯一新包及验收边界以 [V24 交付](releases/v1.0.24.md) 为准，下列历史状态保留原归属。 Windows GUI/release、45 项不同 Rust、7 项 Node 和真实 Server 5 轮验收通过；唯一 MSI `193313` 已生成并完成静态核验，用户实机和 macOS 仍待验收。
 
 2026-11-11 **V1.0.23 搭档配置流水线与界面精简**：修正 Windows 原生业务页遮挡浮层，补充助手操作指引及参数回读；隐藏 WebStorm/VS Code，增加 MiniMax 厂商预设。GUI编译及57项定向回归通过，原真实模型7轮配置流程和屏幕夹具沿原输入复用；新增密钥创建/列表选择→渠道→临时ZCode指定模型的真实3轮流程通过，测试密钥已撤销。Windows release与唯一MSI `181709`已生成，版本/升级及六项载荷核验通过，源码已推送GitHub `main`（`b05775a`）。身份及验收边界见 [V23交付](releases/v1.0.23.md)，行为见 [搭档](customizations/genius-buddy.md)、[账户](customizations/tiancai-squad-account.md) 与 [客户端](customizations/desktop-client-adapters.md)。

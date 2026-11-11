@@ -224,14 +224,12 @@ impl ResourceUi {
         tab.resolve.on_click(move |_| {
             let failed = c.failed.borrow().clone();
             if let Some(mut body) = failed {
-                let decision = MessageDialog::builder(
+                if super::feedback::confirm(
                     &c.frame,
-                    "已使用的客户端会保留。用 Hub 配置替换失败端的同名条目或后改内容？",
                     "处理配置冲突",
-                )
-                .with_style(MessageDialogStyle::YesNo | MessageDialogStyle::IconQuestion)
-                .build();
-                if decision.show_modal() == ID_YES {
+                    "已使用的客户端会保留。用 Hub 配置替换失败端的同名条目或后改内容？",
+                    "替换",
+                ) {
                     body["replaceConflict"] = true.into();
                     let path = if body.get("changes").is_some() {
                         "/api/desktop/resource/selection"
@@ -358,7 +356,9 @@ impl ResourceUi {
         if self.busy.swap(true, Ordering::SeqCst) {
             return;
         }
+        *self.last_request.borrow_mut() = None;
         tab.status.set_label("正在读取客户端配置…");
+        tab.status.show(true);
         self.set_enabled(false);
         self.scanned_at.set(Some(Instant::now()));
         let (api, tx) = (self.api.clone(), self.tx.clone());
@@ -378,6 +378,7 @@ impl ResourceUi {
         *self.last_request.borrow_mut() = Some((path.into(), body.clone()));
         self.set_enabled(false);
         tab.status.set_label("正在更新配置…");
+        tab.status.show(true);
         tab.picker.summary.set_label("正在应用更改…");
         let (api, tx, path) = (self.api.clone(), self.tx.clone(), path.to_string());
         std::thread::spawn(move || {
@@ -502,14 +503,19 @@ impl ResourceUi {
                         } else {
                             messages.join("\n")
                         };
+                        if !message.is_empty() {
+                            super::feedback::error(&self.frame, &message);
+                        } else if self.last_request.borrow().is_some()
+                            || value.get("outcomes").is_some()
+                        {
+                            super::feedback::success(&self.frame, "配置已更新");
+                        }
                         for tab in &self.all_tabs() {
-                            tab.status.set_label(&message);
-                            tab.status.show(!message.is_empty());
-                            tab.status.wrap(580);
+                            tab.status.set_label("");
+                            tab.status.hide();
                             if value.get("outcomes").is_some() && tab.picker.page.is_shown() {
                                 tab.book.change_selection(0);
                             }
-                            tab.picker.summary.set_label(&message);
                             tab.retry.set_label(if self.failed.borrow().is_some() {
                                 "重试失败端"
                             } else {
@@ -533,10 +539,13 @@ impl ResourceUi {
                         }
                     }
                     Err(_) => {
+                        super::feedback::error(
+                            &self.frame,
+                            "管理数据格式不匹配，请更新后台服务后重新读取。",
+                        );
                         for tab in &self.all_tabs() {
-                            tab.status
-                                .set_label("管理数据格式不匹配，请更新后台服务后重试");
-                            tab.status.show(true);
+                            tab.status.set_label("");
+                            tab.status.hide();
                             tab.retry.show(true);
                             tab.page.layout();
                         }
@@ -544,14 +553,13 @@ impl ResourceUi {
                 }
             }
             Err(error) => {
+                super::feedback::error(&self.frame, &error);
                 for tab in &self.all_tabs() {
-                    tab.status.set_label(&error);
-                    tab.status.show(true);
+                    tab.status.set_label("");
+                    tab.status.hide();
                     tab.retry.show(true);
-                    tab.status.wrap(580);
-                    tab.picker.invalidate(&format!(
-                        "未能确认更改结果：{error}。请重新读取后再选择；此处不会自动重复提交。"
-                    ));
+                    tab.picker
+                        .invalidate("配置尚未确认，请重新读取后继续选择。");
                     tab.page.layout();
                 }
             }
@@ -787,18 +795,15 @@ impl ResourceUi {
         }
         let sharing = tab.picker.sharing();
         if !sharing.is_empty()
-            && MessageDialog::builder(
+            && !super::feedback::confirm(
                 &self.frame,
+                "共享文件夹",
                 &format!(
                     "这些客户端共用同一个 Skill 文件夹，本次更改会同时影响：{}。继续应用？",
                     sharing.join("、")
                 ),
-                "共享文件夹",
+                "应用",
             )
-            .with_style(MessageDialogStyle::YesNo | MessageDialogStyle::IconQuestion)
-            .build()
-            .show_modal()
-                != ID_YES
         {
             return;
         }
@@ -880,37 +885,29 @@ impl ResourceUi {
                     shared.into_iter().collect::<Vec<_>>().join("、")
                 )
             };
-            if MessageDialog::builder(
+            if !super::feedback::confirm(
                 &self.frame,
+                "移除客户端配置",
                 &format!(
                     "从 {} 移除 {}？Hub 中的内容及其他独立客户端配置会保留。{}",
                     client.name(),
                     row.resource.name,
                     sharing
                 ),
-                "移除客户端配置",
-            )
-            .with_style(MessageDialogStyle::YesNo | MessageDialogStyle::IconQuestion)
-            .build()
-            .show_modal()
-                != ID_YES
-            {
+                "移除",
+            ) {
                 return;
             }
             self.post("/api/desktop/resource/use",json!({"resourceId":row.resource.id,
                 "targets":targets.iter().map(|t|t.target_id.clone()).collect::<Vec<_>>(),"using":false}),tab);
             return;
         }
-        if MessageDialog::builder(
+        if !super::feedback::confirm(
             &self.frame,
+            "删除",
             &format!("删除 {}？", row.resource.name),
             "删除",
-        )
-        .with_style(MessageDialogStyle::YesNo | MessageDialogStyle::IconQuestion)
-        .build()
-        .show_modal()
-            != ID_YES
-        {
+        ) {
             return;
         }
         self.post(

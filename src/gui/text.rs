@@ -116,17 +116,6 @@ impl GuiText {
         }
     }
 
-    pub(super) fn tray_still_running_message(self) -> &'static str {
-        match self.locale {
-            GuiLocale::ZhCn => {
-                "TianCaiSpaceHub 已隐藏到托盘，本地服务会继续运行。需要退出时请使用托盘菜单里的“退出 TianCaiSpaceHub”。"
-            }
-            GuiLocale::EnUs => {
-                "TianCaiSpaceHub is hidden in the tray and the local service keeps running. Use Quit TianCaiSpaceHub from the tray menu to exit."
-            }
-        }
-    }
-
     pub(super) fn language_menu(self) -> &'static str {
         "&Language / 语言"
     }

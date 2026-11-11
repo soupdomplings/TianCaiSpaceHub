@@ -377,12 +377,12 @@ pub(super) fn show(parent: &Frame, api: ApiClient) {
             if !can_prepare.get() {
                 return Err("请先启用本机协助并保存设置".into());
             }
-            let confirmation = MessageDialog::builder(&dialog,
+            let accepted = super::feedback::confirm(
+                &dialog,
+                "安装天才搭档 Server",
                 "将从已有兼容程序准备共享的天才搭档 Server；本机没有可用来源时，从官方下载安装。\n\n天才搭档和天工协助共用这一份运行端，安装后长期保留。现在准备？",
-                "安装天才搭档 Server")
-                .with_style(MessageDialogStyle::YesNo | MessageDialogStyle::IconQuestion).build();
-            let accepted = confirmation.show_modal() == ID_YES;
-            confirmation.destroy();
+                "安装",
+            );
             if !accepted {
                 return Err("已取消准备。功能保持启用，运行端尚未就绪；需要时可再次准备。".into());
             }

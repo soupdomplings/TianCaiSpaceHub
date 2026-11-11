@@ -63,9 +63,11 @@ pub(super) struct WorkBuddyTab {
     start_button: Button,
     status: StaticText,
     in_flight: Arc<AtomicBool>,
+    refresh_pending: Rc<RefCell<super::configuration_refresh::PendingRefresh>>,
     provider_options: WorkBuddyProviderOptions,
     selection: Rc<RefCell<WorkBuddySelection>>,
     draft: Rc<RefCell<Option<(WorkBuddyModelConfig, String)>>>,
+    editor_base: Rc<RefCell<Option<(serde_json::Value, String)>>>,
 }
 
 #[derive(Default)]
@@ -261,9 +263,11 @@ pub(super) fn create_with_settings(
         start_button,
         status,
         in_flight: Arc::new(AtomicBool::new(false)),
+        refresh_pending: Default::default(),
         provider_options: Rc::new(RefCell::new(Vec::new())),
         selection: Rc::new(RefCell::new(WorkBuddySelection::default())),
         draft: Default::default(),
+        editor_base: Default::default(),
     };
     apply_model(&tab, &WorkBuddyModelConfig::default());
     update_controls(&tab);
@@ -462,17 +466,28 @@ pub(super) fn apply_result(
     tab: &WorkBuddyTab,
     frame: &Frame,
     text: GuiText,
-    _api: &ApiClient,
-    _gui_tx: &tokio::sync::mpsc::UnboundedSender<super::GuiMessage>,
+    api: &ApiClient,
+    gui_tx: &tokio::sync::mpsc::UnboundedSender<super::GuiMessage>,
     result: WorkBuddyActionResult,
 ) {
     // Only release the busy state after applying the reply on the GUI thread.
     tab.in_flight.store(false, Ordering::SeqCst);
+    let queued = tab.refresh_pending.borrow_mut().take();
+    if matches!(&result, WorkBuddyActionResult::Refresh(..)) && queued.is_some() {
+        refresh_configuration(tab, api, gui_tx, false, queued.unwrap());
+        return;
+    }
     match result {
-        WorkBuddyActionResult::Start(Ok(detail)) => tab.status.set_label(&detail),
+        WorkBuddyActionResult::Start(Ok(detail)) => {
+            if let Some(status) = &tab.selection.borrow().status {
+                show_configuration_status(tab, status);
+            }
+            show_info(frame, &detail);
+        }
         WorkBuddyActionResult::Start(Err(error)) => {
-            tab.status
-                .set_label(tr(text, "启动未完成。", "Startup did not complete."));
+            if let Some(status) = &tab.selection.borrow().status {
+                show_configuration_status(tab, status);
+            }
             show_error(frame, &error);
         }
         WorkBuddyActionResult::Save(Ok(status)) => {
@@ -480,24 +495,38 @@ pub(super) fn apply_result(
                 tab.draft.borrow_mut().take();
             }
             apply_status(tab, status);
-            tab.status.set_label(text.workbuddy_saved());
             show_info(frame, text.workbuddy_saved());
         }
         WorkBuddyActionResult::Restore(Ok(status)) => {
             apply_status(tab, status);
-            tab.status
-                .set_label(tr(text, "上次操作已撤销。", "Last operation undone."));
+            show_info(
+                frame,
+                tr(text, "上次操作已撤销。", "Last operation undone."),
+            );
         }
         WorkBuddyActionResult::Delete(Ok(status)) => {
             apply_status(tab, status);
-            tab.status.set_label(tr(
-                text,
-                "所选模型已删除，可撤销上次操作。",
-                "Selected model deleted. You can undo this operation.",
-            ));
+            show_info(
+                frame,
+                tr(
+                    text,
+                    "所选模型已删除，可撤销上次操作。",
+                    "Selected model deleted. You can undo this operation.",
+                ),
+            );
         }
         WorkBuddyActionResult::Refresh(Ok((options, status)), rebase) => {
-            if rebase || tab.draft.borrow().is_none() {
+            let preserved = preserved_editor(tab, rebase);
+            let changed = preserved
+                .as_ref()
+                .is_some_and(|editor| editor.base.1 != status.revision);
+            let removed = preserved.as_ref().is_some_and(|editor| {
+                !status
+                    .entries
+                    .iter()
+                    .any(|entry| entry.entry_id == editor.entry_id)
+            });
+            if rebase || (tab.draft.borrow().is_none() && preserved.is_none()) {
                 *tab.provider_options.borrow_mut() = options;
             }
             if rebase {
@@ -506,6 +535,43 @@ pub(super) fn apply_result(
                 }
             }
             apply_status(tab, status);
+            if let Some(super::configuration_refresh::PreservedEditor {
+                entry_id,
+                values,
+                base,
+            }) = preserved
+            {
+                let mut model = tab
+                    .selection
+                    .borrow()
+                    .status
+                    .as_ref()
+                    .unwrap()
+                    .model
+                    .clone();
+                model.upstream_provider = values["provider"].as_str().unwrap_or_default().into();
+                model.provider_model = values["model"].as_str().unwrap_or_default().into();
+                model.upstream_protocol = values["protocol"].as_str().unwrap_or_default().into();
+                model.reasoning.default_effort =
+                    values["effort"].as_str().unwrap_or_default().into();
+                model.upstream_default_reasoning_effort = model.reasoning.default_effort.clone();
+                apply_provider_options(tab, &model);
+                {
+                    let mut selection = tab.selection.borrow_mut();
+                    selection.fresh &= !changed && !removed;
+                    if let Some(status) = selection.status.as_mut() {
+                        status.revision = base.1.clone();
+                        status.selected_entry_id = Some(entry_id);
+                    }
+                }
+                *tab.editor_base.borrow_mut() = Some(base);
+                if removed {
+                    tab.entry.set_selection(0, false);
+                    tab.status.set_label(tr(text, "正在编辑的模型已移除；当前输入已保留，请载入更新。", "The model being edited was removed. Your inputs are retained; load updates to continue."));
+                } else if changed {
+                    tab.status.set_label(tr(text, "配置已更新；当前输入已保留，请载入更新。", "Configuration changed. Your inputs are retained; load updates to continue."));
+                }
+            }
         }
         WorkBuddyActionResult::Refresh(Err(error), _) => {
             tab.selection.borrow_mut().fresh = false;
@@ -522,9 +588,11 @@ pub(super) fn apply_result(
         | WorkBuddyActionResult::Delete(Err(error))
         | WorkBuddyActionResult::Restore(Err(error)) => {
             tab.selection.borrow_mut().fresh = false;
-            tab.status.set_label(tr(text,
-                "操作未完成，当前输入已保留；点击“载入更新”后重试。",
-                "The operation did not complete. Your inputs are retained; load updates before retrying."));
+            tab.status.set_label(tr(
+                text,
+                "当前输入已保留；请载入更新。",
+                "Your inputs are retained; load updates to continue.",
+            ));
             show_error(frame, &error);
         }
     }
@@ -532,6 +600,9 @@ pub(super) fn apply_result(
     tab.status.wrap(920);
     tab.page.layout();
     tab.editor_scroll.fit_inside();
+    if let Some(rebase) = queued {
+        refresh_configuration(tab, api, gui_tx, false, rebase);
+    }
 }
 
 pub(super) fn refresh_configuration(
@@ -541,6 +612,10 @@ pub(super) fn refresh_configuration(
     startup: bool,
     rebase_draft: bool,
 ) {
+    if tab.in_flight.load(Ordering::SeqCst) {
+        tab.refresh_pending.borrow_mut().request(rebase_draft);
+        return;
+    }
     capture_draft(tab);
     if !begin_action(
         tab,
@@ -643,13 +718,7 @@ pub(super) fn copy_source_label(provider: &ProviderConfig) -> String {
             .map(|b| b.client.name())
             .unwrap_or("客户端")
     };
-    let model = provider
-        .model_aliases
-        .keys()
-        .next()
-        .or_else(|| provider.models.first())
-        .map(String::as_str)
-        .unwrap_or("模型");
+    let model = super::ai_gateway::provider_display_name(provider);
     format!("{client} · {model}")
 }
 
@@ -1136,6 +1205,19 @@ fn apply_status(tab: &WorkBuddyTab, mut status: WorkBuddyConfigStatus) {
     }
     apply_model(tab, &model);
     apply_provider_options(tab, &model);
+    show_configuration_status(tab, &status);
+    let revision = status.revision.clone();
+    *tab.selection.borrow_mut() = WorkBuddySelection {
+        fresh: !revision.is_empty(),
+        status: Some(status),
+    };
+    *tab.editor_base.borrow_mut() = Some((editor_values(tab), revision));
+    update_controls(tab);
+    tab.page.layout();
+    tab.editor_scroll.fit_inside();
+}
+
+fn show_configuration_status(tab: &WorkBuddyTab, status: &WorkBuddyConfigStatus) {
     let message = if let Some(error) = &status.error {
         error.as_str()
     } else if status.selected_entry_id.is_none() {
@@ -1144,8 +1226,10 @@ fn apply_status(tab: &WorkBuddyTab, mut status: WorkBuddyConfigStatus) {
             "选择渠道和模型后保存。",
             "Choose a source channel and model, then save to add a separate WorkBuddy model.",
         )
-    } else if selected
-        .and_then(|index| status.entries.get(index))
+    } else if status
+        .selected_entry_id
+        .as_ref()
+        .and_then(|id| status.entries.iter().find(|entry| &entry.entry_id == id))
         .is_some_and(|entry| entry.configured)
     {
         tr(
@@ -1162,13 +1246,38 @@ fn apply_status(tab: &WorkBuddyTab, mut status: WorkBuddyConfigStatus) {
     };
     tab.status.set_label(message);
     tab.status.wrap(920);
-    *tab.selection.borrow_mut() = WorkBuddySelection {
-        fresh: !status.revision.is_empty(),
-        status: Some(status),
-    };
-    update_controls(tab);
-    tab.page.layout();
-    tab.editor_scroll.fit_inside();
+}
+
+fn editor_values(tab: &WorkBuddyTab) -> serde_json::Value {
+    let provider = tab
+        .provider
+        .get_selection()
+        .and_then(|index| index.checked_sub(1))
+        .and_then(|index| {
+            tab.provider_options
+                .borrow()
+                .get(index as usize)
+                .map(|provider| provider.name.clone())
+        });
+    serde_json::json!({"provider":provider,"model":tab.model.get_value(),"protocol":selected_protocol(tab),
+        "effort":tab.default_effort.get_string_selection().unwrap_or_default()})
+}
+
+fn preserved_editor(
+    tab: &WorkBuddyTab,
+    rebase: bool,
+) -> Option<super::configuration_refresh::PreservedEditor> {
+    if rebase {
+        return None;
+    }
+    let entry_id = selected_entry_id(tab)?;
+    let base = tab.editor_base.borrow().clone()?;
+    let values = editor_values(tab);
+    (values != base.0).then_some(super::configuration_refresh::PreservedEditor {
+        entry_id,
+        values,
+        base,
+    })
 }
 
 fn apply_model(tab: &WorkBuddyTab, model: &WorkBuddyModelConfig) {
@@ -1229,7 +1338,7 @@ pub(super) fn review_inline_draft(
             providers: vec![ProviderConfig {
                 name: "synthetic-source".into(),
                 base_url: "https://provider.example.invalid".into(),
-                models: vec!["gpt-6".into()],
+                models: vec!["gpt-6".into(), "gpt-6-astra".into()],
                 ..Default::default()
             }],
             ..Default::default()
@@ -1257,6 +1366,79 @@ pub(super) fn review_inline_draft(
         revision: "original-revision".into(),
         error: None,
     };
+    apply_status(&tab, status.clone());
+    let original_options = tab.provider_options.borrow().clone();
+    tab.protocol.set_selection(1);
+    refresh_model_settings(&tab);
+    tab.default_effort.set_value("max");
+    let edited = editor_values(&tab);
+    let mut latest = status.clone();
+    latest.revision = "assistant-saved-revision".into();
+    let mut new_entry = latest.entries[0].clone();
+    new_entry.entry_id = "assistant-added-entry".into();
+    new_entry.model.provider_model = "gpt-6-astra".into();
+    latest.entries.push(new_entry);
+    apply_result(
+        &tab,
+        frame,
+        text,
+        &review_api,
+        &review_tx,
+        WorkBuddyActionResult::Refresh(Ok((original_options.clone(), latest.clone())), false),
+    );
+    assert_eq!(
+        tab.selection
+            .borrow()
+            .status
+            .as_ref()
+            .unwrap()
+            .entries
+            .len(),
+        2
+    );
+    assert_eq!(editor_values(&tab), edited);
+    assert_eq!(selected_entry_id(&tab).as_deref(), Some("saved-entry"));
+    assert_eq!(
+        tab.selection.borrow().status.as_ref().unwrap().revision,
+        "original-revision"
+    );
+    assert!(build_request(&tab).is_err());
+    assert!(tab.reload_button.is_shown());
+    apply_result(
+        &tab,
+        frame,
+        text,
+        &review_api,
+        &review_tx,
+        WorkBuddyActionResult::Refresh(Ok((original_options.clone(), latest.clone())), true),
+    );
+    assert_eq!(
+        build_request(&tab).unwrap().revision,
+        "assistant-saved-revision"
+    );
+    assert_ne!(editor_values(&tab), edited);
+    assert!(!tab.reload_button.is_shown());
+    tab.protocol.set_selection(1);
+    refresh_model_settings(&tab);
+    tab.default_effort.set_value("max");
+    let edited = editor_values(&tab);
+    latest.entries.remove(0);
+    latest.revision = "external-delete-revision".into();
+    select_status_entry(&mut latest, None);
+    apply_result(
+        &tab,
+        frame,
+        text,
+        &review_api,
+        &review_tx,
+        WorkBuddyActionResult::Refresh(Ok((original_options.clone(), latest)), false),
+    );
+    assert_eq!(editor_values(&tab), edited);
+    assert_eq!(selected_entry_id(&tab).as_deref(), Some("saved-entry"));
+    assert!(tab.entry.get_selection().is_none());
+    assert!(build_request(&tab).is_err());
+    assert!(tab.reload_button.is_shown());
+    *tab.provider_options.borrow_mut() = original_options;
     apply_status(&tab, status);
     for _ in 0..4 {
         begin_model_draft(&tab);

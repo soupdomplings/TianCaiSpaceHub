@@ -168,10 +168,12 @@ mod clients;
 mod codex_model_catalog;
 mod codex_models;
 mod codex_tab;
+mod configuration_refresh;
 mod controls;
 mod daemon;
 mod dialog_job;
 mod external_import;
+mod feedback;
 mod gmclaw;
 mod im_accounts;
 mod local_assistance;
@@ -623,6 +625,7 @@ fn build_ui(
     // diagnostic state while each page moves to its own graphical overview.
     status_box.hide();
     let shell = shell::Shell::new(&root, &frame);
+    feedback::install(frame, shell.assistant_host);
     theme::load_motion_preference();
     let notebook = shell.book;
     let overview_ui = overview::Overview::new(&shell, frame, api.clone(), text);
@@ -1465,6 +1468,17 @@ fn build_ui(
             force_dashboard_refresh(&api, &refresh);
         });
     }
+    {
+        let clients = client_pages.clone();
+        let api = api.clone();
+        let refresh = dashboard_refresh.clone();
+        assistant_ui.on_configuration_changed(move || {
+            for client in &clients {
+                client.configuration_changed();
+            }
+            force_dashboard_refresh(&api, &refresh);
+        });
+    }
     nvwa::bind_actions(&nvwa_tab, &frame, text, &gui_tx);
 
     bind_system_commands(
@@ -2172,7 +2186,14 @@ fn build_ui(
                                 apply_pending_ai_gw_action(&handles, &frame, result);
                             }
                             GuiMessage::GmClaw(result) => {
-                                gmclaw::apply_result(&gmclaw_tab, &frame, handles.text, result);
+                                gmclaw::apply_result(
+                                    &gmclaw_tab,
+                                    &frame,
+                                    handles.text,
+                                    &api,
+                                    &gui_tx,
+                                    result,
+                                );
                                 needs_dashboard_refresh = true;
                             }
                             GuiMessage::Nvwa(result) => {
@@ -2303,6 +2324,7 @@ fn build_ui(
                 session_ending.load(Ordering::SeqCst) || (!was_quitting && !can_veto);
             quitting.store(true, Ordering::SeqCst);
             dashboard_refresh.closing.store(true, Ordering::SeqCst);
+            feedback::dismiss_all();
             tray_controller.remove_icon();
             if session_exit {
                 gui_timers.stop_for_session_end();
@@ -6258,29 +6280,43 @@ fn schedule_dashboard_refresh(api: &ApiClient, refresh: &DashboardRefresh) -> bo
 }
 
 fn force_dashboard_refresh(api: &ApiClient, refresh: &DashboardRefresh) -> bool {
+    // Share completion's lock so invalidation cannot fall between the last
+    // generation check and clearing in_flight. One worker reads the newest view.
+    let Ok(mut result) = refresh.result.lock() else {
+        return false;
+    };
     let generation = refresh.generation.fetch_add(1, Ordering::SeqCst) + 1;
-    if let Ok(mut result) = refresh.result.lock() {
-        result.take();
+    result.take();
+    let running = refresh.in_flight.swap(true, Ordering::SeqCst);
+    drop(result);
+    if !running {
+        spawn_dashboard_refresh(api, refresh, generation);
     }
-    refresh.in_flight.store(true, Ordering::SeqCst);
-    spawn_dashboard_refresh(api, refresh, generation);
     true
 }
 
-fn spawn_dashboard_refresh(api: &ApiClient, refresh: &DashboardRefresh, generation: u64) {
+fn spawn_dashboard_refresh(api: &ApiClient, refresh: &DashboardRefresh, mut generation: u64) {
     let api = api.clone();
     let result = refresh.result.clone();
     let in_flight = refresh.in_flight.clone();
     let current_generation = refresh.generation.clone();
     let gui_tx = refresh.gui_tx.clone();
     thread::spawn(move || {
-        let snapshot = api.dashboard();
-        if generation == current_generation.load(Ordering::SeqCst)
-            && let Ok(mut slot) = result.lock()
-        {
+        loop {
+            let snapshot = api.dashboard();
+            let Ok(mut slot) = result.lock() else {
+                in_flight.store(false, Ordering::SeqCst);
+                break;
+            };
+            let latest = current_generation.load(Ordering::SeqCst);
+            if generation != latest {
+                generation = latest;
+                continue;
+            }
             slot.replace((generation, snapshot));
+            in_flight.store(false, Ordering::SeqCst);
+            break;
         }
-        in_flight.store(false, Ordering::SeqCst);
         let _ = gui_tx.send(GuiMessage::DashboardUpdate);
         wxdragon::wake_up_idle();
     });
@@ -7035,83 +7071,58 @@ fn show_about_dialog(parent: &Frame) {
 }
 
 fn show_info(parent: &dyn WxWidget, message: &str) {
-    MessageDialog::builder(parent, message, "TianCaiSpaceHub")
-        .with_style(MessageDialogStyle::OK | MessageDialogStyle::IconInformation)
-        .build()
-        .show_modal();
+    feedback::success(parent, message);
 }
 
 fn show_error(parent: &dyn WxWidget, message: &str) {
-    MessageDialog::builder(parent, message, "TianCaiSpaceHub")
-        .with_style(MessageDialogStyle::OK | MessageDialogStyle::IconError)
-        .build()
-        .show_modal();
+    feedback::error(parent, message);
 }
 
 fn confirm_open_update_release(parent: &dyn WxWidget, text: GuiText, message: &str) -> bool {
-    MessageDialog::builder(parent, message, text.update_dialog_title())
-        .with_style(MessageDialogStyle::YesNo | MessageDialogStyle::IconQuestion)
-        .build()
-        .show_modal()
-        == ID_YES
+    feedback::confirm(parent, text.update_dialog_title(), message, "打开更新页")
 }
 
 fn confirm_switch_compatible_connection(parent: &dyn WxWidget, text: GuiText) -> bool {
-    MessageDialog::builder(
+    feedback::confirm(
         parent,
-        text.local_connection_detected_message(),
         text.local_connection_detected_title(),
+        text.local_connection_detected_message(),
+        "切换",
     )
-    .with_style(MessageDialogStyle::YesNo | MessageDialogStyle::IconQuestion)
-    .build()
-    .show_modal()
-        == ID_YES
 }
 
 fn confirm_uninstall_codex_app_config(parent: &dyn WxWidget, text: GuiText) -> bool {
-    MessageDialog::builder(
+    feedback::confirm(
         parent,
-        text.confirm_uninstall_codex_app_message(),
         text.confirm_uninstall_codex_app_title(),
+        text.confirm_uninstall_codex_app_message(),
+        "移除",
     )
-    .with_style(MessageDialogStyle::YesNo | MessageDialogStyle::IconQuestion)
-    .build()
-    .show_modal()
-        == ID_YES
 }
 
 fn confirm_delete_im_account(parent: &dyn WxWidget, text: GuiText, account_name: &str) -> bool {
-    MessageDialog::builder(
+    feedback::confirm(
         parent,
-        &text.confirm_delete_im_account_message(account_name),
         text.confirm_delete_im_account_title(),
+        &text.confirm_delete_im_account_message(account_name),
+        "删除",
     )
-    .with_style(MessageDialogStyle::YesNo | MessageDialogStyle::IconQuestion)
-    .build()
-    .show_modal()
-        == ID_YES
 }
 
 fn confirm_clear_old_request_logs(parent: &dyn WxWidget, text: GuiText) -> bool {
-    MessageDialog::builder(
+    feedback::confirm(
         parent,
-        text.request_log_clear_old_confirm_message(),
         text.request_log_clear_old_confirm_title(),
+        text.request_log_clear_old_confirm_message(),
+        "清理",
     )
-    .with_style(MessageDialogStyle::YesNo | MessageDialogStyle::IconQuestion)
-    .build()
-    .show_modal()
-        == ID_YES
 }
 
 fn confirm_clear_all_request_logs(parent: &dyn WxWidget, text: GuiText) -> bool {
-    MessageDialog::builder(
+    feedback::confirm(
         parent,
-        text.request_log_clear_all_confirm_message(),
         text.request_log_clear_all_confirm_title(),
+        text.request_log_clear_all_confirm_message(),
+        "清空",
     )
-    .with_style(MessageDialogStyle::YesNo | MessageDialogStyle::IconQuestion)
-    .build()
-    .show_modal()
-        == ID_YES
 }

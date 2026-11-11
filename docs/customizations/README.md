@@ -1,5 +1,9 @@
 # 二开功能总表
 
+V1.0.25 追加：[统一操作反馈](../development/operation-feedback.md) 与导入文案简化；[搭档统计查询](assistant-usage.md) 直接读取当前小分队账户用量、实际扣费及本机请求，回复简短自然。[性格草案](genius-buddy-personalities-draft.md) 待用户审核，产品尚无性格开关。
+
+2026-11-11 **TC-016/018/023 V1.0.25 用户反馈修复**：ZCode 首屏脚本发现不再依赖资源计时缓冲区；搭档正文裁切、快捷发送残留和可见滚动条，以及保存后模型/渠道刷新、专用客户端模型名称显示纳入同批。维护入口见 [客户端](desktop-client-adapters.md)、[搭档](genius-buddy.md)、[视觉](../development/desktop-visual-system.md)；实现、必要检查、唯一包和待用户验收状态统一见 [V25 交付](../releases/v1.0.25.md)。
+
 2026-11-11 **TC-011/012/016/018/019/023 V1.0.24 集成**：搭档原生滚轮、Markdown 表格、真实来源解析及客户端副本回读；Codex 模型同步并保留草稿。左栏五端全展示、菜单/对话框动画、小分队统一弹窗与多模型多客户端导入；ZCode 外部模型免登录启动和天工增强启动反馈。行为及回滚见 [搭档](genius-buddy.md)、[客户端](desktop-client-adapters.md)、[天工](gmclaw.md)、[账户](tiancai-squad-account.md) 和 [视觉](../development/desktop-visual-system.md)，检查及唯一测试包见 [V24 交付](../releases/v1.0.24.md)。 Windows GUI/release、45 项不同 Rust、7 项 Node 和真实 Server 5 轮验收通过；唯一 MSI `193313` 已生成并完成静态核验，用户实机和 macOS 仍待验收。
 
 2026-11-11 **TC-016/018/019/023 V1.0.23 搭档流水线与界面精简**：Windows浮层补原生裁剪，同源中文指引要求执行后回读；修正参数范围、身份和导航反馈。隐藏WebStorm/VS Code、增加MiniMax厂商模板，以及当前用户密钥列表选择/创建后用引用配置渠道与指定客户端。GUI测试目标编译和57项定向回归通过；原真实模型7轮/屏幕检查与新增密钥3轮实测分别登记。Windows release及唯一MSI `181709`的版本/升级/六项载荷核验通过，源码已推送`b05775a`，见 [搭档](genius-buddy.md)、[账户](tiancai-squad-account.md)、[客户端](desktop-client-adapters.md)、[V23交付](../releases/v1.0.23.md)。

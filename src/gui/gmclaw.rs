@@ -91,7 +91,9 @@ pub(super) struct GmClawTab {
     normal_start_button: Button,
     state: Rc<RefCell<SelectionState>>,
     in_flight: Arc<AtomicBool>,
+    refresh_pending: Rc<RefCell<super::configuration_refresh::PendingRefresh>>,
     draft: Rc<RefCell<Option<ModelDraft>>>,
+    editor_base: Rc<RefCell<Option<(serde_json::Value, String)>>>,
 }
 
 #[derive(Debug)]
@@ -484,7 +486,9 @@ pub(super) fn create_with_settings(
             ..SelectionState::default()
         })),
         in_flight: Arc::new(AtomicBool::new(false)),
+        refresh_pending: Default::default(),
         draft: Default::default(),
+        editor_base: Default::default(),
     };
     update_parameter_hint(&tab, text);
     update_controls(&tab);
@@ -814,6 +818,10 @@ pub(super) fn refresh(
     startup: bool,
     rebase_draft: bool,
 ) {
+    if tab.in_flight.load(Ordering::SeqCst) {
+        tab.refresh_pending.borrow_mut().request(rebase_draft);
+        return;
+    }
     capture_draft(tab);
     if !begin_action(
         tab,
@@ -900,27 +908,42 @@ pub(super) fn apply_result(
     tab: &GmClawTab,
     frame: &Frame,
     text: GuiText,
+    api: &ApiClient,
+    gui_tx: &tokio::sync::mpsc::UnboundedSender<super::GuiMessage>,
     result: GmClawActionResult,
 ) {
     // Keep the model action busy until its result reaches the GUI thread.
     tab.in_flight.store(false, Ordering::SeqCst);
-    let start_feedback = match &result {
-        GmClawActionResult::Start(Ok(detail) | Err(detail)) => Some(detail.clone()),
-        _ => None,
-    };
+    let queued = tab.refresh_pending.borrow_mut().take();
+    if matches!(&result, GmClawActionResult::Refresh(..)) && queued.is_some() {
+        refresh(tab, api, text, gui_tx, false, queued.unwrap());
+        return;
+    }
     match result {
         GmClawActionResult::Start(result) => {
             tab.start_button
                 .set_label(tr(text, "增强启动", "Enhanced start"));
-            if let Err(error) = result {
-                // This button is also available on the overview/settings tabs;
-                // the model editor's status label can be hidden there.
-                show_error(frame, &error);
+            if let Some(status) = &tab.state.borrow().status {
+                show_configuration_status(tab, text, status);
+            }
+            match result {
+                Ok(detail) => show_info(frame, &detail),
+                Err(error) => show_error(frame, &error),
             }
         }
         GmClawActionResult::Refresh(Ok((providers, status, builtins)), rebase) => {
+            let preserved = preserved_editor(tab, rebase);
+            let changed = preserved
+                .as_ref()
+                .is_some_and(|editor| editor.base.1 != status.revision);
+            let removed = preserved.as_ref().is_some_and(|editor| {
+                !status
+                    .entries
+                    .iter()
+                    .any(|entry| entry.entry_id == editor.entry_id)
+            });
             tab.account.apply(builtins);
-            if rebase || tab.draft.borrow().is_none() {
+            if rebase || (tab.draft.borrow().is_none() && preserved.is_none()) {
                 tab.state.borrow_mut().providers = providers;
             }
             if rebase {
@@ -929,6 +952,46 @@ pub(super) fn apply_result(
                 }
             }
             apply_status(tab, text, status, true);
+            if let Some(super::configuration_refresh::PreservedEditor {
+                entry_id,
+                values,
+                base,
+            }) = preserved
+            {
+                {
+                    let mut state = tab.state.borrow_mut();
+                    state.preferred_provider = values["provider"].as_str().map(str::to_string);
+                    state.preferred_model = values["model"].as_str().map(str::to_string);
+                    state.fresh &= !changed && !removed;
+                    if let Some(status) = state.status.as_mut() {
+                        status.revision = base.1.clone();
+                        status.selected_entry_id = Some(entry_id);
+                    }
+                }
+                // A removed edited row must not become a newly created model
+                // or silently switch the form to a built-in model.
+                tab.selected_builtin.borrow_mut().take();
+                let index = tab.state.borrow().providers.iter().position(|provider| {
+                    Some(provider.name.as_str()) == values["provider"].as_str()
+                });
+                tab.provider
+                    .set_selection(index.map(|index| index as u32 + 1).unwrap_or(0));
+                apply_model_choices(tab, text, false);
+                tab.max_tokens
+                    .change_value(values["maxTokens"].as_str().unwrap_or_default());
+                tab.temperature
+                    .change_value(values["temperature"].as_str().unwrap_or_default());
+                tab.temperature_mode
+                    .set_selection(values["temperatureMode"].as_u64().unwrap_or(0) as u32);
+                apply_reasoning_choices(tab, text, values["effort"].as_str().unwrap_or("auto"));
+                *tab.editor_base.borrow_mut() = Some(base);
+                if removed {
+                    tab.entry.set_selection(0, false);
+                    tab.status.set_label(tr(text, "正在编辑的模型已移除；当前输入已保留，请载入更新。", "The model being edited was removed. Your inputs are retained; load updates to continue."));
+                } else if changed {
+                    tab.status.set_label(tr(text, "配置已更新；当前输入已保留，请载入更新。", "Configuration changed. Your inputs are retained; load updates to continue."));
+                }
+            }
         }
         GmClawActionResult::Save(Ok(status)) => {
             if is_draft(tab) {
@@ -957,6 +1020,14 @@ pub(super) fn apply_result(
         }
         GmClawActionResult::Delete(Ok(status)) => {
             apply_status(tab, text, status, true);
+            show_info(
+                frame,
+                tr(
+                    text,
+                    "所选模型已删除，可撤销上次操作。",
+                    "Selected model deleted. You can undo this operation.",
+                ),
+            );
         }
         GmClawActionResult::Refresh(Err(error), _) => {
             tab.state.borrow_mut().fresh = false;
@@ -975,19 +1046,19 @@ pub(super) fn apply_result(
             tab.state.borrow_mut().fresh = false;
             tab.status.set_label(tr(
                 text,
-                "操作未完成，当前输入已保留；点击“载入更新”后重试。",
-                "The operation did not complete. Your inputs are retained; load updates before retrying.",
+                "当前输入已保留；请载入更新。",
+                "Your inputs are retained; load updates to continue.",
             ));
             show_error(frame, &error);
         }
     }
     update_controls(tab);
-    if let Some(detail) = start_feedback {
-        tab.status.set_label(&detail);
-    }
     tab.status.wrap(920);
     tab.page.layout();
     tab.editor_scroll.fit_inside();
+    if let Some(rebase) = queued {
+        refresh(tab, api, text, gui_tx, false, rebase);
+    }
 }
 
 fn provider_options(config: &AppConfig) -> Vec<GmClawProviderOption> {
@@ -1177,40 +1248,7 @@ fn apply_status(
             .unwrap_or(0.7)
             .to_string(),
     );
-    let status_text = if !status.exists {
-        tr(
-            text,
-            "未找到天工 Work 配置。请先安装并打开天工 Work 完成初始化，再回到这里刷新。",
-            "TianGong Work configuration was not found. Install and open TianGong Work to initialize it, then refresh here.",
-        )
-    } else if !status.schema_supported {
-        tr(
-            text,
-            "当前天工 Work 配置格式暂不支持，无法保存或还原。请确认安装版本与配置路径。",
-            "This TianGong Work configuration format is not supported. Saving and restoring are unavailable. Check the installed version and configuration path.",
-        )
-    } else if status.configured {
-        tr(
-            text,
-            "天工 Work 已配置为通过 Hub 接入。",
-            "TianGong Work is configured to connect through Hub.",
-        )
-    } else {
-        tr(
-            text,
-            "尚未接入 Hub。请选择渠道和模型后保存。",
-            "Not connected through Hub yet. Choose a channel and model, then save.",
-        )
-    };
-    if let Some(error) = status
-        .error
-        .as_deref()
-        .filter(|error| !error.trim().is_empty())
-    {
-        tab.status.set_label(&format!("{status_text}\n{error}"));
-    } else {
-        tab.status.set_label(status_text);
-    }
+    show_configuration_status(tab, text, &status);
     {
         let mut state = tab.state.borrow_mut();
         state.status = Some(status);
@@ -1262,6 +1300,74 @@ fn apply_status(
         );
     }
     update_parameter_hint(tab, text);
+    let revision = tab.state.borrow().status.as_ref().unwrap().revision.clone();
+    *tab.editor_base.borrow_mut() = Some((editor_values(tab), revision));
+}
+
+fn editor_values(tab: &GmClawTab) -> serde_json::Value {
+    serde_json::json!({"provider":selected_provider(tab).map(|provider| provider.name),
+        "model":tab.model.get_value(),"maxTokens":tab.max_tokens.get_value(),"temperature":tab.temperature.get_value(),
+        "temperatureMode":tab.temperature_mode.get_selection(),"effort":selected_reasoning_effort(tab).unwrap_or_else(|| "auto".into())})
+}
+
+fn preserved_editor(
+    tab: &GmClawTab,
+    rebase: bool,
+) -> Option<super::configuration_refresh::PreservedEditor> {
+    if rebase || tab.selected_builtin.borrow().is_some() {
+        return None;
+    }
+    let entry_id = tab
+        .state
+        .borrow()
+        .status
+        .as_ref()?
+        .selected_entry_id
+        .clone()?;
+    let base = tab.editor_base.borrow().clone()?;
+    let values = editor_values(tab);
+    (values != base.0).then_some(super::configuration_refresh::PreservedEditor {
+        entry_id,
+        values,
+        base,
+    })
+}
+
+fn show_configuration_status(tab: &GmClawTab, text: GuiText, status: &GmClawConfigStatus) {
+    let status_text = if !status.exists {
+        tr(
+            text,
+            "未找到天工 Work 配置。请先安装并打开天工 Work 完成初始化，再回到这里刷新。",
+            "TianGong Work configuration was not found. Install and open TianGong Work to initialize it, then refresh here.",
+        )
+    } else if !status.schema_supported {
+        tr(
+            text,
+            "当前天工 Work 配置格式暂不支持，无法保存或还原。请确认安装版本与配置路径。",
+            "This TianGong Work configuration format is not supported. Saving and restoring are unavailable. Check the installed version and configuration path.",
+        )
+    } else if status.configured {
+        tr(
+            text,
+            "天工 Work 已配置为通过 Hub 接入。",
+            "TianGong Work is configured to connect through Hub.",
+        )
+    } else {
+        tr(
+            text,
+            "尚未接入 Hub。请选择渠道和模型后保存。",
+            "Not connected through Hub yet. Choose a channel and model, then save.",
+        )
+    };
+    if let Some(error) = status
+        .error
+        .as_deref()
+        .filter(|error| !error.trim().is_empty())
+    {
+        tab.status.set_label(&format!("{status_text}\n{error}"));
+    } else {
+        tab.status.set_label(status_text);
+    }
 }
 
 fn apply_model_choices(tab: &GmClawTab, text: GuiText, allow_default: bool) {
@@ -1695,6 +1801,8 @@ pub(super) fn review_inline_draft(
     header: &super::client_header::ClientHeader,
 ) {
     let text = GuiText::new(GuiLocale::ZhCn);
+    let review_api = ApiClient::new("http://127.0.0.1:1/unused-native-review".into(), text);
+    let (review_tx, _review_rx) = tokio::sync::mpsc::unbounded_channel();
     let tab = create_with_settings(
         &model.legacy_host,
         text,
@@ -1723,6 +1831,94 @@ pub(super) fn review_inline_draft(
         context_window: 128000,
     };
     let status: GmClawConfigStatus = serde_json::from_value(serde_json::json!({"path":"C:/Synthetic/tiangong/config.db","exists":true,"schemaSupported":true,"backupPath":"","backupExists":false,"model":saved,"sourceProvider":"synthetic-source","configured":true,"active":false,"localUrl":"http://127.0.0.1:3210/synthetic","activeModelId":null,"restartRequired":false,"revision":"original-revision","error":null,"entries":[{"entryId":"saved-entry","modelId":"synthetic-model-id","model":saved,"sourceProvider":"synthetic-source","parameters":{},"configured":true,"active":false,"localUrl":"http://127.0.0.1:3210/synthetic"}],"selectedEntryId":"saved-entry"})).unwrap();
+    apply_status(&tab, text, status.clone(), true);
+    update_controls(&tab);
+    let original_providers = tab.state.borrow().providers.clone();
+    tab.max_tokens.change_value("16384");
+    tab.temperature.change_value("0.45");
+    apply_reasoning_choices(&tab, text, "max");
+    let edited = editor_values(&tab);
+    let mut latest = status.clone();
+    latest.revision = "assistant-saved-revision".into();
+    let mut new_entry = latest.entries[0].clone();
+    new_entry.entry_id = "assistant-added-entry".into();
+    new_entry.model.model_name = "gpt-6-astra".into();
+    latest.entries.push(new_entry);
+    apply_result(
+        &tab,
+        frame,
+        text,
+        &review_api,
+        &review_tx,
+        GmClawActionResult::Refresh(
+            Ok((
+                original_providers.clone(),
+                latest.clone(),
+                serde_json::Value::Null,
+            )),
+            false,
+        ),
+    );
+    assert_eq!(tab.state.borrow().status.as_ref().unwrap().entries.len(), 2);
+    assert_eq!(editor_values(&tab), edited);
+    assert_eq!(
+        tab.state.borrow().status.as_ref().unwrap().revision,
+        "original-revision"
+    );
+    assert!(build_request(&tab, text).is_err());
+    assert!(tab.reload_button.is_shown());
+    apply_result(
+        &tab,
+        frame,
+        text,
+        &review_api,
+        &review_tx,
+        GmClawActionResult::Refresh(
+            Ok((
+                original_providers.clone(),
+                latest.clone(),
+                serde_json::Value::Null,
+            )),
+            true,
+        ),
+    );
+    assert_eq!(
+        build_request(&tab, text).unwrap().revision,
+        "assistant-saved-revision"
+    );
+    assert_ne!(editor_values(&tab), edited);
+    assert!(!tab.reload_button.is_shown());
+    tab.max_tokens.change_value("16384");
+    let edited = editor_values(&tab);
+    latest.entries.remove(0);
+    latest.revision = "external-delete-revision".into();
+    select_entry(&mut latest, usize::MAX);
+    let builtin = serde_json::json!({"models":[{"id":"synthetic-builtin", "name":"内置测试模型", "configured":true}]});
+    apply_result(
+        &tab,
+        frame,
+        text,
+        &review_api,
+        &review_tx,
+        GmClawActionResult::Refresh(Ok((original_providers.clone(), latest, builtin)), false),
+    );
+    assert_eq!(editor_values(&tab), edited);
+    assert_eq!(
+        tab.state
+            .borrow()
+            .status
+            .as_ref()
+            .unwrap()
+            .selected_entry_id
+            .as_deref(),
+        Some("saved-entry")
+    );
+    assert!(tab.selected_builtin.borrow().is_none());
+    assert!(tab.entry.get_selection().is_none());
+    assert!(build_request(&tab, text).is_err());
+    assert!(tab.reload_button.is_shown());
+    tab.account.apply(serde_json::Value::Null);
+    tab.state.borrow_mut().providers = original_providers;
     apply_status(&tab, text, status, true);
     update_controls(&tab);
     for _ in 0..4 {
@@ -1797,6 +1993,8 @@ pub(super) fn review_inline_draft(
         &tab,
         frame,
         text,
+        &review_api,
+        &review_tx,
         GmClawActionResult::Refresh(Ok((vec![], latest.clone(), serde_json::Value::Null)), false),
     );
     assert_eq!(
@@ -1815,6 +2013,8 @@ pub(super) fn review_inline_draft(
         &tab,
         frame,
         text,
+        &review_api,
+        &review_tx,
         GmClawActionResult::Refresh(
             Ok((
                 provider_options_with_copies(&copy_config),

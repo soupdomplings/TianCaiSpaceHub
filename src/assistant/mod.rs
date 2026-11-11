@@ -7,6 +7,7 @@ pub(crate) mod settings;
 mod squad_tools;
 mod telemetry;
 pub(crate) mod tools;
+mod usage_tools;
 mod web;
 mod worker;
 

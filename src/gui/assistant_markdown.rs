@@ -394,6 +394,104 @@ fn native_offset(text: &str) -> i64 {
     }
 }
 
+#[cfg(windows)]
+mod native_measurement {
+    use super::*;
+    use windows_sys::Win32::{
+        Foundation::{HWND, RECT},
+        UI::WindowsAndMessaging::{SendMessageW, WM_NOTIFY, WM_USER},
+    };
+
+    const EM_GETEVENTMASK: u32 = WM_USER + 59;
+    const EM_REQUESTRESIZE: u32 = WM_USER + 65;
+    const EM_SETEVENTMASK: u32 = WM_USER + 69;
+    const ENM_REQUESTRESIZE: isize = 0x0004_0000;
+    const EN_REQUESTRESIZE: u32 = 0x0701;
+
+    #[repr(C)]
+    struct NotifyHeader {
+        source: HWND,
+        id: usize,
+        code: u32,
+    }
+
+    #[repr(C)]
+    struct RequestedSize {
+        header: NotifyHeader,
+        rectangle: RECT,
+    }
+
+    struct Measurement {
+        editor: HWND,
+        height: i32,
+    }
+
+    type SubclassProc = unsafe extern "system" fn(HWND, u32, usize, isize, usize, usize) -> isize;
+
+    #[link(name = "comctl32")]
+    unsafe extern "system" {
+        fn SetWindowSubclass(
+            window: HWND,
+            callback: Option<SubclassProc>,
+            id: usize,
+            data: usize,
+        ) -> i32;
+        fn RemoveWindowSubclass(window: HWND, callback: Option<SubclassProc>, id: usize) -> i32;
+        fn DefSubclassProc(window: HWND, message: u32, wparam: usize, lparam: isize) -> isize;
+    }
+
+    unsafe extern "system" fn receive_size(
+        window: HWND,
+        message: u32,
+        wparam: usize,
+        lparam: isize,
+        _id: usize,
+        data: usize,
+    ) -> isize {
+        if message == WM_NOTIFY && lparam != 0 {
+            // EM_REQUESTRESIZE sends this notification synchronously. The
+            // stack measurement remains alive until the subclass is removed.
+            let header = unsafe { &*(lparam as *const NotifyHeader) };
+            let measurement = unsafe { &mut *(data as *mut Measurement) };
+            if header.source == measurement.editor && header.code == EN_REQUESTRESIZE {
+                let requested = unsafe { &*(lparam as *const RequestedSize) };
+                measurement.height = requested.rectangle.bottom - requested.rectangle.top;
+                return 0;
+            }
+        }
+        unsafe { DefSubclassProc(window, message, wparam, lparam) }
+    }
+
+    /// RichEdit measures its own wrapped glyph runs, including fallback CJK
+    /// fonts and inline styles. A base wx font's char height cannot do this.
+    pub(super) fn content_height(editor: MessageText) -> Option<i32> {
+        let parent = editor.get_parent()?.get_handle();
+        let handle = editor.get_handle();
+        let id = handle as usize;
+        let mut measurement = Measurement {
+            editor: handle,
+            height: 0,
+        };
+        unsafe {
+            if SetWindowSubclass(
+                parent,
+                Some(receive_size),
+                id,
+                &mut measurement as *mut Measurement as usize,
+            ) == 0
+            {
+                return None;
+            }
+            let mask = SendMessageW(handle, EM_GETEVENTMASK, 0, 0);
+            SendMessageW(handle, EM_SETEVENTMASK, 0, mask | ENM_REQUESTRESIZE);
+            SendMessageW(handle, EM_REQUESTRESIZE, 0, 0);
+            SendMessageW(handle, EM_SETEVENTMASK, 0, mask);
+            RemoveWindowSubclass(parent, Some(receive_size), id);
+        }
+        (measurement.height > 0).then_some(measurement.height)
+    }
+}
+
 struct TextLeaf {
     editor: MessageText,
     value: Inline,
@@ -504,8 +602,23 @@ impl TextLeaf {
         if self.width.replace(width) == width {
             return self.height.get();
         }
-        self.editor
-            .set_size(Size::new(width, self.editor.get_char_height().max(1)));
+        self.editor.set_size(Size::new(
+            width,
+            self.height.get().max(self.editor.get_char_height()).max(1),
+        ));
+        #[cfg(windows)]
+        let native_height = native_measurement::content_height(self.editor);
+        #[cfg(not(windows))]
+        let native_height = None;
+        let height = native_height.unwrap_or_else(|| self.estimated_height(width));
+        self.editor.set_min_size(Size::new(width, height));
+        self.editor.set_size(Size::new(width, height));
+        self.editor.show_position(0);
+        self.height.set(height);
+        height
+    }
+
+    fn estimated_height(&self, width: i32) -> i32 {
         let usable = (width - self.editor.from_dip(6)).max(1);
         let measured = self
             .value
@@ -518,11 +631,7 @@ impl TextLeaf {
             .map(|lines| lines.max(1))
             .sum::<i32>();
         let lines = self.editor.get_number_of_lines().max(measured).max(1);
-        let height = lines * self.editor.get_char_height().max(1) + self.editor.from_dip(8);
-        self.editor.set_min_size(Size::new(width, height));
-        self.editor.set_size(Size::new(width, height));
-        self.height.set(height);
-        height
+        lines * self.editor.get_char_height().max(1) + self.editor.from_dip(8)
     }
 }
 
@@ -1087,6 +1196,64 @@ mod tests {
                     && &value.text[span.start..span.end] == "重点 模型")
         );
         assert_eq!(inline("\\*literal\\* 与 ``a`b``").text, "*literal* 与 a`b");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_text_height_contains_mixed_fonts_wrapping_and_preserves_selection() {
+        use windows_sys::Win32::{
+            Foundation::POINT,
+            UI::WindowsAndMessaging::{SendMessageW, WM_USER},
+        };
+
+        wxdragon::app::render_offscreen(|| {
+            theme::init(theme::ThemeMode::Light);
+            let frame = Frame::builder().with_title("hidden native text measurement").build();
+            let transcript = ScrolledWindow::builder(&frame)
+                .with_style(ScrolledWindowStyle::VScroll)
+                .build();
+            let host = Panel::builder(&transcript).build();
+            let t = theme::theme();
+            let source = format!(
+                "中文开头与 English 混排，字号和回退字体不以基础字体行高估算。\n{}\n最后一行需要完整显示。",
+                "窄对话里的长段落、中文标点、emoji 😀 和 model_id 都应完整显示。".repeat(9),
+            );
+            let leaf = TextLeaf::new(
+                &host, inline(&source), FontKind::Body, t.ink_primary, t.bg_card,
+                transcript, None,
+            );
+            let mut larger = TextAttr::new();
+            larger.set_font(&Font::builder().with_point_size(32).build().unwrap());
+            leaf.editor.set_style(0, native_offset("中文"), &larger);
+            leaf.editor.set_selection(0, native_offset("中文"));
+
+            for dip_width in [430, 210, 530] {
+                let width = host.from_dip(dip_width);
+                let height = leaf.layout(width);
+                let requested = native_measurement::content_height(leaf.editor)
+                    .expect("RichEdit must return its requested content size while hidden");
+                assert!(height >= requested);
+                assert_eq!(leaf.editor.get_client_size().height, height);
+                assert!(
+                    height > leaf.estimated_height(width),
+                    "mixed styled glyphs must exceed the retired base-font estimate",
+                );
+                let handle = leaf.editor.get_handle();
+                let last_line = unsafe { SendMessageW(handle, 0xba, 0, 0) - 1 }; // EM_GETLINECOUNT
+                let last_start = unsafe { SendMessageW(handle, 0xbb, last_line as usize, 0) }; // EM_LINEINDEX
+                let mut position = POINT { x: 0, y: 0 };
+                unsafe {
+                    SendMessageW(handle, WM_USER + 38, &mut position as *mut POINT as usize, last_start);
+                } // RichEdit EM_POSFROMCHAR
+                assert!(position.y >= 0);
+                assert!(position.y + leaf.editor.get_char_height() <= height,
+                    "last line descenders must fit inside the native client area");
+                assert_eq!(leaf.editor.get_string_selection(), "中文");
+                assert_eq!(leaf.layout(width), height);
+            }
+            assert!(!frame.is_shown());
+            frame.destroy();
+        }).unwrap();
     }
 
     #[cfg(windows)]

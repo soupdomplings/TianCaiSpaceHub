@@ -6,8 +6,6 @@ use std::{
 
 use wxdragon::prelude::*;
 
-#[cfg(not(target_os = "macos"))]
-use super::show_info;
 use super::text::GuiText;
 use super::{GuiTimers, ID_MENU_QUIT, widgets::app_icon_bitmap};
 
@@ -82,13 +80,10 @@ pub(super) fn show_main_window(frame: &Frame, gui_timers: &GuiTimers) {
     gui_timers.resume_after_show();
 }
 
-pub(super) fn hide_main_window(frame: &Frame, text: GuiText, gui_timers: &GuiTimers) {
+pub(super) fn hide_main_window(frame: &Frame, _text: GuiText, gui_timers: &GuiTimers) {
+    super::feedback::dismiss_all();
     gui_timers.pause_while_hidden();
     frame.show(false);
-    #[cfg(not(target_os = "macos"))]
-    show_info(frame, text.tray_still_running_message());
-    #[cfg(target_os = "macos")]
-    let _ = text;
 }
 
 pub(super) fn request_app_quit(frame: &Frame, quitting: &Rc<AtomicBool>) {

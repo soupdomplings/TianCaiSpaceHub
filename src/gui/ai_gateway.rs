@@ -326,11 +326,7 @@ fn ai_gw_provider_list_rows(config: Option<&AiGatewayConfig>, scope: u32) -> Vec
         .map(|provider| AiGwProviderRow {
             enabled: provider.enabled,
             name: provider.name.clone(),
-            display_name: provider
-                .desktop_binding
-                .as_ref()
-                .map(|b| b.label.clone())
-                .unwrap_or_else(|| provider.name.clone()),
+            display_name: provider_display_name(provider),
             provider_type: provider.provider_type.clone(),
             compatibility: provider.compatibility.clone(),
             base_url: provider.base_url.clone(),
@@ -343,6 +339,69 @@ fn ai_gw_provider_list_rows(config: Option<&AiGatewayConfig>, scope: u32) -> Vec
                 .unwrap_or_default(),
         })
         .collect()
+}
+
+pub(super) fn provider_display_name(provider: &ProviderConfig) -> String {
+    if let Some(binding) = &provider.desktop_binding {
+        return if binding.label.trim().is_empty() {
+            binding.model.clone()
+        } else {
+            binding.label.clone()
+        };
+    }
+    if provider.is_workbuddy() || provider.is_gmclaw() {
+        // Alias keys can include a native entry UUID or local routing name.
+        // The upstream model list is the actual model, never the channel ID.
+        return provider
+            .models
+            .iter()
+            .find(|model| !model.trim().is_empty())
+            .or_else(|| {
+                provider
+                    .model_aliases
+                    .values()
+                    .find(|model| !model.trim().is_empty())
+            })
+            .cloned()
+            .unwrap_or_else(|| "未配置模型".into());
+    }
+    provider.name.clone()
+}
+
+#[cfg(test)]
+mod display_tests {
+    use super::*;
+    #[test]
+    fn dedicated_channels_display_real_models_and_keep_internal_identity() {
+        let mut provider = ProviderConfig {
+            name: crate::ai_gateway::config::workbuddy_provider_name(
+                "11111111-2222-3333-4444-555555555555",
+            )
+            .unwrap(),
+            models: vec!["gpt-6-astra".into()],
+            model_aliases: std::collections::BTreeMap::from([(
+                "0000-native-id".into(),
+                "gpt-6-astra".into(),
+            )]),
+            ..Default::default()
+        };
+        let name = provider.name.clone();
+        let mut config = AiGatewayConfig::default();
+        config.providers.push(provider.clone());
+        let rows = ai_gw_provider_list_rows(Some(&config), 4);
+        assert_eq!(rows[0].display_name, "gpt-6-astra");
+        assert_eq!(rows[0].name, name);
+        provider.name =
+            crate::ai_gateway::config::gmclaw_provider_name("11111111-2222-3333-4444-555555555555")
+                .unwrap();
+        assert_eq!(provider_display_name(&provider), "gpt-6-astra");
+        provider.models.clear();
+        assert_eq!(provider_display_name(&provider), "gpt-6-astra");
+        provider.model_aliases.clear();
+        assert_eq!(provider_display_name(&provider), "未配置模型");
+        provider.name = "我的普通渠道".into();
+        assert_eq!(provider_display_name(&provider), "我的普通渠道");
+    }
 }
 
 pub(super) fn provider_logo_variant(row: &AiGwProviderRow) -> Variant {

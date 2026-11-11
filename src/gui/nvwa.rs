@@ -767,10 +767,7 @@ mod detection_summary_tests {
 }
 
 fn show_error(parent: &dyn WxWidget, message: &str) {
-    MessageDialog::builder(parent, message, "Dumpling-MCP")
-        .with_style(MessageDialogStyle::OK | MessageDialogStyle::IconError)
-        .build()
-        .show_modal();
+    super::feedback::error(parent, message);
 }
 
 fn label<W: WxWidget>(parent: &W, root: &BoxSizer, title: &str) {
@@ -1445,14 +1442,11 @@ pub(super) fn bind_actions(
 ) {
     let f = *frame;
     tab.help.on_click(move |_| {
-        MessageDialog::builder(
+        super::feedback::information(
             &f,
-            configuration_help(text),
             tr(text, "Dumpling-MCP 配置说明", "Dumpling-MCP configuration"),
-        )
-        .with_style(MessageDialogStyle::OK | MessageDialogStyle::IconInformation)
-        .build()
-        .show_modal();
+            configuration_help(text),
+        );
     });
     let t = tab.clone();
     let sender = tx.clone();
@@ -1978,11 +1972,7 @@ fn show_connection_menu(
 }
 
 fn confirm(frame: &Frame, message: &str) -> bool {
-    MessageDialog::builder(frame, message, "Dumpling-MCP")
-        .with_style(MessageDialogStyle::YesNo | MessageDialogStyle::IconQuestion)
-        .build()
-        .show_modal()
-        == ID_YES
+    super::feedback::confirm(frame, "Dumpling-MCP", message, "继续")
 }
 
 fn configuration_help(text: GuiText) -> &'static str {

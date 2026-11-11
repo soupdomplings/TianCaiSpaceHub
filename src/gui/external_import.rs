@@ -38,11 +38,7 @@ enum Action {
 }
 
 pub(super) fn confirm(parent: &dyn WxWidget, message: &str) -> bool {
-    MessageDialog::builder(parent, message, "TianCaiSpaceHub")
-        .with_style(MessageDialogStyle::YesNo | MessageDialogStyle::IconQuestion)
-        .build()
-        .show_modal()
-        == ID_YES
+    super::feedback::confirm(parent, "确认操作", message, "继续")
 }
 
 fn config_path() -> std::path::PathBuf {
@@ -618,14 +614,14 @@ impl ImportPreview {
         let ui = SquadDialog::new(
             parent,
             "导入模型",
-            "勾选模型和客户端后一次接入；不选客户端则只保存渠道。",
+            "选择要导入的模型和使用它们的客户端。不选客户端时，只保存到 Hub。",
             Size::new(760, 840),
         );
         let (dialog, body) = (ui.dialog, ui.body);
         let wrap_width = (dialog.get_client_size().width - dialog.from_dip(112)).max(100);
         let mut wrapped = Vec::new();
         dialog.set_name("hub-import-dialog");
-        let (source_card, source_fields) = ui.section("来源与保存");
+        let (source_card, source_fields) = ui.section("保存到 Hub");
         let source = note(
             &source_card,
             &format!(
@@ -641,7 +637,7 @@ impl ImportPreview {
             SizerFlag::Expand | SizerFlag::Bottom,
             source_card.from_dip(12),
         );
-        let operation_label = field_label(&source_card, "保存方式");
+        let operation_label = field_label(&source_card, "保存为");
         source_fields.add(
             &operation_label,
             0,
@@ -649,9 +645,9 @@ impl ImportPreview {
             source_card.from_dip(6),
         );
         let operation = Choice::builder(&source_card).build();
-        operation.append("新建渠道");
+        operation.append("添加新渠道");
         for channel in &channels {
-            operation.append(&format!("更新 · {}", channel.name));
+            operation.append(&format!("更新已有渠道：{}", channel.name));
         }
         operation.set_selection(matching.map(|i| i as u32 + 1).unwrap_or(0));
         source_fields.add(
@@ -684,7 +680,7 @@ impl ImportPreview {
             });
         }
 
-        let (model_card, model_fields) = ui.section("选择模型");
+        let (model_card, model_fields) = ui.section("要导入的模型");
         if let Some(warning) = &draft.model_warning {
             let warning = note(&model_card, warning);
             wrapped.push((warning, warning.get_label()));
@@ -712,8 +708,8 @@ impl ImportPreview {
         }
         let models = ImportModels::new(&model_card, &model_fields, &draft.provider.models);
 
-        let (target_card, target_fields) = ui.section("接入客户端");
-        let target_status = note(&target_card, "正在读取可用客户端…");
+        let (target_card, target_fields) = ui.section("在哪些客户端使用");
+        let target_status = note(&target_card, "正在查找本机客户端…");
         target_fields.add(
             &target_status,
             0,
@@ -724,7 +720,7 @@ impl ImportPreview {
 
         let (advanced_card, advanced_fields) = ui.section("");
         let advanced = CollapsiblePane::builder(&advanced_card)
-            .with_label("高级选项")
+            .with_label("更多设置")
             .with_style(CollapsiblePaneStyle::NoTlwResize)
             .build();
         let advanced_panel = advanced.get_pane().expect("import advanced pane");
@@ -750,11 +746,17 @@ impl ImportPreview {
             advanced_card.from_dip(12),
         );
         let enabled = CheckBox::builder(&advanced_panel)
-            .with_label("仅保存渠道时也启用")
+            .with_label("保存后启用渠道")
             .build();
+        enabled.set_tooltip(
+            "启用后，Hub 可以使用这个渠道里的模型。选择客户端时会自动勾选；暂不使用时，可以只保存。",
+        );
         let aliases = CheckBox::builder(&advanced_panel)
-            .with_label("更新时替换原有模型映射")
+            .with_label("用本次的模型别名替换旧别名")
             .build();
+        aliases.set_tooltip(
+            "更新已有渠道时，勾选会用本次导入的模型别名替换旧别名，未勾选则保留。新建渠道使用本次导入的别名。",
+        );
         advanced_col.add(&enabled, 0, SizerFlag::Bottom, advanced_card.from_dip(10));
         advanced_col.add(&aliases, 0, SizerFlag::default(), 0);
         advanced_panel.set_sizer(advanced_col, false);
@@ -774,7 +776,7 @@ impl ImportPreview {
             .with_label("取消")
             .build();
         let save = Button::builder(&dialog)
-            .with_label("仅保存渠道")
+            .with_label("保存到 Hub")
             .with_kind(ButtonKind::Primary)
             .build();
         close.set_name("import-close");
@@ -818,11 +820,15 @@ impl ImportPreview {
         match result {
             Ok(targets) => {
                 self.target_status.set_label(if targets.is_empty() {
-                    "未发现可接入的客户端配置目录，可先保存渠道。"
+                    "暂未找到可用客户端，可以先保存到 Hub，稍后再配置。"
                 } else {
-                    "可多选。ChatGPT 首次使用需在接入设置完成初始化。"
+                    "可以多选；不选则只保存到 Hub。ChatGPT 首次使用还需完成接入设置。"
                 });
                 let mut rows = self.target_rows.borrow_mut();
+                let manual_enabled = Rc::new(Cell::new(self.enabled.is_checked()));
+                let enabled = self.enabled;
+                let preference = manual_enabled.clone();
+                enabled.on_toggled(move |_| preference.set(enabled.is_checked()));
                 for target in targets {
                     let same_client = rows.iter().any(|(t, _)| t.client == target.client);
                     let label = if target.label == "默认" && !same_client {
@@ -844,19 +850,28 @@ impl ImportPreview {
                     );
                     let row_store = self.target_rows.clone();
                     let save = self.save;
+                    let manual_enabled = manual_enabled.clone();
                     check.on_toggled(move |_| {
-                        save.set_label(if row_store.borrow().iter().any(|(_, c)| c.is_checked()) {
-                            "保存并接入"
+                        let has_targets = row_store.borrow().iter().any(|(_, c)| c.is_checked());
+                        enabled.set_value(has_targets || manual_enabled.get());
+                        enabled.enable(!has_targets);
+                        save.set_label(if has_targets {
+                            "导入并配置客户端"
                         } else {
-                            "仅保存渠道"
+                            "保存到 Hub"
                         });
                     });
                     rows.push((target, check));
                 }
             }
-            Err(error) => self
-                .target_status
-                .set_label(&format!("客户端列表读取失败：{error}\n本次可先保存渠道。")),
+            Err(error) => {
+                self.target_status
+                    .set_label("暂时无法读取客户端，本次可先保存到 Hub。");
+                super::feedback::error(
+                    &self.chrome.dialog,
+                    &format!("客户端列表读取失败：{error}"),
+                );
+            }
         }
         let width = self.chrome.dialog.get_client_size().width - self.chrome.dialog.from_dip(96);
         self.target_status.wrap(width.max(100));
@@ -905,20 +920,19 @@ impl ImportPreview {
         }
         self.result_card.show(true);
         self.results.start();
-        self.feedback("正在保存并接入…", false);
+        self.progress("正在保存并接入…");
         self.chrome.body.scroll_coords(0, 0);
         self.layout();
     }
-    fn feedback(&self, message: &str, error: bool) {
+    fn progress(&self, message: &str) {
         self.chrome.status.set_label(message);
-        self.chrome.status.set_foreground_color(if error {
-            super::theme::theme().error
-        } else {
-            super::theme::theme().ink_secondary
-        });
+        self.chrome
+            .status
+            .set_foreground_color(super::theme::theme().ink_secondary);
         self.chrome.status.wrap(
             (self.chrome.dialog.get_client_size().width - self.chrome.dialog.from_dip(48)).max(100),
         );
+        self.chrome.status.show(true);
         self.chrome.dialog.layout();
     }
     fn complete(&self, report: &batch::Report) {
@@ -928,10 +942,13 @@ impl ImportPreview {
         if let Some(error) = &report.save_error {
             self.results.save_error(error);
         }
-        self.feedback(
-            &report.message(),
-            report.save_error.is_some() || report.outcomes.iter().any(|o| o.result.is_err()),
-        );
+        self.chrome.status.set_label("");
+        self.chrome.status.hide();
+        if report.save_error.is_some() || report.outcomes.iter().any(|o| o.result.is_err()) {
+            super::feedback::error(&self.chrome.dialog, &report.message());
+        } else {
+            super::feedback::success(&self.chrome.dialog, &report.message());
+        }
         if report.save_error.is_none() && report.outcomes.is_empty() {
             self.results
                 .detail
@@ -970,7 +987,7 @@ fn preview_with_config(parent: &Frame, api: &ApiClient, draft: ImportDraft, conf
             let (request, targets) = match u.request() {
                 Ok(value) => value,
                 Err(error) => {
-                    u.feedback(&error, true);
+                    super::feedback::error(&u.chrome.dialog, &error);
                     return;
                 }
             };
@@ -1016,15 +1033,12 @@ fn preview_with_config(parent: &Frame, api: &ApiClient, draft: ImportDraft, conf
                 match event {
                     ImportEvent::Progress(batch::Progress::Saved) => {
                         u.results.saved();
-                        u.feedback("渠道已保存，正在接入所选客户端…", false);
+                        u.progress("渠道已保存，正在接入所选客户端…");
                     }
                     ImportEvent::Progress(batch::Progress::Item(outcome)) => {
                         finished.set(finished.get() + 1);
                         u.results.outcome(&outcome);
-                        u.feedback(
-                            &format!("已处理 {} / {} 项", finished.get(), total.get()),
-                            false,
-                        );
+                        u.progress(&format!("已处理 {} / {} 项", finished.get(), total.get()));
                     }
                     ImportEvent::Complete(report) => {
                         saving.set(false);
