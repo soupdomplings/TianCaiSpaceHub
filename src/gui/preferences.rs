@@ -183,9 +183,9 @@ pub(super) fn create(
             PageId::Sources,
         ),
         (
-            "Skill 与 MCP",
-            "导入后选择客户端；成功才点亮。遇到同名或后改冲突时核对并选择替换或保留。",
-            PageId::Skills,
+            "天才搭档",
+            "启用后可协助配置模型与渠道，并解答 Hub 和小分队使用问题。",
+            PageId::Assistant,
         ),
         (
             "ChatGPT 接入与修复",

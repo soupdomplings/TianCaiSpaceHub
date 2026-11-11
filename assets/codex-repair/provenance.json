@@ -1,6 +1,39 @@
 {
   "repository": "https://github.com/chen0416ccc-cpu/codex-windows-fast-patch-skill",
   "commit": "4c318c42fb1d9faa09418f96a7eb53bf852f9fb4",
+  "reviewedIncrements": [
+    {
+      "date": "2026-11-11",
+      "localSkillHead": "ffe47a4f6416b7eb54e6afad6302c83c88809644",
+      "reviewedUpstreamCommit": "762c170bf5bf9dce1c15363472cf80cc5e4c3ae5",
+      "installedReference": "OpenAI.Codex 26.1103.7773.0 Windows x64",
+      "localOverlayPreserved": [
+        "scripts/install-computer-use-local.ps1",
+        "scripts/patch-chrome-custom-provider-headers.cjs"
+      ],
+      "reviewedSourceFiles": [
+        "SKILL.md",
+        "references/restriction-debug-cases.md",
+        "references/remote-review-and-publication.md",
+        "scripts/desktop-261103-profiles.json",
+        "scripts/patch-desktop-261029.cjs",
+        "scripts/test-desktop-261103.cjs",
+        "scripts/test-service-tier-access-patterns.ps1",
+        "scripts/test-native-ultra-reasoning.ps1",
+        "scripts/patch-node-repl-proxy-env.cjs",
+        "scripts/patch-chrome-custom-provider-headers.cjs"
+      ],
+      "implementedFiles": [
+        "renderer-adapter.js",
+        "hub-repair.cjs",
+        "patch-node-repl-proxy-env.cjs",
+        "patches/nodeReplTrustedPaths.cjs"
+      ],
+      "scope": "Hub structural adapters for native async chunks: Fast UI/request, custom-provider Ultra query and host bootstrap; shared deep-repair model adapter; equivalent quote styles for proxy inheritance and trusted roots. Original embedded toolkit sources above remain pinned to their original commit.",
+      "validation": "28 isolated Node tests; 26 current-package renderer assets adapted in memory and syntax-checked for both CDP and persistent plans; proxy/trusted-root candidates syntax-checked in target only. No installed package, real configuration, CLI, model request or installer was run.",
+      "acceptance": null
+    }
+  ],
   "files": [
     {
       "path": "patch_codex_fast_mode_windows_msix.ps1",

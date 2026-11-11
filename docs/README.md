@@ -1,5 +1,13 @@
 # TianCaiSpaceHub 文档总入口
 
+2026-11-11 **V1.0.19 后续修复，尚未打包**：Harness 模型不可见与正常设置迁移误报“待核对”修正，客户端及账户常用操作精简多余进度弹层；必要验证由本轮集成登记，不覆盖既有包或将下文 V19 检查当作本次结果。见 [模型兼容](customizations/desktop-client-adapters.md#harness-模型不可见与待核对修正未发布)、[操作反馈](development/desktop-visual-system.md)、[变更记录](customizations/CHANGELOG.md)。天工免登录增强启动仅评估，未实施。
+
+2026-11-11 当前 **V1.0.19 四端启动修复测试交付**：Harness 已打开状态与自定义目录启动修正，VS Code 复用便携/版本/Scoop 发现，ZCode/WebStorm 补已登记安装目录；模型导入后 Harness 直接启动，无需额外登录。离线编译及 32 个不同定向用例通过，Windows release 与唯一新 MSI `113557` 已生成，版本、升级及六项载荷核验通过，见 [V19 交付](releases/v1.0.19.md)；实现与兼容见 [客户端适配](customizations/desktop-client-adapters.md#deepseek-harness-状态与四端启动修正)。保留 V1.0.18 累计功能和原包，真实客户端与 macOS 待用户验收；下文旧交付保持各自归属。
+
+2026-11-11 当前开发 **天才搭档与共享 Server（TC-023）**：新增独立助手模块和右下角对话入口，天工协助共用“天才搭档 Server”，缺少运行包先确认再准备；两项都停用后可手动移除 Hub 自管安装。通用 Skill/MCP 管理入口隐藏，Dumpling-MCP 独立；临时会话在真正退出时清理。小分队按最新决定只新增 [单 GET 配置接口](contracts/assistant-server.md)，返回普通模型 API 与能力，工具和摘要内置于本机。本批同时修正新版 ChatGPT 的数字资源 Ultra/Fast、代理继承与可信路径识别，见 [修复中心审计](customizations/codex-repair-center.md)。最终 Windows GUI 测试目标编译、77 个不同 Rust 定向用例、28 项 Node 和 54 次当前包候选语法检查通过，具体归属见 [本批集成](customizations/genius-buddy.md#本批集成记录2026-11-11)。本批 V1.0.18 Windows release 与唯一 MSI 已生成，版本、升级和内嵌载荷核验通过，包身份见 [V18 交付](releases/v1.0.18.md)，真实调用及 macOS 待验收。以下旧版交付记录保留各自归属。
+
+2026-11-10 当前 **V1.0.17 统一 Windows 测试交付**：缺少 CLI 时首次启用自动准备官方完整运行包并持久复用，协助后台增加可选完全访问，概览与日志统一显示“协助处理 MCP”。104 项定向离线回归、两个受影响示例编译、Windows release 构建及唯一 MSI 静态核验通过；浅深设置两图已人工查看。唯一新包 `232744`、源码身份及待用户验收范围见 [本批交付](releases/v1.0.17.md)。首次真实下载、协助权限/图谱及 macOS 待用户验收，本批未提交、推送或发布；下方 V1.0.16 及更早状态保留原阶段归属。
+
 2026-11-10 当前 **V1.0.16 统一 Windows 测试交付**：集中汇总顶部菜单/主题日历/密钥实际用量，以及 Codex CLI 启动与 MCP 升级、移除同步修复。唯一新包 `220951` 已生成，1354 个不同 Rust 用例及 14 项 Node 检查通过，受影响 4 项补跑替代同名结果，不重复计数；release 构建及静态包核验通过，准确包身份与验收边界见 [本批交付](releases/v1.0.16.md)。长期采用 [统一会话协作与测试打包](development/documentation.md#统一会话协作与测试打包)，根 [AGENTS.md](../AGENTS.md) 按管理/开发/打包职责分工。累计有效开发及本轮文件整理已按授权提交并推送至 GitHub `main`（`4f3e3a0`），详见 [清理记录](development/repository-cleanup.md)。旧包保留，真实安装待用户验收；本轮未触发 Actions、标签或正式发布。下方各阶段检查和“未提交”等状态保留当时事实。
 
 2026-11-10 当前 **V1.0.16 协助启动及MCP管理修正**：[本机协助](customizations/tiangong-local-assistance.md)明确CLI执行端、自动查找/商店包运行缓存及系统失败恢复；工具目录独立定时更新、删除/停用同步；[资源管理](customizations/desktop-capability-management.md)补端内移除和缺失使用记录清理。本任务开发就绪，GUI测试目标编译及68项定向离线检查通过；汇总测试包由统一打包会话核对共同源码后生成，本会话未独立打包，见[V16记录](releases/v1.0.16.md)。保留下方界面/账户增补和全部未提交开发，真实启动/同步及macOS待用户验收。

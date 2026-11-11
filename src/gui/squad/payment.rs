@@ -320,32 +320,41 @@ pub(super) fn continue_order(frame: &Frame, api: ApiClient, order: &Value) {
         official_window(&f, a.clone(), "继续已有订单", &raw, Some(&o));
     });
     let number = merged["out_trade_no"].as_str().unwrap_or("").to_string();
-    let a = api.clone();
-    let f = *frame;
-    verify.on_click(move |_| {
-        if number.is_empty() {
-            status.set_label("请重新读取我的订单，核对对应订单号");
-            return;
-        }
-        if let Some(result) = dialog_job::run(
-            &f,
-            a.clone(),
-            "核对付款",
-            "/api/desktop/squad/request",
-            json!({"method":"POST","path":"/payment/orders/verify","body":{"out_trade_no":number}}),
-        ) {
-            status.set_label(match result["status"].as_str() {
-                Some("COMPLETED") => "已完成到账",
-                Some("PAID" | "RECHARGING") => "已支付，站点正在处理到账",
-                Some("PENDING") => "等待付款",
-                Some("EXPIRED") => "订单已过期",
-                Some("CANCELLED") => "订单已取消",
-                _ => "请在我的订单中查看当前结果",
-            });
-        }
-    });
+    let verify_job = dialog_job::bind_open(
+        dialog,
+        verify,
+        status,
+        api.clone(),
+        move || {
+            if number.is_empty() {
+                return Err("请重新读取订单，核对对应订单号".into());
+            }
+            Ok((
+                "/api/desktop/squad/request".into(),
+                json!({"method":"POST","path":"/payment/orders/verify","body":{"out_trade_no":number}}),
+            ))
+        },
+        move |result| {
+            status.set_label(verification_status(&result));
+            status.wrap((dialog.get_client_size().width - dialog.from_dip(32)).max(120));
+            open.enable(resumable && result["status"].as_str() == Some("PENDING"));
+            dialog.layout();
+        },
+    );
     dialog.show_modal();
+    drop(verify_job);
     dialog.destroy();
+}
+
+pub(super) fn verification_status(result: &Value) -> &'static str {
+    match result["status"].as_str() {
+        Some("COMPLETED") => "已完成到账",
+        Some("PAID" | "RECHARGING") => "已支付，站点正在处理到账",
+        Some("PENDING") => "等待付款",
+        Some("EXPIRED") => "订单已过期",
+        Some("CANCELLED") => "订单已取消",
+        _ => "核对已完成，请在站点查看当前订单状态",
+    }
 }
 
 /// Seed only the official origin. Initial provider HTTPS origin may handle its payment redirects.

@@ -5,7 +5,10 @@ use super::{
     dialog_job, theme, visual,
 };
 use serde_json::{Value, json};
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 use wxdragon::prelude::*;
 
 pub(super) struct Fields {
@@ -15,16 +18,19 @@ pub(super) struct Fields {
     pub effort: Choice,
     pub effort_values: Rc<RefCell<Vec<Option<String>>>>,
     pub write: CheckBox,
+    pub full_access: CheckBox,
     pub clear: CheckBox,
     pub status: StaticText,
     pub save: Button,
     pub cleanup: Button,
+    pub prepare: Button,
+    pub program: Button,
     pub binary: Rc<RefCell<Option<String>>>,
 }
 pub(super) fn fields(parent: &Frame, view: &Value) -> Fields {
     let dialog = Dialog::builder(parent, "本机协助")
         .with_style(DialogStyle::DefaultDialogStyle | DialogStyle::ResizeBorder)
-        .with_size(parent.from_dip(600), parent.from_dip(570))
+        .with_size(parent.from_dip(620), parent.from_dip(650))
         .build();
     dialog.set_background_color(theme::theme().bg_card);
     dialog.set_font(&theme::font(theme::TextRole::Body));
@@ -84,51 +90,69 @@ pub(super) fn fields(parent: &Frame, view: &Value) -> Fields {
     effort.set_min_size(visual::dip_size(&dialog, 180, 36));
     effort.set_tooltip("随协助模型提供选项，支持时默认 xhigh；实际能力由模型来源决定");
     let effort_values = Rc::new(RefCell::new(Vec::new()));
-    let option = model.get_selection().and_then(|i|view["models"].as_array()?.get(i as usize));
-    let saved = option.filter(|m|m["model"]==view["model"] && m["route"]==view["route"]).and_then(|_|view["reasoningEffort"].as_str());
+    let option = model
+        .get_selection()
+        .and_then(|i| view["models"].as_array()?.get(i as usize));
+    let saved = option
+        .filter(|m| m["model"] == view["model"] && m["route"] == view["route"])
+        .and_then(|_| view["reasoningEffort"].as_str());
     fill_efforts(effort, &effort_values, option, saved);
     let values = effort_values.clone();
     let options = view["models"].clone();
     model.on_selection_changed(move |_| {
-        let option=model.get_selection().and_then(|i|options.as_array()?.get(i as usize));
-        fill_efforts(effort,&values,option,None);
+        let option = model
+            .get_selection()
+            .and_then(|i| options.as_array()?.get(i as usize));
+        fill_efforts(effort, &values, option, None);
         dialog.layout();
     });
     grid.add(&effort, 0, SizerFlag::Expand, 0);
-    let label = StaticText::builder(&dialog).with_label("执行程序").build();
+    let label = StaticText::builder(&dialog)
+        .with_label("共享运行端")
+        .build();
     label.set_foreground_color(theme::theme().ink_secondary);
     grid.add(&label, 0, SizerFlag::AlignCenterVertical, 0);
     // Detection is a display result, not an explicit program override. Keeping
     // auto mode lets a later app upgrade move its CLI without pinning old paths.
-    let binary = Rc::new(RefCell::new(view["selectedBinary"].as_str().map(str::to_string)));
+    let binary = Rc::new(RefCell::new(
+        view["selectedBinary"].as_str().map(str::to_string),
+    ));
     let program = Button::builder(&dialog)
         .with_label(if binary.borrow().is_some() {
-            "已指定 Codex CLI · 更换"
-        } else if view["binary"].as_str().is_some() {
-            "Codex CLI · 自动查找"
+            "已指定准备来源 · 更换"
+        } else if view["runtime"]["ready"] == true {
+            "天才搭档 Server · 已就绪"
         } else {
-            "选择 Codex 程序"
+            "选择已有准备来源"
         })
         .with_kind(ButtonKind::Secondary)
         .build();
-    program.set_tooltip(&format!("使用 Codex CLI 的 app-server 后台，进度和审批回天工。\n{}",view["binary"].as_str().unwrap_or("未找到程序，请选择已安装的 Codex CLI")));
-    let automatic = Button::builder(&dialog).with_label("自动查找").with_kind(ButtonKind::Ghost).build();
+    program.set_tooltip(&format!(
+        "与天才搭档共用一份天才搭档 Server。\n{}",
+        view["runtime"]["detail"]
+            .as_str()
+            .unwrap_or("缺少运行端时提示安装，由你确认后才下载；已有程序可用作准备来源")
+    ));
+    let automatic = Button::builder(&dialog)
+        .with_label("自动查找")
+        .with_kind(ButtonKind::Ghost)
+        .build();
     automatic.show(binary.borrow().is_some());
     let b = binary.clone();
     program.on_click(move |_| {
         let picker = FileDialog::builder(&dialog)
-            .with_message("选择 Codex 后台程序")
+            .with_message("选择天才搭档 Server 的已有准备来源")
             .with_wildcard(if cfg!(windows) {
-                "Codex 后台 (codex.exe)|codex.exe"
+                "兼容运行程序 (*.exe)|*.exe"
             } else {
-                "Codex 后台 (codex)|codex"
+                "兼容运行程序|*"
             })
             .with_style(FileDialogStyle::Open | FileDialogStyle::FileMustExist)
             .build();
         if picker.show_modal() == ID_OK {
             if let Some(path) = picker.get_path() {
                 *b.borrow_mut() = Some(path);
-                program.set_label("已选择 Codex · 更换");
+                program.set_label("已选择准备来源 · 更换");
                 automatic.show(true);
                 dialog.layout();
             }
@@ -138,15 +162,36 @@ pub(super) fn fields(parent: &Frame, view: &Value) -> Fields {
     let selected = binary.clone();
     automatic.on_click(move |_| {
         *selected.borrow_mut() = None;
-        program.set_label("Codex CLI · 自动查找");
-        program.set_tooltip("保存时自动查找当前已安装的 Codex CLI；不启动程序或真实模型调用");
+        program.set_label("天才搭档 Server · 自动查找");
+        program.set_tooltip("保存时只检查现有运行端；需要准备时仍须由你确认");
         automatic.hide();
         dialog.layout();
     });
     let program_row = BoxSizer::builder(Orientation::Horizontal).build();
     program_row.add(&program, 0, SizerFlag::AlignCenterVertical, 0);
-    program_row.add(&automatic, 0, SizerFlag::Left | SizerFlag::AlignCenterVertical, dialog.from_dip(6));
-    grid.add_sizer(&program_row, 0, SizerFlag::Left, 0);
+    program_row.add(
+        &automatic,
+        0,
+        SizerFlag::Left | SizerFlag::AlignCenterVertical,
+        dialog.from_dip(6),
+    );
+    let program_col = BoxSizer::builder(Orientation::Vertical).build();
+    program_col.add_sizer(&program_row, 0, SizerFlag::Expand, 0);
+    let prepare = Button::builder(&dialog)
+        .with_label("准备天才搭档 Server")
+        .with_kind(ButtonKind::Ghost)
+        .build();
+    prepare.enable(view["enabled"] == true);
+    prepare.set_tooltip(
+        "先启用并保存；由你确认后准备共享运行端，优先复用已有兼容程序，没有时从官方下载安装",
+    );
+    program_col.add(&prepare, 0, SizerFlag::Top, dialog.from_dip(4));
+    let runtime_note = StaticText::builder(&dialog)
+        .with_label("启用后检查，确认后准备；与天才搭档共用")
+        .build();
+    runtime_note.set_foreground_color(theme::theme().ink_secondary);
+    program_col.add(&runtime_note, 0, SizerFlag::Top, dialog.from_dip(4));
+    grid.add_sizer(&program_col, 0, SizerFlag::Expand, 0);
     col.add_sizer(
         &grid,
         0,
@@ -165,22 +210,34 @@ pub(super) fn fields(parent: &Frame, view: &Value) -> Fields {
         SizerFlag::Left | SizerFlag::Right | SizerFlag::Top,
         dialog.from_dip(24),
     );
-    let clear = CheckBox::builder(&dialog)
-        .with_label("结束后自动清理协助对话，保留天工中的结果")
+    let full_access = CheckBox::builder(&dialog)
+        .with_label("完全访问（协助执行时不再逐次申请授权）")
         .build();
-    clear.set_value(view["autoClear"].as_bool().unwrap_or(true));
-    clear.set_foreground_color(theme::theme().ink_primary);
-    clear.set_background_color(theme::theme().bg_card);
+    full_access.set_value(view["fullAccess"].as_bool().unwrap_or(false));
+    full_access.set_foreground_color(theme::theme().ink_primary);
+    full_access.set_background_color(theme::theme().bg_card);
+    full_access.set_tooltip("允许协助访问本机文件、执行命令和联网；仍遵守当前用户任务的限制，只读协助仍只读。需要你回答的问题会继续显示。");
+    write.enable(!full_access.is_checked());
+    full_access.on_toggled(move |_| write.enable(!full_access.is_checked()));
     col.add_spacer(dialog.from_dip(12));
     col.add(
-        &clear,
+        &full_access,
         0,
         SizerFlag::Left | SizerFlag::Right,
         dialog.from_dip(24),
     );
+    let clear = CheckBox::builder(&dialog)
+        .with_label("结束后自动清理协助对话，保留天工中的结果")
+        .build();
+    clear.set_value(false);
+    clear.set_foreground_color(theme::theme().ink_primary);
+    clear.set_background_color(theme::theme().bg_card);
+    // Historical setting stays readable, but temporary conversations now live
+    // until an explicit clear or an actual Hub exit.
+    clear.hide();
     col.add_spacer(dialog.from_dip(16));
     let note = StaticText::builder(&dialog)
-        .with_label("进度、询问和审批都在天工处理。\n首次启用后请新建天工任务；普通权限下先只读。")
+        .with_label("完全访问可读写本机文件、运行命令和联网；本次只读要求仍有效。\n进度和询问在天工处理；临时会话在主动清理或真正退出 Hub 后删除。")
         .build();
     note.set_foreground_color(theme::theme().ink_secondary);
     note.wrap(dialog.from_dip(540));
@@ -210,15 +267,17 @@ pub(super) fn fields(parent: &Frame, view: &Value) -> Fields {
     );
     let row = BoxSizer::builder(Orientation::Horizontal).build();
     let cleanup = Button::builder(&dialog)
-        .with_label("清理已结束记录")
+        .with_label("清理协助临时内容")
         .with_kind(ButtonKind::Ghost)
         .build();
-    cleanup.set_tooltip("只清理本机协助的独立会话；保留天工主对话、其他 Codex 历史和项目文件");
+    cleanup.set_tooltip(
+        "先停止协助任务，再清理对应临时内容；保留天才搭档 Server、天工主对话、用户项目和已保存成果",
+    );
     row.add(&cleanup, 0, SizerFlag::Right, dialog.from_dip(8));
     row.add_stretch_spacer(1);
     let close = Button::builder(&dialog)
         .with_id(ID_CANCEL)
-        .with_label("取消")
+        .with_label("关闭")
         .with_kind(ButtonKind::Ghost)
         .build();
     let save = Button::builder(&dialog).with_label("保存设置").build();
@@ -231,7 +290,7 @@ pub(super) fn fields(parent: &Frame, view: &Value) -> Fields {
         dialog.from_dip(24),
     );
     dialog.set_sizer(col, false);
-    dialog.set_min_size(visual::dip_size(&dialog, 580, 550));
+    dialog.set_min_size(visual::dip_size(&dialog, 600, 630));
     Fields {
         dialog,
         enabled,
@@ -239,27 +298,57 @@ pub(super) fn fields(parent: &Frame, view: &Value) -> Fields {
         effort,
         effort_values,
         write,
+        full_access,
         clear,
         status,
         save,
         cleanup,
+        prepare,
+        program,
         binary,
     }
 }
-fn fill_efforts(choice: Choice, values: &Rc<RefCell<Vec<Option<String>>>>, option: Option<&Value>, saved: Option<&str>) {
+fn fill_efforts(
+    choice: Choice,
+    values: &Rc<RefCell<Vec<Option<String>>>>,
+    option: Option<&Value>,
+    saved: Option<&str>,
+) {
     choice.clear();
-    let mut values=values.borrow_mut();values.clear();
-    choice.append(if option.and_then(|o|o["efforts"].as_array()).is_some_and(|a|!a.is_empty()) {"自动（优先 xhigh）"} else {"模型默认"});values.push(None);
-    if let Some(efforts)=option.and_then(|o|o["efforts"].as_array()) {
-        for effort in efforts.iter().filter_map(Value::as_str) {choice.append(effort);values.push(Some(effort.into()));}
+    let mut values = values.borrow_mut();
+    values.clear();
+    choice.append(
+        if option
+            .and_then(|o| o["efforts"].as_array())
+            .is_some_and(|a| !a.is_empty())
+        {
+            "自动（优先 xhigh）"
+        } else {
+            "模型默认"
+        },
+    );
+    values.push(None);
+    if let Some(efforts) = option.and_then(|o| o["efforts"].as_array()) {
+        for effort in efforts.iter().filter_map(Value::as_str) {
+            choice.append(effort);
+            values.push(Some(effort.into()));
+        }
     }
-    let desired=saved.or_else(||option.and_then(|o|o["defaultEffort"].as_str()));
-    let selected=desired.map(|s|{
-        values.iter().position(|v|v.as_deref()==Some(s)).unwrap_or_else(||{
-            choice.append(&format!("{s}（当前不可用）"));values.push(Some(s.into()));values.len()-1
+    let desired = saved.or_else(|| option.and_then(|o| o["defaultEffort"].as_str()));
+    let selected = desired
+        .map(|s| {
+            values
+                .iter()
+                .position(|v| v.as_deref() == Some(s))
+                .unwrap_or_else(|| {
+                    choice.append(&format!("{s}（当前不可用）"));
+                    values.push(Some(s.into()));
+                    values.len() - 1
+                })
         })
-    }).unwrap_or(0);
-    choice.set_selection(selected as u32);choice.enable(values.len()>1);
+        .unwrap_or(0);
+    choice.set_selection(selected as u32);
+    choice.enable(values.len() > 1);
 }
 pub(super) fn show(parent: &Frame, api: ApiClient) {
     let Some(view) = dialog_job::run(
@@ -274,6 +363,49 @@ pub(super) fn show(parent: &Frame, api: ApiClient) {
     let f = fields(parent, &view);
     let dialog = f.dialog;
     let status = f.status;
+    let selected_binary = f.binary.clone();
+    let source_binary = f.binary.clone();
+    let program = f.program;
+    let enabled_saved = Rc::new(Cell::new(view["enabled"] == true));
+    let can_prepare = enabled_saved.clone();
+    let prepare = dialog_job::bind_open(
+        dialog,
+        f.prepare,
+        status,
+        api.clone(),
+        move || {
+            if !can_prepare.get() {
+                return Err("请先启用本机协助并保存设置".into());
+            }
+            let confirmation = MessageDialog::builder(&dialog,
+                "将从已有兼容程序准备共享的天才搭档 Server；本机没有可用来源时，从官方下载安装。\n\n天才搭档和天工协助共用这一份运行端，安装后长期保留。现在准备？",
+                "安装天才搭档 Server")
+                .with_style(MessageDialogStyle::YesNo | MessageDialogStyle::IconQuestion).build();
+            let accepted = confirmation.show_modal() == ID_YES;
+            confirmation.destroy();
+            if !accepted {
+                return Err("已取消准备。功能保持启用，运行端尚未就绪；需要时可再次准备。".into());
+            }
+            Ok((
+                "/api/desktop/assistance/prepare".into(),
+                json!({"confirmed":true,"binary":source_binary.borrow().clone()}),
+            ))
+        },
+        move |value| {
+            // Keep auto mode; the prepared runtime is detected after save and on
+            // later tasks without pinning a version-specific program override.
+            *selected_binary.borrow_mut() = None;
+            program.set_label("天才搭档 Server · 已就绪");
+            program.set_tooltip(value["binary"].as_str().unwrap_or("共享运行端"));
+            status.set_label(
+                value["detail"]
+                    .as_str()
+                    .unwrap_or("天才搭档 Server 已准备就绪"),
+            );
+            status.wrap(dialog.from_dip(540));
+            dialog.layout();
+        },
+    );
     let cleanup = dialog_job::bind_open(
         dialog,
         f.cleanup,
@@ -281,29 +413,64 @@ pub(super) fn show(parent: &Frame, api: ApiClient) {
         api.clone(),
         || Ok(("/api/desktop/assistance/clear".into(), json!({}))),
         move |value| {
-            status.set_label(value["detail"].as_str().unwrap_or("已清理结束的协助记录"));
+            status.set_label(
+                value["detail"]
+                    .as_str()
+                    .unwrap_or("已停止协助任务并清理临时内容"),
+            );
             status.wrap(dialog.from_dip(540));
             dialog.layout();
         },
     );
-    let job = dialog_job::bind(dialog, f.save, f.status, api, move || {
-        let selection = f.model.get_selection().map(|n| n as usize);
-        let option = selection.and_then(|i| view["models"].as_array().and_then(|a| a.get(i)));
-        if f.enabled.is_checked() && option.is_none() {
-            return Err("请先在 ChatGPT / Codex 中接入一个可用模型".into());
-        }
-        Ok((
-            "/api/desktop/assistance".into(),
-            json!({"revision":view["revision"],"enabled":f.enabled.is_checked(),"model":option.map(|v|v["model"].clone()).unwrap_or(json!("")),
+    let start_prepare = prepare.start.clone();
+    let prepare_button = f.prepare;
+    let revision = Rc::new(RefCell::new(view["revision"].clone()));
+    let next_revision = revision.clone();
+    let job = dialog_job::bind_open(
+        dialog,
+        f.save,
+        f.status,
+        api,
+        move || {
+            let selection = f.model.get_selection().map(|n| n as usize);
+            let option = selection.and_then(|i| view["models"].as_array().and_then(|a| a.get(i)));
+            if f.enabled.is_checked() && option.is_none() {
+                return Err("请先在 ChatGPT / Codex 中接入一个可用模型".into());
+            }
+            Ok((
+                "/api/desktop/assistance".into(),
+                json!({"revision":revision.borrow().clone(),"enabled":f.enabled.is_checked(),"model":option.map(|v|v["model"].clone()).unwrap_or(json!("")),
             "route":option.map(|v|v["route"].clone()).unwrap_or(json!("")),
             "reasoningEffort":f.effort.get_selection().and_then(|i|f.effort_values.borrow().get(i as usize).cloned().flatten()),
-            "binary":f.binary.borrow().clone(),"allowWorkspaceWrite":f.write.is_checked(),"autoClear":f.clear.is_checked()}),
-        ))
-    });
+            "binary":f.binary.borrow().clone(),"allowWorkspaceWrite":f.write.is_checked(),"fullAccess":f.full_access.is_checked(),"autoClear":false}),
+            ))
+        },
+        move |saved| {
+            if saved.get("revision").is_some() {
+                *next_revision.borrow_mut() = saved["revision"].clone();
+            }
+            let enabled = saved["enabled"] == true;
+            enabled_saved.set(enabled);
+            prepare_button.enable(enabled);
+            if enabled && saved["runtime"]["needsPreparation"] == true {
+                status.set_label("设置已保存；天才搭档 Server 尚未就绪");
+                start_prepare();
+            } else {
+                status.set_label(if enabled {
+                    "设置已保存，天才搭档 Server 已就绪"
+                } else {
+                    "已停用天工本机协助"
+                });
+            }
+            status.wrap(dialog.from_dip(540));
+            dialog.layout();
+        },
+    );
     dialog.centre();
     dialog.show_modal();
     drop(job);
     drop(cleanup);
+    drop(prepare);
     dialog.destroy();
 }
 
@@ -320,7 +487,8 @@ fn local_assistance_setup_keeps_save_cleanup_and_fields_inside_the_hidden_native
             assert_eq!(f.effort.get_string_selection().as_deref(),Some("xhigh"));
             assert!(f.binary.borrow().is_none(),"auto-detected CLI must not become a manual override when saving");
             f.dialog.layout();let bounds=f.dialog.get_client_size();
-            for w in [&f.enabled as &dyn WxWidget,&f.model,&f.effort,&f.write,&f.clear,&f.status,&f.save,&f.cleanup]{
+            assert!(!f.clear.is_shown(),"legacy completion cleanup must remain hidden");
+            for w in [&f.enabled as &dyn WxWidget,&f.model,&f.effort,&f.program,&f.prepare,&f.write,&f.full_access,&f.status,&f.save,&f.cleanup]{
                 let p=w.get_position();let s=w.get_size();
                 assert!(p.x>=0 && p.y>=0 && p.x+s.width<=bounds.width+1 && p.y+s.height<=bounds.height+1,"assistance control must fit: {p:?} {s:?} in {bounds:?}");
             }

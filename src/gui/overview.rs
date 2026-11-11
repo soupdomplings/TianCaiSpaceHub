@@ -10,7 +10,10 @@ use super::{
     visual::{self, Canvas},
 };
 use crate::gui::controls::Choice;
-use crate::{ai_gateway::request_log::desktop::LogFilter, desktop::clients::ClientId};
+use crate::{
+    ai_gateway::request_log::desktop::LogFilter,
+    desktop::{clients::ClientId, request_source},
+};
 use serde_json::Value;
 use std::{
     cell::{Cell, RefCell},
@@ -163,8 +166,8 @@ impl Overview {
             u.filters.borrow_mut().client = client
                 .get_selection()
                 .and_then(|i| i.checked_sub(1))
-                .and_then(|i| ClientId::ALL.get(i as usize))
-                .map(|c| c.key().into());
+                .and_then(|i| request_source::keys().nth(i as usize))
+                .map(Into::into);
             let f = u.filters.borrow().clone();
             view.update_filter_label(
                 f.model.as_deref().unwrap_or(""),
@@ -308,7 +311,7 @@ impl Overview {
                     Action::Mcp(dumpling) => nav.navigate(if dumpling {
                         PageId::Dumpling
                     } else {
-                        PageId::Mcp
+                        PageId::Logs
                     }),
                 }
             }
@@ -533,11 +536,7 @@ impl Overview {
         for (i, row) in rows.iter().enumerate() {
             let name = row["name"].as_str().unwrap_or("历史未标记");
             let label = if index == 0 {
-                ClientId::ALL
-                    .iter()
-                    .find(|c| c.key() == name)
-                    .map(|c| c.name())
-                    .unwrap_or(name)
+                request_source::name(name).unwrap_or(name)
             } else {
                 name
             };
@@ -617,10 +616,17 @@ impl Overview {
                 action: Action::Channel(route.clone()),
             });
         }
-        for ((_, dumpling, _), rect) in view.mcps.iter().zip(result.mcps) {
+        for ((id, dumpling, _), rect) in view.mcps.iter().zip(result.mcps) {
             hits.push(Hit {
                 rect,
-                action: Action::Mcp(*dumpling),
+                action: if id == request_source::LOCAL_ASSISTANCE_MCP_RESOURCE {
+                    Action::Requests(LogFilter {
+                        client: Some(request_source::LOCAL_ASSISTANCE_MCP.into()),
+                        ..Default::default()
+                    })
+                } else {
+                    Action::Mcp(*dumpling)
+                },
             });
         }
     }

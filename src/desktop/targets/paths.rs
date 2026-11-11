@@ -113,31 +113,53 @@ fn app_roots(launcher: &Path, platform: Platform) -> Option<(PathBuf, PathBuf)> 
     Some((app, install.into()))
 }
 
-// Some(None) is an identified installed build, which must stop candidate
-// searching. None is an unrelated launcher/fork and may be skipped.
-fn portable_at(launcher: &Path, platform: Platform) -> Option<Option<PathBuf>> {
-    let (app, install) = app_roots(launcher, platform)?;
-    let product = metadata(&app.join("product.json"));
+fn vscode_product(product: Option<&Value>) -> bool {
     if let Some(name) = product
-        .as_ref()
         .and_then(|p| p["applicationName"].as_str())
         .filter(|s| !s.is_empty())
     {
         if name != "code" {
-            return None;
+            return false;
         }
     }
-    if let Some(short) = product.as_ref().and_then(|p| p["nameShort"].as_str()) {
+    if let Some(short) = product.and_then(|p| p["nameShort"].as_str()) {
         let short = short.to_ascii_lowercase();
         if product
-            .as_ref()
             .and_then(|p| p["applicationName"].as_str())
             .is_none()
             && short != "code"
             && short != "visual studio code"
         {
-            return None;
+            return false;
         }
+    }
+    true
+}
+
+#[cfg(windows)]
+pub(super) fn vscode_program(launcher: &Path) -> Option<PathBuf> {
+    if !launcher.is_file() {
+        return None;
+    }
+    let (app, install) = app_roots(launcher, Platform::Windows)?;
+    if !vscode_product(metadata(&app.join("product.json")).as_ref()) {
+        return None;
+    }
+    [
+        install.join("Code.exe"),
+        app.parent()?.parent()?.join("Code.exe"),
+    ]
+    .into_iter()
+    .find(|p| p.is_file())
+}
+
+// Some(None) is an identified installed build, which must stop candidate
+// searching. None is an unrelated launcher/fork and may be skipped.
+fn portable_at(launcher: &Path, platform: Platform) -> Option<Option<PathBuf>> {
+    let (app, install) = app_roots(launcher, platform)?;
+    let product = metadata(&app.join("product.json"));
+    if !vscode_product(product.as_ref()) {
+        return None;
     }
     if product.as_ref().is_some_and(|p| p.get("target").is_some()) {
         return Some(None);

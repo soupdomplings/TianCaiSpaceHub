@@ -848,6 +848,8 @@ pub(super) struct RequestLogDetailResponse {
 pub(super) struct RequestLogDetail {
     #[serde(flatten)]
     pub(super) summary: RequestLogItem,
+    #[serde(default)]
+    pub(super) client_id: Option<String>,
     pub(super) request_headers_json: Option<String>,
     pub(super) request_json: Option<String>,
     pub(super) upstream_request_headers_json: Option<String>,

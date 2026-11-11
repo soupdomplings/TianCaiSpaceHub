@@ -65,25 +65,7 @@ pub fn snapshot(
     let rows: Vec<_> = ClientId::ALL
         .into_iter()
         .map(|client| {
-            let patterns: &[&str] = match client {
-                ClientId::Codex => &["codex.exe", "codex", "chatgpt.exe", "chatgpt"],
-                ClientId::WorkBuddy => &["workbuddy.exe", "workbuddy"],
-                ClientId::Tiangong => &[
-                    "tiangong.exe",
-                    "tiangong-desktop.exe",
-                    "天工work.exe",
-                    "tiangong",
-                ],
-                ClientId::VsCode => &["code.exe", "code"],
-                ClientId::DeepSeekHarness => {
-                    &["deepseek-harness.exe", "deepseek-harness", "dsh.exe", "dsh"]
-                }
-                ClientId::ZCode => &["zcode.exe", "zcode"],
-                ClientId::WebStorm => &["webstorm64.exe", "webstorm.exe", "webstorm"],
-            };
-            let opened = names
-                .as_ref()
-                .map(|names| names.iter().any(|n| patterns.contains(&n.as_str())));
+            let opened = client_opened(client, names.as_deref());
             let model_count = match client {
                 ClientId::Codex => {
                     let status = crate::codex_app_config::inspect_codex_app_config(
@@ -187,6 +169,36 @@ pub fn snapshot(
     }
     rows
 }
+fn client_opened(client: ClientId, names: Option<&[String]>) -> Option<bool> {
+    let patterns: &[&str] = match client {
+        ClientId::Codex => &["codex.exe", "codex", "chatgpt.exe", "chatgpt"],
+        ClientId::WorkBuddy => &["workbuddy.exe", "workbuddy"],
+        ClientId::Tiangong => &[
+            "tiangong.exe",
+            "tiangong-desktop.exe",
+            "天工work.exe",
+            "tiangong",
+        ],
+        ClientId::VsCode => &["code.exe", "code"],
+        ClientId::DeepSeekHarness => &[
+            "deepseek harness.exe",
+            "deepseek harness",
+            "deepseek-harness.exe",
+            "deepseek-harness",
+            "dsh.exe",
+            "dsh",
+        ],
+        ClientId::ZCode => &["zcode.exe", "zcode"],
+        ClientId::WebStorm => &["webstorm64.exe", "webstorm.exe", "webstorm"],
+    };
+    names.map(|names| {
+        names.iter().any(|name| {
+            patterns
+                .iter()
+                .any(|pattern| name.eq_ignore_ascii_case(pattern))
+        })
+    })
+}
 pub(crate) fn attach_requests(
     mut rows: Vec<ClientRuntime>,
     requests: &[Activity],
@@ -251,4 +263,67 @@ fn process_names() -> Option<Vec<String>> {
 #[cfg(not(any(windows, target_os = "macos")))]
 fn process_names() -> Option<Vec<String>> {
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn harness_desktop_process_with_spaces_is_opened() {
+        let names = vec!["explorer.exe".into(), "DeepSeek Harness.exe".into()];
+        assert_eq!(
+            client_opened(ClientId::DeepSeekHarness, Some(&names)),
+            Some(true)
+        );
+        assert_eq!(client_opened(ClientId::Codex, Some(&names)), Some(false));
+        let names = vec!["DeepSeek Harness".into()];
+        assert_eq!(
+            client_opened(ClientId::DeepSeekHarness, Some(&names)),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn harness_legacy_process_names_still_match_without_substring_false_positives() {
+        for name in ["deepseek-harness.exe", "deepseek-harness", "dsh.exe", "dsh"] {
+            assert_eq!(
+                client_opened(ClientId::DeepSeekHarness, Some(&[name.into()])),
+                Some(true),
+                "{name}"
+            );
+        }
+        let unrelated = [
+            "DeepSeek Harness Helper.exe",
+            "DeepSeek Harness.exe.bak",
+            "deepseek.exe",
+            "dsh-service.exe",
+        ]
+        .map(String::from);
+        assert_eq!(
+            client_opened(ClientId::DeepSeekHarness, Some(&unrelated)),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn missing_process_snapshot_stays_unknown_and_empty_snapshot_stays_closed() {
+        for client in ClientId::ALL {
+            assert_eq!(client_opened(client, None), None);
+            assert_eq!(client_opened(client, Some(&[])), Some(false));
+        }
+    }
+
+    #[test]
+    fn other_editors_match_main_process_names_without_matching_other_clients() {
+        for (client, main, other) in [
+            (ClientId::VsCode, "Code.exe", "Code - Insiders.exe"),
+            (ClientId::ZCode, "ZCode.exe", "ZCode Helper.exe"),
+            (ClientId::WebStorm, "webstorm64.exe", "webstorm64.exe.bak"),
+            (ClientId::WebStorm, "webstorm.exe", "webstorm-toolbox.exe"),
+        ] {
+            assert_eq!(client_opened(client, Some(&[main.into()])), Some(true));
+            assert_eq!(client_opened(client, Some(&[other.into()])), Some(false));
+        }
+    }
 }

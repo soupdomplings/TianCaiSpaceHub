@@ -510,9 +510,16 @@ pub(super) struct RuntimeRoute {
 pub(super) struct RuntimeMcp {
     pub name: String,
     pub detail: String,
+    pub models: Vec<RuntimeMcpModel>,
     pub active: bool,
     pub flowing: bool,
     pub opacity: f64,
+}
+#[derive(Clone)]
+pub(super) struct RuntimeMcpModel {
+    pub route: String,
+    pub model: String,
+    pub flowing: bool,
 }
 pub(super) struct RuntimeHits {
     pub clients: Vec<Rect>,
@@ -788,6 +795,36 @@ pub(super) fn draw_runtime(
                 mcp.flowing,
                 false,
             );
+            for model in &mcp.models {
+                if let Some((index, route)) = routes
+                    .iter()
+                    .enumerate()
+                    .find(|(_, route)| route.route == model.route && route.model == model.model)
+                {
+                    let trunk_x = ox + mx - mw / 2 - 18;
+                    let junction = Point::new(trunk_x, r.y - 12);
+                    let target = Point::new(trunk_x, ys(routes.len(), index) + 18);
+                    let color = faded(t.accent, mcp.opacity.min(route.opacity));
+                    let flowing = model.flowing && mcp.flowing;
+                    c.curve(
+                        Point::new(r.x + r.width / 2, r.y),
+                        junction,
+                        color,
+                        phase,
+                        flowing,
+                        false,
+                    );
+                    c.curve(junction, target, color, phase, flowing, false);
+                    c.curve(
+                        target,
+                        Point::new(ox + mx - mw / 2, target.y),
+                        color,
+                        phase,
+                        flowing,
+                        false,
+                    );
+                }
+            }
             c.rounded(r, 10, t.bg_card, Some(color));
             c.icon(
                 Icon::Mcp,
@@ -914,16 +951,14 @@ pub(super) fn draw_client(
         v.flowing,
         true,
     );
-    for (a, b) in [(0, 0), (0, 1), (1, 2)] {
-        c.curve(
-            Point::new(xs[a] - 10, top + 30),
-            Point::new(xs[b] - 24, bottom),
-            t.border,
-            0.,
-            false,
-            true,
-        );
-    }
+    c.curve(
+        Point::new(xs[1], top + 30),
+        Point::new(xs[1], bottom - 30),
+        t.border,
+        0.,
+        false,
+        true,
+    );
     let mut hits = Vec::new();
     let mut draw = |x: i32,
                     y: i32,
@@ -1010,27 +1045,7 @@ pub(super) fn draw_client(
         false,
     );
     draw(
-        xs[0],
-        bottom,
-        Icon::Skill,
-        "Skill",
-        v.skill,
-        v.states[3],
-        3,
-        false,
-    );
-    draw(
         xs[1],
-        bottom,
-        Icon::Mcp,
-        "MCP",
-        v.mcp,
-        v.states[4],
-        4,
-        false,
-    );
-    draw(
-        xs[2],
         bottom,
         Icon::Chat,
         "聊天与执行",

@@ -133,7 +133,11 @@ impl ResourceCard {
             .with_size(Size::new(58, 30))
             .build();
         delete.set_foreground_color(theme::theme().error);
-        delete.set_tooltip(if scoped { "从当前客户端移除此项，保留 Hub 中的内容及其他客户端" } else { "删除 Hub 中的此项，须先从所有使用端移除" });
+        delete.set_tooltip(if scoped {
+            "从当前客户端移除此项，保留 Hub 中的内容及其他客户端"
+        } else {
+            "删除 Hub 中的此项，须先从所有使用端移除"
+        });
         if !scoped {
             let names = clients
                 .iter()

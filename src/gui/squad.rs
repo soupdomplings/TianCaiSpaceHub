@@ -24,7 +24,7 @@ mod finance;
 mod organization;
 mod payment;
 type Slot = Arc<Mutex<Option<(u64, Result<(Value, Value, String), String>)>>>;
-type InlineSlot = Arc<Mutex<Option<(u64, &'static str, Result<Value, String>)>>>;
+type InlineSlot = Arc<Mutex<Option<(u64, &'static str, String, Result<Value, String>)>>>;
 #[derive(Clone)]
 pub(super) struct SquadPage {
     page: Panel,
@@ -64,6 +64,7 @@ pub(super) struct SquadPage {
     ready: Rc<Cell<bool>>,
     inline_pending: InlineSlot,
     inline_busy: Rc<Cell<bool>>,
+    inline_notice: Rc<RefCell<Option<String>>>,
 }
 impl SquadPage {
     pub fn new(shell: &Shell, frame: Frame, api: ApiClient) -> Self {
@@ -148,6 +149,7 @@ impl SquadPage {
             ready: Default::default(),
             inline_pending: Default::default(),
             inline_busy: Default::default(),
+            inline_notice: Default::default(),
         };
         let u = ui.clone();
         let nav = shell.clone();
@@ -206,27 +208,13 @@ impl SquadPage {
         });
         let u = ui.clone();
         logout.on_click(move |_| {
-            u.serial.set(u.serial.get() + 1);
-            u.ready.set(false);
-            if dialog_job::run(
-                &u.frame,
-                u.api.clone(),
+            u.inline_operation(
+                "logout",
                 "退出账户",
                 "/api/desktop/squad/logout",
                 json!({}),
-            )
-            .is_some()
-            {
-                *u.state.borrow_mut() = Value::Null;
-                *u.data.borrow_mut() = Value::Null;
-                u.workspace.clear();
-                u.capability_checked.set(false);
-                *u.key.borrow_mut() = "account".into();
-                u.badge.set(&json!({"signedIn":false}));
-                u.browser_waiting.set(false);
-                u.browser_login.idle();
-            }
-            u.load();
+                None,
+            );
         });
         let u = ui.clone();
         refresh.on_click(move |_| u.load_inner(None, true));
@@ -282,7 +270,7 @@ impl SquadPage {
         }
         let u = ui.clone();
         table.on_item_activated(move |_| {
-            if !u.ready.get() {
+            if !u.ready.get() || u.inline_busy.get() {
                 return;
             }
             let Some(row) = u.selected() else {
@@ -347,6 +335,11 @@ impl SquadPage {
                         *u.data.borrow_mut() = data;
                         *u.key.borrow_mut() = key;
                         u.render();
+                        if u.ready.get() {
+                            if let Some(notice) = u.inline_notice.borrow_mut().take() {
+                                u.workspace.notice(&notice);
+                            }
+                        }
                     }
                     Err(e) => {
                         if u.state.borrow()["signedIn"].is_null() {
@@ -531,22 +524,57 @@ impl SquadPage {
         self.load_inner(None, false);
     }
     fn inline_write(&self, kind: &'static str, body: Value, checkout: Option<Value>) {
-        if !self.ready.get() || self.inline_busy.replace(true) {
-            return;
+        self.inline_operation(
+            kind,
+            if kind == "purchase" {
+                "核对金额并创建订单"
+            } else {
+                "保存"
+            },
+            "/api/desktop/squad/request",
+            body,
+            checkout,
+        );
+    }
+    fn inline_controls(&self, enabled: bool) {
+        self.workspace.logout.enable(enabled);
+        self.workspace.refresh.enable(enabled);
+        self.workspace.fallback.enable(enabled);
+        self.workspace.purchase.panel.enable(enabled);
+        if !enabled {
+            self.workspace.purchase.set_ready(false);
+            for button in [
+                self.primary,
+                self.edit,
+                self.remove,
+                self.extra,
+                self.invoice,
+            ] {
+                button.enable(false);
+            }
         }
-        self.workspace.fallback.enable(false);
-        self.workspace.purchase.set_ready(false);
-        self.workspace.purchase.panel.enable(false);
-        self.workspace.notice(if kind == "purchase" {
-            "正在核对金额并创建订单…"
-        } else {
-            "正在保存…"
-        });
+    }
+    fn inline_operation(
+        &self,
+        kind: &'static str,
+        title: &str,
+        path: &str,
+        body: Value,
+        checkout: Option<Value>,
+    ) -> bool {
+        if !self.ready.get() || self.inline_busy.replace(true) {
+            return false;
+        }
+        self.inline_controls(false);
+        self.inline_notice.borrow_mut().take();
+        self.workspace.notice(&format!("正在{title}…"));
         let expected = json!({"userId":self.state.borrow()["user"]["id"],"generation":self.state.borrow()["accountGeneration"]});
-        let (api, slot, serial) = (
+        let (api, slot, serial, path, title) = (
             self.api.clone(),
             self.inline_pending.clone(),
             self.serial.get(),
+            path.to_string(),
+            title.to_string(),
         );
         std::thread::spawn(move || {
             let result = (|| {
@@ -557,20 +585,23 @@ impl SquadPage {
                 } else {
                     body
                 };
-                request["expected_account"] = expected;
-                api.desktop_post("/api/desktop/squad/request", &request)
+                if path == "/api/desktop/squad/request" {
+                    request["expected_account"] = expected;
+                }
+                api.desktop_post(&path, &request)
             })();
             if let Ok(mut s) = slot.lock() {
-                *s = Some((serial, kind, result));
+                *s = Some((serial, kind, title, result));
             }
             wxdragon::wake_up_idle();
         });
+        true
     }
     fn inline_tick(&self) {
         let result = self.inline_pending.lock().ok().and_then(|mut s| s.take());
-        if let Some((serial, kind, result)) = result {
+        if let Some((serial, kind, title, result)) = result {
             self.inline_busy.set(false);
-            self.workspace.purchase.panel.enable(true);
+            self.inline_controls(true);
             if serial != self.serial.get() {
                 if self.ready.get() {
                     self.render();
@@ -579,14 +610,58 @@ impl SquadPage {
             }
             match result {
                 Ok(v) => {
+                    if kind == "logout" {
+                        *self.state.borrow_mut() = Value::Null;
+                        *self.data.borrow_mut() = Value::Null;
+                        self.workspace.clear();
+                        self.capability_checked.set(false);
+                        *self.key.borrow_mut() = "account".into();
+                        self.badge.set(&json!({"signedIn":false}));
+                        self.browser_waiting.set(false);
+                        self.browser_login.idle();
+                    }
+                    // A result from a page the user has left must not open a
+                    // payment/import window or overwrite the new page.
+                    if !self.active.get() {
+                        return;
+                    }
                     if kind == "purchase" {
                         payment::continue_order(&self.frame, self.api.clone(), &v);
+                    } else if kind == "import" {
+                        match serde_json::from_value(v) {
+                            Ok(draft) => {
+                                super::external_import::preview(&self.frame, &self.api, draft)
+                            }
+                            Err(_) => {
+                                self.render();
+                                self.workspace.notice("导入预览格式不兼容，请重新读取密钥");
+                                self.status.set_foreground_color(theme::theme().error);
+                                return;
+                            }
+                        }
+                    } else if kind == "verify" {
+                        self.load();
+                        *self.inline_notice.borrow_mut() =
+                            Some(payment::verification_status(&v).into());
+                        return;
                     }
                     self.load();
+                    if kind != "logout" {
+                        *self.inline_notice.borrow_mut() = Some(format!("{title}已完成"));
+                    }
                 }
                 Err(e) => {
-                    self.workspace.fallback.enable(self.ready.get());
+                    if !self.active.get() {
+                        return;
+                    }
+                    self.render();
+                    let e = if e.trim().is_empty() {
+                        format!("{title}未完成，请刷新核对当前状态后再继续")
+                    } else {
+                        e
+                    };
                     self.workspace.notice(&e);
+                    self.status.set_foreground_color(theme::theme().error);
                     if kind == "purchase" {
                         self.workspace.purchase.set_ready(false);
                         self.workspace
@@ -597,6 +672,7 @@ impl SquadPage {
         }
     }
     fn load_inner(&self, session: Option<Value>, force: bool) {
+        self.inline_notice.borrow_mut().take();
         if self.state.borrow()["signedIn"].is_null() {
             self.restore.loading();
             self.book.change_selection(3);
@@ -705,8 +781,7 @@ impl SquadPage {
                 self.page_index.get(),
             );
             if self.inline_busy.get() {
-                self.workspace.fallback.enable(false);
-                self.workspace.purchase.set_ready(false);
+                self.inline_controls(false);
             }
         } else {
             self.workspace.clear();
@@ -722,14 +797,18 @@ impl SquadPage {
     fn selected(&self) -> Option<Value> {
         self.workspace.selected()
     }
-    fn request(&self, title: &str, method: &str, path: &str, body: Value) -> Option<Value> {
-        dialog_job::run(
-            &self.frame,
-            self.api.clone(),
+    fn request(&self, title: &str, method: &str, path: &str, body: Value) {
+        self.inline_operation(
+            if path == "/payment/orders/verify" {
+                "verify"
+            } else {
+                "request"
+            },
             title,
             "/api/desktop/squad/request",
             json!({"method":method,"path":path,"body":body}),
-        )
+            None,
+        );
     }
     fn form(&self, title: &str, method: &str, path: &str, fields: Value) -> Option<Value> {
         forms::edit_money(
@@ -744,7 +823,7 @@ impl SquadPage {
         )
     }
     fn action(&self, action: &str) {
-        if !self.ready.get() {
+        if !self.ready.get() || self.inline_busy.get() {
             return;
         }
         let key = self.key.borrow().clone();
@@ -837,34 +916,23 @@ impl SquadPage {
             }
             ("keys", "extra") => {
                 if let Some(id) = id {
-                    if let Some(value) = dialog_job::run(
-                        &self.frame,
-                        self.api.clone(),
+                    self.inline_operation(
+                        "import",
                         "准备导入",
                         "/api/desktop/squad/import",
                         json!({"id":id}),
-                    ) {
-                        match serde_json::from_value(value) {
-                            Ok(draft) => {
-                                super::external_import::preview(&self.frame, &self.api, draft)
-                            }
-                            Err(_) => {
-                                super::show_error(&self.frame, "导入预览格式不兼容，请重新读取密钥")
-                            }
-                        }
-                    }
+                        None,
+                    );
                 }
             }
             ("orders", "edit") => {
                 if let Some(number) = row["out_trade_no"].as_str() {
-                    if let Some(value) = self.request(
+                    self.request(
                         "核对付款",
                         "POST",
                         "/payment/orders/verify",
                         json!({"out_trade_no":number}),
-                    ) {
-                        forms::inspect(&self.frame, "站点订单状态", &value);
-                    }
+                    );
                 }
             }
             ("orders", "remove") => {
@@ -948,7 +1016,9 @@ impl SquadPage {
             }
             _ => {}
         }
-        self.load();
+        if !self.inline_busy.get() {
+            self.load();
+        }
     }
 }
 fn endpoint(key: &str) -> &str {

@@ -1,10 +1,13 @@
 //! TianGong owns the interaction; isolated Codex app-server owns only subtasks.
 mod binary;
+mod brand;
 mod catalogue;
 mod host;
-mod process;
+pub(crate) mod process;
 mod protocol;
 mod records;
+pub use records::{recover_runs, shutdown_and_cleanup};
+pub(crate) mod runtime;
 pub mod settings;
 #[cfg(test)]
 mod tests;
@@ -33,6 +36,7 @@ pub struct Service {
 }
 #[derive(Default)]
 pub struct Inner {
+    pub cleaning: bool,
     pub host: Option<String>,
     pub host_detail: String,
     pub trigger_state: String,
@@ -85,7 +89,7 @@ pub struct Task {
     pub route: String,
     pub route_fingerprint: String,
     pub api_token: String,
-    pub auto_clear: bool,
+    pub full_access: bool,
     pub phase: Phase,
     pub detail: String,
     pub result: String,
@@ -117,8 +121,13 @@ pub enum Control {
     Cancel,
     Finish,
     Followup(String),
-    Decision { nonce: String, response: Value },
+    Decision {
+        nonce: String,
+        response: Value,
+    },
     Delete,
+    /// Hub exit / explicit temporary cleanup: no model round-trip is needed.
+    Shutdown,
 }
 
 impl Task {
@@ -135,7 +144,7 @@ impl Task {
     pub fn view(&self, details: bool) -> Value {
         let mut v = json!({"id":self.id,"session":self.session,"phase":self.phase,"detail":self.detail,
             "title":self.goal.chars().take(72).collect::<String>(),
-            "model":self.model,"reasoningEffort":self.reasoning_effort,"turns":self.turns,"workerStopped":self.worker_stopped,"closing":self.closing,
+            "model":self.model,"reasoningEffort":self.reasoning_effort,"fullAccess":self.full_access,"turns":self.turns,"workerStopped":self.worker_stopped,"closing":self.closing,
             "elapsedSeconds":self.at.elapsed().as_secs(),
             "progress":self.progress,"files":self.files,"commands":self.commands});
         if details {
@@ -204,7 +213,7 @@ async fn reserve(
     );
     let (settings, _) = settings::read(&state.config_path)?;
     let config = state.config.lock().await.clone();
-    settings::validate(&config, &settings)?;
+    settings::validate(&state.config_path, &config, &settings)?;
     ensure!(settings.enabled, "本机协助已停用");
     let provider = config
         .ai_gateway
@@ -220,6 +229,7 @@ async fn reserve(
     let fingerprint = settings::source_fingerprint(provider)?;
     let reasoning_effort = settings::resolved_effort(&config, &settings)?;
     let mut inner = state.local_assistance.inner.lock().await;
+    ensure!(!inner.cleaning, "协助正在停止并清理临时内容，请完成后重试");
     let parent = inner
         .contexts
         .get(context)
@@ -279,7 +289,8 @@ async fn reserve(
         "此任务或项目已有协助正在处理，请等待原任务，避免同时修改文件");
     let id = uuid::Uuid::new_v4().to_string();
     let (tx, rx) = mpsc::channel(16);
-    let writable = parent.writable && settings.allow_workspace_write && !analysis_only;
+    let writable = !analysis_only
+        && (settings.full_access || (parent.writable && settings.allow_workspace_write));
     let now = Instant::now();
     inner
         .admitted
@@ -299,7 +310,7 @@ async fn reserve(
             route: settings.route.clone(),
             route_fingerprint: fingerprint,
             api_token: settings::token(),
-            auto_clear: settings.auto_clear,
+            full_access: settings.full_access,
             phase: Phase::Starting,
             detail: "正在准备本机协助".into(),
             result: String::new(),
@@ -425,9 +436,9 @@ pub async fn control(
     let task = inner.tasks.get_mut(id).unwrap();
     match &control {
         Control::Followup(_) => task.bump(Phase::Starting, "正在准备补充处理"),
-        Control::Cancel | Control::Delete | Control::Finish => {
+        Control::Cancel | Control::Delete | Control::Finish | Control::Shutdown => {
             task.closing = true;
-            task.delete_requested = matches!(control, Control::Delete);
+            task.delete_requested = matches!(control, Control::Delete | Control::Shutdown);
             task.pending.clear();
             if !task.phase.terminal() {
                 task.bump(Phase::Cancelling, "正在停止协助");
@@ -460,5 +471,8 @@ pub async fn disconnect(state: &SharedState, host: &str) {
     }
 }
 pub async fn run_monitor(state: SharedState, shutdown: watch::Receiver<bool>) {
-    tokio::join!(host::monitor(state.clone(), shutdown.clone()), host::catalogue_monitor(state, shutdown));
+    tokio::join!(
+        host::monitor(state.clone(), shutdown.clone()),
+        host::catalogue_monitor(state, shutdown)
+    );
 }

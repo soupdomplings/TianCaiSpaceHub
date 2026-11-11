@@ -1,4 +1,4 @@
-//! Recoverable ownership inventory, including records left by a Hub restart.
+//! Only feature-owned temporary runs; persistent shared Server stays untouched.
 use super::*;
 use crate::desktop::transaction;
 
@@ -40,23 +40,130 @@ pub(super) fn list(path: &std::path::Path) -> Result<Vec<Value>> {
 }
 
 pub(super) async fn clear_finished(state: &SharedState) -> Result<Value> {
-    let _gate = state.local_assistance.setup.lock().await;
-    let mut inner = state.local_assistance.inner.lock().await;
-    let mut cleared = 0;
-    let mut retained = 0;
-    for record in list(&state.config_path)? {
-        let id = record["id"].as_str().unwrap();
-        if record["canClear"] != true || inner.tasks.get(id).is_some_and(|t| !t.worker_stopped) {
-            retained += 1;
-            continue;
+    Ok(serde_json::to_value(stop_and_cleanup(state, false).await?)?)
+}
+
+#[derive(Default, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanupReport {
+    pub cleared: usize,
+    pub retained: usize,
+    pub detail: String,
+}
+
+/// Startup recovery handles only owned, already-exited runs. An unrecognized
+/// or live PID is retained rather than killed from a stale marker.
+pub fn recover_runs(path: &std::path::Path) -> Result<CleanupReport> {
+    recover_except(path, &std::collections::HashSet::new())
+}
+fn recover_except(
+    path: &std::path::Path,
+    active: &std::collections::HashSet<String>,
+) -> Result<CleanupReport> {
+    let runs = settings::root(path).join("runs");
+    transaction::reject_links(&runs)?;
+    let mut report = CleanupReport::default();
+    if runs.is_dir() {
+        for entry in std::fs::read_dir(&runs)? {
+            let entry = entry?;
+            let id = entry.file_name().to_string_lossy().into_owned();
+            if !uuid::Uuid::parse_str(&id).is_ok_and(|value| value.to_string() == id) {
+                continue;
+            }
+            if active.contains(&id) {
+                report.retained += 1;
+                continue;
+            }
+            match worker::remove_owned(path, &id) {
+                Ok(()) => report.cleared += 1,
+                Err(_) => report.retained += 1,
+            }
         }
-        worker::remove_owned(&state.config_path, id)?;
-        if let Some(task) = inner.tasks.get_mut(id) {
-            task.erase();
-        }
-        cleared += 1;
+        let _ = std::fs::remove_dir(&runs);
     }
-    // Auto-cleared tasks may have only in-memory feedback left.
+    // Current workers keep all native temporary logs below their owned run.
+    // A separate logs root is removed only when an explicit ownership marker
+    // proves it was created by this feature, never for arbitrary local logs.
+    let logs = settings::root(path).join("logs");
+    if let Some(marker) = transaction::read(&logs.join("owner.json"))?
+        && serde_json::from_slice::<Value>(&marker)?["owner"] == "tiancai-local-assistance-v1"
+    {
+        transaction::reject_links(&logs)?;
+        reject_log_links(&logs)?;
+        std::fs::remove_dir_all(&logs)?;
+    }
+    report.detail = format!(
+        "已清理 {} 份协助临时内容；{} 份仍运行或归属待核对的内容已保留。共享 Server 与项目文件保留。",
+        report.cleared, report.retained
+    );
+    Ok(report)
+}
+fn reject_log_links(root: &std::path::Path) -> Result<()> {
+    let mut pending = vec![root.to_owned()];
+    let mut count = 0;
+    while let Some(path) = pending.pop() {
+        transaction::reject_links(&path)?;
+        count += 1;
+        ensure!(count <= 20_000, "协助日志过多，未清理");
+        if path.is_dir() {
+            for entry in std::fs::read_dir(path)? {
+                pending.push(entry?.path());
+            }
+        }
+    }
+    Ok(())
+}
+
+pub async fn shutdown_and_cleanup(state: &SharedState) -> Result<CleanupReport> {
+    stop_and_cleanup(state, true).await
+}
+async fn stop_and_cleanup(state: &SharedState, exiting: bool) -> Result<CleanupReport> {
+    let _gate = state.local_assistance.setup.lock().await;
+    {
+        let mut inner = state.local_assistance.inner.lock().await;
+        inner.cleaning = true;
+        for task in inner.tasks.values_mut() {
+            task.closing = true;
+            // This coordinator owns directory removal after all workers stop.
+            // Do not race the worker's per-task Delete path on the same run.
+            task.delete_requested = false;
+            task.pending.clear();
+            if !task.worker_stopped {
+                let _ = task.controller.try_send(Control::Shutdown);
+            }
+        }
+    }
+    state.local_assistance.changed.notify_waiters();
+    let until = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let notified = state.local_assistance.changed.notified();
+        if state
+            .local_assistance
+            .inner
+            .lock()
+            .await
+            .tasks
+            .values()
+            .all(|task| task.worker_stopped)
+        {
+            break;
+        }
+        if tokio::time::timeout_at(until, notified).await.is_err() {
+            break;
+        }
+    }
+    let active = state
+        .local_assistance
+        .inner
+        .lock()
+        .await
+        .tasks
+        .values()
+        .filter(|task| !task.worker_stopped)
+        .map(|task| task.id.clone())
+        .collect();
+    let result = recover_except(&state.config_path, &active);
+    let mut inner = state.local_assistance.inner.lock().await;
     for task in inner
         .tasks
         .values_mut()
@@ -64,7 +171,8 @@ pub(super) async fn clear_finished(state: &SharedState) -> Result<Value> {
     {
         task.erase();
     }
-    Ok(
-        json!({"cleared":cleared,"retained":retained,"detail":format!("已清理 {cleared} 份协助对话；{retained} 份运行中或待核对的记录已保留。天工主对话与项目文件保留。" )}),
-    )
+    if !exiting {
+        inner.cleaning = false;
+    }
+    result
 }

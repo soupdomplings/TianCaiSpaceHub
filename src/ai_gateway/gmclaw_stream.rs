@@ -17,7 +17,7 @@ const MAX_BODY_BYTES: usize = 32 * 1024 * 1024;
 const MAX_ITEMS: usize = 4096;
 
 #[derive(Clone, Copy)]
-pub(super) enum Protocol {
+pub(crate) enum Protocol {
     Responses,
     Chat,
 }
@@ -26,7 +26,7 @@ pub(super) fn deadline(timeout_secs: u64) -> Instant {
     Instant::now() + Duration::from_secs(timeout_secs.max(1))
 }
 
-pub(super) async fn collect<S, E>(
+pub(crate) async fn collect<S, E>(
     stream: S,
     headers: &HeaderMap,
     protocol: Protocol,

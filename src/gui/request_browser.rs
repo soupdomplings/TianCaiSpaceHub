@@ -6,7 +6,7 @@ use super::{
     theme,
 };
 use crate::gui::controls::{Choice, TextCtrl};
-use crate::{ai_gateway::request_log::desktop::LogFilter, desktop::clients::ClientId};
+use crate::{ai_gateway::request_log::desktop::LogFilter, desktop::request_source};
 use serde_json::Value;
 use std::{
     cell::{Cell, RefCell},
@@ -79,7 +79,7 @@ impl RequestBrowser {
             filter
                 .client
                 .as_deref()
-                .and_then(|key| ClientId::ALL.iter().position(|c| c.key() == key))
+                .and_then(|key| request_source::keys().position(|source| source == key))
                 .map_or(0, |i| i as u32 + 1),
             match filter.status.as_deref() {
                 Some("completed" | "success") => 1,
@@ -123,8 +123,8 @@ impl RequestBrowser {
             filter.client = client
                 .get_selection()
                 .and_then(|s| s.checked_sub(1))
-                .and_then(|i| ClientId::ALL.get(i as usize))
-                .map(|c| c.key().into());
+                .and_then(|i| request_source::keys().nth(i as usize))
+                .map(Into::into);
             filter.status = [
                 None,
                 Some("completed"),
@@ -248,7 +248,7 @@ impl RequestBrowser {
             filter
                 .client
                 .as_deref()
-                .and_then(|key| ClientId::ALL.iter().position(|c| c.key() == key))
+                .and_then(|key| request_source::keys().position(|source| source == key))
                 .map(|i| i + 1)
                 .unwrap_or(0) as u32,
         );
@@ -325,7 +325,7 @@ impl RequestBrowser {
         self.table.clear_all();
         for (i, (title, width)) in [
             ("时间", 150),
-            ("客户端", 125),
+            ("来源", 125),
             ("模型", 170),
             ("渠道", 155),
             ("状态", 90),
@@ -355,8 +355,7 @@ impl RequestBrowser {
         for (i, row) in rows.iter().enumerate() {
             let client = row["clientId"]
                 .as_str()
-                .and_then(|key| ClientId::ALL.into_iter().find(|c| c.key() == key))
-                .map(ClientId::name)
+                .and_then(request_source::name)
                 .unwrap_or("未标记来源");
             let status = match row["status"].as_str().unwrap_or("") {
                 "running" => "进行中",

@@ -9,7 +9,7 @@ if (text.includes(marker)) {
   process.exit(0);
 }
 
-const keyMatch = text.match(/([A-Za-z_$][\w$]*)=`NODE_REPL_TRUSTED_CODE_PATHS`/);
+const keyMatch = text.match(/([A-Za-z_$][\w$]*)=([`"'])NODE_REPL_TRUSTED_CODE_PATHS\2/);
 if (!keyMatch) {
   process.stderr.write('node-repl-trusted-paths-key-not-found\n');
   process.exit(2);

@@ -6,6 +6,8 @@ use super::{
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
+#[cfg(windows)]
+mod windows;
 
 fn supported(client: ClientId) -> Result<()> {
     ensure!(
@@ -31,6 +33,7 @@ pub fn locate(config: &Path, client: ClientId) -> Result<Option<PathBuf>> {
             return Ok(Some(path));
         }
     }
+    #[cfg(not(windows))]
     let stem = match client {
         ClientId::VsCode => "Code",
         ClientId::DeepSeekHarness => "dsh",
@@ -39,52 +42,6 @@ pub fn locate(config: &Path, client: ClientId) -> Result<Option<PathBuf>> {
         _ => unreachable!(),
     };
     let mut paths = Vec::new();
-    #[cfg(windows)]
-    {
-        for hive in [
-            winreg::enums::HKEY_CURRENT_USER,
-            winreg::enums::HKEY_LOCAL_MACHINE,
-        ] {
-            if let Ok(key) = winreg::RegKey::predef(hive).open_subkey(format!(
-                "Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\{stem}.exe"
-            )) {
-                if let Ok(value) = key.get_value::<String, _>("") {
-                    paths.push(PathBuf::from(value.trim_matches('"')));
-                }
-            }
-        }
-        if let Some(root) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) {
-            for relative in [
-                "Programs/Microsoft VS Code/Code.exe",
-                "Programs/DeepSeek Harness/dsh.exe",
-                "Programs/ZCode/ZCode.exe",
-            ] {
-                let p = root.join(relative);
-                if p.file_stem()
-                    .is_some_and(|s| s.to_string_lossy().eq_ignore_ascii_case(stem))
-                {
-                    paths.push(p);
-                }
-            }
-        }
-        for root in ["ProgramFiles", "ProgramFiles(x86)"] {
-            if let Some(root) = std::env::var_os(root).map(PathBuf::from) {
-                let path = root.join("Microsoft VS Code/Code.exe");
-                if client == ClientId::VsCode {
-                    paths.push(path);
-                }
-                if client == ClientId::WebStorm {
-                    if let Ok(entries) = std::fs::read_dir(root.join("JetBrains")) {
-                        for entry in entries.take(32).flatten() {
-                            if entry.file_name().to_string_lossy().starts_with("WebStorm") {
-                                paths.push(entry.path().join("bin/webstorm64.exe"));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
     #[cfg(target_os = "macos")]
     {
         let app = match client {
@@ -103,13 +60,36 @@ pub fn locate(config: &Path, client: ClientId) -> Result<Option<PathBuf>> {
     }
     if let Some(path) = std::env::var_os("PATH") {
         for root in std::env::split_paths(&path) {
-            paths.push(root.join(if cfg!(windows) {
-                format!("{stem}.exe")
-            } else {
-                stem.into()
-            }));
+            #[cfg(windows)]
+            {
+                if client == ClientId::VsCode {
+                    paths.push(root.join("code.cmd"));
+                }
+                paths.extend(
+                    windows::program_names(client)
+                        .iter()
+                        .map(|name| root.join(name)),
+                );
+                if client == ClientId::VsCode {
+                    paths.push(root.join("code"));
+                }
+            }
+            #[cfg(not(windows))]
+            paths.push(root.join(stem.to_ascii_lowercase()));
         }
     }
+    #[cfg(windows)]
+    {
+        // Match the VS Code configuration discovery order, so a portable
+        // PATH installation opens the same instance that received its models.
+        let from_path = || paths.iter().find_map(|path| windows::resolve(client, path));
+        return Ok(if client == ClientId::VsCode {
+            from_path().or_else(|| windows::locate(client))
+        } else {
+            windows::locate(client).or_else(from_path)
+        });
+    }
+    #[cfg(not(windows))]
     Ok(paths.into_iter().find(|p| p.exists()))
 }
 pub fn save(config: &Path, client: ClientId, path: &Path) -> Result<()> {

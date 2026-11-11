@@ -165,10 +165,32 @@ pub fn verify_later_changes(binding: &Binding, target: &ClientTarget) -> Result<
             );
         }
         let bytes = transaction::read(&file.path)?;
-        let unchanged = match &file.owned {
-            Some(owned) => owned_section(target, &file.path, bytes.as_deref())? == *owned,
+        let mut unchanged = match &file.owned {
+            Some(owned) => {
+                let actual = owned_section(target, &file.path, bytes.as_deref())?;
+                if target.client == ClientId::DeepSeekHarness
+                    && actual.is_array()
+                    && owned.is_array()
+                {
+                    super::harness_models::same_profile_snapshot(&actual, owned)
+                } else {
+                    actual == *owned
+                }
+            }
             None => transaction::fingerprint(bytes.as_deref()) == file.fingerprint,
         };
+        if !unchanged
+            && target.client == ClientId::DeepSeekHarness
+            && file
+                .path
+                .file_name()
+                .is_some_and(|name| name == "settings.yaml")
+            && bytes.is_none()
+        {
+            if let Some(owned) = &file.owned {
+                unchanged = super::harness_models::settings_imported(target, owned)?;
+            }
+        }
         ensure!(
             unchanged,
             "客户端已独立修改此模型配置，请重新读取并核对后替换"
@@ -229,32 +251,7 @@ pub fn owned_section(
                 .unwrap_or_default()
                 .into());
         }
-        let mut selected: Vec<Value> = Vec::new();
-        for block in super::mcp::patch_blocks(raw)? {
-            if !block.contains("tiancai-hub-") {
-                continue;
-            }
-            let value: Value = serde_yaml_ng::from_str(&block)?;
-            if let Some(rows) = value.as_array() {
-                for row in rows {
-                    if row["id"] == "llm-pi-ai" {
-                        selected.push(
-                            row["config"]["providers"]
-                                .as_object()
-                                .map(|o| {
-                                    o.iter()
-                                        .filter(|(k, _)| k.starts_with("tiancai-hub-"))
-                                        .map(|(k, v)| (k.clone(), v.clone()))
-                                        .collect::<serde_json::Map<_, _>>()
-                                })
-                                .unwrap_or_default()
-                                .into(),
-                        );
-                    }
-                }
-            }
-        }
-        return Ok(selected.into());
+        return super::harness_models::owned_providers(raw);
     }
     let doc = super::formats::json(raw, Value::Null)?;
     Ok(match target.client {

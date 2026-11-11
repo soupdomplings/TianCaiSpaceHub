@@ -1,5 +1,49 @@
 # 多客户端与外部模型接入：适配规格
 
+## Harness 模型不可见与“待核对”修正（未发布）
+
+日期：2026-11-11；关联 TC-018。基线为 `main` / `16f1118` 加 V1.0.19 后累计工作区。状态：已实现，Windows GUI 测试目标离线编译及本专题 7 项合成回归通过，真实客户端待用户实机验收；本任务不升版本、不独立打包。
+
+用户反馈保存 `gpt-6.1-sol` 后长期显示“待核对”，Harness 内也没有该模型。只读核对本机 Harness `0.2.2-rc.1` 的安装资源，确认以下互相独立的原因，未读取用户凭据、历史或真实配置：
+
+- 桌面版固定启动 `profiles/desktop`。旧 writer 在只有 web Profile 时只写 web，未准备 desktop；现在保存受管模型时总是同时准备 desktop 的 `cordis.patch.yml`，并继续合并其他已有 Profile。首次启动的原生 Profile 初始化会保留此文件；原官方模型和默认选择保持。
+- 新版 `llm-pi-ai` 的 `models[].reasoningEfforts` 需要字典或 `false`，Hub 共用能力字段是数组。现在将例如 `low,high,xhigh` 写为 `{low: low, high: high, xhigh: xhigh}`；`none` 对应 `off: none`，`off` 对应不发送字段的空值。空列表不写入，只有关闭档位时写 `false`，不支持的档位在生成计划时明确报错。图片能力对应客户端的 `input` 列表，仍保留原模型 ID、接口协议、地址与凭据引用。
+- 新版 `dsh-settings` 启动时将旧 `settings.yaml` 导入活动 Profile 后重命名为 `.imported`。旧 writer 反复创建该文件，并把它作为必须存在的受管配置，正常启动后反而被误判为后改。现在不再新建它；已有旧文档仍仅同步 Hub 自有 provider，保留其他命名空间和外部模型。旧保存记录中的文档消失时，只在**活动 desktop Profile 的受管 provider 与保存记录相同**时认可正常导入；`.imported` 不参与读取或判定。活动配置确实缺失或被修改仍需核对，不以历史归档冒充当前配置。
+- Cordis 支持 `insert` 内的插件条目，以及后续按 ID 覆盖整份 `config`。模型 writer 与自有内容读取现在识别插入条目，并同步每个有关覆盖层，避免后面的 `llm-pi-ai` 配置遮住 Hub 模型；其他 provider 和插件配置保留。自有快照按最后生效的配置比较，兼容原快照漏记空白层，以及原生导入器为插入插件追加同值覆盖节点；活动配置被清空仍会报告变化。
+
+维护入口为 `src/desktop/harness_models.rs::{plan,owned_providers,settings_imported}` 与 `src/desktop/models.rs::{verify_later_changes,owned_section}`。没有配置结构迁移，也不在后台自动改写用户文件；旧版已只写 web、或已保存不合法思考字段的模型，需要通过正常保存/明确替换更新活动配置。旧记录本身可读取，正常导入不会再单因 `settings.yaml` 消失而报“待核对”。本次仅针对 Harness 桌面接入，不将独立编辑器的旧 ACP 组合视为新增支持。
+
+增加五项合成回归：只有 web 的目录也准备可见 desktop 模型及空思考列表；原生思考字典与不支持档位；插入插件及后续覆盖层；按实际 `SettingsForms.update` / `ConfigEditor.edit` 形状模拟旧文档导入、追加覆盖节点后的状态与归档边界；旧快照空白层与最后生效层兼容。连同两项原有 Harness 合并/旧代际检查，本次 7 项均通过；通用模型 3 项、保存/恢复事务 2 项与付款规则 2 项同时通过，合计 14 个不同用例。Windows GUI 测试目标离线编译通过，记录在 `target/harness-ui-fix-20261111/`，没有运行全部历史测试。未启动实际 Hub、Harness、安装器或真实模型调用，macOS 也未实机验证。回退恢复上述两处代码即可；已保存 Profile 与原有其他配置不自动删除或从 `.imported` 回写。
+
+## DeepSeek Harness 状态与四端启动修正
+
+日期：2026-11-11。适用 V1.0.19；Windows release 与唯一新 MSI 已生成，版本、升级和六项载荷核验通过，交付身份见 [V19 记录](../releases/v1.0.19.md)，真实客户端待用户验收。
+
+用户实测桌面版已打开而 Hub 显示“未打开”。只读核对进程发现桌面版主程序名为 `DeepSeek Harness.exe`，现有检测只列出连字符形式和 `dsh`，导致漏报。`src/desktop/runtime.rs::client_opened` 补齐带空格的 `deepseek harness.exe` / `deepseek harness`，按完整进程名忽略 ASCII 大小写匹配，保留连字符及 `dsh` 名称；辅助进程或名称子串不算主程序。进程枚举失败仍显示未知，枚举成功但未命中才显示未打开，沿用两秒状态缓存。
+
+同时确认 Windows 启动器只找 `dsh.exe` 等旧入口，没有读取桌面安装器登记的自定义目录。已按 Magpie 的桌面安装发现规则补齐，并复核 VS Code、ZCode、WebStorm 的安装、启动及模型配置入口。**模型成功导入后，点击“启动客户端”直接打开本机程序，不增加账号登录、CLI 安装或模型测试步骤。** Harness 的自定义 API 模型由原 writer 写入 `llm-pi-ai` Profile 和 `.credentials.yaml` 凭据引用；在客户端选择已导入模型即可，不强改用户默认模型。Hub 本机网关在使用期间保持运行。
+
+另只读核对本机 Harness `0.2.2-rc.1` 安装包内代码：`lib/main.js::needsWelcome` 仅在既未登录、又没有已配置 API 凭据时返回真；其状态读取会遍历可配置模型 provider 的 `apiKeyEnv` 引用，不只看官方 DeepSeek Key。`dsh-credentials-local` 明确读取 `.credentials.yaml` 的 `version: 1` / `refs` 字符串，和现有 writer 一致。因此这里无需新增登录绕行或覆盖官方 Key；此结论是安装资源静态核对，未启动客户端或读取个人凭据。
+
+### 四端核对与共用实现
+
+| 客户端 | 本轮结果 | 配置与使用边界 |
+| --- | --- | --- |
+| DeepSeek Harness | 补齐带空格的主进程名；Windows 读取固定安装 GUID、App Paths 和 Uninstall 登记，支持自定义盘符、带引号路径和 `DisplayIcon` 的 `,0` 后缀；保留旧 `dsh` 入口 | 桌面版不依赖额外 CLI；现代 Profile 与凭据引用沿原模型服务，已有默认模型保留 |
+| VS Code Chat | 补齐 PATH 的 `bin/code.cmd` / `code`；转换为原生 `Code.exe` 启动，复用已有产品身份、版本目录和 Scoop shim 解析；保存的位置优先，PATH 与配置发现保持同序，再回退安装登记/常见目录 | 保留便携目录和已登记 Profile/继承关系；模型仍写 `chatLanguageModels.json` 的受管 `customendpoint` 组，识别到其他发行版时跳过 |
+| ZCode | 补齐已登记的自定义安装目录，复核主进程完整名称 | 保留 Windows `HOME`、`ZCODE_HOME` 和 `dataBaseDir` 的原有优先级；模型仍写新旧两种配置，端内手动规则优先 |
+| WebStorm | 补齐已登记安装目录、用户 Programs 与 JetBrains 版本目录中的 `bin/webstorm64.exe`；复核两种 Windows 主进程名 | Toolbox/自定义目录有安装登记时可据此定位，未登记布局仍可显式选择程序；AI Assistant 继续使用 Bridge/PasswordSafe，ACP 继续使用固定 OpenCode 组件，两种前提分别保留 |
+
+`src/desktop/launcher/windows.rs` 共用安装记录解析与主程序筛选：依次核对 `InstallLocation`、`DisplayIcon`、`UninstallString` 对应目录，在 HKCU/HKLM 的 64/32 位视图读取；卸载器只用于取得目录，不能成为启动候选。该发现仅在用户启动时按需执行，不放进两秒运行状态刷新。保存的程序位置保持最高优先级，已有位置失效仍明确提示重新选择。VS Code 共用 `targets/paths.rs::app_roots` / 产品判断，不另写一套便携目录逻辑。运行中与配置可用是独立证据，不能由发现安装目录推断已打开或已连通模型。
+
+固定参考为 Magpie [`eb56de0b590bd93b56e2fa2c12d9eab713a9c073`](https://github.com/yetone/magpie/tree/eb56de0b590bd93b56e2fa2c12d9eab713a9c073)：[`desktopapp.go`](https://github.com/yetone/magpie/blob/eb56de0b590bd93b56e2fa2c12d9eab713a9c073/internal/agent/desktopapp.go)、[`desktopapp_windows.go`](https://github.com/yetone/magpie/blob/eb56de0b590bd93b56e2fa2c12d9eab713a9c073/internal/agent/desktopapp_windows.go) 的 Harness 注册规则移植为 Rust；`dsh.go`、`dsh_desktop_test.go`、`vscode.go`、`vscode_detect_test.go`、`zcode.go`、`air.go` 用于对应配置和边界审阅。既有 V1.0.12 路径移植仍保留其 `e6cdeac9` 原来源。没有运行 Magpie 或其 Go 测试，运行状态检测为 Hub 自身实现，MIT 归属见 [第三方许可](../../THIRD_PARTY_NOTICES.md)。不照搬整组联动、后台自动改写默认模型或其他客户端范围。
+
+### 验证、兼容与交付状态
+
+基线为唯一 `main` / `16f1118` 加 V1.0.18 后累计工作区，本次源码未单独提交。Windows GUI 测试目标离线编译通过，32 个不同定向用例通过：运行状态 4、安装/启动发现 4、路径/Profile 19、Harness 模型 2、通用模型 3。运行状态前三项沿用先前已通过结果，最终 PATH 顺序与测试临时目录规范化调整后仅补编译和 4 项安装发现检查，不重复累计；记录在 `target/client-detection-magpie-20261111/`，编译分别见 `launcher-compile.jsonl`、`validated-compile.jsonl`，先前状态编译在 `target/harness-runtime-20261111/compile.jsonl`。文件测试只使用合成目录和不可执行的假程序；没有运行实际 Hub、客户端、安装器、登录或真实模型调用。四端实机与 macOS 仍待用户验收。
+
+没有配置格式迁移，本次开发没有修改用户客户端配置。回滚恢复 `runtime.rs`、`launcher.rs` 及新 Windows 模块、`targets.rs` / `targets/paths.rs` 的共用入口即可；原保存程序位置和模型文件保持。**已交付 V1.0.18 MSI 不包含本次修正**，保留原名原身份；用户明确要求提供可安装测试包，本次递增至 V1.0.19，构建与包核验状态独立见 [交付记录](../releases/v1.0.19.md)。
+
 ## V1.0.16 天工内置模型来源
 
 天工 Work 模型页读取两个内置模型及源参数，原生个人登录可选；需要个人账号时读取已有会话或 Hub 登录。目标端仍沿各自 writer / 专用 API 使用，认证不导出。本次例外是天工内置生成和上下文参数由源决定，普通来源跨端仍独立调整。已有通用端能力/WorkBuddy 行通过原 writer 更新，后改则停止该目标；Codex 目录映射源窗口及 70% 阈值。删除 Codex 可见条目后再分享恢复原别名。随机身份只在用户主动测试中使用。

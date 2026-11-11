@@ -19,7 +19,8 @@ pub struct ChatSseToResponsesSse<S> {
     inner: S,
     state: ResponsesStreamState,
     /// 上游 SSE 未完成的行缓冲。
-    line_buf: String,
+    line_buf: Vec<u8>,
+    terminated: bool,
     /// 已生成的输出事件队列。
     output_queue: VecDeque<Bytes>,
 }
@@ -34,7 +35,8 @@ impl<S> ChatSseToResponsesSse<S> {
         Self {
             inner,
             state: ResponsesStreamState::new(model, tool_name_map),
-            line_buf: String::new(),
+            line_buf: Vec::new(),
+            terminated: false,
             output_queue: VecDeque::new(),
         }
     }
@@ -54,21 +56,34 @@ where
         if let Some(bytes) = this.output_queue.pop_front() {
             return Poll::Ready(Some(Ok(bytes)));
         }
+        if this.terminated {
+            return Poll::Ready(None);
+        }
 
         // 从上游拉取数据
         loop {
             match Pin::new(&mut this.inner).poll_next(cx) {
                 Poll::Ready(Some(Ok(chunk))) => {
-                    let text = String::from_utf8_lossy(&chunk);
-                    this.line_buf.push_str(&text);
+                    this.line_buf.extend_from_slice(&chunk);
 
                     // 按行处理 SSE
-                    while let Some(pos) = this.line_buf.find('\n') {
-                        let line = this.line_buf[..pos].trim_end_matches('\r').to_string();
-                        this.line_buf = this.line_buf[pos + 1..].to_string();
+                    while let Some(pos) = this.line_buf.iter().position(|byte| *byte == b'\n') {
+                        let line: Vec<u8> = this.line_buf.drain(..=pos).collect();
+                        let line = match std::str::from_utf8(&line) {
+                            Ok(line) => line.trim_end_matches('\n').trim_end_matches('\r'),
+                            Err(error) => {
+                                this.terminated = true;
+                                this.output_queue.clear();
+                                return Poll::Ready(Some(Err(std::io::Error::new(
+                                    std::io::ErrorKind::InvalidData,
+                                    error,
+                                ))));
+                            }
+                        };
 
-                        if let Some(data) = sse_data_value(&line) {
+                        if let Some(data) = sse_data_value(line) {
                             if data.trim() == "[DONE]" {
+                                this.terminated = true;
                                 // 生成结束事件
                                 this.state.handle_done(&mut this.output_queue);
                                 // drain output_queue
@@ -91,13 +106,17 @@ where
                     }
                 }
                 Poll::Ready(Some(Err(e))) => {
-                    return Poll::Ready(Some(Err(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        e.to_string(),
-                    ))));
+                    this.terminated = true;
+                    return Poll::Ready(Some(Err(std::io::Error::other(e.to_string()))));
                 }
                 Poll::Ready(None) => {
-                    // 流结束，确保所有事件都已生成
+                    this.terminated = true;
+                    if this.state.finish_reason.is_none() {
+                        return Poll::Ready(Some(Err(std::io::Error::new(
+                            std::io::ErrorKind::UnexpectedEof,
+                            "Chat 模型流未返回结束信号",
+                        ))));
+                    }
                     this.state.handle_done(&mut this.output_queue);
                     if let Some(bytes) = this.output_queue.pop_front() {
                         return Poll::Ready(Some(Ok(bytes)));
@@ -1161,6 +1180,61 @@ mod tests {
         assert!(types.contains(&"response.output_text.delta"));
         assert!(types.contains(&"response.completed"));
         assert_eq!(events[0].1["response"]["id"], "chatcmpl_abc");
+    }
+
+    #[tokio::test]
+    async fn stream_adapter_preserves_split_utf8_text_and_tool_arguments() {
+        let arguments = r#"{"name":"天才渠道😀"}"#;
+        let chunks = [
+            json!({"choices":[{"delta":{"content":"你好😀"}}]}),
+            json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_cn",
+                "type":"function","function":{"name":"hub_add_channel","arguments":arguments}}]}}]}),
+            json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
+        ];
+        let wire = chunks
+            .iter()
+            .map(|chunk| format!("data: {chunk}\r\n\r\n"))
+            .collect::<String>();
+        let input = stream::iter(
+            wire.into_bytes()
+                .into_iter()
+                .map(|byte| Ok::<_, std::io::Error>(Bytes::from(vec![byte]))),
+        );
+        let output = ChatSseToResponsesSse::new(input, "fixture".into())
+            .collect::<Vec<_>>()
+            .await;
+        let events = parse_events(&output.into_iter().map(Result::unwrap).collect());
+        let completed = events
+            .iter()
+            .find(|(kind, _)| kind == "response.completed")
+            .unwrap();
+        assert_eq!(
+            completed.1["response"]["output"][0]["content"][0]["text"],
+            "你好😀"
+        );
+        assert_eq!(completed.1["response"]["output"][1]["arguments"], arguments);
+    }
+
+    #[tokio::test]
+    async fn stream_adapter_terminates_after_errors_or_premature_eof_without_completion() {
+        for explicit_error in [false, true] {
+            let mut input = vec![Ok(Bytes::from_static(
+                b"data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n",
+            ))];
+            if explicit_error {
+                input.push(Err(std::io::Error::other("cancelled")));
+                // An errored source must never be polled for a later success marker.
+                input.push(Ok(Bytes::from_static(b"data: [DONE]\n\n")));
+            }
+            let output = ChatSseToResponsesSse::new(stream::iter(input), "fixture".into())
+                .collect::<Vec<_>>()
+                .await;
+            assert_eq!(output.iter().filter(|chunk| chunk.is_err()).count(), 1);
+            assert!(output.last().unwrap().is_err());
+            let events = parse_events(&output.into_iter().filter_map(Result::ok).collect());
+            assert!(event_types(&events).contains(&"response.output_text.delta"));
+            assert!(!event_types(&events).contains(&"response.completed"));
+        }
     }
 
     fn assert_codex_active_item_invariants(events: &[(String, Value)]) {

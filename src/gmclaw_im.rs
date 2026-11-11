@@ -1353,6 +1353,7 @@ mod tests {
             desktop_mcp_activity: crate::desktop::mcp_activity::McpActivityStore::default(),
             desktop_squad: Mutex::new(Default::default()),
             local_assistance: crate::local_assistance::Service::default(),
+            assistant: crate::assistant::AssistantState::default(),
             config_path: PathBuf::from(":memory:"),
             daemon_identity: crate::daemon_process::DaemonIdentity {
                 service: "fixture".into(),

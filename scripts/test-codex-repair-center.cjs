@@ -3,9 +3,15 @@
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),vm=require('node:vm'),zlib=require('node:zlib');
+const {spawnSync}=require('node:child_process');
 const {Plan,run,hash,archiveRead,archiveWrite,axValid}=require('../assets/codex-repair/hub-repair.cjs');
 const adapter=vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../assets/codex-repair/renderer-adapter.js'),'utf8'));
+const nativeUi='function hook(e){let args,access,result,memo=(0,react.c)(10),root=(0,state.host)(hostKey),host=e?.hostId??root,auth=(0,authNs.read)(host),allowed=auth?.authMethod==="chatgpt"||auth?.authMethod==="personalAccessToken"||auth?.authMethod==="amazonBedrock",method=auth?.authMethod??null;memo[0]!==host||memo[1]!==method?(args={authMethod:method,hostId:host},memo[0]=host,memo[1]=method,memo[2]=args):args=memo[2];let{data:requirements,isPending:pending}=(0,queryNs.read)(queryNs.key,args),loading=!!auth?.isLoading||allowed&&pending;memo[3]!==requirements||memo[4]!==loading||memo[5]!==allowed?(access=allowed&&!loading&&null!=requirements?(0,converter.convert)(requirements):null,memo[3]=requirements,memo[4]=loading,memo[5]=allowed,memo[6]=access):access=memo[6];let value=access;return memo[7]!==loading||memo[8]!==value?(result={serviceTierAccess:value,isLoading:loading},memo[7]=loading,memo[8]=value,memo[9]=result):result=memo[9],result}';
+const nativeRequest='const request=async function(scope,host){let method=await (0,authNs.read)(scope,host);if("chatgpt"!==method&&"personalAccessToken"!==method&&"amazonBedrock"!==method)return null;let requirements=await (0,queryNs.read)(scope,host,{priority:"critical"});return scope.query.setData(queryNs.key,{authMethod:method,hostId:host},requirements),(0,converter.convert)(requirements)};';
+const nativeUltra='const query=({authMethod:auth,enabledReasoningEfforts:efforts,hostId:host,includeUltraReasoningEffort:include=!0},{get:getter,queryClient:cache,scope:scope})=>{let config=getter(configNs.key,host),custom=(0,provider.isCustom)(config),gate=include&&getter(configNs.JW,"1186680773");return{queryKey:[host],queryFn:()=>client.sendRequest("model/list",{includeHidden:!0}),select:({data:models})=>selectModels({includeUltraReasoningEffort:gate,isCustomModelProvider:custom,models,enabledReasoningEfforts:efforts})}};';
+const nativeHost='const hostOptions={hostId:options.hostId,includeUltraReasoningEffort:(0,gateNs.read)(scope,"1186680773"),isAuthLoading:options.hostId!==hostNs.local||auth.isLoading,isTabAvailable:()=>true,isCustomModelProvider:(0,provider.isCustom)(config),workspaceDependenciesEnabled:false};';
 function fixture(fn){const dir=fs.mkdtempSync(path.join(os.tmpdir(),'hub-repair-test-'));const home=path.join(dir,'home'),localRoot=path.join(dir,'local'),backupRoot=path.join(home,'hub-desktop-repair-backups');fs.mkdirSync(home);fs.mkdirSync(localRoot);try{return fn({dir,home,localRoot,backupRoot,kind:'models'});}finally{fs.rmSync(dir,{recursive:true,force:true});}}
+function makeArchive(files){const a={header:{files:{}},entries:[]};for(const [name,text]of Object.entries(files)){const parts=name.split('/');let node=a.header;for(const part of parts.slice(0,-1))node=node.files[part]??=({files:{}});const entry={offset:'0',size:Buffer.byteLength(text)};node.files[parts.at(-1)]=entry;a.entries.push({name,entry,bytes:Buffer.from(text)});}return archiveWrite(a);}
 test('planning is read-only and restore survives a new planner',()=>fixture(o=>{
   const f=path.join(o.home,'config.toml');fs.writeFileSync(f,'original');const p=new Plan(o);p.file(f,Buffer.from('managed'));assert.equal(fs.readFileSync(f,'utf8'),'original');assert.equal(fs.existsSync(o.backupRoot),false);
   const backup=p.commit();assert.equal(fs.readFileSync(f,'utf8'),'managed');assert.equal(run({...o,action:'restore',backup,verifyOnly:true}).canRestore,true);assert.equal(fs.readFileSync(f,'utf8'),'managed');
@@ -26,6 +32,67 @@ test('Power adapter preserves normal behavior outside Hub and rejects ambiguous 
   assert.equal(evaluate(false,{harborEnabled:false,isElectron:true,isEverydayWorkMode:false}),false);assert.equal(evaluate(true,{harborEnabled:false,isElectron:true,isEverydayWorkMode:false}),true);assert.equal(evaluate(true,{harborEnabled:false,isElectron:false,isEverydayWorkMode:false}),false);
   assert.equal(adapter(source+source).power,false);assert.equal(adapter('function unknown(){return false}').source,'function unknown(){return false}');
 });
+test('native Fast request preserves authentication scope, requirements, caching and independent speed modes',async()=>{
+  const changed=adapter(nativeRequest);assert.equal(changed.fastRequest,true);assert.equal(adapter(changed.source).source,changed.source);
+  for(const managed of [false,true])for(const host of ['local','remote'])for(const method of ['apikey','chatgpt','personalAccessToken','amazonBedrock',null])for(const fast of [true,false]){
+    const events=[],requirements={requirements:{featureRequirements:{fast_mode:fast,ultrafast_mode:true}},supportsIndependentSpeedModes:true},scope={query:{setData(key,args,data){assert.equal(key,'requirements');assert.equal(args.authMethod,method);assert.equal(args.hostId,host);assert.equal(data,requirements);events.push('cache');}}};
+    const fn=vm.runInNewContext(changed.source+';request',{globalThis:{__CODEXHUB_ENHANCED_MODE__:{modelControlsEnabled:managed}},authNs:{read:async(s,h)=>{assert.equal(s,scope);assert.equal(h,host);events.push('auth');return method;}},queryNs:{key:'requirements',read:async(s,h,o)=>{assert.equal(s,scope);assert.equal(h,host);assert.equal(o.priority,'critical');events.push('requirements');return requirements;}},converter:{convert:r=>{events.push('convert');return{fast:r.requirements.featureRequirements.fast_mode,ultrafast:r.supportsIndependentSpeedModes&&r.requirements.featureRequirements.ultrafast_mode};}}});
+    const result=await fn(scope,host),allowed=method==='chatgpt'||method==='personalAccessToken'||method==='amazonBedrock'||managed&&host==='local';
+    assert.deepEqual(events,allowed?['auth','requirements','cache','convert']:['auth']);assert.deepEqual(result,allowed?{fast,ultrafast:true}:null);
+  }
+});
+test('native Fast hook keeps loading, memo invalidation, host and converter results',()=>{
+  const changed=adapter(nativeUi);assert.equal(changed.fastUi,true);assert.equal(adapter(changed.source).source,changed.source);
+  for(const managed of [false,true]){
+    let state;const memo=Array(10).fill(Symbol.for('react.memo_cache_sentinel'));
+    const fn=vm.runInNewContext(changed.source+';hook',{globalThis:{__CODEXHUB_ENHANCED_MODE__:{modelControlsEnabled:managed}},react:{c:()=>memo},hostKey:0,requirementsKey:1,state:{host:()=>'local'},authNs:{read:h=>{assert.equal(h,state.host);return state.auth;}},queryNs:{read:(key,args)=>{assert.equal(args.hostId,state.host);assert.equal(args.authMethod,state.auth?.authMethod??null);return{data:state.data,isPending:state.pending};}},converter:{convert:r=>({fast:r.fast,ultrafast:r.ultrafast})}});
+    for(const host of ['local','remote'])for(const method of ['apikey','chatgpt','personalAccessToken','amazonBedrock'])for(const loading of [false,true])for(const pending of [false,true])for(const fast of [true,false]){
+      state={host,auth:{authMethod:method,isLoading:loading},data:{fast,ultrafast:true},pending};const actual=fn({hostId:host}),allowed=method!=='apikey'||managed&&host==='local',busy=loading||allowed&&pending;
+      assert.equal(actual.isLoading,busy);assert.deepEqual(JSON.parse(JSON.stringify(actual.serviceTierAccess)),allowed&&!busy?{fast,ultrafast:true}:null);
+    }
+  }
+});
+test('native Ultra query and host bootstrap preserve provider, opt-in and model capability filters',()=>{
+  const query=adapter(nativeUltra),host=adapter(nativeHost);assert.equal(query.ultraModels,true);assert.equal(host.ultraHost,true);
+  for(const managed of [false,true])for(const local of [false,true])for(const custom of [false,true])for(const enabled of [false,true])for(const gate of [false,true]){
+    const hostId=local?'local':'remote',models=[{model:'with-ultra',supportedReasoningEfforts:['high','ultra']},{model:'high-only',supportedReasoningEfforts:['high']}],efforts=['high','ultra'];
+    const context={globalThis:{__CODEXHUB_ENHANCED_MODE__:{modelControlsEnabled:managed}},configNs:{key:0,JW:1},provider:{isCustom:()=>custom},selectModels:o=>({...o,models:o.models.map(m=>({...m,supportedReasoningEfforts:m.supportedReasoningEfforts.filter(e=>e!=='ultra'||o.includeUltraReasoningEffort)}))}),options:{hostId},scope:{},gateNs:{read:()=>gate},hostNs:{local:'local'},auth:{isLoading:false},config:{}};
+    const q=vm.runInNewContext(query.source+';query',context),actual=q({hostId,includeUltraReasoningEffort:enabled,enabledReasoningEfforts:efforts},{get:key=>key===0?{}:gate,queryClient:{},scope:{}}).select({data:models});
+    const allowed=gate||managed&&local&&custom;assert.equal(actual.includeUltraReasoningEffort,enabled&&allowed);assert.equal(actual.enabledReasoningEfforts,efforts);assert.deepEqual(actual.models[1].supportedReasoningEfforts,['high']);assert.deepEqual(actual.models[0].supportedReasoningEfforts,enabled&&allowed?['high','ultra']:['high']);
+    assert.equal(vm.runInNewContext(host.source+';hostOptions.includeUltraReasoningEffort',context),allowed);
+  }
+});
+test('native model adapters reject ambiguity and altered variable bindings without touching neighbors',()=>{
+  for(const [source,key]of [[nativeUi,'fastUi'],[nativeRequest,'fastRequest'],[nativeUltra,'ultraModels'],[nativeHost,'ultraHost']]){assert.equal(adapter(source+source)[key],false);assert.equal(adapter(adapter(source).source).source,adapter(source).source);}
+  assert.equal(adapter(nativeRequest.replace('hostId:host','hostId:other')).fastRequest,false);
+  assert.equal(adapter(nativeRequest.replace('(requirements)}','(other)}')).fastRequest,false);
+  assert.equal(adapter(nativeRequest.replace('return null;','return!1;')).fastRequest,false);
+  assert.equal(adapter(nativeUi.replace('auth?.authMethod==="amazonBedrock"','other?.authMethod==="amazonBedrock"')).fastUi,false);
+  assert.equal(adapter(nativeUltra.replace('include&&!','include&&extra&&!').replace('gate=include&&getter','gate=include&&extra&&getter')).ultraModels,false);
+  assert.equal(adapter(nativeHost.replace('(config),workspace','(config,extra),workspace')).ultraHost,false);
+  const source=nativeRequest+'function untouched(){return "neighbor"}';assert.ok(adapter(source).source.includes('function untouched(){return "neighbor"}'));
+});
+test('persistent model adapter is local-host scoped and keeps optional UI adapters out of the package plan',async()=>{
+  const power='function choose({harborEnabled:h,isElectron:e,isEverydayWorkMode:w}){return w||e&&h}',changed=adapter(nativeRequest+power,{persistentModelExperience:true,modelExperienceOnly:true});assert.equal(changed.fastRequest,true);assert.equal(changed.power,false);assert.ok(changed.source.includes(power));
+  let calls=0;const context={authNs:{read:async()=>'apikey'},queryNs:{key:0,read:async()=>{calls++;return{};}},converter:{convert:()=>({fast:false})}},fn=vm.runInNewContext(changed.source+';request',context),scope={query:{setData(){}}};assert.deepEqual(await fn(scope,'local'),{fast:false});assert.equal(await fn(scope,'remote'),null);assert.equal(calls,1);
+});
+test('proxy inheritance accepts current quote styles and preserves only names present in the parent',()=>{
+  const {patchSource}=require('../assets/codex-repair/patch-node-repl-proxy-env.cjs');
+  for(const quote of ['"',"'",'`']){
+    const source=`let marker=${quote}CODEX_WINDOWS_REGISTERED_CORE${quote};vars=[...new Set([...inherited,marker])];`,changed=patchSource(source);assert.equal(changed.status,'patched');assert.equal(patchSource(changed.source).status,'already-patched');
+    const output=vm.runInNewContext(changed.source+';vars',{inherited:['CUSTOM'],process:{env:{HTTPS_PROXY:'fixture-only',no_proxy:'fixture-only'}}});assert.deepEqual(Array.from(output),['CUSTOM','CODEX_WINDOWS_REGISTERED_CORE','HTTPS_PROXY','no_proxy']);
+    assert.throws(()=>patchSource(source+source),/exactly once/);assert.throws(()=>patchSource(source.replace('inherited,marker','inherited,other')),/exactly once/);
+  }
+});
+test('trusted-path repair accepts current quotes and preserves inherited roots without replacing local roots',()=>fixture(o=>{
+  const patcher=path.join(__dirname,'../assets/codex-repair/patches/nodeReplTrustedPaths.cjs');
+  for(const quote of ['"',"'",'`']){
+    const file=path.join(o.home,'trusted.js'),source=`const key=${quote}NODE_REPL_TRUSTED_CODE_PATHS${quote};const options={[key]:join([home,modules],platform)};`;fs.writeFileSync(file,source);
+    const result=spawnSync(process.execPath,[patcher,file],{encoding:'utf8',windowsHide:true});assert.equal(result.status,0,result.stderr);const changed=fs.readFileSync(file,'utf8');
+    const output=vm.runInNewContext(changed+';options.NODE_REPL_TRUSTED_CODE_PATHS',{home:'hub-home',modules:'module-root',platform:'win32',join:roots=>roots.filter(Boolean).join(';'),process:{env:{NODE_REPL_TRUSTED_CODE_PATHS:'explicit-root'}}});assert.equal(output,'hub-home;module-root;explicit-root');
+    assert.equal(spawnSync(process.execPath,[patcher,file],{encoding:'utf8',windowsHide:true}).status,0);assert.equal(fs.readFileSync(file,'utf8'),changed);
+  }
+}));
 test('Goal preserves cloud and side conversation restrictions',()=>{
   const source='let visible=gate(`3074100722`)&&read(cfg?.config,`goals`)===!0&&mode!==`cloud`&&!side,other=0;';const a=adapter(source);assert.equal(a.goal,true);
   const check=(mode,side,enabled)=>vm.runInNewContext(a.source+';visible',{globalThis:{__CODEXHUB_ENHANCED_MODE__:{modelControlsEnabled:enabled}},gate:()=>false,read:()=>false,cfg:{config:{}},mode,side});
@@ -82,4 +149,13 @@ test('package plan preserves browser neighbors and links configuration backup',(
   const entry={offset:'0',size:Buffer.byteLength(text)};const a={header:{files:{'.vite':{files:{build:{files:{'main.js':entry}}}}}},entries:[{name:'.vite/build/main.js',entry,bytes:Buffer.from(text)}]};const resources=path.join(o.dir,'resources');fs.mkdirSync(resources);const source=path.join(resources,'app.asar');fs.writeFileSync(source,archiveWrite(a));const original=fs.readFileSync(source);
   const checked=run({...o,resources,kind:'desktop',action:'check',configCandidate:'managed'});assert.equal(checked.needsRepair,true);assert.deepEqual(fs.readFileSync(source),original);assert.equal(fs.existsSync(o.backupRoot),false);
   const result=run({...o,resources,kind:'desktop',action:'repair',configCandidate:'managed'});assert.equal(typeof result.packagePlan.relatedBackup,'string');const next=archiveRead(result.packagePlan.prepared).entries[0].bytes.toString();assert.ok(next.includes('findShortcuts:f.findShortcuts,computerUse:f.computerUse'));assert.ok(next.includes('externalBrowserUseAllowed:!0'));assert.deepEqual(fs.readFileSync(source),original);
+}));
+test('deep repair plans native model chunks while model settings repair leaves the installed package unchanged',()=>fixture(o=>{
+  const resources=path.join(o.dir,'resources');fs.mkdirSync(resources);const source=path.join(resources,'app.asar'),files={'webview/assets/async/101.abc.js':nativeUi,'webview/assets/async/102.abc.js':nativeRequest,'webview/assets/async/103.abc.js':nativeUltra,'webview/assets/async/104.abc.js':nativeHost,'webview/assets/async/105.abc.js':'const nativePower={label:"composer.modelPicker.power",name:"PowerSlider",selectedPowerSelection:null};','webview/assets/async/106.abc.js':'const unrelated="keep me";'};
+  const original=makeArchive(files);fs.writeFileSync(source,original);
+  const models=run({...o,resources,kind:'models',action:'check'});assert.equal(models.packagePlan,null);assert.equal(models.needsRepair,false);
+  const checked=run({...o,resources,kind:'desktop',action:'check'});assert.equal(checked.needsRepair,true);assert.match(checked.message,/Fast 界面 1、请求 1、Ultra 查询 1、主机能力 1/);assert.match(checked.message,/已识别原生实现/);assert.deepEqual(fs.readFileSync(source),original);assert.equal(fs.existsSync(o.backupRoot),false);
+  const repaired=run({...o,resources,kind:'desktop',action:'repair'}),entries=archiveRead(repaired.packagePlan.prepared).entries;assert.deepEqual(fs.readFileSync(source),original);
+  assert.equal(entries[4].bytes.toString(),files['webview/assets/async/105.abc.js']);assert.equal(entries[5].bytes.toString(),files['webview/assets/async/106.abc.js']);assert.match(entries[1].bytes.toString(),/CODEXHUB_FAST_REQUEST_V2/);assert.ok(entries[1].bytes.toString().includes('true&&host==="local"'));
+  const ready=path.join(o.dir,'ready');fs.mkdirSync(ready);fs.copyFileSync(repaired.packagePlan.prepared,path.join(ready,'app.asar'));assert.equal(run({...o,resources:ready,kind:'desktop',action:'check'}).needsRepair,false);
 }));

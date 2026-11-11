@@ -9,11 +9,14 @@ use std::{
 use wxdragon::{dc::GraphicsDC, prelude::*};
 #[path = "../src/desktop/clients.rs"]
 pub mod client_types;
+#[path = "../src/desktop/request_source.rs"]
+pub mod request_source_types;
 #[path = "../src/desktop/squad_money.rs"]
 pub mod squad_money;
 #[path = "../src/desktop/squad_quote.rs"]
 pub mod squad_quote;
 mod desktop {
+    pub use super::request_source_types as request_source;
     pub use super::{squad_money, squad_quote};
     pub mod squad {
         pub const ORIGIN: &str = "https://tiancai.yc99.space";
@@ -1487,7 +1490,9 @@ fn review_resource_navigation(output: &Path) {
         let host = Panel::builder(&frame).build();
         let shell = shell::Shell::new(&host, &frame);
         let picker = resource_detail::TargetPicker::new(&shell.book);
-        shell.register(shell::PageId::Skills, &picker.page);
+        // This is a direct component review. General Skill/MCP navigation is
+        // hidden in the product, so use an ordinary fixture page here.
+        shell.register(shell::PageId::Overview, &picker.page);
         let root = BoxSizer::builder(Orientation::Vertical).build();
         root.add(&shell.panel, 1, SizerFlag::Expand, 0);
         host.set_sizer(root, true);
@@ -1539,7 +1544,7 @@ fn review_resource_navigation(output: &Path) {
             options.push(item);
         }
         picker.populate("示例 Skill", options.clone());
-        shell.navigate(shell::PageId::Skills);
+        shell.navigate(shell::PageId::Overview);
         frame.layout();
         picker.page.layout();
         assert!(picker.changes().is_empty());
@@ -1654,7 +1659,7 @@ fn review_resource_navigation(output: &Path) {
     let host = Panel::builder(&frame).build();
     let shell = shell::Shell::new(&host, &frame);
     for id in [
-        shell::PageId::Mcp,
+        shell::PageId::Overview,
         shell::PageId::Dumpling,
         shell::PageId::Client(ClientId::Codex),
     ] {
@@ -1667,24 +1672,25 @@ fn review_resource_navigation(output: &Path) {
     let outer = BoxSizer::builder(Orientation::Vertical).build();
     outer.add(&host, 1, SizerFlag::Expand, 0);
     frame.set_sizer(outer, true);
-    for origin in [shell::PageId::Mcp, shell::PageId::Client(ClientId::Codex)] {
+    for origin in [
+        shell::PageId::Overview,
+        shell::PageId::Client(ClientId::Codex),
+    ] {
         shell.navigate(origin);
         shell.navigate(shell::PageId::Dumpling);
         frame.layout();
         let back = shell.panel.find_window_by_name("back-to-parent").unwrap();
-        assert!(back.is_shown());
-        #[cfg(windows)]
-        {
-            draft_click(&back);
-            assert_eq!(shell.current(), origin);
-            assert!(!back.is_shown());
-        }
+        assert!(
+            !back.is_shown(),
+            "Dumpling now has a standalone navigation entry"
+        );
+        assert_eq!(shell.current(), shell::PageId::Dumpling);
     }
-    shell.navigate(shell::PageId::Mcp);
+    shell.navigate(shell::PageId::Overview);
     shell.navigate(shell::PageId::Dumpling);
     frame.layout();
     if let Some(bitmap) = shell.panel.capture_bitmap() {
-        save(&output.join("dumpling-back-navigation.png"), bitmap);
+        save(&output.join("dumpling-standalone-navigation.png"), bitmap);
     }
     shell.panel.destroy();
     frame.destroy();
@@ -1815,6 +1821,7 @@ fn review_runtime_surface(output: &Path) {
         } else {
             vec![
                 RuntimeMcp {
+                    models: vec![],
                     name: "Dumpling-MCP".into(),
                     detail: "1 个调用".into(),
                     active: true,
@@ -1822,6 +1829,7 @@ fn review_runtime_surface(output: &Path) {
                     opacity: 1.,
                 },
                 RuntimeMcp {
+                    models: vec![],
                     name: "filesystem".into(),
                     detail: "调用已结束".into(),
                     active: false,

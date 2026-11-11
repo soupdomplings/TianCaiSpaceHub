@@ -11,7 +11,7 @@ use axum::{
     routing::{get, post},
 };
 use serde::Serialize;
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::{
     app_state::{FeishuWsState, ImAccountRuntimeState, SharedState, TelegramState, WechatState},
@@ -33,6 +33,69 @@ mod workbuddy_launch;
 
 pub async fn start_bridge_if_ready(state: &SharedState, event_message: &'static str) -> bool {
     im_api::start_bridge_task(state, im_api::BridgeStartMode::KeepExisting, event_message).await
+}
+
+/// The assistant calls the same configuration handlers as the desktop, with no
+/// loopback HTTP, inference requests, or separate configuration writer.
+pub(crate) async fn assistant_configuration_operation(
+    state: SharedState,
+    operation: &str,
+    body: Value,
+) -> anyhow::Result<Value> {
+    use axum::{body::Body, http::Request};
+    use tower::ServiceExt;
+    let (method, path) = match operation {
+        "models" => ("GET", "/api/desktop/models"),
+        "save" => ("POST", "/api/config"),
+        "use" => ("POST", "/api/desktop/models/use"),
+        "copy" => ("POST", "/api/desktop/models/copy"),
+        "workbuddy_read" => ("GET", "/api/workbuddy/config"),
+        "workbuddy_save" => ("POST", "/api/workbuddy/config"),
+        "workbuddy_delete" => ("POST", "/api/workbuddy/config/delete"),
+        "tiangong_read" => ("GET", "/api/gmclaw/config"),
+        "tiangong_save" => ("POST", "/api/gmclaw/config"),
+        "tiangong_delete" => ("POST", "/api/gmclaw/config/delete"),
+        _ => anyhow::bail!("不支持的配置操作"),
+    };
+    let routes = Router::new()
+        .route("/api/config", post(save_config))
+        .route(
+            "/api/workbuddy/config",
+            get(workbuddy_config).post(save_workbuddy_config),
+        )
+        .route(
+            "/api/workbuddy/config/delete",
+            post(delete_workbuddy_config),
+        )
+        .route(
+            "/api/gmclaw/config",
+            get(gmclaw_config).post(save_gmclaw_config),
+        )
+        .route("/api/gmclaw/config/delete", post(delete_gmclaw_config))
+        .merge(desktop_models::router())
+        .with_state(state);
+    let request = Request::builder()
+        .method(method)
+        .uri(path)
+        .header("content-type", "application/json")
+        .header("x-tiancai-desktop", "1")
+        .body(if method == "GET" {
+            Body::empty()
+        } else {
+            Body::from(serde_json::to_vec(&body)?)
+        })?;
+    let response = routes.oneshot(request).await?;
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), 4 * 1024 * 1024).await?;
+    let result: Value = serde_json::from_slice(&bytes)?;
+    anyhow::ensure!(
+        status.is_success() && result.get("error").is_none(),
+        "{}",
+        result["error"]
+            .as_str()
+            .unwrap_or("配置操作失败，请在对应页面核对")
+    );
+    Ok(result)
 }
 
 pub fn router(state: SharedState) -> Router {
@@ -193,6 +256,7 @@ pub fn router(state: SharedState) -> Router {
         .merge(plugins::router())
         .merge(desktop::router())
         .merge(crate::local_assistance::web::router())
+        .merge(crate::assistant::router())
         .merge(crate::desktop::mcp_bridge::router())
         .merge(desktop_models::router())
         .merge(squad::router())

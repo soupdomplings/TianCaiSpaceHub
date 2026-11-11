@@ -12,6 +12,154 @@ mod cache;
 mod key_usage;
 #[cfg(test)]
 mod performance_tests;
+#[cfg(test)]
+mod assistant_tests {
+    use super::*;
+    use axum::{
+        Router,
+        body::Bytes,
+        response::IntoResponse,
+        routing::{get, post},
+    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[tokio::test]
+    async fn assistant_raw_transport_keeps_sse_json_and_account_identity_without_balance_calls() {
+        let seen = Arc::new(AtomicUsize::new(0));
+        let counter = seen.clone();
+        let app=Router::new()
+            .route("/api/v1/hub/assistant/config",get(|headers:axum::http::HeaderMap|async move{
+                assert_eq!(headers["authorization"],"Bearer synthetic-assistant-token");
+                axum::Json(json!({"code":0,"data":{"fixture":true}}))}))
+            .route("/v1/responses",post(move |headers:axum::http::HeaderMap,body:Bytes|{
+                let counter=counter.clone();async move {
+                    counter.fetch_add(1,Ordering::SeqCst);
+                    assert_eq!(headers["authorization"],"Bearer synthetic-admin-api-key");
+                    assert_eq!(headers["x-hub-client"],"genius-buddy");
+                    assert!(!String::from_utf8_lossy(&body).contains("synthetic-assistant-token"));
+                    let body:Value=serde_json::from_slice(&body).unwrap();
+                    if body["stream"]==true {
+                        ([("content-type","text/event-stream")],"data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n").into_response()
+                    } else { axum::Json(json!({"object":"response","output":[]})).into_response() }
+                }
+            }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let api: crate::assistant::model::Api = serde_json::from_value(
+            json!({"baseUrl":format!("{origin}/v1"),"apiKey":"synthetic-admin-api-key"}),
+        )
+        .unwrap();
+        let squad = Squad::synthetic(
+            dir.path().join("squad"),
+            Client::builder().no_proxy().build().unwrap(),
+            origin,
+        )
+        .unwrap();
+        let expected = squad.assistant_test_identity("one").unwrap();
+        assert_eq!(
+            squad.assistant_config(&expected).await.unwrap()["fixture"],
+            true
+        );
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("x-hub-client", "genius-buddy".parse().unwrap());
+        let response = squad
+            .assistant_model(
+                &expected,
+                &api,
+                json!({"model":"fixture","stream":true}),
+                headers.clone(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.headers()["content-type"], "text/event-stream");
+        assert!(response.text().await.unwrap().starts_with("data: "));
+        let summary = squad
+            .assistant_model(
+                &expected,
+                &api,
+                json!({"model":"fixture","input":[],"stream":false}),
+                headers,
+            )
+            .await
+            .unwrap()
+            .json::<Value>()
+            .await
+            .unwrap();
+        assert_eq!(summary["object"], "response");
+        squad.assistant_test_identity("two").unwrap();
+        assert!(
+            squad
+                .assistant_model(&expected, &api, json!({}), Default::default())
+                .await
+                .is_err()
+        );
+        assert_eq!(seen.load(Ordering::SeqCst), 2);
+        server.abort();
+    }
+    #[tokio::test]
+    async fn assistant_missing_endpoint_is_clear_and_model_failures_are_not_replayed() {
+        let seen = Arc::new(AtomicUsize::new(0));
+        let counter = seen.clone();
+        let app = Router::new()
+            .route(
+                "/api/v1/hub/assistant/config",
+                get(|| async { (StatusCode::NOT_FOUND, "not deployed") }),
+            )
+            .route(
+                "/v1/responses",
+                post(move || {
+                    let counter = counter.clone();
+                    async move {
+                        counter.fetch_add(1, Ordering::SeqCst);
+                        (
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            axum::Json(json!({"error":{"message":"synthetic unavailable"}})),
+                        )
+                            .into_response()
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let api: crate::assistant::model::Api = serde_json::from_value(
+            json!({"baseUrl":format!("{origin}/v1"),"apiKey":"synthetic-admin-api-key"}),
+        )
+        .unwrap();
+        let squad = Squad::synthetic(
+            dir.path().join("squad"),
+            Client::builder().no_proxy().build().unwrap(),
+            origin,
+        )
+        .unwrap();
+        let expected = squad.assistant_test_identity("one").unwrap();
+        assert!(
+            squad
+                .assistant_config(&expected)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("尚未部署")
+        );
+        assert_eq!(
+            squad
+                .assistant_model(&expected, &api, json!({}), Default::default())
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(seen.load(Ordering::SeqCst), 1);
+        server.abort();
+    }
+}
 
 /// One service/HTTP connection pool per daemon configuration, replaced on proxy changes.
 #[derive(Default)]
@@ -52,7 +200,7 @@ pub struct Session {
     #[serde(default)]
     pub user_id: i64,
 }
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ExpectedAccount {
     pub user_id: i64,
@@ -72,6 +220,70 @@ pub struct Squad {
     cache: Mutex<cache::ReadCache>,
 }
 impl Squad {
+    /// Public account identity without the login JWT or refresh credential.
+    pub(crate) fn assistant_identity(&self) -> Result<Option<ExpectedAccount>> {
+        Ok(self.session()?.map(|session| ExpectedAccount {
+            user_id: session.user_id,
+            generation: session.generation,
+        }))
+    }
+    #[cfg(test)]
+    pub(crate) fn assistant_test_identity(&self, generation: &str) -> Result<ExpectedAccount> {
+        self.save(&Session {
+            access_token: "synthetic-assistant-token".into(),
+            refresh_token: String::new(),
+            expires_at: 0,
+            generation: generation.into(),
+            user_id: 7,
+        })?;
+        self.assistant_identity()?.context("测试会话未保存")
+    }
+    fn assistant_account(&self, expected: &ExpectedAccount) -> Result<Session> {
+        let session = self.session()?.context("请先登录天才小分队")?;
+        ensure!(
+            session.user_id == expected.user_id && session.generation == expected.generation,
+            "小分队账户已切换，请重新打开天才搭档"
+        );
+        Ok(session)
+    }
+    pub(crate) async fn assistant_config(&self, expected: &ExpectedAccount) -> Result<Value> {
+        self.assistant_account(expected)?;
+        let result = self
+            .authenticated(Method::GET, "/hub/assistant/config", &[], None)
+            .await;
+        self.assistant_account(expected)?;
+        if result
+            .as_ref()
+            .err()
+            .and_then(|e| e.downcast_ref::<Rejection>())
+            .is_some_and(|e| e.status == StatusCode::NOT_FOUND)
+        {
+            anyhow::bail!("小分队尚未部署天才搭档模型接口，请联系管理员完成服务端对接");
+        }
+        result
+    }
+    /// The ordinary model API uses its own credential, never the login JWT.
+    pub(crate) async fn assistant_model(
+        &self,
+        expected: &ExpectedAccount,
+        api: &crate::assistant::model::Api,
+        body: Value,
+        protocol_headers: reqwest::header::HeaderMap,
+    ) -> Result<reqwest::Response> {
+        self.assistant_account(expected)?;
+        let response = self
+            .http
+            .post(api.endpoint())
+            .headers(protocol_headers)
+            .bearer_auth(&api.api_key)
+            .timeout(std::time::Duration::from_secs(1800))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|_| anyhow::anyhow!("天才搭档模型 API 连接中断，请稍后重试"))?;
+        self.assistant_account(expected)?;
+        Ok(response)
+    }
     pub fn new(path: &Path, config: &crate::config::AppConfig) -> Result<Self> {
         let root = super::state_root(path).join("squad");
         let http = crate::external_import::client::build_client(
@@ -124,7 +336,7 @@ impl Squad {
         Ok(value)
     }
     #[cfg(test)]
-    pub(super) fn synthetic(root: PathBuf, http: Client, origin: String) -> Result<Self> {
+    pub(crate) fn synthetic(root: PathBuf, http: Client, origin: String) -> Result<Self> {
         Ok(Self {
             secrets: SecretStore::new(root.join("session"))?,
             root,
@@ -170,6 +382,13 @@ impl Squad {
             anyhow::anyhow!("天才小分队响应未确认。请重新读取列表或订单，不要重复提交")
         })?;
         let status = response.status();
+        if status == StatusCode::NOT_FOUND && path == "/hub/assistant/config" {
+            return Err(Rejection {
+                status,
+                message: "小分队尚未部署天才搭档模型接口".into(),
+            }
+            .into());
+        }
         ensure!(!status.is_redirection(), "站点接口发生跳转，请重新登录");
         let mut bytes = Vec::new();
         while let Some(chunk) = response

@@ -128,8 +128,8 @@ fn shell(c: &Canvas<'_>, width: i32, height: i32, client: bool) {
     c.text("共用能力", 24, 418, 11, false, t.ink_muted);
     for (i, (label, icon)) in [
         ("模型与渠道", Icon::Model),
-        ("Skill 管理", Icon::Skill),
-        ("MCP 管理", Icon::Mcp),
+        ("天才搭档", Icon::Chat),
+        ("Dumpling-MCP", Icon::Mcp),
         ("聊天接入", Icon::Chat),
         ("请求日志", Icon::Logs),
     ]
@@ -205,10 +205,7 @@ fn shell(c: &Canvas<'_>, width: i32, height: i32, client: bool) {
         false,
     );
     if client {
-        for (i, label) in ["状态概览", "模型", "Skill", "MCP", "接入设置"]
-            .into_iter()
-            .enumerate()
-        {
+        for (i, label) in ["状态概览", "模型", "接入设置"].into_iter().enumerate() {
             button(
                 c,
                 Rect::new(248 + i as i32 * 96, 137, 90, 42),
@@ -340,7 +337,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         flowing: true,
                     };
                     let hits = visual::draw_client(c, size, &v, 0.3);
-                    assert_eq!(hits.len(), 6);
+                    assert_eq!(hits.len(), 4);
                     for (rect, _) in hits {
                         assert!(rect.x >= 0 && rect.y >= 0);
                         assert!(rect.x + rect.width <= c.px(size.width));
@@ -533,6 +530,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }];
             let mcps = vec![
                 RuntimeMcp {
+                    models: vec![],
                     name: "Dumpling-MCP".into(),
                     detail: if dim {
                         "调用已结束"
@@ -545,6 +543,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     opacity,
                 },
                 RuntimeMcp {
+                    models: vec![],
                     name: "filesystem".into(),
                     detail: "调用已结束".into(),
                     active: false,

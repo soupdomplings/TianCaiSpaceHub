@@ -15,6 +15,8 @@ pub fn router() -> Router<SharedState> {
         .route("/api/desktop/assistance/read", post(status))
         .route("/api/desktop/assistance/control", post(user_control))
         .route("/api/desktop/assistance/clear", post(clear_records))
+        .route("/api/desktop/assistance/prepare", post(prepare))
+        .route("/api/desktop/assistance/uninstall", post(uninstall))
         .route("/api/local-assistance/mcp", post(mcp))
         .route("/api/local-assistance/model/{task}/responses", post(model))
         .route(
@@ -48,12 +50,18 @@ pub async fn view(state: &SharedState) -> Result<Value> {
     let (settings, revision) = settings::read(&state.config_path)?;
     let config = state.config.lock().await.clone();
     let options = settings::models(&config);
-    let binary = settings::resolve_binary(settings.binary.as_deref()).ok();
+    let mut runtime = super::runtime::check(&state.config_path, settings.binary.as_deref());
+    runtime.can_uninstall &=
+        !settings.enabled && !crate::assistant::settings::read(&state.config_path)?.enabled;
+    let binary = runtime.program.clone();
     let inner = state.local_assistance.inner.lock().await;
     let tasks: Vec<_> = inner.tasks.values().map(|t| t.view(true)).collect();
     let records = records::list(&state.config_path)?;
     let detail = if settings.native_disable_pending {
-        format!("本机协助已停用，等待天工可用后移除配置。{}", inner.host_detail)
+        format!(
+            "本机协助已停用，等待天工可用后移除配置。{}",
+            inner.host_detail
+        )
     } else if settings.native_catalog_pending {
         format!(
             "工具目录正在接入。{}\n确认天工已打开，稍后重新打开此设置查看结果。",
@@ -64,9 +72,10 @@ pub async fn view(state: &SharedState) -> Result<Value> {
     };
     Ok(
         json!({"enabled":settings.enabled,"model":settings.model,"route":settings.route,"reasoningEffort":settings.reasoning_effort,"binary":binary,"selectedBinary":settings.binary,
-        "allowWorkspaceWrite":settings.allow_workspace_write,"autoClear":settings.auto_clear,"revision":revision,
+        "allowWorkspaceWrite":settings.allow_workspace_write,"fullAccess":settings.full_access,"autoClear":settings.auto_clear,"revision":revision,
         "models":options,"hostReady":inner.host.is_some() && !settings.native_catalog_pending,"hostDetail":detail,"tasks":tasks,
         "nativeCatalogPending":settings.native_catalog_pending,
+        "runtime":runtime,
         "triggerState":inner.trigger_state,
         "nativeDisablePending":settings.native_disable_pending,"records":records}),
     )
@@ -76,6 +85,73 @@ async fn status(State(state): State<SharedState>, headers: HeaderMap) -> Respons
         async {
             trusted(&headers)?;
             view(&state).await
+        }
+        .await,
+    )
+}
+#[derive(Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct Prepare {
+    confirmed: bool,
+    binary: Option<PathBuf>,
+}
+impl Default for Prepare {
+    fn default() -> Self {
+        Self {
+            confirmed: false,
+            binary: None,
+        }
+    }
+}
+async fn prepare(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Json(request): Json<Prepare>,
+) -> Response {
+    response(async {
+        trusted(&headers)?;
+        let _gate = state.local_assistance.setup.lock().await;
+        let proxy = state.config.lock().await.outbound_proxy.clone();
+        let saved = settings::read(&state.config_path)?.0;
+        ensure!(saved.enabled || crate::assistant::settings::read(&state.config_path)?.enabled,
+            "请先启用天工本机协助或天才搭档，再确认准备共享 Server");
+        let selected = request.binary.as_deref().or(saved.binary.as_deref());
+        let ready = super::runtime::prepare(&state.config_path, selected, &proxy, request.confirmed).await?;
+        Ok(json!({"binary":ready.program,"runtime":super::runtime::check(&state.config_path,None),
+            "detail":"共享天才搭档 Server 已准备。保存设置后，新任务将使用此后台。"}))
+    }.await)
+}
+async fn uninstall(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Json(request): Json<Prepare>,
+) -> Response {
+    response(
+        async {
+            trusted(&headers)?;
+            ensure!(
+                request.confirmed,
+                "请本人确认移除 Hub 自管的天才搭档 Server"
+            );
+            let _gate = state.local_assistance.setup.lock().await;
+            ensure!(
+                !settings::read(&state.config_path)?.0.enabled
+                    && !crate::assistant::settings::read(&state.config_path)?.enabled,
+                "天工本机协助与天才搭档共用此 Server，请先停用两个功能再移除安装"
+            );
+            ensure!(
+                state
+                    .local_assistance
+                    .inner
+                    .lock()
+                    .await
+                    .tasks
+                    .values()
+                    .all(|task| task.worker_stopped)
+                    && !crate::assistant::has_active(&state).await,
+                "共享 Server 的后台仍在退出，请稍后重试移除"
+            );
+            super::runtime::uninstall(&state.config_path).await
         }
         .await,
     )
@@ -91,7 +167,8 @@ struct Save {
     reasoning_effort: Option<String>,
     binary: Option<PathBuf>,
     allow_workspace_write: bool,
-    auto_clear: bool,
+    #[serde(default)]
+    full_access: bool,
 }
 async fn save(
     State(state): State<SharedState>,
@@ -111,14 +188,17 @@ async fn save(
                 reasoning_effort: r.reasoning_effort,
                 binary: r.binary,
                 allow_workspace_write: r.allow_workspace_write,
-                auto_clear: r.auto_clear,
+                full_access: r.full_access,
+                auto_clear: false,
                 ..old.clone()
             };
             if next.token.is_empty() {
                 next.token = settings::token();
             }
             let config = state.config.lock().await.clone();
-            settings::validate(&config, &next)?;
+            settings::validate(&state.config_path, &config, &next)?;
+            // Saving opt-in and native MCP metadata never installs a runtime.
+            // UI receives needsPreparation and asks the person before prepare.
             if !next.enabled {
                 // Local revocation must work even if TianGong is closed. Synchronize
                 // its owned native entry next time the official endpoint is ready.
@@ -274,9 +354,12 @@ pub(super) async fn sync_catalogue_native(
         s.native_catalog_pending = false;
         settings::write(&state.config_path, &s, revision)?;
         let host = state.local_assistance.inner.lock().await.host.clone();
-        if let Some(host) = host { disconnect(state, &host).await; }
+        if let Some(host) = host {
+            disconnect(state, &host).await;
+        }
         let mut inner = state.local_assistance.inner.lock().await;
-        inner.host_detail = "本机协助已在天工移除，Hub 已同步停用；如需使用，可在此重新启用并保存".into();
+        inner.host_detail =
+            "本机协助已在天工移除，Hub 已同步停用；如需使用，可在此重新启用并保存".into();
         inner.trigger_state = "removed".into();
         return Ok(());
     };
@@ -291,9 +374,12 @@ pub(super) async fn sync_catalogue_native(
             s.native_disable_pending = false;
             settings::write(&state.config_path, &s, revision)?;
             let host = state.local_assistance.inner.lock().await.host.clone();
-            if let Some(host) = host { disconnect(state, &host).await; }
+            if let Some(host) = host {
+                disconnect(state, &host).await;
+            }
             let mut inner = state.local_assistance.inner.lock().await;
-            inner.host_detail = "本机协助已在天工停用，Hub 已同步；如需使用，可在此重新启用并保存".into();
+            inner.host_detail =
+                "本机协助已在天工停用，Hub 已同步；如需使用，可在此重新启用并保存".into();
             inner.trigger_state = "disabled".into();
             return Ok(());
         }
@@ -306,9 +392,15 @@ pub(super) async fn sync_catalogue_native(
         .as_str()
         .and_then(|t| serde_json::from_str::<Value>(t).ok())
         .unwrap_or(before["tools_json"].clone());
-    let port = state.config.lock().await.local_listen_port().context("Hub 本机端口无效")?;
+    let port = state
+        .config
+        .lock()
+        .await
+        .local_listen_port()
+        .context("Hub 本机端口无效")?;
     let desired = settings::native_value(&s, port);
-    let static_changed = settings::native_fingerprint(&desired) != settings::native_fingerprint(&before);
+    let static_changed =
+        settings::native_fingerprint(&desired) != settings::native_fingerprint(&before);
     let changed = static_changed || prior != tools || before["is_connected"] != 1;
     let mut revision = revision.to_string();
     if changed && !s.native_catalog_pending {
@@ -316,14 +408,28 @@ pub(super) async fn sync_catalogue_native(
         revision = settings::write_revision(&state.config_path, &s, &revision)?;
     }
     if static_changed {
-        let store = crate::desktop::transaction::TransactionStore::new(settings::root(&state.config_path).join("native-undo"))?;
-        store.put_record(&uuid::Uuid::new_v4().to_string(), &json!({"before":before,"after":desired}))?;
+        let store = crate::desktop::transaction::TransactionStore::new(
+            settings::root(&state.config_path).join("native-undo"),
+        )?;
+        store.put_record(
+            &uuid::Uuid::new_v4().to_string(),
+            &json!({"before":before,"after":desired}),
+        )?;
         // Owned static upgrades (including a changed Hub port) are transactional
         // in local state; external native edits still fail the prior fingerprint.
-        client.mcp_update_connection(settings::MCP_NAME, settings::native_fields(&desired)).await?;
+        client
+            .mcp_update_connection(settings::MCP_NAME, settings::native_fields(&desired))
+            .await?;
         s.native_fingerprint = Some(settings::native_fingerprint(&desired));
-        ensure!(client.mcp_connection(settings::MCP_NAME).await?.as_ref().map(settings::native_fingerprint) == s.native_fingerprint,
-            "天工协助配置升级后读回不一致，请核对连接；未继续覆盖");
+        ensure!(
+            client
+                .mcp_connection(settings::MCP_NAME)
+                .await?
+                .as_ref()
+                .map(settings::native_fingerprint)
+                == s.native_fingerprint,
+            "天工协助配置升级后读回不一致，请核对连接；未继续覆盖"
+        );
         revision = settings::write_revision(&state.config_path, &s, &revision)?;
     }
     if changed {
@@ -350,8 +456,12 @@ pub(super) async fn sync_catalogue_native(
         confirmed["is_connected"] == 1 && actual == tools,
         "天工工具目录保存未确认，请稍后重试"
     );
-    if changed || s.native_catalog_pending { client.reload_configuration().await?; }
-    if !changed && !s.native_catalog_pending { return Ok(()); }
+    if changed || s.native_catalog_pending {
+        client.reload_configuration().await?;
+    }
+    if !changed && !s.native_catalog_pending {
+        return Ok(());
+    }
     s.native_catalog_pending = false;
     settings::write(&state.config_path, &s, &revision)
 }
@@ -365,7 +475,12 @@ pub(super) async fn sync_disabled(state: &SharedState) -> Result<()> {
     let client = crate::desktop::tiangong_resources::client(&config.gmclaw_bridge).await?;
     sync_disabled_native(state, s, &revision, &client).await
 }
-pub(super) async fn sync_disabled_native(state: &SharedState, mut s: settings::Settings, revision: &str, client: &crate::gmclaw_desktop::DesktopClient) -> Result<()> {
+pub(super) async fn sync_disabled_native(
+    state: &SharedState,
+    mut s: settings::Settings,
+    revision: &str,
+    client: &crate::gmclaw_desktop::DesktopClient,
+) -> Result<()> {
     if let Some(before) = client.mcp_connection(settings::MCP_NAME).await? {
         ensure!(
             s.native_fingerprint.as_deref() == Some(&settings::native_fingerprint(&before)),
@@ -379,7 +494,10 @@ pub(super) async fn sync_disabled_native(state: &SharedState, mut s: settings::S
             &json!({"before":before,"after":null}),
         )?;
         client.mcp_delete_connection(settings::MCP_NAME).await?;
-        ensure!(client.mcp_connection(settings::MCP_NAME).await?.is_none(), "天工尚未确认移除本机协助，请稍后重试");
+        ensure!(
+            client.mcp_connection(settings::MCP_NAME).await?.is_none(),
+            "天工尚未确认移除本机协助，请稍后重试"
+        );
         s.native_fingerprint = None;
     } else {
         s.native_fingerprint = None;
@@ -458,18 +576,24 @@ async fn mcp(
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({"tools":tools()})),
         "tools/call" => {
-            let guard = state.desktop_mcp_activity.begin(
-                "tiancai-local-assistance",
-                "本机协助",
-                crate::desktop::clients::ClientId::Tiangong,
-                false,
-            );
+            let guard = matches!(
+                v["params"]["name"].as_str(),
+                Some("assist_start" | "assist_followup")
+            )
+            .then(|| {
+                state.desktop_mcp_activity.begin(
+                    "tiancai-local-assistance",
+                    "本机协助",
+                    crate::desktop::clients::ClientId::Tiangong,
+                    false,
+                )
+            });
             let call = tool(&state, &v["params"]).await;
             drop(guard);
-            if let Err(error)=&call {
-                let mut inner=state.local_assistance.inner.lock().await;
-                inner.trigger_state="call_error".into();
-                inner.host_detail=format!("天工已尝试调用协助，但未通过：{error}");
+            if let Err(error) = &call {
+                let mut inner = state.local_assistance.inner.lock().await;
+                inner.trigger_state = "call_error".into();
+                inner.host_detail = format!("天工已尝试调用协助，但未通过：{error}");
             }
             Ok(match call {
                 Ok(mut value) => {
@@ -550,8 +674,9 @@ pub(super) async fn tool(state: &SharedState, p: &Value) -> Result<Value> {
         )
         .await;
         if result.is_ok() {
-            let mut inner=state.local_assistance.inner.lock().await;
-            inner.trigger_state="called".into();inner.host_detail="天工已发起本机协助，进度与人类确认在天工窗口处理".into();
+            let mut inner = state.local_assistance.inner.lock().await;
+            inner.trigger_state = "called".into();
+            inner.host_detail = "天工已发起本机协助，进度与人类确认在天工窗口处理".into();
         }
         return result;
     }
@@ -650,13 +775,11 @@ async fn model(
         "x-openai-actor-authorization",
         axum::http::HeaderValue::from_static("Bearer codexhub"),
     );
-    crate::ai_gateway::handler::handle_responses_pinned(
+    crate::ai_gateway::handler::handle_local_assistance_responses(
         state,
         headers,
         body,
-        None,
-        None,
-        Some((route, fingerprint)),
+        (route, fingerprint),
     )
     .await
 }
@@ -679,11 +802,12 @@ async fn model_catalog(
     match model_pin(&state, &id, &headers).await {
         Ok((model, route, _)) => {
             let config = state.config.lock().await;
-            let mut scoped=config.ai_gateway.clone();
-            scoped.providers.retain(|p|crate::ai_gateway::config::provider_route_id(p)==route && !p.is_client_reserved());
-            let (mut v, _) = crate::ai_gateway::catalog::configured_models_response_with_etag(
-                &scoped,
-            );
+            let mut scoped = config.ai_gateway.clone();
+            scoped.providers.retain(|p| {
+                crate::ai_gateway::config::provider_route_id(p) == route && !p.is_client_reserved()
+            });
+            let (mut v, _) =
+                crate::ai_gateway::catalog::configured_models_response_with_etag(&scoped);
             if let Some(models) = v["models"].as_array_mut() {
                 models.retain(|v| v["slug"] == model);
             }

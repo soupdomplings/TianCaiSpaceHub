@@ -3,7 +3,7 @@ use super::{
     controls::{Button, ButtonKind, Choice, TextCtrl, paint_surface},
     theme,
 };
-use crate::desktop::clients::ClientId;
+use crate::desktop::request_source;
 use wxdragon::prelude::*;
 pub(super) struct RequestView {
     pub page: Panel,
@@ -40,8 +40,12 @@ impl RequestView {
             .build();
         search.set_tooltip("搜索模型、渠道或请求编号");
         search.set_hint("搜索模型、渠道、请求");
-        let mut choices = vec!["全部客户端".into()];
-        choices.extend(ClientId::ALL.into_iter().map(|c| c.name().into()));
+        let mut choices = vec!["全部来源".into()];
+        choices.extend(
+            request_source::keys()
+                .filter_map(request_source::name)
+                .map(Into::into),
+        );
         let client = Choice::builder(&page)
             .with_choices(choices)
             .with_size(Size::new(160, theme::CONTROL_HEIGHT))
@@ -129,7 +133,7 @@ impl RequestView {
         table.set_foreground_color(theme::theme().ink_primary);
         for (i, (title, width)) in [
             ("时间", 150),
-            ("客户端", 125),
+            ("来源", 125),
             ("模型", 170),
             ("渠道", 155),
             ("状态", 90),

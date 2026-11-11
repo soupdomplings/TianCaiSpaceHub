@@ -59,7 +59,11 @@ pub(super) fn show(parent: &Frame, text: GuiText, detail: &RequestLogDetail) {
     let root = BoxSizer::builder(Orientation::Vertical).build();
 
     let summary = StaticText::builder(&panel)
-        .with_label(&summary_text(&detail.summary))
+        .with_label(&format!(
+            "来源：{}\n{}",
+            detail.client_id.as_deref().and_then(crate::desktop::request_source::name).unwrap_or("未标记来源"),
+            summary_text(&detail.summary),
+        ))
         .build();
     summary.set_foreground_color(theme::theme().ink_secondary);
     root.add(

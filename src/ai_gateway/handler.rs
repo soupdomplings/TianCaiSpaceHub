@@ -469,6 +469,23 @@ pub(super) async fn handle_responses_scoped(
     handle_responses_pinned(state, headers, body, scope, original, None).await
 }
 
+/// Called only after the local-assistance endpoint authenticates its live task
+/// and verifies the selected model. Public URLs/headers cannot set this source.
+pub(crate) async fn handle_local_assistance_responses(
+    state: SharedState,
+    mut headers: HeaderMap,
+    body: Bytes,
+    pin: (String, String),
+) -> Response {
+    let guard = state.desktop_activity.begin_local_assistance();
+    headers.insert(
+        crate::desktop::activity::INTERNAL_HEADER,
+        HeaderValue::from_str(&guard.id).expect("UUID header"),
+    );
+    let response = handle_responses_pinned(state, headers, body, None, None, Some(pin)).await;
+    guard.response(response)
+}
+
 /// A local-assistance task fixes its chosen ordinary provider for every turn.
 /// Only the authenticated task endpoint supplies a pin; public headers cannot.
 pub(crate) async fn handle_responses_pinned(

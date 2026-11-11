@@ -1,13 +1,54 @@
 // Pure source adapter used through CDP. No filesystem, network or page writes.
 // Each feature validates its own structure and leaves unknown layouts intact.
-(function adaptHubDesktopSource(source) {
-  const guard='globalThis.__CODEXHUB_ENHANCED_MODE__?.modelControlsEnabled===true';
-  const result={source,power:false,ultraPreference:false,goal:false,pluginUi:false,browserUi:false,computerUi:false,locale:false};
+(function adaptHubDesktopSource(source,options={}) {
+  // The repair planner explicitly requests persistent model-only changes. CDP
+  // keeps the opt-in marker and local-host boundary on every adapted call site.
+  const guard=options.persistentModelExperience===true?'true':'globalThis.__CODEXHUB_ENHANCED_MODE__?.modelControlsEnabled===true';
+  const localGuard=host=>`(${guard}&&${host}==="local")`;
+  const result={source,fastUi:false,fastRequest:false,ultraModels:false,ultraHost:false,power:false,ultraPreference:false,goal:false,pluginUi:false,browserUi:false,computerUi:false,locale:false};
   const unique=(re,replace)=>{
     const matches=[...result.source.matchAll(re)];if(matches.length!==1)return false;
-    const next=replace(...matches[0]);if(typeof next!=='string')return false;
+    const next=replace(...matches[0],matches[0].groups);if(typeof next!=='string')return false;
     result.source=result.source.slice(0,matches[0].index)+next+result.source.slice(matches[0].index+matches[0][0].length);return true;
   };
+  // Native/webpack Desktop uses numeric async chunks and module-member calls.
+  // Check complete auth/host/requirements/cache shapes, independently in each
+  // duplicate chunk. The requirements converter and React memo/loading stay intact.
+  if(source.includes('serviceTierAccess:')&&!source.includes('CODEXHUB_FAST_UI_V2')){
+    result.fastUi=unique(/(?<host>[\w$]+)=e\?\.hostId\?\?[\w$]+,(?<auth>[\w$]+)=\(0,[\w$]+\.[\w$]+\)\(\k<host>\),(?<allowed>[\w$]+)=(?<authCheck>\k<auth>\?\.authMethod===(?<q>["`])chatgpt\k<q>\|\|\k<auth>\?\.authMethod===\k<q>personalAccessToken\k<q>(?:\|\|\k<auth>\?\.authMethod===\k<q>amazonBedrock\k<q>)?),/g,
+      (...args)=>{const match=args[0],groups=args.at(-1),at=result.source.indexOf(match),tail=result.source.slice(at+match.length,at+match.length+1100);
+        const id=value=>value.replace(/[$]/g,'\\$&'),host=id(groups.host),auth=id(groups.auth),allowed=id(groups.allowed);
+        const state=new RegExp(`^(?<method>[\\w$]+)=${auth}\\?\\.authMethod\\?\\?null;(?<memo>[\\w$]+)\\[0\\]!==${host}\\|\\|\\k<memo>\\[1\\]!==\\k<method>\\?\\((?<args>[\\w$]+)=\\{authMethod:\\k<method>,hostId:${host}\\},\\k<memo>\\[0\\]=${host},\\k<memo>\\[1\\]=\\k<method>,\\k<memo>\\[2\\]=\\k<args>\\):\\k<args>=\\k<memo>\\[2\\];let\\{data:(?<requirements>[\\w$]+),isPending:(?<pending>[\\w$]+)\\}=\\(0,[\\w$]+\\.[\\w$]+\\)\\([\\w$]+\\.[\\w$]+,\\k<args>\\),(?<loading>[\\w$]+)=!!${auth}\\?\\.isLoading\\|\\|${allowed}&&\\k<pending>;\\k<memo>\\[3\\]!==\\k<requirements>\\|\\|\\k<memo>\\[4\\]!==\\k<loading>\\|\\|\\k<memo>\\[5\\]!==${allowed}\\?\\((?<access>[\\w$]+)=${allowed}&&!\\k<loading>&&null!=\\k<requirements>\\?\\(0,[\\w$]+\\.[\\w$]+\\)\\(\\k<requirements>\\):null,\\k<memo>\\[3\\]=\\k<requirements>,\\k<memo>\\[4\\]=\\k<loading>,\\k<memo>\\[5\\]=${allowed},\\k<memo>\\[6\\]=\\k<access>\\):\\k<access>=\\k<memo>\\[6\\];let (?<value>[\\w$]+)=\\k<access>;return \\k<memo>\\[7\\]!==\\k<loading>\\|\\|\\k<memo>\\[8\\]!==\\k<value>\\?\\((?<result>[\\w$]+)=\\{serviceTierAccess:\\k<value>,isLoading:\\k<loading>\\}`);
+        if(!state.test(tail))return null;
+        return match.slice(0,-1)+`||${localGuard(groups.host)}/*CODEXHUB_FAST_UI_V2*/,`;
+      });
+  }
+  if(source.includes('priority:')&&!source.includes('CODEXHUB_FAST_REQUEST_V2')){
+    result.fastRequest=unique(/async function(?: [\w$]+)?\((?<scope>[\w$]+),(?<host>[\w$]+)\)\{let (?<auth>[\w$]+)=await \(0,[\w$]+\.[\w$]+\)\(\k<scope>,\k<host>\);(?<deny>if\((?<q>["`])chatgpt\k<q>!==\k<auth>&&\k<q>personalAccessToken\k<q>!==\k<auth>(?:&&\k<q>amazonBedrock\k<q>!==\k<auth>)?\))return null;let (?<requirements>[\w$]+)=await \(0,[\w$]+\.[\w$]+\)\(\k<scope>,\k<host>,\{priority:\k<q>critical\k<q>\}\);return \k<scope>\.query\.setData\([\w$]+\.[\w$]+,\{authMethod:\k<auth>,hostId:\k<host>\},\k<requirements>\),\(0,[\w$]+\.[\w$]+\)\(\k<requirements>\)\}/g,
+      (...args)=>{const match=args[0],g=args.at(-1);return match.replace(g.deny,g.deny.slice(0,-1)+`&&!${localGuard(g.host)})/*CODEXHUB_FAST_REQUEST_V2*/`);});
+  }
+  if(source.includes('includeUltraReasoningEffort:')&&!source.includes('CODEXHUB_ULTRA_MODELS_V2')){
+    result.ultraModels=unique(/\(\{(?<params>[^;{}\n]{0,650})\},\{get:(?<get>[\w$]+),queryClient:[\w$]+,scope:[\w$]+\}\)=>\{(?<body>[^;\n]{0,2600}?),(?<gate>[\w$]+)=(?<include>[\w$]+)&&(?<read>\k<get>\([\w$]+\.[\w$]+,(?<q>["`])1186680773\k<q>\));return\{queryKey:/g,
+      (...args)=>{const match=args[0],g=args.at(-1),host=g.params.match(/(?:^|,)hostId:([\w$]+)(?:,|$)/)?.[1],include=g.params.match(/(?:^|,)includeUltraReasoningEffort:([\w$]+)(?:=!0)?(?:,|$)/)?.[1];
+        if(!host||include!==g.include)return null;
+        const at=result.source.indexOf(match),tail=result.source.slice(at+match.length,at+match.length+2000),selected=tail.match(new RegExp(`includeUltraReasoningEffort:${g.gate.replace(/[$]/g,'\\$&')},isCustomModelProvider:([\\w$]+)`)),custom=selected?.[1];
+        if(!custom||!g.body.includes(`${custom}=(0,`))return null;
+        return match.replace(`${g.gate}=${g.include}&&${g.read}`,`${g.gate}=${g.include}&&(${g.read}||${localGuard(host)}&&${custom})/*CODEXHUB_ULTRA_MODELS_V2*/`);
+      });
+  }
+  // Host bootstrap supplies the same capability to tool/model guidance. Keep it
+  // aligned with the picker query; do not enable the official provider's gate.
+  if(source.includes('includeUltraReasoningEffort:')&&!source.includes('CODEXHUB_ULTRA_HOST_V2')){
+    result.ultraHost=unique(/includeUltraReasoningEffort:(?<read>(?:\(0,[\w$]+\.[\w$]+\)|[\w$]+)\([\w$]+,(?<q>["`])1186680773\k<q>\))(?<middle>,isAuthLoading:(?<host>[\w$]+)\.hostId!==[\s\S]{0,700}?,isCustomModelProvider:)(?<custom>(?:\(0,[\w$]+\.[\w$]+\)|[\w$]+)\([\w$]+\)),workspaceDependenciesEnabled:/g,
+      (...args)=>{const match=args[0],g=args.at(-1);return match.replace(g.read,`(${g.read}||${localGuard(`${g.host}.hostId`)}&&${g.custom})/*CODEXHUB_ULTRA_HOST_V2*/`);});
+  }
+  if(options.modelExperienceOnly===true){
+    if(result.fastUi||result.fastRequest||result.ultraModels||result.ultraHost){
+      const flags=Object.fromEntries(Object.entries(result).filter(([k,v])=>k!=='source'&&v===true));
+      result.source+='\n;globalThis.__CODEXHUB_MODEL_CONTROLS_SOURCE__=Object.assign(globalThis.__CODEXHUB_MODEL_CONTROLS_SOURCE__??{},{version:2},'+JSON.stringify(flags)+');\n';
+    }
+    return result;
+  }
   if(!source.includes('CODEXHUB_POWER_V1'))result.power=unique(/function ([\w$]+)\(\{harborEnabled:([\w$]+),isElectron:([\w$]+),isEverydayWorkMode:([\w$]+)\}\)\{return \4\|\|\3&&\2\}/g,
     (m,fn,harbor,electron,work)=>`function ${fn}({harborEnabled:${harbor},isElectron:${electron},isEverydayWorkMode:${work}}){return ${work}||${electron}&&(${harbor}||(${guard}))/*CODEXHUB_POWER_V1*/}`);
   if(!source.includes('CODEXHUB_GOAL_V1'))result.goal=unique(/([\w$]+)=([\w$]+)\(`3074100722`\)&&([\w$]+)\(([\w$]+)\?\.config,`goals`\)===!0&&([\w$]+)!==`cloud`(&&![\w$]+)?(?=,)/g,

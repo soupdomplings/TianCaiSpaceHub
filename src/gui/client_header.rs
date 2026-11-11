@@ -36,7 +36,7 @@ impl ClientSettings {
         title.set_foreground_color(theme::theme().ink_primary);
         col.add(&title, 0, SizerFlag::Bottom, panel.from_dip(12));
         let note = StaticText::builder(&panel).with_label(match client {
-            ClientId::Codex => "初始化、执行连接与历史维护在这里调整。模型、Skill 和 MCP 分别在对应页管理。",
+            ClientId::Codex => "初始化、执行连接与历史维护在这里调整。模型在对应页管理。",
             ClientId::WorkBuddy => "保存模型后在 WorkBuddy 中选择使用。配置恢复在下方有备份时显示；不需要额外开启接入。",
             ClientId::Tiangong => "模型保存后在天工 Work 中选择使用。桌面对话同步和配置恢复在下方管理。",
             ClientId::VsCode => "模型用于 VS Code Chat；未更新时新建聊天。各 Profile 独立，保留客户端信任确认。",
@@ -199,11 +199,9 @@ impl ClientSettings {
                 .map(|path| format!("模型配置目录\n{path}\n\n"))
                 .unwrap_or_default();
             format!(
-                "配置目录\n{}\n\n{}Skill 文件夹\n{}\n\nMCP 配置\n{}",
+                "配置目录\n{}\n\n{}",
                 row["root"].as_str().unwrap_or("未提供"),
                 model_directory,
-                row["skills"].as_str().unwrap_or("未提供"),
-                row["mcp"].as_str().unwrap_or("未提供")
             )
         } else {
             "尚未读取到配置位置。请重新进入此客户端；读取失败时按页面提示处理。".into()
@@ -261,6 +259,9 @@ impl ClientHeader {
                     SizerFlag::Right | SizerFlag::Bottom,
                     left.from_dip(4),
                 );
+                if matches!(label, "Skill" | "MCP") {
+                    b.hide();
+                }
                 b
             })
             .collect::<Vec<_>>();

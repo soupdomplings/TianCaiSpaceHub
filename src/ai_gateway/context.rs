@@ -181,7 +181,10 @@ impl GatewayContext {
             if let Some(activity) = state.desktop_activity.get(id) {
                 store.bind_identity(
                     log_id,
-                    activity.client.map(|c| c.key().to_string()),
+                    activity
+                        .source
+                        .map(str::to_string)
+                        .or_else(|| activity.client.map(|c| c.key().to_string())),
                     activity.entry,
                     activity.route,
                 );

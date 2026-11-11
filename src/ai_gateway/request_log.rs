@@ -119,6 +119,8 @@ pub struct RequestLogEntry {
 pub struct RequestLogDetail {
     #[serde(flatten)]
     pub summary: RequestLogEntry,
+    #[serde(default)]
+    pub client_id: Option<String>,
     pub request_headers_json: Option<String>,
     pub request_json: Option<String>,
     pub upstream_request_headers_json: Option<String>,
@@ -973,12 +975,13 @@ fn get_detail_with_conn(conn: &Connection, id: i64) -> rusqlite::Result<Option<R
             upstream_request_body_bytes, upstream_request_headers_json, upstream_request_json,
             upstream_response_sse, response_json,
             write_cache_5m_tokens, write_cache_1h_tokens, upstream_response_headers_json,
-            upstream_stream
+            upstream_stream, client_id
          FROM ai_gateway_request_logs
          WHERE id = ?1",
         params![id],
         |row| {
             Ok(RequestLogDetail {
+                client_id: row.get(30)?,
                 summary: RequestLogEntry {
                     id: row.get(0)?,
                     request_id: row.get(1)?,

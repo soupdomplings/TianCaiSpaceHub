@@ -22,6 +22,8 @@ pub const INTERNAL_HEADER: &str = "x-tiancai-internal-activity";
 pub struct Activity {
     pub id: String,
     pub client: Option<ClientId>,
+    /// Set by a trusted Hub entry, never inferred from caller headers.
+    pub source: Option<&'static str>,
     pub entry: Option<String>,
     pub model: Option<String>,
     pub channel: Option<String>,
@@ -50,6 +52,7 @@ impl ActivityStore {
         let value = Activity {
             id: id.clone(),
             client,
+            source: None,
             entry,
             model: None,
             channel: None,
@@ -75,6 +78,21 @@ impl ActivityStore {
             store: self.clone(),
             id,
         }
+    }
+    pub(crate) fn begin_local_assistance(&self) -> Guard {
+        let guard = self.begin("");
+        self.update(&guard.id, |activity| {
+            activity.client = Some(ClientId::Tiangong);
+            activity.source = Some(super::request_source::LOCAL_ASSISTANCE_MCP);
+        });
+        guard
+    }
+    pub(crate) fn begin_assistant(&self) -> Guard {
+        let guard = self.begin("");
+        self.update(&guard.id, |activity| {
+            activity.source = Some(super::request_source::GENIUS_BUDDY);
+        });
+        guard
     }
     pub fn annotate(&self, id: &str, model: &str, channel: &str, route: &str) {
         self.update(id, |v| {
@@ -157,6 +175,34 @@ impl ActivityStore {
 pub(crate) struct Guard {
     store: ActivityStore,
     pub(crate) id: String,
+}
+impl Guard {
+    /// The model response body owns both ordinary and managed request evidence.
+    /// Dropping a cancelled stream ends the activity just like reading its end.
+    pub(crate) fn response(self, response: Response) -> Response {
+        self.store.update(&self.id, |v| {
+            v.phase = if response.status().is_success() {
+                "streaming"
+            } else {
+                "failed"
+            }
+            .into()
+        });
+        let (parts, body) = response.into_parts();
+        let stream = futures_util::stream::unfold(
+            (body.into_data_stream(), self),
+            |(mut body, guard)| async move {
+                match body.next().await {
+                    Some(chunk) => {
+                        guard.store.update(&guard.id, |_| {});
+                        Some((chunk, (body, guard)))
+                    }
+                    None => None,
+                }
+            },
+        );
+        Response::from_parts(parts, Body::from_stream(stream))
+    }
 }
 impl Drop for Guard {
     fn drop(&mut self) {
@@ -252,28 +298,7 @@ pub async fn track(State(state): State<SharedState>, mut request: Request, next:
         HeaderValue::from_str(&id).expect("UUID header"),
     );
     let response = next.run(request).await;
-    guard.store.update(&id, |v| {
-        v.phase = if response.status().is_success() {
-            "streaming"
-        } else {
-            "failed"
-        }
-        .into()
-    });
-    let (parts, body) = response.into_parts();
-    let stream = futures_util::stream::unfold(
-        (body.into_data_stream(), guard),
-        |(mut body, guard)| async move {
-            match body.next().await {
-                Some(chunk) => {
-                    guard.store.update(&guard.id, |_| {});
-                    Some((chunk, (body, guard)))
-                }
-                None => None,
-            }
-        },
-    );
-    Response::from_parts(parts, Body::from_stream(stream))
+    guard.response(response)
 }
 
 #[cfg(test)]

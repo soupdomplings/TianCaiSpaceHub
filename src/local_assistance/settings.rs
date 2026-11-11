@@ -21,6 +21,7 @@ pub struct Settings {
     pub reasoning_effort: Option<String>,
     pub binary: Option<PathBuf>,
     pub allow_workspace_write: bool,
+    pub full_access: bool,
     pub auto_clear: bool,
     // Local MCP credential, never returned in the UI.
     pub token: String,
@@ -37,7 +38,10 @@ impl Default for Settings {
             reasoning_effort: None,
             binary: None,
             allow_workspace_write: false,
-            auto_clear: true,
+            full_access: false,
+            // Kept for old settings. Temporary runs now survive until explicit
+            // cleanup or the real Hub exit, regardless of this legacy value.
+            auto_clear: false,
             token: String::new(),
             native_fingerprint: None,
             native_disable_pending: false,
@@ -84,15 +88,48 @@ pub fn models(config: &AppConfig) -> Vec<Value> {
                 let mut scoped = config.ai_gateway.clone();
                 scoped.providers = vec![provider.clone()];
                 scoped.codex_visible_models = vec![model.clone()];
-                let (catalog, _) = crate::ai_gateway::catalog::configured_models_response_with_etag(&scoped);
-                let descriptor = catalog["models"].as_array().and_then(|a| a.iter().find(|m|m["slug"] == *model));
-                let no_reasoning = crate::desktop::tiangong_models::parameters_for_provider(provider).is_some()
-                    || scoped.codex_model_profiles.iter().any(|p|p.id.eq_ignore_ascii_case(model) && p.supports_reasoning == Some(false));
-                let efforts: Vec<&str> = if no_reasoning { vec![] } else { descriptor
-                    .and_then(|m| m["supported_reasoning_levels"].as_array()).map(|a|a.iter().filter_map(|v|v["effort"].as_str())
-                        .filter(|v|matches!(*v,"none"|"minimal"|"low"|"medium"|"high"|"xhigh"|"max"|"ultra")).collect()).unwrap_or_default() };
-                let default = if efforts.contains(&"xhigh") { Some("xhigh") } else {
-                    descriptor.and_then(|m|m["default_reasoning_level"].as_str()).filter(|v|efforts.contains(v)).or_else(||efforts.first().copied())
+                let (catalog, _) =
+                    crate::ai_gateway::catalog::configured_models_response_with_etag(&scoped);
+                let descriptor = catalog["models"]
+                    .as_array()
+                    .and_then(|a| a.iter().find(|m| m["slug"] == *model));
+                let no_reasoning =
+                    crate::desktop::tiangong_models::parameters_for_provider(provider).is_some()
+                        || scoped.codex_model_profiles.iter().any(|p| {
+                            p.id.eq_ignore_ascii_case(model) && p.supports_reasoning == Some(false)
+                        });
+                let efforts: Vec<&str> = if no_reasoning {
+                    vec![]
+                } else {
+                    descriptor
+                        .and_then(|m| m["supported_reasoning_levels"].as_array())
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|v| v["effort"].as_str())
+                                .filter(|v| {
+                                    matches!(
+                                        *v,
+                                        "none"
+                                            | "minimal"
+                                            | "low"
+                                            | "medium"
+                                            | "high"
+                                            | "xhigh"
+                                            | "max"
+                                            | "ultra"
+                                    )
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                };
+                let default = if efforts.contains(&"xhigh") {
+                    Some("xhigh")
+                } else {
+                    descriptor
+                        .and_then(|m| m["default_reasoning_level"].as_str())
+                        .filter(|v| efforts.contains(v))
+                        .or_else(|| efforts.first().copied())
                 };
                 out.push(json!({"model":model,"route":crate::ai_gateway::config::provider_route_id(provider),
                     "label":format!("{} · {}",model,provider.name),"efforts":efforts,"defaultEffort":default}));
@@ -103,16 +140,22 @@ pub fn models(config: &AppConfig) -> Vec<Value> {
 }
 pub fn resolved_effort(config: &AppConfig, settings: &Settings) -> Result<Option<String>> {
     let models = models(config);
-    let model = models.iter().find(|m|m["model"] == settings.model && m["route"] == settings.route)
+    let model = models
+        .iter()
+        .find(|m| m["model"] == settings.model && m["route"] == settings.route)
         .context("协助模型已变化，请重新选择")?;
     if let Some(effort) = &settings.reasoning_effort {
-        ensure!(model["efforts"].as_array().is_some_and(|a|a.iter().any(|v|v == effort)),
-            "协助模型当前未提供已保存的思考强度 {effort}，请重新选择；未自动降低强度");
+        ensure!(
+            model["efforts"]
+                .as_array()
+                .is_some_and(|a| a.iter().any(|v| v == effort)),
+            "协助模型当前未提供已保存的思考强度 {effort}，请重新选择；未自动降低强度"
+        );
         return Ok(Some(effort.clone()));
     }
     Ok(model["defaultEffort"].as_str().map(str::to_string))
 }
-pub fn validate(config: &AppConfig, settings: &Settings) -> Result<()> {
+pub fn validate(path: &Path, config: &AppConfig, settings: &Settings) -> Result<()> {
     if !settings.enabled {
         return Ok(());
     }
@@ -124,7 +167,7 @@ pub fn validate(config: &AppConfig, settings: &Settings) -> Result<()> {
         "协助模型已变化，请先在 ChatGPT / Codex 模型中接入，再重新选择"
     );
     resolved_effort(config, settings)?;
-    resolve_binary(settings.binary.as_deref())?;
+    let _ = path;
     Ok(())
 }
 pub(crate) fn source_fingerprint(
@@ -136,9 +179,11 @@ pub(crate) fn source_fingerprint(
     crate::desktop::models::fingerprint(&stable)
 }
 
-/// Discovery only; no --version/help/schema subprocess is launched.
-pub fn resolve_binary(selected: Option<&Path>) -> Result<PathBuf> {
-    super::binary::resolve(selected)
+/// Execution uses only the shared Hub-managed package. `selected` is retained
+/// as an import-source preference and is never executed directly.
+pub fn resolve_binary(path: &Path, selected: Option<&Path>) -> Result<PathBuf> {
+    let _ = selected;
+    super::runtime::resolve_ready(path).map(|runtime| runtime.program)
 }
 
 pub fn native_value(settings: &Settings, port: u16) -> Value {

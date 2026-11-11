@@ -76,13 +76,14 @@ pub(super) struct ResourceUi {
     last_request: Rc<RefCell<Option<(String, Value)>>>,
     failed: Rc<RefCell<Option<Value>>>,
     dumpling: Button,
+    shell: Shell,
     issues: Rc<RefCell<Vec<DiscoveryIssue>>>,
 }
 
 impl ResourceUi {
     pub fn set_dumpling_visible(&self, visible: bool) {
-        self.dumpling.show(visible);
-        self.mcp.list_page.layout();
+        self.dumpling.hide();
+        self.shell.set_dumpling_visible(visible);
     }
     pub fn new(
         shell: &Shell,
@@ -132,10 +133,8 @@ impl ResourceUi {
         let dumpling = Button::builder(&mcp.list_page)
             .with_label("Dumpling-MCP 环境与认证")
             .build();
-        // Put the optional specialised manager alongside the general service list.
-        if let Some(sizer) = mcp.list_page.get_sizer() {
-            sizer.add(&dumpling, 0, SizerFlag::All, 12);
-        }
+        // The specialised manager now has its own sidebar entrance.
+        dumpling.hide();
         let nav = shell.clone();
         dumpling.on_click(move |_| nav.navigate(PageId::Dumpling));
         let ui = Self {
@@ -156,6 +155,7 @@ impl ResourceUi {
             last_request: Default::default(),
             failed: Default::default(),
             dumpling,
+            shell: shell.clone(),
             issues: Default::default(),
         };
         ui.set_dumpling_visible(super::load_dumpling_mcp_visibility());
@@ -252,12 +252,8 @@ impl ResourceUi {
             .with_kind(ButtonKind::Ghost)
             .build();
         button.enable(false);
-        column.add(
-            &button,
-            0,
-            SizerFlag::Left | SizerFlag::Bottom,
-            parent.from_dip(20),
-        );
+        let _ = column;
+        button.hide();
         *self.recovery.borrow_mut() = Some(button);
         let c = self.clone();
         button.on_click(move |_| c.restore(&c.skills));
@@ -327,6 +323,12 @@ impl ResourceUi {
         self.client_tabs.borrow_mut().push(tab);
     }
     pub fn enter(&self, id: PageId) {
+        // Hidden managers must not trigger background discovery just because
+        // the user opens a client or Settings. Existing writers stay intact.
+        if !matches!(id, PageId::Skills | PageId::Mcp) {
+            self.market.enter(false);
+            return;
+        }
         self.market
             .enter(id == PageId::Skills && self.market_visible.get());
         if matches!(
@@ -682,7 +684,12 @@ impl ResourceUi {
                 &labels,
                 tab.client_filter.is_some(),
             );
-            card.delete.show(tab.client_filter.is_none() || row.targets.iter().any(|t|tab.client_filter == Some(t.client) && (t.managed || t.using == Some(true))));
+            card.delete.show(
+                tab.client_filter.is_none()
+                    || row.targets.iter().any(|t| {
+                        tab.client_filter == Some(t.client) && (t.managed || t.using == Some(true))
+                    }),
+            );
             let (c, t, id) = (self.clone(), tab.clone(), row.resource.id.clone());
             card.edit.on_click(move |_| {
                 *t.selected.borrow_mut() = Some(id.clone());
@@ -846,18 +853,50 @@ impl ResourceUi {
             .map(|v| v.revision.clone())
             .unwrap_or_default();
         if let Some(client) = tab.client_filter {
-            let targets = row.targets.iter().filter(|t|t.client == client && (t.managed || t.using != Some(false))).collect::<Vec<_>>();
-            if targets.is_empty() { return; }
-            if targets.iter().any(|t|t.using.is_none()) {
-                self.choose_target(tab);
-                tab.picker.summary.set_label("此项已被客户端修改或暂时无法读取。请先核对状态，再决定是否移除。");
+            let targets = row
+                .targets
+                .iter()
+                .filter(|t| t.client == client && (t.managed || t.using != Some(false)))
+                .collect::<Vec<_>>();
+            if targets.is_empty() {
                 return;
             }
-            let shared = targets.iter().flat_map(|t|t.shared_with.iter().cloned()).collect::<BTreeSet<_>>();
-            let sharing = if shared.is_empty() { String::new() } else { format!("\n共用同一文件夹的客户端也会受影响：{}。",shared.into_iter().collect::<Vec<_>>().join("、")) };
-            if MessageDialog::builder(&self.frame,
-                &format!("从 {} 移除 {}？Hub 中的内容及其他独立客户端配置会保留。{}",client.name(),row.resource.name,sharing),
-                "移除客户端配置").with_style(MessageDialogStyle::YesNo | MessageDialogStyle::IconQuestion).build().show_modal() != ID_YES { return; }
+            if targets.iter().any(|t| t.using.is_none()) {
+                self.choose_target(tab);
+                tab.picker
+                    .summary
+                    .set_label("此项已被客户端修改或暂时无法读取。请先核对状态，再决定是否移除。");
+                return;
+            }
+            let shared = targets
+                .iter()
+                .flat_map(|t| t.shared_with.iter().cloned())
+                .collect::<BTreeSet<_>>();
+            let sharing = if shared.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "\n共用同一文件夹的客户端也会受影响：{}。",
+                    shared.into_iter().collect::<Vec<_>>().join("、")
+                )
+            };
+            if MessageDialog::builder(
+                &self.frame,
+                &format!(
+                    "从 {} 移除 {}？Hub 中的内容及其他独立客户端配置会保留。{}",
+                    client.name(),
+                    row.resource.name,
+                    sharing
+                ),
+                "移除客户端配置",
+            )
+            .with_style(MessageDialogStyle::YesNo | MessageDialogStyle::IconQuestion)
+            .build()
+            .show_modal()
+                != ID_YES
+            {
+                return;
+            }
             self.post("/api/desktop/resource/use",json!({"resourceId":row.resource.id,
                 "targets":targets.iter().map(|t|t.target_id.clone()).collect::<Vec<_>>(),"using":false}),tab);
             return;

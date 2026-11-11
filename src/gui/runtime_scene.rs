@@ -1,7 +1,7 @@
 //! A page visit owns its topology. Polls update evidence without deleting or
 //! sorting nodes; completed nodes fade and are discarded on the next visit.
-use super::visual::{RuntimeClient, RuntimeMcp, RuntimeRoute};
-use crate::desktop::clients::ClientId;
+use super::visual::{RuntimeClient, RuntimeMcp, RuntimeMcpModel, RuntimeRoute};
+use crate::desktop::{clients::ClientId, request_source};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
@@ -117,6 +117,7 @@ impl RuntimeScene {
             );
         }
         let mut routes: BTreeMap<(String, String), Vec<&Value>> = BTreeMap::new();
+        let mut assistance = Vec::new();
         for r in data["requests"]
             .as_array()
             .unwrap_or(&empty)
@@ -125,6 +126,9 @@ impl RuntimeScene {
         {
             if r["phase"] == "ended" && r["lastEvidenceAt"].as_i64().unwrap_or(0) <= self.entered {
                 continue;
+            }
+            if r["source"] == request_source::LOCAL_ASSISTANCE_MCP {
+                assistance.push(r);
             }
             if let (Some(route), Some(model)) = (r["route"].as_str(), r["model"].as_str()) {
                 routes
@@ -196,6 +200,9 @@ impl RuntimeScene {
                     .push(call);
             }
         }
+        let assistance_calls = tools
+            .remove(&(request_source::LOCAL_ASSISTANCE_MCP_RESOURCE.into(), false))
+            .unwrap_or_default();
         for ((id, dumpling), calls) in tools {
             let key = format!("{}:{id}", if dumpling { "dumpling" } else { "library" });
             let count = calls.iter().filter(|c| c["active"] == true).count();
@@ -209,6 +216,7 @@ impl RuntimeScene {
                 key,
                 RuntimeMcp {
                     name: calls[0]["name"].as_str().unwrap_or("MCP").into(),
+                    models: vec![],
                     detail: if count > 0 {
                         format!("{count} 个调用")
                     } else {
@@ -219,6 +227,48 @@ impl RuntimeScene {
                     opacity: 1.,
                 },
                 (count == 0).then_some(at),
+                at,
+            );
+        }
+        if !assistance.is_empty() || !assistance_calls.is_empty() {
+            let model_count = assistance.iter().filter(|r| r["phase"] != "ended").count();
+            let tool_active = assistance_calls.iter().any(|call| call["active"] == true);
+            let active = model_count > 0 || tool_active;
+            let at = assistance
+                .iter()
+                .filter_map(|r| r["lastEvidenceAt"].as_i64())
+                .chain(assistance_calls.iter().filter_map(|call| call["at"].as_i64()))
+                .max()
+                .unwrap_or(now);
+            let mut models = BTreeMap::new();
+            for request in &assistance {
+                if let (Some(route), Some(model)) = (request["route"].as_str(), request["model"].as_str()) {
+                    *models.entry((route.to_string(), model.to_string())).or_insert(false) |=
+                        request["phase"] != "ended" && is_flowing(request, now);
+                }
+            }
+            touch(
+                &mut self.mcps,
+                format!("library:{}", request_source::LOCAL_ASSISTANCE_MCP_RESOURCE),
+                RuntimeMcp {
+                    name: request_source::LOCAL_ASSISTANCE_MCP_NAME.into(),
+                    detail: if model_count > 0 {
+                        format!("{model_count} 个模型请求")
+                    } else if tool_active {
+                        "正在发起协助".into()
+                    } else {
+                        "本次协助已结束".into()
+                    },
+                    models: models.into_iter().map(|((route, model), flowing)| RuntimeMcpModel {
+                        route,
+                        model,
+                        flowing,
+                    }).collect(),
+                    active,
+                    flowing: tool_active || assistance.iter().any(|r| is_flowing(r, now)),
+                    opacity: 1.,
+                },
+                (!active).then_some(at),
                 at,
             );
         }
@@ -287,6 +337,14 @@ impl RuntimeScene {
                 v.opacity = fade(end, now);
                 v.active &= end.is_none();
                 v.flowing &= fresh && row.ended.is_none() && motion;
+                if !v.models.is_empty() && v.active && now.saturating_sub(row.evidence) >= 5000 {
+                    v.flowing = false;
+                    v.opacity = fade(Some(row.evidence + 5000), now);
+                    v.detail = "等待响应".into();
+                }
+                for model in &mut v.models {
+                    model.flowing &= v.flowing;
+                }
                 if row.ended.is_some() && v.detail != "已使用" {
                     v.detail = "调用已结束".into();
                 }
@@ -319,6 +377,64 @@ fn is_flowing(r: &Value, now: i64) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn local_assistance_keeps_the_real_mcp_model_route_after_the_start_tool_returns() {
+        let mut scene = RuntimeScene::default();
+        scene.reset(100);
+        scene.observe(&json!({"at":200,
+            "mcpCalls":[{"resource":"tiancai-local-assistance","name":"本机协助","client":"tiangong","dumpling":false,"active":false,"at":150}],
+            "requests":[
+                {"client":"tiangong","source":"local-assistance-mcp","route":"assist-route","model":"same-model","channel":"assist-source","phase":"streaming","lastEvidenceAt":200},
+                {"client":"codex","route":"ordinary-route","model":"same-model","phase":"streaming","lastEvidenceAt":200}
+            ]}));
+        let view = scene.view(200, true);
+        assert_eq!(view.routes.len(), 2);
+        assert_eq!(view.mcps.len(), 1);
+        let (id, dumpling, mcp) = &view.mcps[0];
+        assert_eq!(id, "tiancai-local-assistance");
+        assert!(!dumpling);
+        assert_eq!(mcp.name, "协助处理 MCP");
+        assert_eq!(mcp.detail, "1 个模型请求");
+        assert!(mcp.active && mcp.flowing);
+        assert_eq!(mcp.models.len(), 1);
+        assert_eq!(mcp.models[0].route, "assist-route");
+        assert_eq!(mcp.models[0].model, "same-model");
+        assert!(mcp.models[0].flowing);
+        assert!(view.clients.iter().any(|client| client.id == ClientId::Tiangong && client.busy));
+        assert!(!scene.view(200, false).mcps[0].2.models[0].flowing);
+    }
+    #[test]
+    fn local_assistance_model_edges_stop_for_waiting_completion_and_page_reentry() {
+        let mut scene = RuntimeScene::default();
+        scene.reset(100);
+        let mut data = json!({"at":200,"requests":[
+            {"client":"tiangong","source":"local-assistance-mcp","route":"assist-route","model":"model","phase":"streaming","lastEvidenceAt":200}
+        ]});
+        scene.observe(&data);
+        assert!(scene.view(200, true).mcps[0].2.models[0].flowing);
+        data["at"] = json!(6000);
+        data["requests"][0]["phase"] = json!("waiting");
+        scene.observe(&data);
+        let waiting = scene.view(6000, true);
+        assert!(waiting.mcps[0].2.active);
+        assert!(!waiting.mcps[0].2.flowing);
+        assert!(!waiting.mcps[0].2.models[0].flowing);
+        data["at"] = json!(6500);
+        data["recentRequests"] = data["requests"].take();
+        data["recentRequests"][0]["phase"] = json!("ended");
+        data["recentRequests"][0]["lastEvidenceAt"] = json!(6200);
+        scene.observe(&data);
+        let ended = scene.view(6500, true);
+        assert!(!ended.mcps[0].2.active);
+        assert!(!ended.mcps[0].2.models[0].flowing);
+        data["at"] = json!(11200);
+        scene.observe(&data);
+        assert!(scene.view(11200, true).mcps[0].2.opacity <= 0.41);
+        scene.reset(12000);
+        data["at"] = json!(12100);
+        scene.observe(&data);
+        assert!(scene.view(12100, true).mcps.is_empty());
+    }
     #[test]
     fn reduced_motion_keeps_live_evidence_bright_without_animation() {
         let mut scene = RuntimeScene::default();

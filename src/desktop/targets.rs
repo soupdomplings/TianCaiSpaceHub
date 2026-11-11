@@ -7,6 +7,11 @@ use std::{
 };
 mod paths;
 
+#[cfg(windows)]
+pub(super) fn vscode_program(launcher: &Path) -> Option<PathBuf> {
+    paths::vscode_program(launcher)
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClientTarget {

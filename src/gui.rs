@@ -157,6 +157,7 @@ struct ImAccountToggle {
 }
 
 mod ai_gateway;
+mod assistant;
 mod api;
 mod browser;
 mod chatgpt;
@@ -623,6 +624,7 @@ fn build_ui(
     let notebook = shell.book;
     let overview_ui = overview::Overview::new(&shell, frame, api.clone(), text);
     let squad_ui = squad::SquadPage::new(&shell, frame, api.clone());
+    let assistant_ui = assistant::AssistantUi::new(&frame, &shell, api.clone());
     let client_pages = crate::desktop::clients::ClientId::ALL
         .into_iter()
         .map(|id| clients::ClientPage::new(&shell, id, frame, api.clone()))
@@ -1850,6 +1852,7 @@ fn build_ui(
         let request_browser = request_browser.clone();
         let client_pages = client_pages.clone();
         let squad_ui = squad_ui.clone();
+        let assistant_ui = assistant_ui.clone();
         let source_navigation = shell.clone();
         shell.on_changed(move |page| {
             if let Some(route) = source_navigation.take_source_focus() {
@@ -1872,6 +1875,7 @@ fn build_ui(
             }
             overview_ui.enter(page);
             squad_ui.enter(page);
+            assistant_ui.enter(page);
             request_browser.enter(page == PageId::Logs);
             resource_ui.enter(page);
             for client in &client_pages {
@@ -2521,7 +2525,7 @@ fn toggle_dumpling_mcp_page(
             page.shell.navigate(shell::PageId::Dumpling);
             nvwa::refresh_if_needed(&page.tab, gui_tx);
         } else if page.shell.current() == shell::PageId::Dumpling {
-            page.shell.navigate(shell::PageId::Mcp);
+            page.shell.navigate(shell::PageId::Overview);
         }
         frame.layout();
     });

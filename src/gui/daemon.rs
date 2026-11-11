@@ -33,7 +33,8 @@ use crate::{
     types::now_ms,
 };
 
-const DAEMON_GRACEFUL_STOP_TIMEOUT: Duration = Duration::from_millis(1_500);
+// Actual exit lets shared Server workers stop and remove owned temporary data.
+const DAEMON_GRACEFUL_STOP_TIMEOUT: Duration = Duration::from_secs(25);
 const DAEMON_FORCE_STOP_TIMEOUT: Duration = Duration::from_millis(1_500);
 const DAEMON_STOP_POLL_INTERVAL: Duration = Duration::from_millis(50);
 

@@ -267,9 +267,16 @@ function archiveWrite(a){let offset=0;const data=[];for(const x of a.entries){x.
 function archivePlan(o,p) {
   const file=path.join(o.resources,'app.asar'),a=archiveRead(file);let count=0;
   const candidates=a.entries.filter(x=>x.name.endsWith('.js')&&(x.name.startsWith('.vite/build/')||x.name.startsWith('webview/assets/')));
-  const jobs=o.kind==='proxy'?['proxy']:o.kind==='surface'?['surface']:o.kind==='discovery'?['discovery']:['power','ultra','locale','goal','plugin','browser','trusted'];
+  const jobs=o.kind==='proxy'?['proxy']:o.kind==='surface'?['surface']:o.kind==='discovery'?['discovery']:['models','power','ultra','locale','goal','plugin','browser','trusted'];
+  const modelAdapter=jobs.includes('models')?require('node:vm').runInNewContext(fs.readFileSync(path.join(__dirname,'renderer-adapter.js'),'utf8')):null;
+  const modelCounts={fastUi:0,fastRequest:0,ultraModels:0,ultraHost:0};
   for(const job of jobs){let matched=0;
     for(const e of candidates){let text=e.bytes.toString('utf8'),next=null;
+      if(job==='models'&&e.name.startsWith('webview/assets/')&&(text.includes('serviceTierAccess:')||text.includes('priority:')||text.includes('includeUltraReasoningEffort:'))){
+        const adapted=modelAdapter(text,{persistentModelExperience:true,modelExperienceOnly:true});
+        for(const key of Object.keys(modelCounts))if(adapted[key])modelCounts[key]++;
+        if(adapted.source!==text)next=Buffer.from(adapted.source);
+      }
       if(job==='proxy'&&text.includes('NODE_REPL_NODE_MODULE_DIRS')&&text.includes('CODEX_WINDOWS_REGISTERED_CORE'))next=Buffer.from(require('./patch-node-repl-proxy-env.cjs').patchSource(text).source);
       if(job==='surface'&&e.name.startsWith('.vite/build/')&&text.includes('CUA_REPL_ENABLED_SURFACES'))next=patchTemp('patches/computerUseSurface.cjs',e.bytes);
       if(job==='trusted'&&text.includes('NODE_REPL_TRUSTED_CODE_PATHS')&&e.name.startsWith('.vite/build/'))next=patchTemp('patches/nodeReplTrustedPaths.cjs',e.bytes);
@@ -305,8 +312,10 @@ function archivePlan(o,p) {
       }
       if(next){matched++;if(!next.equals(e.bytes)){e.original??=e.bytes;e.bytes=next;count++;}}
     }
-    if(matched)p.lines.push(`${({power:'Power 拖动条',ultra:'Ultra 偏好',locale:'语言设置',goal:'Goal 入口',plugin:'插件安装入口',browser:'浏览器主程序',trusted:'运行时可信路径',proxy:'子进程代理继承',surface:'Windows Any App',discovery:'Image-guided Assets 可发现性'})[job]}：匹配到 ${matched} 个支持的组件`);
-    else p.skip(`${({power:'Power',ultra:'Ultra',locale:'语言',goal:'Goal',plugin:'插件入口',browser:'浏览器',trusted:'可信路径',proxy:'代理继承',surface:'Any App',discovery:'Image-guided Assets'})[job]}：当前布局未匹配、已开放或不适用，保留原代码`);
+    if(job==='models'&&matched)p.lines.push(`新版模型控制：Fast 界面 ${modelCounts.fastUi}、请求 ${modelCounts.fastRequest}、Ultra 查询 ${modelCounts.ultraModels}、主机能力 ${modelCounts.ultraHost}；保留 requirements、模型能力及非本地主机行为。`);
+    else if(job==='power'&&!matched&&candidates.some(e=>{const s=e.bytes.toString('utf8');return s.includes('composer.modelPicker.power')&&s.includes('PowerSlider')&&s.includes('selectedPowerSelection');}))p.lines.push('Power 拖动条：已识别原生实现，保留原有模型组合与可用性条件。');
+    else if(matched)p.lines.push(`${({power:'Power 拖动条',ultra:'Ultra 偏好',locale:'语言设置',goal:'Goal 入口',plugin:'插件安装入口',browser:'浏览器主程序',trusted:'运行时可信路径',proxy:'子进程代理继承',surface:'Windows Any App',discovery:'Image-guided Assets 可发现性'})[job]}：匹配到 ${matched} 个支持的组件`);
+    else p.skip(`${({models:'新版模型控制',power:'Power',ultra:'Ultra',locale:'语言',goal:'Goal',plugin:'插件入口',browser:'浏览器',trusted:'可信路径',proxy:'代理继承',surface:'Any App',discovery:'Image-guided Assets'})[job]}：当前布局未匹配、已开放或不适用，保留原代码`);
   }
     if(count){
     const syntaxDir=fs.mkdtempSync(path.join(os.tmpdir(),'hub-package-syntax-'));try{for(const e of candidates.filter(e=>e.original)){const f=path.join(syntaxDir,'candidate.'+(e.name.startsWith('.vite/build/')?'cjs':'mjs'));fs.writeFileSync(f,e.bytes);const checked=spawnSync(process.execPath,['--check',f],{encoding:'utf8',timeout:20000,windowsHide:true});ensure(checked.status===0,'候选客户端脚本语法校验失败，保留原程序');}}finally{fs.rmSync(syntaxDir,{recursive:true,force:true});}

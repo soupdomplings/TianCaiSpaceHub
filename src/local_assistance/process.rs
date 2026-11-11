@@ -4,7 +4,7 @@ use tokio::process::Child;
 
 /// A reused or inaccessible PID is treated as live. Cleanup never guesses that
 /// another user's process can be terminated or that its files can be removed.
-pub(super) fn alive(pid: u32) -> Result<bool> {
+pub(crate) fn alive(pid: u32) -> Result<bool> {
     ensure!(pid > 0, "协助记录中的进程标识无效");
     #[cfg(windows)]
     unsafe {

@@ -1,5 +1,19 @@
 # V1 桌面重构实施记录
 
+2026-11-11：本轮实施 [天才搭档与共享 Server（TC-023）](../customizations/genius-buddy.md)，沿用 V1.0.17 累计未提交开发，按用户要求版本进入 V1.0.18，Windows release 和唯一 MSI 已生成、静态核验通过，包身份见 [V18 交付](../releases/v1.0.18.md)。共享运行端、确认准备/仅卸载自管包、临时会话及退出回收、配置工具与隐藏通用资源入口的现行行为和验证统一记录在专题；小分队已精简为 [单配置 GET + 复用普通模型 API](../contracts/assistant-server.md)，工具及摘要由本机处理。本批同时完成新版 ChatGPT 数字资源 Ultra/Fast、Node REPL 代理与可信路径适配，逐项检查修复审计见 TC-006/007 专题；最终 Windows GUI 测试目标编译、77 个不同 Rust 定向用例、28 项 Node 和 54 次候选语法检查通过，真实客户端与 macOS 待验收。下方 V1.0.17 等验证归属原输入，不能覆盖本轮。
+
+## V1.0.17 协助模型请求来源（2026-11-10）
+
+用户实测天工已可通过本机协助 MCP 执行任务，但该入口直接调用固定来源的 Responses handler，没有经过普通网关的活动中间件，造成真实模型请求缺少活动及日志来源。现在受信任务入口核对活动任务令牌、模型与固定来源后，调用 `ai_gateway/handler.rs::handle_local_assistance_responses`，复用 `desktop/activity.rs` 的请求及响应体生命周期。活动保留实际发起端 `tiangong`，另记录 `source: local-assistance-mcp`；完成、错误或取消均沿响应体释放结束活动，并只保留原有五秒短请求显示证据。
+
+日志沿现有 `client_id` 列保存 `local-assistance-mcp`，统一显示“协助处理 MCP”；列表、详情、筛选和按来源用量分布共用 `desktop/request_source.rs`。不新增普通客户端、不改变模型路由与输入/输出口径。来源只由 Hub 受信入口设置，公开 URL、User-Agent 和外来内部活动头无法声明此来源；内部活动 ID 不转发上游，任务令牌仍按现有凭据脱敏边界处理。旧日志不回填，不需数据库或用户配置迁移；停用本机协助即停止新增该来源，回退旧包保留现有日志列数据。
+
+`gui/runtime_scene.rs` 从带该来源的真实模型请求保持协助 MCP 节点，`gui/visual.rs` 将该节点连接到实际 `route + model`，不能串到其他来源的同名模型；真实天工发起端保持。仅启用配置、目录检查或进度轮询不产生模型边；开始工具返回也不会提前结束仍在响应中的模型边。完成先停流再按原规则暗淡，离开重进不复活旧结束请求。协助 MCP 节点点击下钻其来源日志。相关视觉规则见 [视觉规范](desktop-visual-system.md#v1017-协助-mcp-真实模型连接2026-11-10)。
+
+已新增合成回归：`local_assistance_response_lifetime_preserves_source_for_logs_and_usage` 覆盖固定模型来源、流式/非流式、取消、日志详情与用量；`local_assistance_keeps_the_real_mcp_model_route_after_the_start_tool_returns`、`local_assistance_model_edges_stop_for_waiting_completion_and_page_reentry` 覆盖同名不同路由、结束退流及重进。公开入口现有链路用例补充伪来源 User-Agent 不生效。唯一打包会话已完成本批 104 项定向用例、两个示例编译和 Windows release 构建，包含以上回归；唯一 MSI 及实际结果见 [V17 交付](../releases/v1.0.17.md)。真实图谱、调用和 macOS 待用户验收，不把用户此前调通结果写成本修复已验收。
+
+以下为各历史阶段记录，保留当时版本及验证归属。
+
 2026-11-10 当前 V1.0.16：Windows 主窗口标题区与应用壳层融合并保留系统/托盘交互；使用原海豚图标。按用户要求移除 Hub 模型广场的入口、视图与读取路径，可用渠道归账户；不删除模型配置、天工内置来源或 Skill 广场。实现及当前验证见 [V1.0.16 交付](../releases/v1.0.16.md)、[视觉规范](desktop-visual-system.md)、[账户专题](../customizations/tiancai-squad-account.md)。下方旧版本范围保留其原阶段归属，不代表被移除功能仍在当前包中。
 
 

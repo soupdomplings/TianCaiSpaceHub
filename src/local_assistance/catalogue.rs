@@ -117,10 +117,10 @@ pub(super) fn prompt(rows: &[Value], selected: &[String]) -> Result<String> {
 
 pub(super) fn instructions(context: &str, catalog: &str) -> String {
     let start = json!({"mcp_id":settings::MCP_NAME,"tool_name":"assist_start","arguments":{
-        "context_ref":context,"goal":"具体困难、错误证据、已试方法和用户限制","problem_key":"本次问题的稳定标识","analysis_only":true}});
+        "context_ref":context,"goal":"具体困难、错误证据、已试方法和用户限制","problem_key":"本次问题的稳定标识","analysis_only":false}});
     let wait = json!({"mcp_id":settings::MCP_NAME,"tool_name":"assist_wait","arguments":{"context_ref":context,"task":"assist_start 返回的 id","seconds":20}});
     format!(
-        "{catalog}\n\n{}\n\n## 本次自动协助调用\n本次 context_ref={context}\ncontext_ref 由 Hub 自动提供，不是用户要填写的设置。每次调用五个协助工具都必须把此值原样放在 arguments.context_ref，不能漏填、猜测或向用户索取。\nassist_start 是服务内工具名，天工实际调用入口是 mcp_call。发起参数示例（替换 goal 和 problem_key，保留真实 context_ref）：\n{start}\n等待参数示例（替换 task 为返回的 id）：\n{wait}\n追问、取消、采纳也使用同一 mcp_id 和 context_ref，tool_name 分别为 assist_followup、assist_cancel、assist_finish。",
+        "{catalog}\n\n{}\n\n## 本次自动协助调用\n本次 context_ref={context}\ncontext_ref 由 Hub 自动提供，不是用户要填写的设置。每次调用五个协助工具都必须把此值原样放在 arguments.context_ref，不能漏填、猜测或向用户索取。\nassist_start 是服务内工具名，天工实际调用入口是 mcp_call。需要协助修改或执行任务时传 analysis_only=false；仅分析读取或用户要求只读时传 true，本次限制优先于完全访问设置。发起参数示例（替换 goal、problem_key 和 analysis_only，保留真实 context_ref）：\n{start}\n等待参数示例（替换 task 为返回的 id）：\n{wait}\n追问、取消、采纳也使用同一 mcp_id 和 context_ref，tool_name 分别为 assist_followup、assist_cancel、assist_finish。",
         host::rules()
     )
 }

@@ -28,6 +28,7 @@ mod gui;
 mod im;
 mod im_runtime;
 mod local_assistance;
+mod assistant;
 mod nvwa;
 mod outbound_http;
 mod remote_control_backend;
@@ -218,6 +219,14 @@ async fn run_daemon(config_path: PathBuf, config: AppConfig) -> anyhow::Result<(
         Some(shutdown_tx),
         Some(daemon_identity),
     );
+    // Recover only Hub-owned temporary sessions, before accepting new work.
+    // Persistent Server binaries and saved client configuration are separate.
+    if let Err(error) = local_assistance::recover_runs(&state.config_path) {
+        tracing::warn!(error = %error, "天工协助临时内容待清理");
+    }
+    if let Err(error) = assistant::recover_runs(&state.config_path).await {
+        tracing::warn!(error = %error, "天才搭档临时内容待清理");
+    }
     {
         let config = state.config.lock().await;
         state
@@ -245,6 +254,7 @@ async fn run_daemon(config_path: PathBuf, config: AppConfig) -> anyhow::Result<(
         .with_context(|| format!("invalid bind address `{bind}`"))?;
     tracing::info!(target: "codexhub::startup", addr = %addr, "binding local service");
     let listener = bind_service_listener(addr).await?;
+    let assistant_supervisor = tokio::spawn(assistant::run(state.clone()));
     println!("TianCaiSpaceHub web: http://{addr}");
     tracing::info!(target: "codexhub::startup", addr = %addr, "local service listener ready");
 
@@ -354,14 +364,28 @@ async fn run_daemon(config_path: PathBuf, config: AppConfig) -> anyhow::Result<(
         }
     }
     let shutdown_task_tx = server_shutdown_tx.clone();
-    tokio::spawn(async move {
+    let shutdown_state = state.clone();
+    let shutdown_task = tokio::spawn(async move {
         let _ = shutdown_rx.await;
         let _ = shutdown_task_tx.send(true);
+        let (_, assistance) = tokio::join!(
+            assistant::shutdown_and_cleanup(&shutdown_state),
+            local_assistance::shutdown_and_cleanup(&shutdown_state),
+        );
+        if let Err(error) = assistance {
+            tracing::warn!(error = %error, "天工协助临时内容待下次启动回收");
+        }
         crate::desktop::mcp_bridge::shutdown().await;
     });
 
     let primary_result = serve_http(listener, app, server_shutdown_rx).await;
     let _ = server_shutdown_tx.send(true);
+    // A listener failure also takes the normal cleanup path.
+    if !shutdown_task.is_finished() {
+        let _ = state.request_shutdown().await;
+    }
+    let _ = shutdown_task.await;
+    assistant_supervisor.abort();
     crate::desktop::mcp_bridge::shutdown().await;
     if tokio::time::timeout(Duration::from_millis(1200), &mut nvwa_task)
         .await

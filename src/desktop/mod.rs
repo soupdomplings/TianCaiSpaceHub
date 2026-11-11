@@ -12,6 +12,7 @@ pub mod model_operations;
 pub mod models;
 pub mod permissions;
 pub mod resources;
+pub mod request_source;
 pub mod runtime;
 pub mod skill_market;
 pub mod skills;

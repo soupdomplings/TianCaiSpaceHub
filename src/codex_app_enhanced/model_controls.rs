@@ -60,6 +60,8 @@ pub(super) fn fetch_options() -> Value {
         ,{"urlPattern": "app://*/assets/use-is-plugins-enabled-*.js", "requestStage": "Response"}
         ,{"urlPattern": "app://*/assets/use-plugin-install-flow-*.js", "requestStage": "Response"}
         ,{"urlPattern": "app://*/assets/local-conversation-thread-*.js", "requestStage": "Response"}
+        ,{"urlPattern": "app://*/assets/initialize-app-host-services-*.js", "requestStage": "Response"}
+        ,{"urlPattern": "app://*/assets/async/*.js", "requestStage": "Response"}
     ]})
 }
 
@@ -70,9 +72,20 @@ fn supported_script_url(raw: &str) -> bool {
     let Some(name) = url.path().strip_prefix("/assets/") else {
         return false;
     };
-    url.scheme() == "app"
-        && !name.contains('/')
-        && name.ends_with(".js")
+    if url.scheme() != "app" || !name.ends_with(".js") {
+        return false;
+    }
+    // Native Desktop's webpack layout puts the same independent controls in
+    // numeric async chunks. The body adapter verifies behavior for each chunk.
+    if let Some(bundle) = name.strip_prefix("async/") {
+        return !bundle.contains('/')
+            && bundle.split_once('.').is_some_and(|(id, suffix)| {
+                !id.is_empty()
+                    && id.bytes().all(|byte| byte.is_ascii_digit())
+                    && suffix != "js"
+            });
+    }
+    !name.contains('/')
         && [
             "app-initial-",
             "use-service-tier-settings-",
@@ -92,6 +105,7 @@ fn supported_script_url(raw: &str) -> bool {
             "use-is-plugins-enabled-",
             "use-plugin-install-flow-",
             "local-conversation-thread-",
+            "initialize-app-host-services-",
         ]
         .iter()
         .any(|prefix| name.starts_with(prefix))
@@ -164,7 +178,7 @@ fn adapt_source(source: String) -> AdaptedSource {
     static ULTRA_MODELS: LazyLock<Regex> = LazyLock::new(|| {
         // 26.1007 omits teamCatalog; 26.1013 adds it to the same query.
         // Both layouts still require the exact gate and verified reused locals.
-        Regex::new(r#"hostId:(?P<host>[$\w]+),includeUltraReasoningEffort:(?P<include>[$\w]+),isCustomModelProvider:[$\w]+,limit:[$\w]+,modelCatalogPath:[$\w]+,modelProvider:[$\w]+(?:,teamCatalog:[$\w]+)?\},\{get:(?P<get>[$\w]+),queryClient:[$\w]+,scope:[$\w]+\}\)=>\{[^;\n]{0,1600}?,(?P<gate>[$\w]+)=(?P<requested>[$\w]+)&&(?P<getter>[$\w]+)\([$\w]+,`1186680773`\);return\{queryKey:"#).expect("Ultra models adapter pattern")
+        Regex::new(r#"hostId:(?P<host>[$\w]+),includeUltraReasoningEffort:(?P<include>[$\w]+),isCustomModelProvider:(?P<custom>[$\w]+),limit:[$\w]+,modelCatalogPath:[$\w]+,modelProvider:[$\w]+(?:,teamCatalog:[$\w]+)?\},\{get:(?P<get>[$\w]+),queryClient:[$\w]+,scope:[$\w]+\}\)=>\{[^;\n]{0,1600}?,(?P<gate>[$\w]+)=(?P<requested>[$\w]+)&&(?P<getter>[$\w]+)\([$\w]+,`1186680773`\);return\{queryKey:"#).expect("Ultra models adapter pattern")
     });
     static SETTINGS_SECTIONS: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r#"function [$\w]+\(e\)\{let [$\w]+=[^;\n]{0,100}?,\{workConfiguration:(?P<work>[$\w]+)\}=e,\{selectedHostId:(?P<host>[$\w]+)\}=[$\w]+\(\),[^;\n]{0,300}?,(?P<dependencies>[$\w]+)=(?P<gate_fn>[$\w]+)\((?P<dependencies_gate>[$\w]+)\),(?P<other>[$\w]+)=(?P<other_gate_fn>[$\w]+)\(`2106641128`\),(?P<models>[$\w]+)=(?P<models_gate_fn>[$\w]+)\(`3693343337`\)"#).expect("Configuration sections adapter pattern")
@@ -254,7 +268,12 @@ fn adapt_source(source: String) -> AdaptedSource {
         let mut next = c[0].to_string();
         next.replace_range(
             start + 2..end,
-            &format!("({}||{})", &c[0][start + 2..end], local_guard(&c["host"])),
+            &format!(
+                "({}||{}&&{})",
+                &c[0][start + 2..end],
+                local_guard(&c["host"]),
+                &c["custom"]
+            ),
         );
         Some(next)
     });
@@ -393,7 +412,11 @@ impl Interceptor {
                 && source.len() <= MAX_SCRIPT_BYTES + 128 * 1024
             {
                 adapted.source = source.to_string();
+                adapted.fast_ui |= value["fastUi"].as_bool() == Some(true);
+                adapted.fast_request |= value["fastRequest"].as_bool() == Some(true);
+                adapted.ultra_models |= value["ultraModels"].as_bool() == Some(true);
                 adapted.extra_controls = [
+                    "ultraHost",
                     "power",
                     "ultraPreference",
                     "goal",
@@ -470,10 +493,6 @@ impl Interceptor {
             || !params["request"]["url"]
                 .as_str()
                 .is_some_and(supported_script_url)
-            || self.pending_bodies.len()
-                + self.pending_fulfillments.len()
-                + self.pending_adapters.len()
-                >= 16
         {
             return continue_script(socket, command_id, &paused).await;
         }
@@ -731,11 +750,21 @@ mod tests {
         assert!(supported_script_url(
             "app://-/assets/configuration-panel-123.js"
         ));
+        assert!(supported_script_url(
+            "app://-/assets/initialize-app-host-services-123.js"
+        ));
+        assert!(supported_script_url(
+            "app://-/assets/async/161445.832141020f.js"
+        ));
         for url in [
             "https://example.local/assets/app-initial-123.js",
             "app://-/assets/unrelated.js",
             "app://-/other/app-initial-123.js",
             "app://-/assets/subdir/app-initial-123.js",
+            "https://example.local/assets/async/161445.832141020f.js",
+            "app://-/assets/async/not-a-chunk.js",
+            "app://-/assets/async/161445.js",
+            "app://-/assets/async/deeper/161445.832141020f.js",
         ] {
             assert!(!supported_script_url(url));
         }

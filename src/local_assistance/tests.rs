@@ -4,78 +4,206 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, DuplexS
 
 #[tokio::test]
 async fn maintenance_refreshes_without_reenable_and_respects_native_removal() {
-    use std::sync::{Arc,Mutex as StdMutex,atomic::{AtomicUsize,Ordering}};
     use axum::response::IntoResponse;
-    for mode in ["stale", "upgrade_reload_retry", "concurrent_local", "removed", "paused", "disable", "disable_reload_retry"] {
-        let (_temp,state,mut s)=fixture();
-        let mut native=settings::native_value(&s,state.config.lock().await.local_listen_port().unwrap());
-        if matches!(mode,"upgrade_reload_retry"|"concurrent_local") { native["description"]="previous release description".into(); }
-        native["is_connected"]=1.into();
-        native["tools_json"]=if mode=="stale" {json!([])} else {json!(web::tools())};
-        native["external_metadata"]="keep".into();
-        s.native_fingerprint=Some(settings::native_fingerprint(&native));
-        if mode=="paused" { native["status"]="inactive".into(); }
-        s.native_catalog_pending=false;
-        if mode.starts_with("disable") {s.enabled=false;s.native_disable_pending=true;}
-        let (_,rev)=settings::read(&state.config_path).unwrap(); settings::write(&state.config_path,&s,&rev).unwrap();
-        let (_,revision)=settings::read(&state.config_path).unwrap();
-        let saved=Arc::new(StdMutex::new(if mode=="removed"{None}else{Some(native)}));
-        let updates=Arc::new(AtomicUsize::new(0));let reloads=Arc::new(AtomicUsize::new(0));let deletes=Arc::new(AtomicUsize::new(0));
-        let (read,write,delete,reload)=(saved.clone(),saved.clone(),saved.clone(),reloads.clone());
-        let (writes,delete_count)=(updates.clone(),deletes.clone());
-        let changed_settings=state.clone();
-        let router=axum::Router::new()
-            .route("/data/mcp/connections/tiancai-local-assistance",axum::routing::get(move ||{let read=read.clone();async move{
-                read.lock().unwrap().clone().map(axum::Json).map(IntoResponse::into_response).unwrap_or_else(||axum::http::StatusCode::NOT_FOUND.into_response())
-            }}).put(move |axum::Json(v):axum::Json<Value>|{let write=write.clone();let writes=writes.clone();let changed_settings=changed_settings.clone();async move{
-                let count=writes.fetch_add(1,Ordering::SeqCst);write.lock().unwrap().as_mut().unwrap().as_object_mut().unwrap().extend(v.as_object().unwrap().clone());
-                if mode=="concurrent_local" && count==0 {
-                    let(mut newer,revision)=settings::read(&changed_settings.config_path).unwrap();newer.enabled=false;newer.native_disable_pending=true;newer.token="revoked-fixture-token".into();
-                    settings::write(&changed_settings.config_path,&newer,&revision).unwrap();
-                }
-                axum::Json(json!({"ok":true}))
-            }}).delete(move ||{let delete=delete.clone();let delete_count=delete_count.clone();async move{
-                delete_count.fetch_add(1,Ordering::SeqCst);*delete.lock().unwrap()=None;axum::Json(json!({"ok":true}))
-            }}))
-            .route("/ctrl/config/reload",axum::routing::post(move ||{let reload=reload.clone();async move{
-                let count=reload.fetch_add(1,Ordering::SeqCst);
-                if matches!(mode,"upgrade_reload_retry"|"disable_reload_retry") && count==0 {axum::http::StatusCode::SERVICE_UNAVAILABLE} else {axum::http::StatusCode::OK}
-            }}));
-        let (base,job)=server(router).await;let client=crate::gmclaw_desktop::DesktopClient::fixture(&base);
-        if mode.starts_with("disable") {
-            assert!(web::view(&state).await.unwrap()["hostDetail"].as_str().unwrap().contains("等待天工"));
-            let result=web::sync_disabled_native(&state,s,&revision,&client).await;
-            if mode=="disable_reload_retry" {
-                assert!(result.is_err());
-                let(next,revision)=settings::read(&state.config_path).unwrap();assert!(next.native_disable_pending);
-                web::sync_disabled_native(&state,next,&revision,&client).await.unwrap();
-            } else { result.unwrap(); }
-            assert!(saved.lock().unwrap().is_none());assert_eq!(deletes.load(Ordering::SeqCst),1);
-            assert_eq!(updates.load(Ordering::SeqCst),0);
-            assert!(!settings::read(&state.config_path).unwrap().0.native_disable_pending);
-            assert!(web::view(&state).await.unwrap()["hostDetail"].as_str().unwrap().contains("已从天工移除"));
+    use std::sync::{
+        Arc, Mutex as StdMutex,
+        atomic::{AtomicUsize, Ordering},
+    };
+    for mode in [
+        "stale",
+        "upgrade_reload_retry",
+        "concurrent_local",
+        "removed",
+        "paused",
+        "disable",
+        "disable_reload_retry",
+    ] {
+        let (_temp, state, mut s) = fixture();
+        let mut native =
+            settings::native_value(&s, state.config.lock().await.local_listen_port().unwrap());
+        if matches!(mode, "upgrade_reload_retry" | "concurrent_local") {
+            native["description"] = "previous release description".into();
+        }
+        native["is_connected"] = 1.into();
+        native["tools_json"] = if mode == "stale" {
+            json!([])
         } else {
-            let first=web::sync_catalogue_native(&state,s.clone(),&revision,&client,json!(web::tools())).await;
-            assert_eq!(first.is_ok(),!matches!(mode,"upgrade_reload_retry"|"concurrent_local"),"{mode}: {first:?}");
-            let (next,revision)=settings::read(&state.config_path).unwrap();
-            if mode=="concurrent_local" {
-                assert!(!next.enabled && next.native_disable_pending);assert_eq!(next.token,"revoked-fixture-token");
-                assert_eq!(updates.load(Ordering::SeqCst),1);assert_eq!(reloads.load(Ordering::SeqCst),0);
-            } else if matches!(mode,"removed"|"paused") {
-                assert!(!next.enabled);assert_eq!(next.native_fingerprint.is_none(),mode=="removed");assert_ne!(next.token,s.token);
-                assert_eq!(updates.load(Ordering::SeqCst),0);assert_eq!(reloads.load(Ordering::SeqCst),0);
+            json!(web::tools())
+        };
+        native["external_metadata"] = "keep".into();
+        s.native_fingerprint = Some(settings::native_fingerprint(&native));
+        if mode == "paused" {
+            native["status"] = "inactive".into();
+        }
+        s.native_catalog_pending = false;
+        if mode.starts_with("disable") {
+            s.enabled = false;
+            s.native_disable_pending = true;
+        }
+        let (_, rev) = settings::read(&state.config_path).unwrap();
+        settings::write(&state.config_path, &s, &rev).unwrap();
+        let (_, revision) = settings::read(&state.config_path).unwrap();
+        let saved = Arc::new(StdMutex::new(if mode == "removed" {
+            None
+        } else {
+            Some(native)
+        }));
+        let updates = Arc::new(AtomicUsize::new(0));
+        let reloads = Arc::new(AtomicUsize::new(0));
+        let deletes = Arc::new(AtomicUsize::new(0));
+        let (read, write, delete, reload) =
+            (saved.clone(), saved.clone(), saved.clone(), reloads.clone());
+        let (writes, delete_count) = (updates.clone(), deletes.clone());
+        let changed_settings = state.clone();
+        let router = axum::Router::new()
+            .route(
+                "/data/mcp/connections/tiancai-local-assistance",
+                axum::routing::get(move || {
+                    let read = read.clone();
+                    async move {
+                        read.lock()
+                            .unwrap()
+                            .clone()
+                            .map(axum::Json)
+                            .map(IntoResponse::into_response)
+                            .unwrap_or_else(|| axum::http::StatusCode::NOT_FOUND.into_response())
+                    }
+                })
+                .put(move |axum::Json(v): axum::Json<Value>| {
+                    let write = write.clone();
+                    let writes = writes.clone();
+                    let changed_settings = changed_settings.clone();
+                    async move {
+                        let count = writes.fetch_add(1, Ordering::SeqCst);
+                        write
+                            .lock()
+                            .unwrap()
+                            .as_mut()
+                            .unwrap()
+                            .as_object_mut()
+                            .unwrap()
+                            .extend(v.as_object().unwrap().clone());
+                        if mode == "concurrent_local" && count == 0 {
+                            let (mut newer, revision) =
+                                settings::read(&changed_settings.config_path).unwrap();
+                            newer.enabled = false;
+                            newer.native_disable_pending = true;
+                            newer.token = "revoked-fixture-token".into();
+                            settings::write(&changed_settings.config_path, &newer, &revision)
+                                .unwrap();
+                        }
+                        axum::Json(json!({"ok":true}))
+                    }
+                })
+                .delete(move || {
+                    let delete = delete.clone();
+                    let delete_count = delete_count.clone();
+                    async move {
+                        delete_count.fetch_add(1, Ordering::SeqCst);
+                        *delete.lock().unwrap() = None;
+                        axum::Json(json!({"ok":true}))
+                    }
+                }),
+            )
+            .route(
+                "/ctrl/config/reload",
+                axum::routing::post(move || {
+                    let reload = reload.clone();
+                    async move {
+                        let count = reload.fetch_add(1, Ordering::SeqCst);
+                        if matches!(mode, "upgrade_reload_retry" | "disable_reload_retry")
+                            && count == 0
+                        {
+                            axum::http::StatusCode::SERVICE_UNAVAILABLE
+                        } else {
+                            axum::http::StatusCode::OK
+                        }
+                    }
+                }),
+            );
+        let (base, job) = server(router).await;
+        let client = crate::gmclaw_desktop::DesktopClient::fixture(&base);
+        if mode.starts_with("disable") {
+            assert!(
+                web::view(&state).await.unwrap()["hostDetail"]
+                    .as_str()
+                    .unwrap()
+                    .contains("等待天工")
+            );
+            let result = web::sync_disabled_native(&state, s, &revision, &client).await;
+            if mode == "disable_reload_retry" {
+                assert!(result.is_err());
+                let (next, revision) = settings::read(&state.config_path).unwrap();
+                assert!(next.native_disable_pending);
+                web::sync_disabled_native(&state, next, &revision, &client)
+                    .await
+                    .unwrap();
+            } else {
+                result.unwrap();
+            }
+            assert!(saved.lock().unwrap().is_none());
+            assert_eq!(deletes.load(Ordering::SeqCst), 1);
+            assert_eq!(updates.load(Ordering::SeqCst), 0);
+            assert!(
+                !settings::read(&state.config_path)
+                    .unwrap()
+                    .0
+                    .native_disable_pending
+            );
+            assert!(
+                web::view(&state).await.unwrap()["hostDetail"]
+                    .as_str()
+                    .unwrap()
+                    .contains("已从天工移除")
+            );
+        } else {
+            let first = web::sync_catalogue_native(
+                &state,
+                s.clone(),
+                &revision,
+                &client,
+                json!(web::tools()),
+            )
+            .await;
+            assert_eq!(
+                first.is_ok(),
+                !matches!(mode, "upgrade_reload_retry" | "concurrent_local"),
+                "{mode}: {first:?}"
+            );
+            let (next, revision) = settings::read(&state.config_path).unwrap();
+            if mode == "concurrent_local" {
+                assert!(!next.enabled && next.native_disable_pending);
+                assert_eq!(next.token, "revoked-fixture-token");
+                assert_eq!(updates.load(Ordering::SeqCst), 1);
+                assert_eq!(reloads.load(Ordering::SeqCst), 0);
+            } else if matches!(mode, "removed" | "paused") {
+                assert!(!next.enabled);
+                assert_eq!(next.native_fingerprint.is_none(), mode == "removed");
+                assert_ne!(next.token, s.token);
+                assert_eq!(updates.load(Ordering::SeqCst), 0);
+                assert_eq!(reloads.load(Ordering::SeqCst), 0);
             } else {
                 assert!(next.enabled);
-                web::sync_catalogue_native(&state,next,&revision,&client,json!(web::tools())).await.unwrap();
-                let (next,revision)=settings::read(&state.config_path).unwrap();
+                web::sync_catalogue_native(&state, next, &revision, &client, json!(web::tools()))
+                    .await
+                    .unwrap();
+                let (next, revision) = settings::read(&state.config_path).unwrap();
                 assert!(!next.native_catalog_pending);
-                let writes=updates.load(Ordering::SeqCst);let reloaded=reloads.load(Ordering::SeqCst);
-                web::sync_catalogue_native(&state,next,&revision,&client,json!(web::tools())).await.unwrap();
-                assert_eq!(updates.load(Ordering::SeqCst),writes);assert_eq!(reloads.load(Ordering::SeqCst),reloaded);
-                assert_eq!(settings::read(&state.config_path).unwrap().1,revision);
-                let actual=saved.lock().unwrap().clone().unwrap();
-                assert_eq!(actual["tools_json"],json!(web::tools()));assert_eq!(actual["external_metadata"],"keep");
-                assert_eq!(actual["header_config"]["Authorization"],format!("Bearer {}",s.token));
+                let writes = updates.load(Ordering::SeqCst);
+                let reloaded = reloads.load(Ordering::SeqCst);
+                web::sync_catalogue_native(&state, next, &revision, &client, json!(web::tools()))
+                    .await
+                    .unwrap();
+                assert_eq!(updates.load(Ordering::SeqCst), writes);
+                assert_eq!(reloads.load(Ordering::SeqCst), reloaded);
+                assert_eq!(settings::read(&state.config_path).unwrap().1, revision);
+                let actual = saved.lock().unwrap().clone().unwrap();
+                assert_eq!(actual["tools_json"], json!(web::tools()));
+                assert_eq!(actual["external_metadata"], "keep");
+                assert_eq!(
+                    actual["header_config"]["Authorization"],
+                    format!("Bearer {}", s.token)
+                );
             }
         }
         job.abort();
@@ -84,14 +212,26 @@ async fn maintenance_refreshes_without_reenable_and_respects_native_removal() {
 
 #[tokio::test]
 async fn unavailable_native_api_never_revokes_settings_as_if_deleted() {
-    let (_temp,state,mut s)=fixture();s.native_fingerprint=Some("owned-fixture".into());
-    let (_,revision)=settings::read(&state.config_path).unwrap();settings::write(&state.config_path,&s,&revision).unwrap();
-    let (_,revision)=settings::read(&state.config_path).unwrap();
-    let (base,job)=server(axum::Router::new().fallback(||async{axum::http::StatusCode::SERVICE_UNAVAILABLE})).await;
-    let client=crate::gmclaw_desktop::DesktopClient::fixture(&base);
-    assert!(web::sync_catalogue_native(&state,s.clone(),&revision,&client,json!(web::tools())).await.is_err());
-    let (after,after_revision)=settings::read(&state.config_path).unwrap();
-    assert!(after.enabled);assert_eq!(after.token,s.token);assert_eq!(revision,after_revision);job.abort();
+    let (_temp, state, mut s) = fixture();
+    s.native_fingerprint = Some("owned-fixture".into());
+    let (_, revision) = settings::read(&state.config_path).unwrap();
+    settings::write(&state.config_path, &s, &revision).unwrap();
+    let (_, revision) = settings::read(&state.config_path).unwrap();
+    let (base, job) = server(
+        axum::Router::new().fallback(|| async { axum::http::StatusCode::SERVICE_UNAVAILABLE }),
+    )
+    .await;
+    let client = crate::gmclaw_desktop::DesktopClient::fixture(&base);
+    assert!(
+        web::sync_catalogue_native(&state, s.clone(), &revision, &client, json!(web::tools()))
+            .await
+            .is_err()
+    );
+    let (after, after_revision) = settings::read(&state.config_path).unwrap();
+    assert!(after.enabled);
+    assert_eq!(after.token, s.token);
+    assert_eq!(revision, after_revision);
+    job.abort();
 }
 
 fn fixture() -> (tempfile::TempDir, SharedState, settings::Settings) {
@@ -182,11 +322,43 @@ struct Fake {
 async fn fake(state: &SharedState, root: &std::path::Path) -> Fake {
     fake_with_effort(state, root, None).await
 }
-async fn fake_with_effort(state: &SharedState, root: &std::path::Path, effort: Option<&str>) -> Fake {
+async fn fake_with_effort(
+    state: &SharedState,
+    root: &std::path::Path,
+    effort: Option<&str>,
+) -> Fake {
+    fake_with_options(state, root, effort, true).await
+}
+async fn fake_with_options(
+    state: &SharedState,
+    root: &std::path::Path,
+    effort: Option<&str>,
+    analysis_only: bool,
+) -> Fake {
     let context = parent(state, root, "fake-session").await;
-    let work = reserved(state, &context, "fake-problem").await;
+    let work = reserve(
+        state,
+        &context,
+        "分析这个合成失败，遵守本次权限",
+        "fake-problem",
+        analysis_only,
+    )
+    .await
+    .unwrap()
+    .1
+    .unwrap();
+    let full_access = work.settings.full_access;
+    let writable = work.writable;
     let id = work.id.clone();
-    state.local_assistance.inner.lock().await.tasks.get_mut(&id).unwrap().reasoning_effort=effort.map(str::to_string);
+    state
+        .local_assistance
+        .inner
+        .lock()
+        .await
+        .tasks
+        .get_mut(&id)
+        .unwrap()
+        .reasoning_effort = effort.map(str::to_string);
     let (hub, server) = tokio::io::duplex(MAX_WIRE * 2);
     let (r, mut w) = tokio::io::split(hub);
     let (r2, w2) = tokio::io::split(server);
@@ -200,7 +372,7 @@ async fn fake_with_effort(state: &SharedState, root: &std::path::Path, effort: O
             &work.parent,
             "fixture-model",
             "合成定位",
-            false,
+            writable,
             &mut w,
             &mut BufReader::new(r),
             &mut control,
@@ -220,8 +392,22 @@ async fn fake_with_effort(state: &SharedState, root: &std::path::Path, effort: O
     assert_eq!(read(&mut f.reader).await["method"], "initialized");
     let thread = read(&mut f.reader).await;
     assert_eq!(thread["method"], "thread/start");
-    assert_eq!(thread["params"]["sandbox"], "read-only");
+    assert_eq!(
+        thread["params"]["sandbox"],
+        if full_access && writable {
+            "danger-full-access"
+        } else if writable {
+            "workspace-write"
+        } else {
+            "read-only"
+        }
+    );
+    assert_eq!(
+        thread["params"]["approvalPolicy"],
+        if full_access { "never" } else { "on-request" }
+    );
     assert_eq!(thread["params"]["approvalsReviewer"], "user");
+    assert_eq!(thread["params"]["ephemeral"], true);
     write(
         &mut f.writer,
         json!({"id":thread["id"],"result":{"thread":{"id":"thread-fixture"}}}),
@@ -229,9 +415,21 @@ async fn fake_with_effort(state: &SharedState, root: &std::path::Path, effort: O
     .await;
     let turn = read(&mut f.reader).await;
     assert_eq!(turn["method"], "turn/start");
-    assert_eq!(turn["params"]["approvalPolicy"], "on-request");
-    assert_eq!(turn["params"]["sandboxPolicy"]["type"], "readOnly");
-    assert_eq!(turn["params"].get("effort").and_then(Value::as_str),effort);
+    assert_eq!(
+        turn["params"]["approvalPolicy"],
+        if full_access { "never" } else { "on-request" }
+    );
+    assert_eq!(
+        turn["params"]["sandboxPolicy"]["type"],
+        if full_access && writable {
+            "dangerFullAccess"
+        } else if writable {
+            "workspaceWrite"
+        } else {
+            "readOnly"
+        }
+    );
+    assert_eq!(turn["params"].get("effort").and_then(Value::as_str), effort);
     assert!(
         turn["params"]["input"][0]["text"]
             .as_str()
@@ -267,72 +465,139 @@ fn native_catalogue_fixture() -> Value {
 }
 #[test]
 fn native_extra_prompt_keeps_the_complete_allowed_catalogue_without_credentials() {
-    let own=native_catalogue_fixture();
-    let other=json!({"server_name":"fixture-other","is_connected":1,"tools":{"lookup":{"description":"合成查询","input_schema":{"type":"object","properties":{"term":{"type":"string"}},"required":["term"]}}},
+    let own = native_catalogue_fixture();
+    let other = json!({"server_name":"fixture-other","is_connected":1,"tools":{"lookup":{"description":"合成查询","input_schema":{"type":"object","properties":{"term":{"type":"string"}},"required":["term"]}}},
         "server_url":"http://127.0.0.1/fixture-private-address","header_param":{"Authorization":"fixture-other-secret"}});
-    let mut disabled=other.clone();disabled["server_name"]="fixture-disabled".into();disabled["is_connected"]=0.into();
-    let text=catalogue::prompt(&[own.clone(),other.clone(),disabled],&[]).unwrap();
-    assert!(text.contains("fixture-other") && text.contains("lookup") && text.contains("context_ref") && text.contains("required"));
-    for absent in ["fixture-disabled","fixture-secret-never-in-prompts","fixture-other-secret","fixture-private-address"] {assert!(!text.contains(absent));}
-    if let Some(dir)=std::env::var_os("TIANCAI_NATIVE_REVIEW_DIR") {
-        let dir=PathBuf::from(dir);std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("assistance-prompt-contract.json"),serde_json::to_vec(&json!({
-            "context":"fixture-contract-context","cataloguePrompt":text,
-            "systemPrompt":catalogue::instructions("fixture-contract-context",&text)
-        })).unwrap()).unwrap();
+    let mut disabled = other.clone();
+    disabled["server_name"] = "fixture-disabled".into();
+    disabled["is_connected"] = 0.into();
+    let text = catalogue::prompt(&[own.clone(), other.clone(), disabled], &[]).unwrap();
+    assert!(
+        text.contains("fixture-other")
+            && text.contains("lookup")
+            && text.contains("context_ref")
+            && text.contains("required")
+    );
+    for absent in [
+        "fixture-disabled",
+        "fixture-secret-never-in-prompts",
+        "fixture-other-secret",
+        "fixture-private-address",
+    ] {
+        assert!(!text.contains(absent));
     }
-    let selected=catalogue::prompt(&[own.clone(),other.clone()],&[settings::MCP_NAME.into()]).unwrap();
+    if let Some(dir) = std::env::var_os("TIANCAI_NATIVE_REVIEW_DIR") {
+        let dir = PathBuf::from(dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("assistance-prompt-contract.json"),
+            serde_json::to_vec(&json!({
+                "context":"fixture-contract-context","cataloguePrompt":text,
+                "systemPrompt":catalogue::instructions("fixture-contract-context",&text)
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    }
+    let selected =
+        catalogue::prompt(&[own.clone(), other.clone()], &[settings::MCP_NAME.into()]).unwrap();
     assert!(!selected.contains("fixture-other"));
-    assert!(catalogue::prompt(&[own,other],&["fixture-other".into()]).is_err());
+    assert!(catalogue::prompt(&[own, other], &["fixture-other".into()]).is_err());
 }
 #[test]
 fn incomplete_or_disabled_native_assistance_catalogue_never_produces_ready_rules() {
-    let mut own=native_catalogue_fixture();
-    own["tools_json"][0]["inputSchema"]["required"]=json!(["goal","problem_key"]);
-    assert!(catalogue::prompt(&[own],&[]).unwrap_err().to_string().contains("参数不完整"));
-    for value in [json!(0),json!(false),json!("0"),json!("FALSE")] {
-        let mut own=native_catalogue_fixture();own["is_connected"]=value;
-        assert!(catalogue::prompt(&[own],&[]).is_err());
+    let mut own = native_catalogue_fixture();
+    own["tools_json"][0]["inputSchema"]["required"] = json!(["goal", "problem_key"]);
+    assert!(
+        catalogue::prompt(&[own], &[])
+            .unwrap_err()
+            .to_string()
+            .contains("参数不完整")
+    );
+    for value in [json!(0), json!(false), json!("0"), json!("FALSE")] {
+        let mut own = native_catalogue_fixture();
+        own["is_connected"] = value;
+        assert!(catalogue::prompt(&[own], &[]).is_err());
     }
-    let mut own=native_catalogue_fixture();own.as_object_mut().unwrap().remove("is_connected");
-    assert!(catalogue::prompt(&[own],&[]).is_err());
+    let mut own = native_catalogue_fixture();
+    own.as_object_mut().unwrap().remove("is_connected");
+    assert!(catalogue::prompt(&[own], &[]).is_err());
 }
 #[tokio::test]
 async fn generated_mcp_call_examples_bind_the_exact_native_task_context() {
-    let (temp,state,_)=fixture();
-    let one=parent(&state,temp.path(),"one").await;
-    let two=parent(&state,temp.path(),"two").await;
-    assert_ne!(one,two);
-    let catalog=catalogue::prompt(&[native_catalogue_fixture()],&[]).unwrap();
-    for context in [&one,&two] {
-        let prompt=catalogue::instructions(context,&catalog);
-        let calls:Vec<Value>=prompt.lines().filter(|l|l.starts_with('{')).map(|l|serde_json::from_str(l).unwrap()).collect();
-        assert_eq!(calls.len(),2);
+    let (temp, state, _) = fixture();
+    let one = parent(&state, temp.path(), "one").await;
+    let two = parent(&state, temp.path(), "two").await;
+    assert_ne!(one, two);
+    let catalog = catalogue::prompt(&[native_catalogue_fixture()], &[]).unwrap();
+    for context in [&one, &two] {
+        let prompt = catalogue::instructions(context, &catalog);
+        let calls: Vec<Value> = prompt
+            .lines()
+            .filter(|l| l.starts_with('{'))
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(calls.len(), 2);
         for call in &calls {
-            assert_eq!(call["mcp_id"],settings::MCP_NAME);assert_eq!(call["arguments"]["context_ref"],*context);
+            assert_eq!(call["mcp_id"], settings::MCP_NAME);
+            assert_eq!(call["arguments"]["context_ref"], *context);
             assert!(call.get("context_ref").is_none());
         }
-        assert_eq!(calls[0]["tool_name"],"assist_start");assert_eq!(calls[1]["tool_name"],"assist_wait");
+        assert_eq!(calls[0]["tool_name"], "assist_start");
+        assert_eq!(calls[1]["tool_name"], "assist_wait");
     }
-    let missing=web::tool(&state,&json!({"name":"assist_start","arguments":{"goal":"合成分析","problem_key":"fixture"}})).await.unwrap_err();
-    assert!(missing.to_string().contains("arguments.context_ref") && missing.to_string().contains("不要向用户索取"));
+    let missing = web::tool(
+        &state,
+        &json!({"name":"assist_start","arguments":{"goal":"合成分析","problem_key":"fixture"}}),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        missing.to_string().contains("arguments.context_ref")
+            && missing.to_string().contains("不要向用户索取")
+    );
     assert!(state.local_assistance.inner.lock().await.tasks.is_empty());
 }
 #[test]
 fn reasoning_defaults_to_xhigh_when_available_and_rejects_lost_capabilities() {
-    let (_,state,mut settings)=fixture();
-    let mut config=state.config.try_lock().unwrap().clone();
-    config.ai_gateway.providers[0].models=vec!["gpt-5.6-sol".into(),"fixture-unknown".into()];
-    config.ai_gateway.codex_visible_models=config.ai_gateway.providers[0].models.clone();
-    settings.model="gpt-5.6-sol".into();settings.route=crate::ai_gateway::config::provider_route_id(&config.ai_gateway.providers[0]);
-    assert_eq!(settings::resolved_effort(&config,&settings).unwrap().as_deref(),Some("xhigh"));
-    settings.reasoning_effort=Some("high".into());assert_eq!(settings::resolved_effort(&config,&settings).unwrap().as_deref(),Some("high"));
-    let bytes=serde_json::to_vec(&settings).unwrap();let restored:settings::Settings=serde_json::from_slice(&bytes).unwrap();assert_eq!(restored.reasoning_effort,settings.reasoning_effort);
-    config.ai_gateway.codex_model_profiles.push(crate::ai_gateway::config::CodexModelProfile{id:settings.model.clone(),supports_reasoning:Some(false),..Default::default()});
-    assert!(settings::resolved_effort(&config,&settings).is_err());assert_eq!(settings.reasoning_effort.as_deref(),Some("high"));
-    settings.model="fixture-unknown".into();settings.reasoning_effort=None;
-    assert_eq!(settings::resolved_effort(&config,&settings).unwrap(),None);
-    let old:settings::Settings=serde_json::from_value(json!({"enabled":false,"model":"legacy","route":"legacy"})).unwrap();assert_eq!(old.reasoning_effort,None);
+    let (_, state, mut settings) = fixture();
+    let mut config = state.config.try_lock().unwrap().clone();
+    config.ai_gateway.providers[0].models = vec!["gpt-5.6-sol".into(), "fixture-unknown".into()];
+    config.ai_gateway.codex_visible_models = config.ai_gateway.providers[0].models.clone();
+    settings.model = "gpt-5.6-sol".into();
+    settings.route = crate::ai_gateway::config::provider_route_id(&config.ai_gateway.providers[0]);
+    assert_eq!(
+        settings::resolved_effort(&config, &settings)
+            .unwrap()
+            .as_deref(),
+        Some("xhigh")
+    );
+    settings.reasoning_effort = Some("high".into());
+    assert_eq!(
+        settings::resolved_effort(&config, &settings)
+            .unwrap()
+            .as_deref(),
+        Some("high")
+    );
+    let bytes = serde_json::to_vec(&settings).unwrap();
+    let restored: settings::Settings = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(restored.reasoning_effort, settings.reasoning_effort);
+    config
+        .ai_gateway
+        .codex_model_profiles
+        .push(crate::ai_gateway::config::CodexModelProfile {
+            id: settings.model.clone(),
+            supports_reasoning: Some(false),
+            ..Default::default()
+        });
+    assert!(settings::resolved_effort(&config, &settings).is_err());
+    assert_eq!(settings.reasoning_effort.as_deref(), Some("high"));
+    settings.model = "fixture-unknown".into();
+    settings.reasoning_effort = None;
+    assert_eq!(settings::resolved_effort(&config, &settings).unwrap(), None);
+    let old: settings::Settings =
+        serde_json::from_value(json!({"enabled":false,"model":"legacy","route":"legacy"})).unwrap();
+    assert_eq!(old.reasoning_effort, None);
 }
 #[test]
 fn command_approval_is_once_only() {
@@ -856,6 +1121,8 @@ fn isolated_configuration_contains_only_the_selected_local_model_connection() {
         "fixture-task",
         "fixture-secret",
         temp.path(),
+        false,
+        false,
     )
     .unwrap();
     let v: toml::Value = toml::from_str(&s).unwrap();
@@ -868,6 +1135,103 @@ fn isolated_configuration_contains_only_the_selected_local_model_connection() {
         Some("untrusted")
     );
     assert!(!s.contains("OPENAI_API_KEY"));
+}
+#[test]
+fn old_assistance_settings_default_to_explicit_approvals_and_full_access_config_is_consistent() {
+    let settings: settings::Settings = serde_json::from_value(json!({"enabled":false})).unwrap();
+    assert!(!settings.full_access);
+    let temp = tempfile::tempdir().unwrap();
+    for writable in [false, true] {
+        let text = worker::configuration(
+            "fixture",
+            None,
+            1234,
+            "id",
+            "token",
+            temp.path(),
+            true,
+            writable,
+        )
+        .unwrap();
+        let config: toml::Value = toml::from_str(&text).unwrap();
+        assert_eq!(config["approval_policy"].as_str(), Some("never"));
+        assert_eq!(
+            config["sandbox_mode"].as_str(),
+            Some(if writable {
+                "danger-full-access"
+            } else {
+                "read-only"
+            })
+        );
+    }
+}
+#[tokio::test]
+async fn full_access_is_kept_on_followup_and_readonly_still_does_not_write_or_request_permissions()
+{
+    for analysis_only in [false, true] {
+        let (temp, state, mut settings) = fixture();
+        settings.full_access = true;
+        let (_, revision) = settings::read(&state.config_path).unwrap();
+        settings::write(&state.config_path, &settings, &revision).unwrap();
+        let mut f = fake_with_options(&state, temp.path(), None, analysis_only).await;
+        assert!(state.local_assistance.inner.lock().await.tasks[&f.id].full_access);
+        write(&mut f.writer, json!({"id":91,"method":"item/tool/requestUserInput","params":{
+            "threadId":"thread-fixture","turnId":"turn-1","itemId":"question","questions":[{"id":"choice","header":"方案","question":"请选择合成方案","isOther":false,"isSecret":false,"options":[{"label":"A","description":"合成选项"}]}]}})).await;
+        wait_phase(&state, &f.id, Phase::WaitingUser).await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(30), read(&mut f.reader))
+                .await
+                .is_err()
+        );
+        let view = task_view(&state, &f.context, &f.id).await.unwrap();
+        host::event_from_host(
+            &state,
+            "fixture-host",
+            &json!({"op":"decision","task":f.id,"nonce":view["pending"][0]["nonce"],
+            "response":{"choice":"allow","answers":{"choice":"A"}}}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            read(&mut f.reader).await["result"]["answers"]["choice"]["answers"],
+            json!(["A"])
+        );
+        completed(&mut f, &state).await;
+        // A settings change applies to new tasks, not to this admitted task.
+        let (mut saved, revision) = settings::read(&state.config_path).unwrap();
+        saved.full_access = false;
+        settings::write(&state.config_path, &saved, &revision).unwrap();
+        control(
+            &state,
+            Some(&f.context),
+            &f.id,
+            Control::Followup("补充合成证据".into()),
+        )
+        .await
+        .unwrap();
+        let next = read(&mut f.reader).await;
+        assert_eq!(next["params"]["approvalPolicy"], "never");
+        assert_eq!(
+            next["params"]["sandboxPolicy"]["type"],
+            if analysis_only {
+                "readOnly"
+            } else {
+                "dangerFullAccess"
+            }
+        );
+        write(
+            &mut f.writer,
+            json!({"id":next["id"],"result":{"turn":{"id":"turn-2","status":"inProgress"}}}),
+        )
+        .await;
+        wait_phase(&state, &f.id, Phase::Running).await;
+        write(&mut f.writer, json!({"method":"turn/completed","params":{"threadId":"thread-fixture","turn":{"id":"turn-2","status":"completed"}}})).await;
+        wait_phase(&state, &f.id, Phase::Completed).await;
+        control(&state, Some(&f.context), &f.id, Control::Finish)
+            .await
+            .unwrap();
+        assert!(f.job.await.unwrap().is_ok());
+    }
 }
 fn owned_dir(path: &std::path::Path) -> (String, PathBuf) {
     let id = uuid::Uuid::new_v4().to_string();
@@ -928,11 +1292,105 @@ async fn restart_inventory_can_clear_owned_records_without_any_codex_home_scan()
     assert!(!dir.exists());
     assert!(outside.join("history.jsonl").exists());
 }
+#[tokio::test]
+async fn completed_sessions_survive_the_old_five_minute_idle_limit() {
+    let (temp, state, _) = fixture();
+    let mut fake = fake(&state, temp.path()).await;
+    completed(&mut fake, &state).await;
+    state
+        .local_assistance
+        .inner
+        .lock()
+        .await
+        .tasks
+        .get_mut(&fake.id)
+        .unwrap()
+        .updated = Instant::now() - Duration::from_secs(301);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(1100), &mut fake.job)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        task_view(&state, &fake.context, &fake.id).await.unwrap()["phase"],
+        "completed"
+    );
+    control(&state, Some(&fake.context), &fake.id, Control::Finish)
+        .await
+        .unwrap();
+    assert!(fake.job.await.unwrap().is_ok());
+}
+#[test]
+fn startup_recovery_removes_only_exited_owned_temporary_content() {
+    let (_temp, state, _) = fixture();
+    let (_, exited) = owned_dir(&state.config_path);
+    let (live_id, live) = owned_dir(&state.config_path);
+    crate::desktop::transaction::atomic_write(
+        &live.join("owner.json"),
+        &serde_json::to_vec(
+            &json!({"owner":"tiancai-local-assistance-v1","task":live_id,"pid":std::process::id()}),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let persistent = runtime::root(&state.config_path).join("keep-server.bin");
+    std::fs::create_dir_all(persistent.parent().unwrap()).unwrap();
+    std::fs::write(&persistent, b"persistent server fixture").unwrap();
+    let logs = settings::root(&state.config_path).join("logs");
+    std::fs::create_dir_all(&logs).unwrap();
+    std::fs::write(
+        logs.join("owner.json"),
+        br#"{"owner":"tiancai-local-assistance-v1"}"#,
+    )
+    .unwrap();
+    std::fs::write(logs.join("temporary.log"), b"fixture").unwrap();
+    let result = recover_runs(&state.config_path).unwrap();
+    assert_eq!((result.cleared, result.retained), (1, 1));
+    assert!(!exited.exists() && !logs.exists());
+    assert!(live.is_dir() && persistent.is_file());
+}
+#[tokio::test]
+async fn explicit_cleanup_stops_the_bridge_before_erasing_temporary_content() {
+    let (temp, state, _) = fixture();
+    let fake = fake(&state, temp.path()).await;
+    let run = worker::run_dir(&state.config_path, &fake.id).unwrap();
+    std::fs::create_dir_all(&run).unwrap();
+    std::fs::write(
+        run.join("owner.json"),
+        serde_json::to_vec(
+            &json!({"owner":"tiancai-local-assistance-v1","task":fake.id,"pid":null}),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let id = fake.id.clone();
+    let completed_state = state.clone();
+    let stopped = tokio::spawn(async move {
+        assert!(fake.job.await.unwrap().is_ok());
+        completed_state
+            .local_assistance
+            .inner
+            .lock()
+            .await
+            .tasks
+            .get_mut(&id)
+            .unwrap()
+            .worker_stopped = true;
+        completed_state.local_assistance.changed.notify_waiters();
+    });
+    let report = records::clear_finished(&state).await.unwrap();
+    stopped.await.unwrap();
+    assert_eq!(report["cleared"], 1);
+    assert!(!run.exists());
+    let inner = state.local_assistance.inner.lock().await;
+    assert!(!inner.cleaning);
+    assert_eq!(inner.tasks[&fake.id].phase, Phase::Cleared);
+}
 #[test]
 fn settings_revision_and_normalized_native_fields_preserve_independent_edits() {
     let (_temp, state, mut s) = fixture();
     let (_, old) = settings::read(&state.config_path).unwrap();
-    s.auto_clear = false;
+    s.full_access = !s.full_access;
     settings::write(&state.config_path, &s, &old).unwrap();
     assert!(settings::write(&state.config_path, &s, &old).is_err());
     let a = json!({"header_config":{"a":"b"},"status":"active","id":123});
@@ -942,6 +1400,74 @@ fn settings_revision_and_normalized_native_fields_preserve_independent_edits() {
         settings::native_fingerprint(&b)
     );
     assert!(settings::native_fields(&a).get("id").is_none());
+}
+
+#[tokio::test]
+async fn shared_server_routes_require_opt_in_install_consent_and_both_switches_off_to_uninstall() {
+    let (temp, state, mut saved) = fixture();
+    saved.enabled = false;
+    let (_, revision) = settings::read(&state.config_path).unwrap();
+    settings::write(&state.config_path, &saved, &revision).unwrap();
+    let runtime = runtime::root(&state.config_path);
+    let (base, job) = server(web::router().with_state(state.clone())).await;
+    let http = reqwest::Client::new();
+    let request = |operation: &str, confirmed| {
+        http.post(format!("{base}/api/desktop/assistance/{operation}"))
+            .header("x-tiancai-desktop", "1")
+            .json(&json!({"confirmed":confirmed}))
+    };
+    // Even confirmed preparation must not run while neither feature is enabled.
+    assert_eq!(request("prepare", true).send().await.unwrap().status(), 409);
+    assert!(!runtime.exists());
+    crate::assistant::settings::write(&state.config_path, true).unwrap();
+    assert_eq!(
+        request("prepare", false).send().await.unwrap().status(),
+        409
+    );
+    assert!(!runtime.exists());
+
+    let package = runtime.join("packages/owned-fixture");
+    std::fs::create_dir_all(&package).unwrap();
+    let marker = br#"{"owner":"tiancai-companion-server-v1","schema":1}"#;
+    std::fs::write(runtime.join("owner.json"), marker).unwrap();
+    std::fs::write(package.join("hub-provenance.json"), marker).unwrap();
+    std::fs::write(
+        package.join("server-fixture.exe"),
+        b"synthetic, never executed",
+    )
+    .unwrap();
+    let external = temp.path().join("system-cli.exe");
+    std::fs::write(&external, b"user-owned source fixture").unwrap();
+
+    assert_eq!(
+        request("uninstall", false).send().await.unwrap().status(),
+        409
+    );
+    assert_eq!(
+        request("uninstall", true).send().await.unwrap().status(),
+        409
+    );
+    assert!(package.is_dir());
+    crate::assistant::settings::write(&state.config_path, false).unwrap();
+    let (mut saved, revision) = settings::read(&state.config_path).unwrap();
+    saved.enabled = true;
+    settings::write(&state.config_path, &saved, &revision).unwrap();
+    assert_eq!(
+        request("uninstall", true).send().await.unwrap().status(),
+        409
+    );
+    assert!(package.is_dir());
+
+    let (mut saved, revision) = settings::read(&state.config_path).unwrap();
+    saved.enabled = false;
+    settings::write(&state.config_path, &saved, &revision).unwrap();
+    assert_eq!(
+        request("uninstall", true).send().await.unwrap().status(),
+        200
+    );
+    assert!(!package.exists() && external.is_file());
+    assert!(!runtime.join("owner.json").exists());
+    job.abort();
 }
 
 #[tokio::test]
@@ -1019,7 +1545,8 @@ async fn catalogue_native_write_requires_exact_readback_reload_and_unchanged_own
         "reload_failed",
     ] {
         let (_temp, state, mut s) = fixture();
-        let native = settings::native_value(&s, state.config.lock().await.local_listen_port().unwrap());
+        let native =
+            settings::native_value(&s, state.config.lock().await.local_listen_port().unwrap());
         s.native_fingerprint = Some(settings::native_fingerprint(&native));
         s.native_catalog_pending = true;
         let (_, revision) = settings::read(&state.config_path).unwrap();
@@ -1124,27 +1651,60 @@ async fn server(router: axum::Router) -> (String, tokio::task::JoinHandle<()>) {
 }
 #[tokio::test]
 async fn native_catalogue_read_keeps_agent_user_and_project_scope() {
-    let (base,job)=server(axum::Router::new().route("/data/mcp/catalog/fixture-agent",axum::routing::get(
-        |axum::extract::Query(query):axum::extract::Query<std::collections::HashMap<String,String>>| async move {
-            assert_eq!(query.get("user_id").map(String::as_str),Some("fixture-user"));
-            assert_eq!(query.get("project_id").map(String::as_str),Some("fixture/project"));
-            axum::Json(json!({"catalog":[native_catalogue_fixture()]}))
-        }))).await;
-    let client=crate::gmclaw_desktop::DesktopClient::fixture(&base);
-    let rows=client.task_mcp_catalog("fixture-agent","fixture-user","fixture/project").await.unwrap();
-    assert!(catalogue::prompt(&rows,&[]).unwrap().contains("context_ref"));
-    assert!(client.task_mcp_catalog("../invalid","fixture-user","fixture/project").await.is_err());
+    let (base, job) = server(axum::Router::new().route(
+        "/data/mcp/catalog/fixture-agent",
+        axum::routing::get(
+            |axum::extract::Query(query): axum::extract::Query<
+                std::collections::HashMap<String, String>,
+            >| async move {
+                assert_eq!(
+                    query.get("user_id").map(String::as_str),
+                    Some("fixture-user")
+                );
+                assert_eq!(
+                    query.get("project_id").map(String::as_str),
+                    Some("fixture/project")
+                );
+                axum::Json(json!({"catalog":[native_catalogue_fixture()]}))
+            },
+        ),
+    ))
+    .await;
+    let client = crate::gmclaw_desktop::DesktopClient::fixture(&base);
+    let rows = client
+        .task_mcp_catalog("fixture-agent", "fixture-user", "fixture/project")
+        .await
+        .unwrap();
+    assert!(
+        catalogue::prompt(&rows, &[])
+            .unwrap()
+            .contains("context_ref")
+    );
+    assert!(
+        client
+            .task_mcp_catalog("../invalid", "fixture-user", "fixture/project")
+            .await
+            .is_err()
+    );
     job.abort();
 }
 #[tokio::test]
 async fn a_contextless_mcp_call_reports_the_missing_parameter_and_never_starts_work() {
-    let (_temp,state,settings)=fixture();
-    let (base,job)=server(web::router().with_state(state.clone())).await;
+    let (_temp, state, settings) = fixture();
+    let (base, job) = server(web::router().with_state(state.clone())).await;
     let reply:Value=reqwest::Client::new().post(format!("{base}/api/local-assistance/mcp")).bearer_auth(&settings.token)
         .json(&json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"assist_start","arguments":{"goal":"合成分析","problem_key":"same"}}}))
         .send().await.unwrap().json().await.unwrap();
-    assert_eq!(reply["result"]["isError"],true);assert!(reply["result"]["content"][0]["text"].as_str().unwrap().contains("arguments.context_ref"));
-    let inner=state.local_assistance.inner.lock().await;assert_eq!(inner.trigger_state,"call_error");assert!(inner.tasks.is_empty());
+    assert_eq!(reply["result"]["isError"], true);
+    assert!(
+        reply["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("arguments.context_ref")
+    );
+    let inner = state.local_assistance.inner.lock().await;
+    assert_eq!(inner.trigger_state, "call_error");
+    assert!(inner.tasks.is_empty());
     job.abort();
 }
 #[tokio::test]
@@ -1300,11 +1860,81 @@ async fn a_valid_pin_calls_only_its_ordinary_source_even_with_same_named_reserve
     job.abort();
 }
 #[tokio::test]
+async fn authenticated_assistance_model_endpoint_records_its_mcp_source() {
+    let (base, upstream) = server(axum::Router::new().route(
+        "/v1/responses",
+        axum::routing::post(|| async {
+            axum::Json(
+                json!({"id":"resp_fixture","status":"completed","model":"fixture-model","output":[],
+            "usage":{"input_tokens":10,"output_tokens":2,"total_tokens":12}}),
+            )
+        }),
+    ))
+    .await;
+    let (temp, state, mut settings) = fixture();
+    {
+        let mut config = state.config.lock().await;
+        config.ai_gateway.request_logging_enabled = true;
+        let provider = &mut config.ai_gateway.providers[0];
+        provider.base_url = format!("{base}/v1");
+        provider.provider_type = crate::ai_gateway::config::ProviderType::OpenAiResponses;
+        settings.route = crate::ai_gateway::config::provider_route_id(provider);
+    }
+    let (_, revision) = settings::read(&state.config_path).unwrap();
+    settings::write(&state.config_path, &settings, &revision).unwrap();
+    let context = parent(&state, temp.path(), "request-source").await;
+    let work = reserved(&state, &context, "source").await;
+    let token = state.local_assistance.inner.lock().await.tasks[&work.id]
+        .api_token
+        .clone();
+    let (hub, hub_job) = server(web::router().with_state(state.clone())).await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let url = format!("{hub}/api/local-assistance/model/{}/responses", work.id);
+    let response = client
+        .post(&url)
+        .bearer_auth(&token)
+        .header("user-agent", "codex_cli_rs/fixture")
+        .json(&json!({"model":"fixture-model","input":"synthetic","stream":false}))
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+    response.bytes().await.unwrap();
+    let filter = crate::ai_gateway::request_log::desktop::LogFilter {
+        client: Some("local-assistance-mcp".into()),
+        ..Default::default()
+    };
+    let page = state.ai_gateway_request_logs.desktop_page(&filter).unwrap();
+    assert_eq!(page["total"], 1);
+    assert_eq!(page["rows"][0]["clientId"], "local-assistance-mcp");
+    let detail = state
+        .ai_gateway_request_logs
+        .get_detail(page["rows"][0]["id"].as_i64().unwrap())
+        .unwrap()
+        .unwrap();
+    assert_eq!(detail.client_id.as_deref(), Some("local-assistance-mcp"));
+    let denied = client
+        .post(url)
+        .bearer_auth("invalid-fixture-token")
+        .json(&json!({"model":"fixture-model","input":"fixture"}))
+        .send()
+        .await
+        .unwrap();
+    assert!(!denied.status().is_success());
+    assert_eq!(
+        state.ai_gateway_request_logs.desktop_page(&filter).unwrap()["total"],
+        1
+    );
+    hub_job.abort();
+    upstream.abort();
+}
+#[tokio::test]
 async fn two_followups_continue_the_same_thread_and_finish_closes_it() {
     let (temp, state, _) = fixture();
     let mut f = fake_with_effort(&state, temp.path(), Some("xhigh")).await;
-    let (mut next,revision)=settings::read(&state.config_path).unwrap();
-    next.reasoning_effort=Some("high".into());settings::write(&state.config_path,&next,&revision).unwrap();
+    let (mut next, revision) = settings::read(&state.config_path).unwrap();
+    next.reasoning_effort = Some("high".into());
+    settings::write(&state.config_path, &next, &revision).unwrap();
     completed(&mut f, &state).await;
     for turn in 2..=3 {
         control(

@@ -4,7 +4,7 @@ use super::{
     controls::{Button, ButtonKind, Choice, paint_surface},
     theme, visual,
 };
-use crate::desktop::clients::ClientId;
+use crate::desktop::request_source;
 use std::{cell::Cell, rc::Rc};
 use wxdragon::prelude::*;
 
@@ -53,8 +53,12 @@ impl UsageView {
         let client = Choice::builder(&page)
             .with_size(Size::new(160, theme::CONTROL_HEIGHT))
             .with_choices(
-                std::iter::once("全部客户端".into())
-                    .chain(ClientId::ALL.iter().map(|c| c.name().into()))
+                std::iter::once("全部来源".into())
+                    .chain(
+                        request_source::keys()
+                            .filter_map(request_source::name)
+                            .map(Into::into),
+                    )
                     .collect(),
             )
             .build();
@@ -163,7 +167,7 @@ impl UsageView {
         let detail_col = BoxSizer::builder(Orientation::Vertical).build();
         let dimension = Choice::builder(&detail)
             .with_size(Size::new(126, 32))
-            .with_choices(vec!["按客户端".into(), "按模型".into(), "按渠道".into()])
+            .with_choices(vec!["按来源".into(), "按模型".into(), "按渠道".into()])
             .build();
         dimension.set_selection(0);
         detail_col.add(

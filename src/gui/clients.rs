@@ -46,6 +46,7 @@ pub(super) struct ClientPage {
     graph: Panel,
     state_label: StaticText,
     error: StaticText,
+    action_job: Rc<dialog_job::InlineJob>,
     model_list: super::model_list::ModelList,
     model_fields: Option<super::model_fields::ModelFields>,
     model_view: super::model_fields::ModelPage,
@@ -150,6 +151,16 @@ impl ClientPage {
         error.set_foreground_color(t.error);
         error.hide();
         column.add(&error, 0, SizerFlag::Expand | SizerFlag::All, 10);
+        let action_status = StaticText::builder(&page).with_label("").build();
+        action_status.set_name("client-action-status");
+        action_status.hide();
+        column.add(
+            &action_status,
+            0,
+            SizerFlag::Expand | SizerFlag::All,
+            page.from_dip(10),
+        );
+        let action_job = Rc::new(dialog_job::InlineJob::new(page, action_status));
         page.set_sizer(column, true);
         shell.register(PageId::Client(id), &page);
         let ui = Self {
@@ -165,6 +176,7 @@ impl ClientPage {
             graph,
             state_label,
             error,
+            action_job,
             model_list,
             model_fields,
             model_view,
@@ -250,12 +262,6 @@ impl ClientPage {
                         nav.navigate(PageId::Sources);
                     }
                 }
-                Some(3) => {
-                    u.select(2);
-                }
-                Some(4) => {
-                    u.select(3);
-                }
                 Some(5) => nav.navigate(PageId::Chat),
                 _ => {}
             }
@@ -263,14 +269,12 @@ impl ClientPage {
         if generic {
             let u = ui.clone();
             open.on_click(move |_| {
-                dialog_job::run(
-                    &u.frame,
-                    u.api.clone(),
+                u.action(
                     "打开客户端",
                     "/api/desktop/client/open",
                     json!({"client":u.id}),
+                    |_, _| {},
                 );
-                u.fetch();
             });
         }
         let u = ui.clone();
@@ -403,42 +407,56 @@ impl ClientPage {
                 .with_kind(super::controls::ButtonKind::Secondary)
                 .build();
             assistance.set_name("tiangong-local-assistance");
-            let api = self.api.clone(); let frame = self.frame;
+            let api = self.api.clone();
+            let frame = self.frame;
             assistance.on_click(move |_| super::local_assistance::show(&frame, api.clone()));
-            column.add(&assistance, 0, SizerFlag::Left | SizerFlag::Bottom, host.from_dip(16));
+            column.add(
+                &assistance,
+                0,
+                SizerFlag::Left | SizerFlag::Bottom,
+                host.from_dip(16),
+            );
         }
         if self.id == ClientId::WebStorm {
             let export = Button::builder(&host)
                 .with_label("导出 AI Assistant 辅助插件")
                 .build();
             column.add(&export, 0, SizerFlag::Left | SizerFlag::Bottom, 18);
-            let api = self.api.clone();
-            let frame = self.frame;
-            export.on_click(move |_|{
-                let picker=FileDialog::builder(&frame).with_message("保存 Hub 辅助插件").with_default_file("tiancai-hub-bridge.jar").with_wildcard("JetBrains 插件 (*.jar)|*.jar").with_style(FileDialogStyle::Save|FileDialogStyle::OverwritePrompt).build();
-                if picker.show_modal()==ID_OK{if let Some(path)=picker.get_path(){if dialog_job::run(&frame,api.clone(),"导出辅助插件","/api/desktop/webstorm/plugin",json!({"path":path})).is_some(){super::show_info(&frame,"插件已导出。请在 WebStorm 的设置 → 插件 → 从磁盘安装中选择此文件，重开 IDE 并打开项目。适配 AI Assistant 262.11879 系列；后续版本会先检查兼容性。 ");}}}picker.destroy();
+            let u = self.clone();
+            export.on_click(move |_| {
+                let picker = FileDialog::builder(&u.frame)
+                    .with_message("保存 Hub 辅助插件")
+                    .with_default_file("tiancai-hub-bridge.jar")
+                    .with_wildcard("JetBrains 插件 (*.jar)|*.jar")
+                    .with_style(FileDialogStyle::Save | FileDialogStyle::OverwritePrompt)
+                    .build();
+                let selected = (picker.show_modal() == ID_OK).then(|| picker.get_path()).flatten();
+                picker.destroy();
+                if let Some(path) = selected {
+                    u.action("导出辅助插件", "/api/desktop/webstorm/plugin", json!({"path":path}), |u, _| {
+                        u.action_job.feedback("插件已导出。在 WebStorm 设置 → 插件 → 从磁盘安装中选择此文件，重开 IDE 并打开项目；适配 AI Assistant 262.11879 系列。", false);
+                    });
+                }
             });
             let install = Button::builder(&host)
                 .with_label("安装 / 修复 Air / ACP 组件")
                 .build();
             column.add(&install, 0, SizerFlag::Left | SizerFlag::Bottom, 18);
-            let api = self.api.clone();
-            let frame = self.frame;
+            let u = self.clone();
             install.on_click(move |_| {
-                if let Some(value) = dialog_job::run(
-                    &frame,
-                    api.clone(),
+                u.action(
                     "安装 ACP 组件",
                     "/api/desktop/components/install",
                     json!({}),
-                ) {
-                    if value["opencode"]["installed"] == true {
-                        super::show_info(
-                            &frame,
-                            "ACP 组件已安装并通过文件校验。到模型页选择 Air / ACP，再使用模型。 ",
-                        );
-                    }
-                }
+                    |u, value| {
+                        if value["opencode"]["installed"] == true {
+                            u.action_job.feedback(
+                                "ACP 组件已安装。到模型页选择 Air / ACP，再使用模型。",
+                                false,
+                            );
+                        }
+                    },
+                );
             });
         }
         if let Some(download) = self.settings.download {
@@ -472,12 +490,11 @@ impl ClientPage {
                 selected
             };
             if let Some(path) = selected {
-                dialog_job::run(
-                    &u.frame,
-                    u.api.clone(),
+                u.action(
                     "保存程序位置",
                     "/api/desktop/client/open",
                     json!({"client":u.id,"path":path}),
+                    |_, _| {},
                 );
             }
         });
@@ -490,6 +507,42 @@ impl ClientPage {
             }
         });
         host.layout();
+    }
+    fn action(
+        &self,
+        title: &str,
+        path: &str,
+        body: Value,
+        saved: impl FnOnce(&Self, Value) + 'static,
+    ) {
+        if self.action_job.is_running() {
+            return;
+        }
+        let previous = (
+            self.model_view.page.is_enabled(),
+            self.settings_host.is_enabled(),
+            self.launch.is_enabled(),
+            self.reload.is_enabled(),
+        );
+        let u = self.clone();
+        if self
+            .action_job
+            .start(self.api.clone(), title, path, body, move |outcome| {
+                u.model_view.page.enable(previous.0);
+                u.settings_host.enable(previous.1);
+                u.launch.enable(previous.2);
+                u.reload.enable(previous.3);
+                if let Ok(value) = outcome {
+                    saved(&u, value);
+                }
+                u.fetch();
+            })
+        {
+            self.model_view.page.enable(false);
+            self.settings_host.enable(false);
+            self.launch.enable(false);
+            self.reload.enable(false);
+        }
     }
     pub fn enter(&self, page: PageId) {
         let active = page == PageId::Client(self.id);
@@ -747,7 +800,7 @@ impl ClientPage {
         let mut body = match fields.body(&row, &view, self.id) {
             Ok(body) => body,
             Err(error) => {
-                super::show_error(&self.frame, &error);
+                self.action_job.feedback(&error, true);
                 return;
             }
         };
@@ -756,9 +809,7 @@ impl ClientPage {
             ClientId::Codex | ClientId::WorkBuddy | ClientId::Tiangong
         );
         body["client"] = serde_json::to_value(self.id).unwrap();
-        if operation(
-            &self.frame,
-            self.api.clone(),
+        self.action(
             "保存客户端模型",
             if legacy {
                 "/api/desktop/models/copy"
@@ -766,21 +817,19 @@ impl ClientPage {
                 "/api/desktop/models/use"
             },
             body,
-        )
-        .is_some()
-        {
-            self.draft.borrow_mut().take();
-            self.editing_snapshot.borrow_mut().take();
-            if let Some(saved) = self.model_saved.borrow().clone() {
-                saved();
-            }
-            if legacy {
-                self.model_view.show_draft(false);
-                self.refresh_legacy_models(true);
-            }
-            self.editing_id.borrow_mut().take();
-            self.fetch();
-        }
+            move |u, _| {
+                u.draft.borrow_mut().take();
+                u.editing_snapshot.borrow_mut().take();
+                if let Some(saved) = u.model_saved.borrow().clone() {
+                    saved();
+                }
+                if legacy {
+                    u.model_view.show_draft(false);
+                    u.refresh_legacy_models(true);
+                }
+                u.editing_id.borrow_mut().take();
+            },
+        );
     }
     fn begin_model_draft(&self) {
         if self.models.borrow()["revision"].is_null() {
@@ -825,44 +874,33 @@ impl ClientPage {
         let Some(row) = self.selected() else {
             return;
         };
-        let Some(value) = dialog_job::run(
-            &self.frame,
-            self.api.clone(),
+        self.action(
             "读取模型配置",
             "/api/desktop/models/read",
             json!({"id":row["id"]}),
-        ) else {
-            return;
-        };
-        let Ok(mut provider) =
-            serde_json::from_value::<crate::ai_gateway::config::ProviderConfig>(value)
-        else {
-            super::show_error(&self.frame, "模型配置格式不兼容，请重新读取");
-            return;
-        };
-        provider.name = row["label"].as_str().unwrap_or("模型").into();
-        provider.desktop_binding = None;
-        if let Some(provider) = super::show_ai_gw_channel_dialog(
-            &self.frame,
-            super::text::GuiText::new(super::load_gui_locale()),
-            &self.api,
-            Some(&provider),
-        ) {
-            let view = self.models.borrow();
-            let body = json!({"revision":view["revision"],"targetId":row["targetId"],"id":row["id"],"label":provider.name,"provider":provider,"using":true});
-            drop(view);
-            if operation(
-                &self.frame,
-                self.api.clone(),
-                "保存客户端模型",
-                "/api/desktop/models/use",
-                body,
-            )
-            .is_some()
-            {
-                self.fetch();
+            move |u, value| {
+                // Reading in the background must not open an editor over a
+                // different page the user has moved to in the meantime.
+                if !u.active.get() { return; }
+                let Ok(mut provider) = serde_json::from_value::<crate::ai_gateway::config::ProviderConfig>(value) else {
+                    u.action_job.feedback("模型配置格式不兼容，请重新读取", true);
+                    return;
+                };
+                provider.name = row["label"].as_str().unwrap_or("模型").into();
+                provider.desktop_binding = None;
+                if let Some(provider) = super::show_ai_gw_channel_dialog(
+                    &u.frame,
+                    super::text::GuiText::new(super::load_gui_locale()),
+                    &u.api,
+                    Some(&provider),
+                ) {
+                    let view = u.models.borrow();
+                    let body = json!({"revision":view["revision"],"targetId":row["targetId"],"id":row["id"],"label":provider.name,"provider":provider,"using":true});
+                    drop(view);
+                    u.action("保存客户端模型", "/api/desktop/models/use", body, |_, _| {});
+                }
             }
-        }
+        );
     }
     fn remove(&self) {
         if self.selected().is_some_and(|r| r["draft"] == true) {
@@ -881,19 +919,24 @@ impl ClientPage {
         let Some(row) = self.selected() else {
             return;
         };
+        if !super::external_import::confirm(
+            &self.frame,
+            &format!(
+                "从 {} 移除模型“{}”？",
+                self.id.name(),
+                row["label"].as_str().unwrap_or("此模型")
+            ),
+        ) {
+            return;
+        }
         let view = self.models.borrow().clone();
         let body = json!({"revision":view["revision"],"targetId":row["targetId"],"id":row["id"],"using":false});
-        if operation(
-            &self.frame,
-            self.api.clone(),
+        self.action(
             "移除此客户端模型",
             "/api/desktop/models/use",
             body,
-        )
-        .is_some()
-        {
-            self.fetch();
-        }
+            |_, _| {},
+        );
     }
     fn restore(&self) {
         let view = self.models.borrow();
@@ -914,16 +957,35 @@ impl ClientPage {
             .unwrap_or_default();
         drop(view);
         if operations.is_empty() {
-            super::show_info(&self.frame, "没有此客户端的可撤销更改");
+            self.action_job.feedback("没有此客户端的可撤销更改", false);
+            return;
+        }
+        if operations.len() == 1 {
+            if super::external_import::confirm(&self.frame, "恢复此客户端最近一次模型配置更改？")
+            {
+                self.action(
+                    "恢复模型配置",
+                    "/api/desktop/models/restore",
+                    json!({"undo":operations[0]["id"]}),
+                    |_, _| {},
+                );
+            }
             return;
         }
         let labels = operations
             .iter()
-            .map(|o| {
+            .enumerate()
+            .map(|(i, o)| {
                 format!(
-                    "{} · {}",
-                    o["id"].as_str().unwrap_or(""),
-                    o["phase"].as_str().unwrap_or("")
+                    "最近第 {} 次更改 · {}",
+                    i + 1,
+                    match o["phase"].as_str().unwrap_or("") {
+                        "applied" => "已应用",
+                        "prepared" => "已准备",
+                        "native-error" => "写入未完成",
+                        "needs-recovery" => "待恢复",
+                        _ => "待核对",
+                    }
                 )
             })
             .collect::<Vec<_>>();
@@ -934,18 +996,17 @@ impl ClientPage {
             &labels.iter().map(String::as_str).collect::<Vec<_>>(),
         )
         .build();
-        if dialog.show_modal() == ID_OK {
-            let i = dialog.get_selection();
-            if i >= 0 {
-                operation(
-                    &self.frame,
-                    self.api.clone(),
-                    "撤销更改",
-                    "/api/desktop/models/restore",
-                    json!({"undo":operations[i as usize]["id"]}),
-                );
-                self.fetch();
-            }
+        let selected = (dialog.show_modal() == ID_OK)
+            .then(|| dialog.get_selection())
+            .filter(|i| *i >= 0);
+        dialog.destroy();
+        if let Some(i) = selected {
+            self.action(
+                "恢复模型配置",
+                "/api/desktop/models/restore",
+                json!({"undo":operations[i as usize]["id"]}),
+                |_, _| {},
+            );
         }
     }
     fn paint(&self) {
@@ -1139,6 +1200,9 @@ impl ClientPage {
         );
     }
     fn select(&self, index: usize) {
+        if matches!(index, 2 | 3) {
+            return;
+        }
         self.book.change_selection(index);
         if index == 1 {
             let draft = self.selected().is_some_and(|r| r["draft"] == true);
@@ -1328,16 +1392,6 @@ pub(super) fn review_inline_draft(frame: &Frame, shell: &Shell, id: ClientId) {
     assert!(fields.page.get_virtual_size().height <= viewport.height + fields.page.from_dip(2));
     // No timer or network action is started: this uses synthetic in-memory state.
 }
-fn operation(
-    parent: &Frame,
-    api: ApiClient,
-    title: &str,
-    path: &str,
-    body: Value,
-) -> Option<Value> {
-    dialog_job::run(parent, api, title, path, body)
-}
-
 fn source_label(source: &Value) -> String {
     let name = source["name"].as_str().unwrap_or("来源");
     if let Some(client) = ClientId::ALL.iter().find(|c| source["client"] == c.key()) {

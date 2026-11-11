@@ -1,6 +1,6 @@
 [package]
 name = "tiancaispacehub"
-version = "1.0.16"
+version = "1.0.19"
 edition = "2024"
 license = "Apache-2.0"
 build = "build.rs"
@@ -16,6 +16,7 @@ cipher = "0.4"
 ecb = "0.1"
 futures-util = "0.3"
 fs2 = "0.4"
+flate2 = "1"
 hex = "0.4"
 libsm = "0.6"
 image = { version = "0.25.10", default-features = false, features = ["png"], optional = true }
@@ -36,12 +37,14 @@ serde_path_to_error = "0.1"
 sha2 = "0.10"
 rusqlite = { version = "0.32", features = ["bundled", "backup"] }
 tempfile = "3"
+tar = "0.4"
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 toml = "0.8"
 toml_edit = "0.22"
 tower-http = { version = "0.6", features = ["trace"] }
+tower = { version = "0.5", features = ["util"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2"

@@ -11,7 +11,7 @@ mod endpoint_repair;
 pub mod error;
 pub mod gmclaw;
 mod gmclaw_replay;
-mod gmclaw_stream;
+pub(crate) mod gmclaw_stream;
 pub mod handler;
 #[allow(dead_code)]
 pub mod ir;

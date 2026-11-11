@@ -20,6 +20,7 @@ use wxdragon::widgets::SimpleBook;
 pub(super) enum PageId {
     Overview,
     Squad,
+    Assistant,
     Client(ClientId),
     Sources,
     Skills,
@@ -36,6 +37,7 @@ impl PageId {
         match self {
             Self::Overview => "概览",
             Self::Squad => "天才小分队",
+            Self::Assistant => "天才搭档",
             Self::Client(id) => id.name(),
             Self::Sources => "模型与渠道",
             Self::Skills => "Skill 管理",
@@ -106,6 +108,8 @@ pub(super) struct Shell {
     pub book: SimpleBook,
     pub service: Button,
     pub account: Button,
+    pub assistant_launcher: Button,
+    assistant_footer: Panel,
     title: StaticText,
     back: Button,
     secondary_origin: Rc<Cell<PageId>>,
@@ -158,12 +162,12 @@ impl Shell {
         sidebar.set_background_color(t.bg_card);
         let side = BoxSizer::builder(Orientation::Vertical).build();
         let mut buttons = Vec::new();
-        for id in [PageId::Overview, PageId::Squad] {
+        for id in [PageId::Overview, PageId::Squad, PageId::Assistant] {
             let b = nav_button(&sidebar, id.title());
-            b.set_icon(if id == PageId::Overview {
-                Icon::Overview
-            } else {
-                Icon::Squad
+            b.set_icon(match id {
+                PageId::Overview => Icon::Overview,
+                PageId::Assistant => Icon::Chat,
+                _ => Icon::Squad,
             });
             side.add(
                 &b,
@@ -257,8 +261,7 @@ impl Shell {
         );
         for (id, icon) in [
             (PageId::Sources, Icon::Model),
-            (PageId::Skills, Icon::Skill),
-            (PageId::Mcp, Icon::Mcp),
+            (PageId::Dumpling, Icon::Mcp),
             (PageId::Chat, Icon::Chat),
             (PageId::Logs, Icon::Logs),
         ] {
@@ -271,6 +274,10 @@ impl Shell {
                 sidebar.from_dip(4),
             );
             buttons.push((id, b));
+            if id == PageId::Dumpling {
+                // The resource controller applies the saved optional visibility.
+                b.hide();
+            }
         }
         sidebar.set_sizer(side, true);
         rail_column.add(&sidebar, 1, SizerFlag::Expand, 0);
@@ -404,6 +411,29 @@ impl Shell {
             SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Bottom,
             content.from_dip(theme::PAGE_GUTTER),
         );
+        // Keep the assistant entrance in the bottom-right corner with a small
+        // reserved row, so it never covers a focused configuration control.
+        let assistant_footer = Panel::builder(&content).build();
+        assistant_footer.set_background_color(t.bg_app);
+        let footer = BoxSizer::builder(Orientation::Horizontal).build();
+        footer.add_stretch_spacer(1);
+        let assistant_launcher = Button::builder(&assistant_footer)
+            .with_label("天才搭档")
+            .with_icon(Icon::Chat)
+            .with_kind(ButtonKind::Primary)
+            .with_size(Size::new(136, 42))
+            .build();
+        assistant_launcher.set_name("assistant-floating-chat");
+        assistant_launcher.set_tooltip("打开天才搭档，继续本次对话");
+        footer.add(
+            &assistant_launcher,
+            0,
+            SizerFlag::Right | SizerFlag::Bottom,
+            content.from_dip(theme::PAGE_GUTTER),
+        );
+        assistant_footer.set_sizer(footer, true);
+        column.add(&assistant_footer, 0, SizerFlag::Expand, 0);
+        assistant_footer.hide();
         content.set_sizer(column, true);
         row.add(&content, 1, SizerFlag::Expand, 0);
         panel.set_sizer(row, true);
@@ -412,9 +442,11 @@ impl Shell {
             book,
             service,
             account,
+            assistant_launcher,
+            assistant_footer,
             title,
             back,
-            secondary_origin: Rc::new(Cell::new(PageId::Mcp)),
+            secondary_origin: Rc::new(Cell::new(PageId::Overview)),
             status,
             breadcrumb,
             sidebar,
@@ -483,14 +515,34 @@ impl Shell {
     pub fn on_changed(&self, changed: impl Fn(PageId) + 'static) {
         *self.changed.borrow_mut() = Some(Rc::new(changed));
     }
+    pub fn set_assistant_ready(&self, ready: bool) {
+        self.assistant_launcher.show(ready);
+        if self.assistant_footer.is_shown() != ready {
+            self.assistant_footer.show(ready);
+            self.panel.layout();
+        }
+    }
+    pub fn set_dumpling_visible(&self, visible: bool) {
+        if let Some((_, button)) = self
+            .buttons
+            .borrow()
+            .iter()
+            .find(|(id, _)| *id == PageId::Dumpling)
+        {
+            button.show(visible);
+        }
+        self.refresh_navigation();
+    }
     pub fn navigate(&self, id: PageId) {
+        // General capability management is intentionally hidden. The backend
+        // remains available to existing client integrations.
+        if matches!(id, PageId::Skills | PageId::Mcp) {
+            return;
+        }
         let Some(index) = self.pages.borrow().iter().position(|v| *v == id) else {
             return;
         };
-        if id == PageId::Dumpling && self.current.get() != PageId::Dumpling {
-            self.secondary_origin.set(self.current.get());
-        }
-        self.back.show(id == PageId::Dumpling);
+        self.back.hide();
         if let PageId::Client(client) = id {
             self.recent.borrow_mut().visit(client);
             if let Some(path) = &self.recent_path {
@@ -510,7 +562,7 @@ impl Shell {
                 "共用能力"
             }
             PageId::Squad => "账户服务",
-            PageId::Dumpling => "MCP 管理",
+            PageId::Dumpling | PageId::Assistant => "共用能力",
             _ => "工作台",
         });
         self.status.set_label("");
@@ -567,7 +619,7 @@ fn help_text(page: PageId) -> String {
             "运行状态只展示打开或有请求的客户端；有进行中请求时连线流动。用量统计来自本机已记录的请求，输入已包含协议报告的缓存用量，不另列缓存或首字。站点余额和账单请到天才小分队查看。"
         }
         PageId::Client(_) => {
-            "选择模型即可配置到当前客户端。复用其他客户端的模型会建立独立副本，各端可以分别调整。Skill 和 MCP 只有实际配置成功才点亮；如需重开客户端会在操作结果中提示。接入设置和历史维护在本页对应区域。"
+            "选择模型即可配置到当前客户端。复用其他客户端的模型会建立独立副本，各端可以分别调整。如需重开客户端会在操作结果中提示。天工本机协助、接入设置和历史维护在本页对应区域。"
         }
         PageId::Sources => {
             "添加来源时按厂商选择账号、API Key 或专用接入方式。普通模型来源与客户端独立副本分别管理；更新来源后可选择同步哪些客户端，已有修改不会被静默覆盖。模型可见不代表上游支持所有能力。"
@@ -580,6 +632,9 @@ fn help_text(page: PageId) -> String {
         }
         PageId::Squad => {
             "登录天才小分队后管理 API 密钥、站点用量及充值订阅；组织与扣费按账户实际权限显示。登录和付款由官网验证。退出账户不会删除已经导入的模型渠道。"
+        }
+        PageId::Assistant => {
+            "启用后检查共享的天才搭档 Server；需要安装时由你确认。登录天才小分队后使用管理员提供的模型，费用由管理员承担。右下角可继续本次对话，收起不会结束；停止会中断执行，清空会删除本次临时内容。真正退出 Hub 后统一清理。密钥通过本机表单输入，删除配置会集中确认一次。"
         }
         PageId::Chat => {
             "添加聊天账号后，可在聊天平台内选择目录、模型和会话并处理审批。WorkBuddy 暂无外部任务执行；天工的执行授权、桌面同步与模型连接分别显示。"

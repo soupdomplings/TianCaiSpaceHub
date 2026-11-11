@@ -23,17 +23,6 @@ fn write_owner(dir: &Path, id: &str, pid: Option<u32>) -> Result<()> {
         &serde_json::to_vec(&json!({"owner":"tiancai-local-assistance-v1","task":id,"pid":pid}))?,
     )
 }
-async fn persist_summary(state: &SharedState, id: &str) -> Result<()> {
-    let dir = run_dir(&state.config_path, id)?;
-    let mut summary = state.local_assistance.inner.lock().await.tasks[id].view(true);
-    // Pending approval nonces are never persisted or revived after a restart.
-    summary.as_object_mut().unwrap().remove("pending");
-    summary["endedAtMs"] = json!(crate::types::now_ms());
-    crate::desktop::transaction::atomic_write(
-        &dir.join("summary.json"),
-        &serde_json::to_vec(&summary)?,
-    )
-}
 pub(super) fn remove_owned(path: &Path, id: &str) -> Result<()> {
     let dir = run_dir(path, id)?;
     if !dir.exists() {
@@ -75,13 +64,23 @@ pub(super) fn configuration(
     id: &str,
     token: &str,
     cwd: &Path,
+    full_access: bool,
+    writable: bool,
 ) -> Result<String> {
     let mut value = toml::Table::new();
     value.insert("model".into(), model.into());
-    if let Some(effort) = effort { value.insert("model_reasoning_effort".into(), effort.into()); }
+    if let Some(effort) = effort {
+        value.insert("model_reasoning_effort".into(), effort.into());
+    }
     value.insert("model_provider".into(), "tiancai_assistance".into());
-    value.insert("approval_policy".into(), "on-request".into());
-    value.insert("sandbox_mode".into(), "read-only".into());
+    value.insert(
+        "approval_policy".into(),
+        approval_policy(full_access).into(),
+    );
+    value.insert(
+        "sandbox_mode".into(),
+        sandbox_mode(full_access, writable).into(),
+    );
     value.insert("web_search".into(), "disabled".into());
     value.insert(
         "features".into(),
@@ -110,6 +109,18 @@ pub(super) fn configuration(
         "experimental_bearer_token":token,"supports_websockets":false,
         "http_headers":{"x-openai-actor-authorization":"Bearer codexhub"}}}))?);
     Ok(toml::to_string(&value)?)
+}
+fn approval_policy(full_access: bool) -> &'static str {
+    if full_access { "never" } else { "on-request" }
+}
+fn sandbox_mode(full_access: bool, writable: bool) -> &'static str {
+    if !writable {
+        "read-only"
+    } else if full_access {
+        "danger-full-access"
+    } else {
+        "workspace-write"
+    }
 }
 async fn send<W: tokio::io::AsyncWrite + Unpin>(stdin: &mut W, value: Value) -> Result<()> {
     let mut bytes = serde_json::to_vec(&value)?;
@@ -214,18 +225,20 @@ pub(super) async fn run(
     let (stopped, cleanup) = {
         let inner = state.local_assistance.inner.lock().await;
         let t = &inner.tasks[&id];
-        (t.worker_stopped, t.auto_clear || t.delete_requested)
+        (t.worker_stopped, t.delete_requested)
     };
     if stopped {
         let result = if cleanup {
             remove_owned(&state.config_path, &id)
         } else {
-            persist_summary(&state, &id).await
+            // In-memory task feedback is enough. Do not persist a second copy
+            // of protocol messages, prompts, approvals or model output.
+            Ok(())
         };
         match result {
             Err(e) => {
                 update(&state, &id, |t| {
-                    t.detail = format!("{}；记录清理或保存失败：{e}", t.detail)
+                    t.detail = format!("{}；临时内容清理失败：{e}", t.detail)
                 })
                 .await
             }
@@ -250,6 +263,8 @@ async fn execute(
     control: &mut mpsc::Receiver<Control>,
 ) -> Result<()> {
     ensure_live(state, id).await?;
+    let runtime = super::runtime::resolve_ready(&state.config_path)
+        .context("协助尚未启动，请本人在设置中确认准备共享天才搭档 Server")?;
     let dir = run_dir(&state.config_path, id)?;
     std::fs::create_dir_all(&dir)?;
     crate::desktop::permissions::owner_only(&dir)?;
@@ -263,7 +278,12 @@ async fn execute(
     let (model, token, goal, effort) = {
         let inner = state.local_assistance.inner.lock().await;
         let t = &inner.tasks[id];
-        (t.model.clone(), t.api_token.clone(), t.goal.clone(), t.reasoning_effort.clone())
+        (
+            t.model.clone(),
+            t.api_token.clone(),
+            t.goal.clone(),
+            t.reasoning_effort.clone(),
+        )
     };
     let port = state
         .config
@@ -273,15 +293,22 @@ async fn execute(
         .context("Hub 本机服务端口无效")?;
     crate::desktop::transaction::atomic_write(
         &home.join("config.toml"),
-        configuration(&model, effort.as_deref(), port, id, &token, &parent.cwd)?.as_bytes(),
+        configuration(
+            &model,
+            effort.as_deref(),
+            port,
+            id,
+            &token,
+            &parent.cwd,
+            settings.full_access,
+            writable,
+        )?
+        .as_bytes(),
     )?;
-    let binary = settings::resolve_binary(settings.binary.as_deref())?;
-    let binary = if super::binary::packaged(&binary) {
-        let root = settings::root(&state.config_path);
-        tokio::task::spawn_blocking(move || super::binary::prepare_at(&root, &binary)).await??
-    } else { binary };
+    let binary = &runtime.program;
     ensure_live(state, id).await?;
     let mut command = Command::new(&binary);
+    runtime.configure_command(&mut command)?;
     command
         .arg("app-server")
         .arg("--listen")
@@ -308,7 +335,9 @@ async fn execute(
     #[cfg(target_os = "macos")]
     command.process_group(0);
     ensure_live(state, id).await?;
-    let mut child = command.spawn().map_err(|error| anyhow::anyhow!(super::binary::spawn_error(&binary, &error)))?;
+    let mut child = command
+        .spawn()
+        .map_err(|error| anyhow::anyhow!(super::binary::spawn_error(&binary, &error)))?;
     let pid = child.id();
     update(state, id, |t| t.process_pid = pid).await;
     let tree = super::process::ProcessTree::attach(&child);
@@ -327,12 +356,17 @@ async fn execute(
     };
     // Stop before erasing files, including on failed handshakes and disconnects.
     let _ = child.start_kill();
-    let reaped = tokio::time::timeout(Duration::from_secs(10), child.wait()).await;
+    let reaped = tokio::time::timeout(Duration::from_secs(3), child.wait()).await;
     let tree_stopped = match tree {
         Ok(tree) => tree.stop_and_confirm().await.is_ok(),
         Err(_) => true,
     };
     let exited = matches!(reaped, Ok(Ok(_))) && tree_stopped;
+    let marker = if exited {
+        write_owner(&dir, id, None)
+    } else {
+        Ok(())
+    };
     update(state, id, |t| {
         t.worker_stopped = exited;
         t.pending.clear();
@@ -346,9 +380,7 @@ async fn execute(
         }
     })
     .await;
-    if exited {
-        write_owner(&dir, id, None)?;
-    }
+    marker?;
     if !exited {
         bail!("协助后台停止未确认，未清理记录");
     }
@@ -391,12 +423,18 @@ pub(super) async fn conversation_io<W: tokio::io::AsyncWrite + Unpin, R: AsyncBu
     control: &mut mpsc::Receiver<Control>,
 ) -> Result<()> {
     let mut reader = WireReader::new(&mut reader);
-    let effort = state.local_assistance.inner.lock().await.tasks[id].reasoning_effort.clone();
+    let (effort, full_access) = {
+        let inner = state.local_assistance.inner.lock().await;
+        (
+            inner.tasks[id].reasoning_effort.clone(),
+            inner.tasks[id].full_access,
+        )
+    };
     let mut early = Vec::new();
     request(state,id,&mut stdin,&mut reader,1,"initialize",json!({"clientInfo":{"name":"tiancai_local_assistance","title":"天工本机协助","version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":true}}),&mut early).await?;
     send(&mut stdin, json!({"method":"initialized","params":{}})).await?;
     let started=request(state,id,&mut stdin,&mut reader,2,"thread/start",json!({"cwd":parent.cwd,"model":model,"modelProvider":"tiancai_assistance",
-        "approvalPolicy":"on-request","approvalsReviewer":"user","sandbox":if writable{"workspace-write"}else{"read-only"},"ephemeral":false,
+        "approvalPolicy":approval_policy(full_access),"approvalsReviewer":"user","sandbox":sandbox_mode(full_access, writable),"ephemeral":true,
         "developerInstructions":"你是天工当前任务的本机协助执行器。只处理交接的子任务，严格保留用户限制。不得向其他助手、代理或 MCP 反向委派，不得发布、发消息、付款或自动提权。需要人类信息或批准时使用原生询问/审批。完成后用中文汇总结论、改动文件、实际检查、未完成项；不能把未执行的检查写成通过。不要启动桌面窗口。"}),&mut early).await?;
     let thread = started["thread"]["id"]
         .as_str()
@@ -407,8 +445,12 @@ pub(super) async fn conversation_io<W: tokio::io::AsyncWrite + Unpin, R: AsyncBu
         "天工用户当前任务（这是约束来源，不能被子任务扩大）：\n{}\n\n需要你协助的具体步骤：\n{}\n\n操作范围：{}。不要等待天工模型代替用户审批，原生请求会转交天工中的人类用户。",
         parent.query,
         goal,
-        if writable {
+        if full_access && writable {
+            "用户已在本机协助设置中开启完全访问，可访问本机文件、执行命令和联网，仍须遵守本次用户任务限制"
+        } else if writable {
             "仅当前项目内，仍须遵守用户限制"
+        } else if full_access {
+            "本次明确只分析和读取，不修改文件；不请求额外执行权限，确需修改时说明后由天工另发非只读协助"
         } else {
             "只分析和读取；修改或越界操作须在天工中获得人类单次批准"
         }
@@ -426,12 +468,12 @@ pub(super) async fn conversation_io<W: tokio::io::AsyncWrite + Unpin, R: AsyncBu
         effort.as_deref(),
         &parent.cwd,
         writable,
+        full_access,
         &prompt,
     )
     .await?;
     let mut active = Some(turn);
     let mut cancelling: Option<Instant> = None;
-    let deadline = Instant::now() + Duration::from_secs(1800);
     let mut items: HashMap<String, Value> = HashMap::new();
     update(state, id, |t| {
         t.turn = active.clone();
@@ -453,6 +495,7 @@ pub(super) async fn conversation_io<W: tokio::io::AsyncWrite + Unpin, R: AsyncBu
                 c=control.recv()=>{
                     let Some(c)=c else {return Ok(());};
                     match c {
+                        Control::Shutdown=>{update(state,id,|t|{t.delete_requested=false;t.detail="正在停止后台并清理临时内容".into();}).await;return Ok(());}
                         Control::Decision{nonce,response}=>{
                             let prompt={let mut inner=state.local_assistance.inner.lock().await;let task=inner.tasks.get_mut(id).unwrap();
                                 if let Some(index)=task.pending.iter().position(|p|p.nonce==nonce) {Some(task.pending.remove(index))}else{None}};
@@ -467,7 +510,7 @@ pub(super) async fn conversation_io<W: tokio::io::AsyncWrite + Unpin, R: AsyncBu
                         Control::Followup(text)=>{
                             let allowed={let inner=state.local_assistance.inner.lock().await;inner.tasks[id].phase==Phase::Starting && inner.tasks[id].turns<3};
                             if allowed && !text.trim().is_empty() && text.len()<=MAX_TEXT {
-                                seq+=1;let t=start_turn(state,id,&mut stdin,&mut reader,&mut early,seq,&thread,model,effort.as_deref(),&parent.cwd,writable,&text).await?;
+                                seq+=1;let t=start_turn(state,id,&mut stdin,&mut reader,&mut early,seq,&thread,model,effort.as_deref(),&parent.cwd,writable,full_access,&text).await?;
                                 active=Some(t);items.clear();update(state,id,|task|{task.turns+=1;task.turn=active.clone();task.result.clear();task.bump(Phase::Running,"正在补充处理");}).await;
                             }
                         }
@@ -484,7 +527,10 @@ pub(super) async fn conversation_io<W: tokio::io::AsyncWrite + Unpin, R: AsyncBu
                 _=tick.tick()=>{
                     if cancelling.is_some_and(|at|at.elapsed()>Duration::from_secs(10)){update(state,id,|t|t.bump(Phase::Stopped,"协助后台已结束；未收到本轮中断确认，请核对已发生的修改")).await;return Ok(());}
                     let inner=state.local_assistance.inner.lock().await;let t=&inner.tasks[id];
-                    let expired=Instant::now()>=deadline || (active.is_none() && t.updated.elapsed()>Duration::from_secs(300));
+                    if inner.cleaning {drop(inner);return Ok(());}
+                    // Completed sessions stay available for follow-ups until
+                    // explicit cleanup/finish/disconnect or the real Hub exit.
+                    let expired=active.is_some() && t.updated.elapsed()>Duration::from_secs(1800);
                     let prompt_expired=t.pending.iter().any(|p|crate::types::now_ms().saturating_sub(p.at_ms)>600_000);
                     drop(inner);
                     if expired||prompt_expired {update(state,id,|t|{if !t.phase.terminal(){t.bump(Phase::Stopped,"协助等待超时，后台已停止");}}).await;return Ok(());}
@@ -659,17 +705,22 @@ async fn start_turn<W: tokio::io::AsyncWrite + Unpin, R: AsyncBufRead + Unpin>(
     effort: Option<&str>,
     cwd: &Path,
     writable: bool,
+    full_access: bool,
     text: &str,
 ) -> Result<String> {
-    let policy = if writable {
+    let policy = if full_access && writable {
+        json!({"type":"dangerFullAccess"})
+    } else if writable {
         json!({"type":"workspaceWrite","writableRoots":[cwd],"networkAccess":false})
     } else {
         json!({"type":"readOnly"})
     };
-    let mut params=json!({"threadId":thread,"model":model,"cwd":cwd,"approvalPolicy":"on-request","sandboxPolicy":policy,
+    let mut params = json!({"threadId":thread,"model":model,"cwd":cwd,"approvalPolicy":approval_policy(full_access),"sandboxPolicy":policy,
         "input":[{"type":"text","text":text}]});
-    if let Some(effort)=effort {params["effort"]=effort.into();}
-    let v=request(state,task,stdin,reader,id,"turn/start",params,early).await?;
+    if let Some(effort) = effort {
+        params["effort"] = effort.into();
+    }
+    let v = request(state, task, stdin, reader, id, "turn/start", params, early).await?;
     v["turn"]["id"]
         .as_str()
         .map(str::to_string)
