@@ -11,6 +11,8 @@
 
 最终 Windows GUI 测试目标离线编译通过（87 条 warning、0 错误），14 项不同定向离线用例通过：Harness 模型 7、通用模型 3、保存/恢复事务 2、付款规则 2。记录在 `target/harness-ui-fix-20261111/{compile-result,verification}.json`；首次编译因未加载本机 LIBCLANG 环境停止，加载既有构建环境后通过，未改产品依赖。未启动实际 Hub/客户端、登录、支付或模型调用，没有生成新安装包。真实界面、Harness 加载及 macOS 待用户验收。
 
+本轮及此前 V1.0.17/18/19 累计源码已提交并正常推送至 `main` / [`6b86df5`](https://github.com/soupdomplings/TianCaiSpaceHub/commit/6b86df5)，见 [整理与同步记录](../development/repository-cleanup.md)。历史包保持原身份，未创建标签或 Release；下文各包构建当时的未提交状态保留原事实。
+
 ## V1.0.19 本地测试交付 · 2026-11-11 · DeepSeek Harness 状态及四端启动发现修正
 
 关联 TC-016/018；基线 `main` / `16f1118` 加 V1.0.18 已交付后的累计工作区。用户反馈 Harness 已打开，Hub 仍显示未打开；真实进程名 `DeepSeek Harness.exe` 原未纳入检测，启动器也漏读桌面版自定义安装登记。本轮补齐主进程名称，并按固定 Magpie `eb56de0b` 的注册规则实现四端共用 Windows 安装发现；VS Code 启动复用现有便携/产品身份/版本/Scoop 解析，ZCode 与 WebStorm 补已登记目录和对应主程序布局。Harness 导入成功后直接启动，不新增登录前提；原 Profile/凭据引用、ZCode 双配置及 WebStorm 两条路线的前提保持。未修改真实用户配置，无配置迁移。Windows GUI 测试目标离线编译和 32 个不同定向用例通过。按用户要求递增 V1.0.19，Windows release 与唯一新 MSI `113557` 已生成，版本、升级和六项载荷核验通过，见 [V19 交付](../releases/v1.0.19.md)；保留旧 V1.0.18 包，真实客户端及 macOS 待用户验收，未提交或发布。实现、参考归属及检查记录见 [客户端适配](desktop-client-adapters.md#deepseek-harness-状态与四端启动修正)。
