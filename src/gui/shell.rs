@@ -33,6 +33,12 @@ pub(super) enum PageId {
 }
 
 impl PageId {
+    fn visible_destination(self) -> Self {
+        match self {
+            Self::Client(id) if !id.is_visible() => Self::Overview,
+            _ => self,
+        }
+    }
     pub fn title(self) -> &'static str {
         match self {
             Self::Overview => "概览",
@@ -205,12 +211,13 @@ impl Shell {
         );
         let recent_path = super::daemon_config_path()
             .map(|p| crate::desktop::state_root(&p).join("recent-clients.json"));
-        let recent = recent_path
+        let mut recent = recent_path
             .as_ref()
             .and_then(|p| transaction::read(p).ok().flatten())
             .and_then(|b| serde_json::from_slice::<RecentClients>(&b).ok())
             .filter(|v| v.validate())
             .unwrap_or_default();
+        recent.normalize_visible();
         let slots = std::array::from_fn(|i| {
             let b = nav_button(&sidebar, visual::client_short(recent.slots()[i]));
             side.add(
@@ -236,7 +243,7 @@ impl Shell {
             SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right,
             sidebar.from_dip(10),
         );
-        let extras = ClientId::ALL
+        let extras = ClientId::VISIBLE
             .into_iter()
             .map(|id| {
                 let b = nav_button(&sidebar, visual::client_short(id));
@@ -405,7 +412,6 @@ impl Shell {
             content.from_dip(theme::PAGE_GUTTER),
         );
         let book = SimpleBook::builder(&content).build();
-        book.add_style(WindowStyle::ClipSiblings);
         book.set_background_color(t.bg_app);
         column.add(
             &book,
@@ -552,6 +558,7 @@ impl Shell {
         self.refresh_navigation();
     }
     pub fn navigate(&self, id: PageId) {
+        let id = id.visible_destination();
         // General capability management is intentionally hidden. The backend
         // remains available to existing client integrations.
         if matches!(id, PageId::Skills | PageId::Mcp) {
@@ -617,6 +624,26 @@ impl Shell {
         self.sidebar.layout();
         self.sidebar.fit_inside();
         self.panel.layout();
+    }
+}
+
+#[cfg(test)]
+mod visibility_tests {
+    use super::*;
+
+    #[test]
+    fn hidden_client_navigation_returns_to_overview() {
+        for id in ClientId::ALL {
+            assert_eq!(
+                PageId::Client(id).visible_destination(),
+                if id.is_visible() {
+                    PageId::Client(id)
+                } else {
+                    PageId::Overview
+                }
+            );
+        }
+        assert_eq!(PageId::Assistant.visible_destination(), PageId::Assistant);
     }
 }
 

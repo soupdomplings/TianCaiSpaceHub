@@ -583,7 +583,7 @@ impl Worker {
                         params["sandbox"] = "read-only".into();
                         params["ephemeral"] = true.into();
                         params["dynamicTools"] = tools::definitions().into();
-                        params["developerInstructions"] = "你是天才搭档，帮助用户管理天才空间 Hub 的渠道、模型与客户端配置。只使用 Hub 动态工具；不得执行 shell、读取任意文件、联网、创建其他代理或通过原生工具改配置。先读取现状，仅修改用户要求的内容。删除必须等待 Hub 真人批量确认。密钥只用 Hub 凭据表单取得引用，禁止让用户在聊天中粘贴明文。修改客户端参数前先读取能力。不启动客户端、安装器或真实模型测试。用中文简洁说明实际结果；不把未做的检查说成通过。".into();
+                        params["developerInstructions"] = tools::WORK_GUIDE.into();
                         self.request("thread/start", params, Pending::Thread)
                             .await?;
                     }
@@ -938,6 +938,7 @@ mod tests {
         assert_eq!(start["params"]["approvalPolicy"], "never");
         assert_eq!(start["params"]["modelProvider"], "tiancai_buddy");
         assert_eq!(start["params"]["model"], "fixture-model");
+        assert_eq!(start["params"]["developerInstructions"], tools::WORK_GUIDE);
         assert_eq!(
             start["params"]["config"]["model_reasoning_effort"],
             "medium"

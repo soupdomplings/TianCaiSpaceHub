@@ -1254,6 +1254,15 @@ pub trait WxWidget: std::any::Any {
         }
     }
 
+    /// Keep an overlapping child above its siblings without activating a
+    /// desktop window. Opts this parent's children into native sibling
+    /// clipping on Windows, where the wx style alone is not mapped to HWNDs.
+    /// Call after showing or repositioning the child, and after page changes.
+    fn raise_child_overlay(&self) -> bool {
+        let handle = self.handle_ptr();
+        !handle.is_null() && unsafe { ffi::wxd_Window_RaiseChildOverlay(handle) }
+    }
+
     /// Lowers the window to the bottom of the window hierarchy (Z-order).
     ///
     /// This makes the window appear behind other windows.

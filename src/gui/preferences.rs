@@ -241,7 +241,7 @@ fn target_editor(frame: &Frame, api: ApiClient) {
     let s = BoxSizer::builder(Orientation::Vertical).build();
     let client = Choice::builder(&dialog)
         .with_choices(
-            crate::desktop::clients::ClientId::ALL
+            crate::desktop::clients::ClientId::VISIBLE
                 .into_iter()
                 .map(|c| c.name().into())
                 .collect(),
@@ -263,8 +263,10 @@ fn target_editor(frame: &Frame, api: ApiClient) {
     s.add(&save, 0, SizerFlag::AlignRight | SizerFlag::All, 16);
     dialog.set_sizer(s, true);
     let job = dialog_job::bind(dialog, save, status, api, move || {
-        let id =
-            crate::desktop::clients::ClientId::ALL[client.get_selection().unwrap_or(0) as usize];
+        let id = client
+            .get_selection()
+            .and_then(|index| crate::desktop::clients::ClientId::VISIBLE.get(index as usize))
+            .ok_or("请选择客户端")?;
         if path.get_value().trim().is_empty() {
             return Err("请选择实际配置根目录".into());
         }

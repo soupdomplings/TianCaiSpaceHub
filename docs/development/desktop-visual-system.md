@@ -1,5 +1,13 @@
 # V1 桌面视觉与组件规范
 
+## 2026-11-11 客户端入口精简（本轮开发）
+
+按用户要求隐藏 VS Code 和 WebStorm。侧栏最近三个位置、展开列表、客户端页面构建、配置位置选择、添加模型的来源候选、天工内置模型的跨端分享统一使用 `ClientId::VISIBLE` 或其 `is_visible` 判定。该列表保留 ChatGPT / Codex、WorkBuddy、天工 Work、DeepSeek Harness 和 ZCode；后台 `ClientId::ALL` 仍含全部七端。
+
+读取旧 `recent-clients.json` 时，仅把隐藏端所在的槽位替换为尚未占用的可见端，保留其他槽位的顺序及最近使用信息；正常后续导航按原方式保存。已知隐藏端的旧跳转和助手导航统一返回概览并正常完成导航确认。概览活动图在 GUI 投影中移除隐藏端及其请求/MCP 连接，ChatGPT 状态区隐藏 VS Code 卡片及对应连接线；历史请求日志、来源筛选和统计归属继续保留，避免丢失既有记录的说明。
+
+本轮不删除客户端配置、程序位置、模型副本和安装资料，不停用后台发现、writer 或 API。没有新增持久开关或配置格式迁移；恢复 GUI 可见列表及投影后，原有两端资料可继续展示。`ui-ux-pro-max` 两次定向查询没有命中适合原生桌面隐藏目的地的规则，未采用 Web 溢出或层级建议；本次沿现有原生导航处理。新增离线用例覆盖旧最近记录迁移、隐藏端导航回退、概览活动投影及后台身份保留，实际执行由管理会话统一记录；本子任务仅完成静态与格式检查，不独立运行产品、Cargo 或打包。用户实机、Windows 多屏及 macOS 待验收。
+
 ## 2026-11-11 操作反馈与二级弹层精简
 
 状态：纳入 [V1.0.20 统一测试交付](../releases/v1.0.20.md)，Windows GUI 测试目标离线编译及本批 14 项定向用例通过，范围及记录见 [变更记录](../customizations/CHANGELOG.md)；这些文件/协议用例不代替真实界面验证，真实操作、Windows 缩放和 macOS 待用户验收。用户反馈恢复模型配置时出现重复“撤销更改”标题、无正文且只留“重试”的窗口，本次从共用任务交互及客户端调用处处理。
@@ -11,6 +19,18 @@
 维护入口为 `src/gui/dialog_job.rs::InlineJob` 与 `src/gui/clients.rs::action`：后台线程仅执行 HTTP，原生 Panel 的 Timer 接收结果后停止，UI 线程更新反馈和执行一次完成回调；同一任务执行中再次提交不会重放。为仍需同步取得结果再打开真实表单的旧入口保留 `run`，去掉正文重复标题、禁用整个进度窗口及固定“重试”按钮；失败展示具体原因与“关闭”，空原因提示先重新读取实际状态。不要把关闭错误窗口解释为请求已取消，也不自动重新发送写入请求。
 
 采用 `ui-ux-pro-max` 的 UX 定向查询 `nonblocking action feedback modal` 与 `loading feedback`，核对其中 Loading Indicators / Confirmation Messages：反馈与等待相称，保留布局和焦点，并给简短完成说明。沿现有原生主题与字号，不移植 Web toast/ARIA 或移动触控尺寸。此调整不改变配置格式、writer、后改保护、账号权限和既有安装包；回退恢复相应 GUI 实现即可，用户配置及成果不删除。
+
+## 2026-11-11 天才搭档原生遮挡修复（本轮开发）
+
+用户确认 V1.0.22 已能对话，但小分队账户页的卡片、图表仍覆盖浮层和输入区。管理会话在 1168×754 实际窗口复现。原因在 wxWidgets 3.3.2 的 `wxWindowMSW::MSWGetStyle`：它以普通子窗不重叠为前提，不把 `wxCLIP_SIBLINGS` 映射到真正的 `WS_CLIPSIBLINGS`。此前在 `SimpleBook` 设置同名 wx 样式和调用 `Raise`，只能改变顺序，不能阻止嵌套页子控件在相交区域绘制。依据为本机本轮使用的 wxWidgets 源码及 [Microsoft 子窗口裁剪说明](https://learn.microsoft.com/en-us/windows/win32/winmsg/window-features#clipping)。
+
+本轮增加仅供重叠子窗显式调用的 `WxWidget::raise_child_overlay`，由 `src/gui/assistant.rs` 在展开、重新定位和页面切换后使用；普通窗口的 `raise` 行为保持。Windows 支撑把该浮层宿主的直接子窗设置为真正的原生兄弟裁剪，宿主启用子级裁剪，使用不激活的 `SetWindowPos(HWND_TOP)` 保持浮层在业务页分支之上。只在样式或顺序发生变化时使相交区域重绘，不扫描所有后代，不新增轮询计时器、桌面顶层窗或持久开关。纯图标入口、无产品标题、收起续聊和模型来源保持。macOS 走原生子级抬升，未据此宣称完成实机验收。
+
+vendor 范围限于 `rust/wxdragon/src/window.rs`、`rust/wxdragon-sys/cpp/src/window.cpp` 与 `cpp/include/core/wxd_window_base.h`，不全局改写所有 Panel/Book 的创建样式。移除 Shell 上没有原生效果的同名样式调用。回滚相关 GUI 与此三个 vendor 改动即可，不迁移或删除用户配置、会话目录及已保存成果。
+
+验证入口为 `gui::assistant::native_overlay_tests::assistant_overlay_stays_above_nested_native_pages_on_screen`，需显式 `--ignored --exact --test-threads=1`。该用例短暂显示隔离合成窗口，包含两层 `SimpleBook`、`ScrolledWindow`、原生多行 `TextCtrl` 和醒目图表 `Canvas`；覆盖浅深色、1168×754 / 900×560、顶层和嵌套切页、滚动、重新绘制、输入与发送命中、收起、最小化及隐藏恢复。断言检查真实 `HWND` 风格/父级/命中、业务叶级 DC 可见裁剪及屏幕像素；`TIANCAI_NATIVE_REVIEW_DIR` 指向忽略的 `target/` 子目录时保存实际 `ScreenDC` 图像，区别于旧隐藏 `WM_PRINT` 合成图。既有 `assistant_account_switch_and_pending_actions_fit_the_hub_overlay` 隐藏夹具补非零尺寸与原生层级检查。本子任务未运行 Cargo、合成 GUI、实际 Hub 或模型，由管理会话统一编译及运行并登记结果；当前不能把新增断言当成已经通过。真实 Hub 复测、Windows 多屏/DPI 与 macOS 另列验收状态。
+
+管理会话前两轮屏幕用例均在首个像素采样失败，原生层级及命中已通过；人工核对截图，红色业务图表在浮层边界截止，消息及输入完整。Rust 测试 EXE 未带正式 GUI 的 DPI manifest，夹具已增加 `PerMonitorV2` 线程上下文并在结束后恢复。第二轮元数据记录卡片宽 630 px，但合成屏幕中的卡片约 620 px、全窗边缘有额外留白，符合首显 DWM 过渡期间的整体缩放；不能据此按固定偏移修正坐标。[DwmFlush](https://learn.microsoft.com/en-us/windows/win32/api/dwmapi/nf-dwmapi-dwmflush) 仅等待已排队更新呈现，不保证窗口过渡完成。本轮仅在隔离夹具首次显示前设置 `DWMWA_TRANSITIONS_FORCEDISABLED`，避免动画表面与 HWND 最终矩形不同，生产窗口不作此设置。客户区/浮层/采样点、请求的 DPI 上下文及真实窗口 DPI 保存为元数据；原右沿采样点、纯色容差、叶级 DC 裁剪和命中断言保持，不放宽颜色阈值。修正后的用例待管理会话重编与重新运行，前两轮失败记录保留；产品代码不因这次夹具调整改变。
 
 ## V1.0.22 天才搭档窗口内对话浮层（2026-11-11）
 

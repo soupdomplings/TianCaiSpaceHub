@@ -3122,10 +3122,10 @@ impl GuiText {
     pub(super) fn ai_gw_channel_editor_help(self) -> &'static str {
         match self.locale {
             GuiLocale::ZhCn => {
-                "选择 OpenAI、Grok、DeepSeek Responses、智谱 Anthropic、Anthropic 或其它兼容厂商，并填写大模型厂商接入信息。"
+                "选择 OpenAI、Grok、DeepSeek Responses、MiniMax、智谱 Anthropic、Anthropic 或其它兼容厂商，并填写大模型厂商接入信息。"
             }
             GuiLocale::EnUs => {
-                "Choose OpenAI, Grok, DeepSeek Responses, Z.AI Anthropic, Anthropic, or another compatible provider and fill in the channel connection details."
+                "Choose OpenAI, Grok, DeepSeek Responses, MiniMax, Z.AI Anthropic, Anthropic, or another compatible provider and fill in the channel connection details."
             }
         }
     }
@@ -3275,6 +3275,17 @@ impl GuiText {
 
     pub(super) fn ai_gw_service_deepseek(self) -> &'static str {
         "OpenAI Chat Completions"
+    }
+
+    pub(super) fn ai_gw_service_minimax(self) -> &'static str {
+        "MiniMax"
+    }
+
+    pub(super) fn ai_gw_minimax_help(self) -> &'static str {
+        match self.locale {
+            GuiLocale::ZhCn => "默认国内站 https://api.minimax.cn/v1；国际站可改为 https://api.minimax.io/v1，并使用对应站点的 API Key。已预填 MiniMax-M3.1-Flash 与 MiniMax-M3，可获取模型或手动编辑。M3.1-Flash 不支持关闭推理。",
+            GuiLocale::EnUs => "Defaults to China: https://api.minimax.cn/v1. For the international service, use https://api.minimax.io/v1 and its API key. MiniMax-M3.1-Flash and MiniMax-M3 are prefilled; fetch models or edit them manually. M3.1-Flash requires reasoning.",
+        }
     }
 
     pub(super) fn ai_gw_chat_disable_reasoning(self) -> &'static str {

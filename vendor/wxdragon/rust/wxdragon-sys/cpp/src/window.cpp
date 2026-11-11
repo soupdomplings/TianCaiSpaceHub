@@ -716,6 +716,48 @@ wxd_Window_Lower(wxd_Window_t* window)
     }
 }
 
+WXD_EXPORTED bool
+wxd_Window_RaiseChildOverlay(wxd_Window_t* window)
+{
+    auto* overlay = reinterpret_cast<wxWindow*>(window);
+    auto* parent = overlay ? overlay->GetParent() : nullptr;
+    if (!parent || overlay->IsTopLevel()) return false;
+#ifdef __WXMSW__
+    // wxWindowMSW::MSWGetStyle intentionally ignores wxCLIP_SIBLINGS because
+    // wx normally assumes non-overlapping children. Set the real HWND style:
+    // otherwise a book's descendants can paint over a raised sibling panel.
+    const HWND host = reinterpret_cast<HWND>(parent->GetHandle());
+    const HWND hwnd = reinterpret_cast<HWND>(overlay->GetHandle());
+    if (!host || !hwnd || ::GetParent(hwnd) != host) return false;
+    bool changed = false;
+    const auto hostStyle = ::GetWindowLongPtr(host, GWL_STYLE);
+    if (!(hostStyle & WS_CLIPCHILDREN)) {
+        ::SetWindowLongPtr(host, GWL_STYLE, hostStyle | WS_CLIPCHILDREN);
+        changed = true;
+    }
+    for (auto* sibling : parent->GetChildren()) {
+        if (sibling->IsTopLevel()) continue;
+        const HWND child = reinterpret_cast<HWND>(sibling->GetHandle());
+        if (!child || ::GetParent(child) != host) continue;
+        const auto style = ::GetWindowLongPtr(child, GWL_STYLE);
+        if (!(style & WS_CLIPSIBLINGS)) {
+            ::SetWindowLongPtr(child, GWL_STYLE, style | WS_CLIPSIBLINGS);
+            changed = true;
+        }
+    }
+    if (::GetWindow(hwnd, GW_HWNDPREV)) {
+        if (!::SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)) return false;
+        changed = true;
+    }
+    if (changed) ::RedrawWindow(host, nullptr, nullptr, RDW_INVALIDATE | RDW_ALLCHILDREN);
+    return true;
+#else
+    overlay->Raise();
+    return true;
+#endif
+}
+
 // --- Mouse Capture Functions ---
 WXD_EXPORTED void
 wxd_Window_CaptureMouse(wxd_Window_t* window)

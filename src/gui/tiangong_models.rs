@@ -519,7 +519,7 @@ fn share_fields(
         let Ok(id) = serde_json::from_value::<ClientId>(target["client"].clone()) else {
             continue;
         };
-        if id == ClientId::Tiangong || target["modelsInherited"] == true {
+        if !id.is_visible() || id == ClientId::Tiangong || target["modelsInherited"] == true {
             continue;
         }
         let Some(key) = target["id"].as_str() else {
@@ -729,7 +729,8 @@ fn native_tiangong_login_form_fits_and_keeps_secrets_out_of_captures() {
             let view=json!({"shares":[{"modelId":"tiangong-builtin","client":"workbuddy","targetId":"workbuddy-default"}]});
             let targets=ClientId::ALL.iter().map(|id|json!({"id":format!("{}-default",id.key()),"client":id,"label":"默认"})).collect();
             let share=share_fields(&frame,&model,&view,targets);share.dialog.layout();
-            assert_eq!(share.tiles.len(),6);assert_eq!(share.tiles[0].0,"workbuddy-default");
+            assert_eq!(share.tiles.len(),4);assert_eq!(share.tiles[0].0,"workbuddy-default");
+            assert!(!share.tiles.iter().any(|(key,_)|matches!(key.as_str(),"vscode-default"|"webstorm-default")));
             let target=&share.tiles[1];super::native_model_review::click(&target.1);
             assert!(share.selected.borrow().contains(&target.0));
             super::native_model_review::click(&target.1);assert!(share.selected.borrow().is_empty());

@@ -1,5 +1,19 @@
 # 状态概览与模型 / Skill / MCP 管理
 
+## 2026-11-11 MiniMax 厂商预设
+
+“模型与渠道 → 新增大模型厂商”增加 MiniMax 选项。默认名称为 `minimax`，使用现有 `ChatCompletions` 和 `compatibility="openai_chat"`；国内地址预填 `https://api.minimax.cn/v1`，国际用户直接改成 `https://api.minimax.io/v1`，并填写对应站点的 API Key。地址、渠道名、模型列表及独立模型目录地址均可编辑，不新增地区开关或协议适配器。
+
+预填当前官方目录中的 `MiniMax-M3.1-Flash`、`MiniMax-M3`，可手动维护，也可点现有“获取模型”，按所填地址请求 `/models`。不新增跨站点目录回退。MiniMax 预设默认不勾选“关闭推理”，说明提示 M3.1-Flash 不支持关闭推理；该复选框仍按现有 Chat Completions 配置方式保存。厂商列表和表单使用现有通用 Router 图标，不借用其他厂商标志。
+
+编辑时仅把名称以 MiniMax 开头或地址主机为已知官方域名的 Chat Completions 渠道识别为 MiniMax。普通 OpenAI Chat Completions、DeepSeek 及其他协议继续保持原来的选择和保存方式。若用户同时改成其他名称与自建地址，回读显示通用 Chat Completions，已保存的地址、模型及凭据仍沿原格式保留；无需配置迁移。
+
+关键入口为 `src/gui.rs` 的 `default_ai_gw_minimax_service_provider`、厂商表单和模型目录获取流程，`src/gui/ai_gateway.rs` 的 `is_minimax_channel`、厂商图标，以及 `src/gui/text.rs` 的双语说明。回滚时移除新增预设入口即可，现有 Chat Completions 渠道继续可用；取消新建不会保存，删除已保存渠道仍走原确认流程。
+
+`minimax_preset_preserves_editable_chat_configuration` 和 `minimax_identity_does_not_relabel_other_chat_providers` 两项离线用例已由管理会话执行通过，覆盖两站与自建地址、目录不跨站回退、编辑配置回读及其他渠道不被误标，纳入本批57项定向回归和GUI测试目标编译。唯一测试包见 [V23交付](../releases/v1.0.23.md)；未请求真实MiniMax模型，Windows/macOS界面与真实连通待用户验收。
+
+官方依据：[国内 OpenAI 兼容说明](https://platform.minimax.cn/docs/api-reference/text-openai-api)、[国际 OpenAI 兼容说明](https://platform.minimax.io/docs/api-reference/text-openai-api)、[国内模型目录](https://platform.minimax.cn/docs/api-reference/models/openai/list-models)、[国际模型目录](https://platform.minimax.io/docs/api-reference/models/openai/list-models)。核对日期：2026-11-11。
+
 ## 2026-11-11 天才搭档与入口收敛
 
 本轮在现有 V1.0.17 工作区实现，尚未生成新包、实机验收或发布。当前界面隐藏通用 Skill/MCP 的侧栏、客户端页签、客户端概览卡片及跳转、设置中的恢复入口；原配置、writer 与后端集成保留。历史下文中的管理入口不再代表本轮界面入口。隐藏页面不因进入客户端或设置触发通用资源发现。

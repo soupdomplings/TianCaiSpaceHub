@@ -527,6 +527,7 @@ fn build_ui(
         StatusIconKind::VsCodeCodex,
         text,
     );
+    vscode_status.panel.hide();
     let cli_status = status_panel(
         &status_box,
         text.codex_cli(),
@@ -625,7 +626,7 @@ fn build_ui(
     let overview_ui = overview::Overview::new(&shell, frame, api.clone(), text);
     let squad_ui = squad::SquadPage::new(&shell, frame, api.clone());
     let assistant_ui = assistant::AssistantUi::new(&frame, &shell, api.clone());
-    let client_pages = crate::desktop::clients::ClientId::ALL
+    let client_pages = crate::desktop::clients::ClientId::VISIBLE
         .into_iter()
         .map(|id| clients::ClientPage::new(&shell, id, frame, api.clone()))
         .collect::<Vec<_>>();
@@ -1318,7 +1319,7 @@ fn build_ui(
         let tx = gui_tx.clone();
         dumpling_checkbox.on_toggled(move |_| toggle_dumpling_mcp_page(&frame, text, &page, &tx));
     }
-    for (id, client) in crate::desktop::clients::ClientId::ALL
+    for (id, client) in crate::desktop::clients::ClientId::VISIBLE
         .into_iter()
         .zip(&client_pages)
     {
@@ -2780,7 +2781,17 @@ fn ai_gw_service_option(
             );
         }
         None => {
-            row.add_spacer(34);
+            let icon = StaticBitmap::builder(&row_panel)
+                .with_bitmap(Some(lucide_icon_bitmap(LucideIconKind::Router, 24)))
+                .with_size(Size::new(24, 24))
+                .build();
+            icon.set_min_size(Size::new(24, 24));
+            row.add(
+                &icon,
+                0,
+                SizerFlag::AlignCenterVertical | SizerFlag::Right,
+                10,
+            );
         }
     }
 
@@ -3004,6 +3015,15 @@ fn show_ai_gw_channel_dialog(
         false,
         true,
     );
+    let radio_minimax = ai_gw_service_option(
+        &service_panel,
+        &service_sizer,
+        text.ai_gw_service_minimax(),
+        None,
+        false,
+        true,
+    );
+    radio_minimax.set_tooltip(text.ai_gw_minimax_help());
     let radio_kimi = ai_gw_service_option(
         &service_panel,
         &service_sizer,
@@ -3300,6 +3320,7 @@ fn show_ai_gw_channel_dialog(
         &radio_grok,
         &radio_deepseek,
         &radio_deepseek_responses,
+        &radio_minimax,
         &radio_kimi,
         &radio_anthropic,
         &radio_glm,
@@ -3328,10 +3349,16 @@ fn show_ai_gw_channel_dialog(
             text,
             provider.provider_type.clone(),
             provider.compatibility.as_deref().map(ToOwned::to_owned),
+            ai_gateway::is_minimax_channel(
+                &provider.provider_type,
+                &provider.name,
+                &provider.base_url,
+            ),
             &radio_openai,
             &radio_grok,
             &radio_deepseek,
             &radio_deepseek_responses,
+            &radio_minimax,
             &radio_kimi,
             &radio_anthropic,
             &radio_glm,
@@ -3362,6 +3389,7 @@ fn show_ai_gw_channel_dialog(
                     &radio_grok,
                     &radio_deepseek,
                     &radio_deepseek_responses,
+                    &radio_minimax,
                     &radio_kimi,
                     &radio_anthropic,
                     &radio_glm,
@@ -3404,6 +3432,7 @@ fn show_ai_gw_channel_dialog(
                     &radio_grok,
                     &radio_deepseek,
                     &radio_deepseek_responses,
+                    &radio_minimax,
                     &radio_kimi,
                     &radio_anthropic,
                     &radio_glm,
@@ -3446,6 +3475,51 @@ fn show_ai_gw_channel_dialog(
                     &radio_grok,
                     &radio_deepseek,
                     &radio_deepseek_responses,
+                    &radio_minimax,
+                    &radio_kimi,
+                    &radio_anthropic,
+                    &radio_glm,
+                    &zai_access_controls,
+                    &type_input,
+                    &name_input,
+                    &base_url_input,
+                    &models_url_input,
+                    &key_input,
+                    &models_list,
+                    &model_mapping_rows,
+                    &model_mapping_model,
+                    &weight_input,
+                    &service_template_applying,
+                );
+                *current_ai_gw_provider_template.borrow_mut() = provider;
+            }
+        });
+    }
+    if initial.is_none() {
+        let type_input = type_input;
+        let name_input = name_input;
+        let base_url_input = base_url_input;
+        let models_url_input = models_url_input;
+        let key_input = key_input;
+        let models_list = models_list;
+        let model_mapping_rows = model_mapping_rows.clone();
+        let model_mapping_model = model_mapping_model.clone();
+        let weight_input = weight_input;
+        let service_template_applying = service_template_applying.clone();
+        let current_ai_gw_provider_template = current_ai_gw_provider_template.clone();
+        radio_minimax.on_selected(move |_| {
+            if radio_minimax.get_value() && !*service_template_applying.borrow() {
+                chat_disable_reasoning.enable(true);
+                chat_disable_reasoning.set_value(false);
+                let provider = default_ai_gw_minimax_service_provider();
+                apply_ai_gw_service_template(
+                    text,
+                    provider.clone(),
+                    &radio_openai,
+                    &radio_grok,
+                    &radio_deepseek,
+                    &radio_deepseek_responses,
+                    &radio_minimax,
                     &radio_kimi,
                     &radio_anthropic,
                     &radio_glm,
@@ -3488,6 +3562,7 @@ fn show_ai_gw_channel_dialog(
                     &radio_grok,
                     &radio_deepseek,
                     &radio_deepseek_responses,
+                    &radio_minimax,
                     &radio_kimi,
                     &radio_anthropic,
                     &radio_glm,
@@ -3530,6 +3605,7 @@ fn show_ai_gw_channel_dialog(
                     &radio_grok,
                     &radio_deepseek,
                     &radio_deepseek_responses,
+                    &radio_minimax,
                     &radio_kimi,
                     &radio_anthropic,
                     &radio_glm,
@@ -3572,6 +3648,7 @@ fn show_ai_gw_channel_dialog(
                     &radio_grok,
                     &radio_deepseek,
                     &radio_deepseek_responses,
+                    &radio_minimax,
                     &radio_kimi,
                     &radio_anthropic,
                     &radio_glm,
@@ -3614,6 +3691,7 @@ fn show_ai_gw_channel_dialog(
                     &radio_grok,
                     &radio_deepseek,
                     &radio_deepseek_responses,
+                    &radio_minimax,
                     &radio_kimi,
                     &radio_anthropic,
                     &radio_glm,
@@ -4001,6 +4079,7 @@ fn show_ai_gw_channel_dialog(
                         &radio_grok,
                         &radio_deepseek,
                         &radio_deepseek_responses,
+                        &radio_minimax,
                         &radio_kimi,
                         &radio_anthropic,
                         &radio_glm,
@@ -4008,7 +4087,9 @@ fn show_ai_gw_channel_dialog(
                 });
             let compatibility = match initial {
                 Some(provider) => provider.compatibility.clone(),
-                None if radio_deepseek.get_value() => Some("openai_chat".to_string()),
+                None if radio_deepseek.get_value() || radio_minimax.get_value() => {
+                    Some("openai_chat".to_string())
+                }
                 None => selected_ai_gw_dialog_compatibility(&radio_anthropic, &radio_glm),
             };
             let is_zai = provider_type == ProviderType::AnthropicMessages
@@ -4080,6 +4161,7 @@ fn apply_ai_gw_dialog_template(
     radio_grok: &RadioButton,
     radio_deepseek: &RadioButton,
     radio_deepseek_responses: &RadioButton,
+    radio_minimax: &RadioButton,
     radio_kimi: &RadioButton,
     radio_anthropic: &RadioButton,
     radio_glm: &RadioButton,
@@ -4103,10 +4185,12 @@ fn apply_ai_gw_dialog_template(
         text,
         provider.provider_type.clone(),
         provider.compatibility.as_deref(),
+        ai_gateway::is_minimax_channel(&provider.provider_type, &provider.name, &provider.base_url),
         radio_openai,
         radio_grok,
         radio_deepseek,
         radio_deepseek_responses,
+        radio_minimax,
         radio_kimi,
         radio_anthropic,
         radio_glm,
@@ -4119,6 +4203,17 @@ fn apply_ai_gw_dialog_template(
     );
     name_input.change_value(&provider.name);
     base_url_input.change_value(&provider.base_url);
+    base_url_input.set_tooltip(
+        if ai_gateway::is_minimax_channel(
+            &provider.provider_type,
+            &provider.name,
+            &provider.base_url,
+        ) {
+            text.ai_gw_minimax_help()
+        } else {
+            ""
+        },
+    );
     models_url_input.change_value(provider.models_url.as_deref().unwrap_or_default());
     replace_model_mapping_rows(
         models_list,
@@ -4137,6 +4232,7 @@ fn apply_ai_gw_service_template(
     radio_grok: &RadioButton,
     radio_deepseek: &RadioButton,
     radio_deepseek_responses: &RadioButton,
+    radio_minimax: &RadioButton,
     radio_kimi: &RadioButton,
     radio_anthropic: &RadioButton,
     radio_glm: &RadioButton,
@@ -4160,6 +4256,7 @@ fn apply_ai_gw_service_template(
         radio_grok,
         radio_deepseek,
         radio_deepseek_responses,
+        radio_minimax,
         radio_kimi,
         radio_anthropic,
         radio_glm,
@@ -4181,10 +4278,12 @@ fn bind_locked_ai_gw_service_selection(
     text: GuiText,
     provider_type: ProviderType,
     compatibility: Option<String>,
+    minimax: bool,
     radio_openai: &RadioButton,
     radio_grok: &RadioButton,
     radio_deepseek: &RadioButton,
     radio_deepseek_responses: &RadioButton,
+    radio_minimax: &RadioButton,
     radio_kimi: &RadioButton,
     radio_anthropic: &RadioButton,
     radio_glm: &RadioButton,
@@ -4195,11 +4294,13 @@ fn bind_locked_ai_gw_service_selection(
         text,
         provider_type.clone(),
         compatibility.clone(),
+        minimax,
         radio_openai,
         radio_openai,
         radio_grok,
         radio_deepseek,
         radio_deepseek_responses,
+        radio_minimax,
         radio_kimi,
         radio_anthropic,
         radio_glm,
@@ -4210,11 +4311,13 @@ fn bind_locked_ai_gw_service_selection(
         text,
         provider_type.clone(),
         compatibility.clone(),
-        radio_grok,
+        minimax,
+        radio_minimax,
         radio_openai,
         radio_grok,
         radio_deepseek,
         radio_deepseek_responses,
+        radio_minimax,
         radio_kimi,
         radio_anthropic,
         radio_glm,
@@ -4225,11 +4328,13 @@ fn bind_locked_ai_gw_service_selection(
         text,
         provider_type.clone(),
         compatibility.clone(),
-        radio_deepseek,
+        minimax,
+        radio_grok,
         radio_openai,
         radio_grok,
         radio_deepseek,
         radio_deepseek_responses,
+        radio_minimax,
         radio_kimi,
         radio_anthropic,
         radio_glm,
@@ -4240,11 +4345,13 @@ fn bind_locked_ai_gw_service_selection(
         text,
         provider_type.clone(),
         compatibility.clone(),
-        radio_deepseek_responses,
+        minimax,
+        radio_deepseek,
         radio_openai,
         radio_grok,
         radio_deepseek,
         radio_deepseek_responses,
+        radio_minimax,
         radio_kimi,
         radio_anthropic,
         radio_glm,
@@ -4255,11 +4362,13 @@ fn bind_locked_ai_gw_service_selection(
         text,
         provider_type.clone(),
         compatibility.clone(),
-        radio_kimi,
+        minimax,
+        radio_deepseek_responses,
         radio_openai,
         radio_grok,
         radio_deepseek,
         radio_deepseek_responses,
+        radio_minimax,
         radio_kimi,
         radio_anthropic,
         radio_glm,
@@ -4270,11 +4379,30 @@ fn bind_locked_ai_gw_service_selection(
         text,
         provider_type.clone(),
         compatibility.clone(),
+        minimax,
+        radio_kimi,
+        radio_openai,
+        radio_grok,
+        radio_deepseek,
+        radio_deepseek_responses,
+        radio_minimax,
+        radio_kimi,
+        radio_anthropic,
+        radio_glm,
+        type_input,
+        service_template_applying.clone(),
+    );
+    bind_locked_ai_gw_service_radio(
+        text,
+        provider_type.clone(),
+        compatibility.clone(),
+        minimax,
         radio_anthropic,
         radio_openai,
         radio_grok,
         radio_deepseek,
         radio_deepseek_responses,
+        radio_minimax,
         radio_kimi,
         radio_anthropic,
         radio_glm,
@@ -4285,11 +4413,13 @@ fn bind_locked_ai_gw_service_selection(
         text,
         provider_type,
         compatibility,
+        minimax,
         radio_glm,
         radio_openai,
         radio_grok,
         radio_deepseek,
         radio_deepseek_responses,
+        radio_minimax,
         radio_kimi,
         radio_anthropic,
         radio_glm,
@@ -4302,11 +4432,13 @@ fn bind_locked_ai_gw_service_radio(
     text: GuiText,
     provider_type: ProviderType,
     compatibility: Option<String>,
+    minimax: bool,
     radio: &RadioButton,
     radio_openai: &RadioButton,
     radio_grok: &RadioButton,
     radio_deepseek: &RadioButton,
     radio_deepseek_responses: &RadioButton,
+    radio_minimax: &RadioButton,
     radio_kimi: &RadioButton,
     radio_anthropic: &RadioButton,
     radio_glm: &RadioButton,
@@ -4318,6 +4450,7 @@ fn bind_locked_ai_gw_service_radio(
     let radio_grok = *radio_grok;
     let radio_deepseek = *radio_deepseek;
     let radio_deepseek_responses = *radio_deepseek_responses;
+    let radio_minimax = *radio_minimax;
     let radio_kimi = *radio_kimi;
     let radio_anthropic = *radio_anthropic;
     let radio_glm = *radio_glm;
@@ -4331,10 +4464,12 @@ fn bind_locked_ai_gw_service_radio(
             text,
             provider_type.clone(),
             compatibility.as_deref(),
+            minimax,
             &radio_openai,
             &radio_grok,
             &radio_deepseek,
             &radio_deepseek_responses,
+            &radio_minimax,
             &radio_kimi,
             &radio_anthropic,
             &radio_glm,
@@ -4392,6 +4527,17 @@ fn default_ai_gw_service_provider(provider_type: ProviderType) -> ProviderConfig
             base_url: "https://api.anthropic.com/v1".to_string(),
             ..Default::default()
         },
+    }
+}
+
+fn default_ai_gw_minimax_service_provider() -> ProviderConfig {
+    ProviderConfig {
+        name: "minimax".to_string(),
+        provider_type: ProviderType::ChatCompletions,
+        compatibility: Some("openai_chat".to_string()),
+        base_url: "https://api.minimax.cn/v1".to_string(),
+        models: vec!["MiniMax-M3.1-Flash".to_string(), "MiniMax-M3".to_string()],
+        ..Default::default()
     }
 }
 
@@ -4502,10 +4648,12 @@ fn set_ai_gw_dialog_provider_type(
     text: GuiText,
     provider_type: ProviderType,
     compatibility: Option<&str>,
+    minimax: bool,
     radio_openai: &RadioButton,
     radio_grok: &RadioButton,
     radio_deepseek: &RadioButton,
     radio_deepseek_responses: &RadioButton,
+    radio_minimax: &RadioButton,
     radio_kimi: &RadioButton,
     radio_anthropic: &RadioButton,
     radio_glm: &RadioButton,
@@ -4515,12 +4663,17 @@ fn set_ai_gw_dialog_provider_type(
     radio_grok.set_value(false);
     radio_deepseek.set_value(false);
     radio_deepseek_responses.set_value(false);
+    radio_minimax.set_value(false);
     radio_kimi.set_value(false);
     radio_anthropic.set_value(false);
     radio_glm.set_value(false);
     match provider_type {
         ProviderType::ChatCompletions => {
-            radio_deepseek.set_value(true);
+            if minimax {
+                radio_minimax.set_value(true);
+            } else {
+                radio_deepseek.set_value(true);
+            }
             type_input.change_value(text.provider_type_chat_completions());
         }
         ProviderType::OpenAiResponses | ProviderType::ChatGptResponses => {
@@ -4568,6 +4721,7 @@ fn selected_ai_gw_dialog_provider_type(
     radio_grok: &RadioButton,
     radio_deepseek: &RadioButton,
     radio_deepseek_responses: &RadioButton,
+    radio_minimax: &RadioButton,
     radio_kimi: &RadioButton,
     radio_anthropic: &RadioButton,
     radio_glm: &RadioButton,
@@ -4576,7 +4730,7 @@ fn selected_ai_gw_dialog_provider_type(
         ProviderType::AnthropicMessages
     } else if radio_grok.get_value() {
         ProviderType::GrokResponses
-    } else if radio_deepseek.get_value() {
+    } else if radio_deepseek.get_value() || radio_minimax.get_value() {
         ProviderType::ChatCompletions
     } else if radio_deepseek_responses.get_value() {
         ProviderType::DeepSeekResponses
@@ -4864,6 +5018,91 @@ fn inferred_model_alias_key(model: &str) -> Option<String> {
 mod model_mapping_tests {
     use super::api::RemoteControlConnectionStatus;
     use super::*;
+
+    #[test]
+    fn minimax_preset_preserves_editable_chat_configuration() {
+        let mut provider = default_ai_gw_minimax_service_provider();
+        assert_eq!(provider.provider_type, ProviderType::ChatCompletions);
+        assert_eq!(provider.compatibility.as_deref(), Some("openai_chat"));
+        assert_eq!(provider.base_url, "https://api.minimax.cn/v1");
+        assert_eq!(provider.models, ["MiniMax-M3.1-Flash", "MiniMax-M3"]);
+        assert!(!provider.chat_disable_reasoning);
+
+        for endpoint in [
+            "https://api.minimax.cn/v1",
+            "https://api.minimax.io/v1",
+            "https://example.com/minimax/v1",
+        ] {
+            provider.base_url = endpoint.into();
+            assert!(known_models_urls_for_provider(&provider).is_empty());
+            let candidates = model_list_candidates(endpoint, None, &[]);
+            assert_eq!(candidates.len(), 1);
+            assert_eq!(candidates[0].url, format!("{endpoint}/models"));
+            assert_eq!(candidates[0].normalized_base_url, endpoint);
+        }
+
+        provider.name = "MiniMax proxy".into();
+        provider.models = vec!["custom-minimax-model".into()];
+        provider.models_url = Some("https://example.com/minimax/catalog".into());
+        provider.model_aliases =
+            BTreeMap::from([("my-minimax".into(), "custom-minimax-model".into())]);
+        let saved = normalize_provider_models_url(provider);
+        let reloaded: ProviderConfig =
+            serde_json::from_value(serde_json::to_value(&saved).unwrap()).unwrap();
+        assert_eq!(reloaded.provider_type, ProviderType::ChatCompletions);
+        assert_eq!(reloaded.compatibility.as_deref(), Some("openai_chat"));
+        assert_eq!(reloaded.name, "MiniMax proxy");
+        assert_eq!(reloaded.base_url, "https://example.com/minimax/v1");
+        assert_eq!(
+            reloaded.models_url.as_deref(),
+            Some("https://example.com/minimax/catalog")
+        );
+        assert_eq!(reloaded.models, ["custom-minimax-model"]);
+        assert_eq!(
+            reloaded.resolve_upstream_model("my-minimax"),
+            Some("custom-minimax-model")
+        );
+        assert!(ai_gateway::is_minimax_channel(
+            &reloaded.provider_type,
+            &reloaded.name,
+            &reloaded.base_url,
+        ));
+    }
+
+    #[test]
+    fn minimax_identity_does_not_relabel_other_chat_providers() {
+        for (name, endpoint, expected) in [
+            (" MiniMax proxy ", "https://example.com/v1", true),
+            ("custom-name", "https://api.minimax.cn/v1", true),
+            ("custom-name", "https://api.minimax.io/v1", true),
+            ("custom-name", "https://api.minimaxi.com/v1", true),
+            ("openai-chat", "https://api.openai.com/v1", false),
+            ("deepseek", "https://api.deepseek.com/v1", false),
+            ("custom-name", "https://example.com/v1", false),
+            (
+                "custom-name",
+                "https://api.minimax.cn.example.com/v1",
+                false,
+            ),
+        ] {
+            assert_eq!(
+                ai_gateway::is_minimax_channel(&ProviderType::ChatCompletions, name, endpoint),
+                expected,
+                "{name}: {endpoint}",
+            );
+        }
+        for protocol in [
+            ProviderType::OpenAiResponses,
+            ProviderType::DeepSeekResponses,
+            ProviderType::AnthropicMessages,
+        ] {
+            assert!(!ai_gateway::is_minimax_channel(
+                &protocol,
+                "minimax",
+                "https://api.minimax.cn/v1",
+            ));
+        }
+    }
 
     #[test]
     fn kimi_defaults_to_responses_with_editable_endpoint_and_custom_models() {

@@ -70,6 +70,10 @@ impl Bridge {
         );
         Ok(())
     }
+    pub(super) fn tool_squad(&self, epoch: &str, account: &ExpectedAccount) -> Result<Arc<Squad>> {
+        self.ensure_account(epoch, account)?;
+        Ok(self.squad.clone())
+    }
     #[cfg(test)]
     pub(super) fn scope(&self) -> (String, ExpectedAccount) {
         (self.id.clone(), self.account.clone())

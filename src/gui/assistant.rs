@@ -436,7 +436,7 @@ impl AssistantUi {
         // A normal child of the content panel is clipped by Hub and follows
         // its minimize/tray lifecycle. It is deliberately outside the sizer.
         let chat = Panel::builder(&shell.assistant_host).build();
-        chat.add_style(WindowStyle::ClipChildren | WindowStyle::ClipSiblings);
+        chat.add_style(WindowStyle::ClipChildren);
         chat.set_name("对话浮层");
         chat.hide();
         paint_chat_surface(chat, t.bg_card, Some(t.divider));
@@ -792,7 +792,7 @@ impl AssistantUi {
         drop(state);
         self.position_chat();
         self.chat.show(true);
-        self.chat.raise();
+        self.chat.raise_child_overlay();
         self.input.set_focus();
         self.fetch();
     }
@@ -831,7 +831,7 @@ impl AssistantUi {
                 .set_size_with_pos(bounds.x, bounds.y, bounds.width, bounds.height);
         }
         if self.chat.is_shown() {
-            self.chat.raise();
+            self.chat.raise_child_overlay();
         }
     }
 
@@ -1559,6 +1559,7 @@ fn assistant_account_switch_and_pending_actions_fit_the_hub_overlay() {
             assert!(!ui.uninstall.is_enabled());assert!(ui.approve.is_shown());
             ui.position_chat();ui.layout_chat();
             let size=ui.chat.get_client_size();
+            assert!(size.width>0 && size.height>0,"hidden overlay layout was not initialized: {size:?}");
             for control in [&ui.input as &dyn WxWidget,&ui.send,&ui.stop,&ui.clear] {
                 if !control.is_shown() {continue;}
                 let screen=control.client_to_screen(Point::new(0,0));
@@ -1578,8 +1579,399 @@ fn assistant_account_switch_and_pending_actions_fit_the_hub_overlay() {
             assert!(ui.input.get_value().is_empty());
             assert!(ui.cards.borrow().is_empty());
             assert!(!ui.chat.is_shown() && !parent.is_shown());
+            ui.chat.show(true);
+            assert!(ui.chat.raise_child_overlay());
+            native_overlay_tests::assert_native_order(&ui);
+            ui.chat.hide();
             super::native_model_review::capture(&ui.chat,&format!("assistant-chat-{suffix}"));
             parent.destroy();
         }
     }).unwrap();
+}
+
+#[cfg(all(test, windows))]
+mod native_overlay_tests {
+    use super::*;
+    use std::{ffi::c_void, ptr::null_mut};
+    use windows_sys::Win32::{
+        Foundation::{HWND, POINT},
+        UI::WindowsAndMessaging::{
+            ChildWindowFromPointEx, DispatchMessageW, GA_ROOT, GWL_STYLE, GetAncestor,
+            GetWindowLongPtrW, IsChild, MSG, PM_REMOVE, PeekMessageW, TranslateMessage, WS_CHILD,
+            WS_CLIPSIBLINGS, WindowFromPoint,
+        },
+    };
+    use wxdragon::{
+        bitmap::Bitmap,
+        dc::{BlitConfig, DeviceContext, MemoryDC, ScreenDC},
+        widgets::SimpleBook,
+    };
+
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn GetDCEx(window: HWND, region: *mut c_void, flags: u32) -> *mut c_void;
+        fn ReleaseDC(window: HWND, dc: *mut c_void) -> i32;
+        fn SetThreadDpiAwarenessContext(context: *mut c_void) -> *mut c_void;
+        fn GetDpiForWindow(window: HWND) -> u32;
+    }
+    #[link(name = "gdi32")]
+    unsafe extern "system" {
+        fn PtVisible(dc: *mut c_void, x: i32, y: i32) -> i32;
+    }
+    #[link(name = "dwmapi")]
+    unsafe extern "system" {
+        fn DwmFlush() -> i32;
+        fn DwmSetWindowAttribute(
+            window: HWND,
+            attribute: u32,
+            value: *const c_void,
+            size: u32,
+        ) -> i32;
+    }
+
+    // The Rust test executable has no desktop-app DPI manifest. Native HWND
+    // coordinates and ScreenDC pixels must share physical coordinates, just
+    // as they do in the packaged GUI. Restore only this test thread afterward.
+    struct ReviewDpiContext(*mut c_void);
+    impl ReviewDpiContext {
+        fn enter() -> Self {
+            let previous = unsafe { SetThreadDpiAwarenessContext(-4isize as *mut c_void) };
+            assert!(
+                !previous.is_null(),
+                "PerMonitorV2 test DPI context was not set"
+            );
+            Self(previous)
+        }
+    }
+    impl Drop for ReviewDpiContext {
+        fn drop(&mut self) {
+            unsafe { SetThreadDpiAwarenessContext(self.0) };
+        }
+    }
+
+    pub(super) fn assert_native_order(ui: &AssistantUi) {
+        let chat = ui.chat.get_handle();
+        let host = ui.shell.assistant_host.get_handle();
+        let size = ui.chat.get_client_size();
+        let point = ui
+            .chat
+            .client_to_screen(Point::new(size.width / 2, size.height / 2));
+        let point = ui.shell.assistant_host.screen_to_client(point);
+        unsafe {
+            assert_ne!(GetWindowLongPtrW(chat, GWL_STYLE) & WS_CHILD as isize, 0);
+            assert_eq!(GetAncestor(chat, GA_ROOT), ui.parent.get_handle());
+            assert_ne!(
+                GetWindowLongPtrW(ui.shell.book.get_handle(), GWL_STYLE) & WS_CLIPSIBLINGS as isize,
+                0,
+                "wx style must have reached the native book HWND"
+            );
+            assert_eq!(
+                ChildWindowFromPointEx(
+                    host,
+                    POINT {
+                        x: point.x,
+                        y: point.y
+                    },
+                    0
+                ),
+                chat,
+                "native content hit test must reach the overlay before the business book"
+            );
+        }
+    }
+
+    fn pump_native_messages() {
+        unsafe {
+            let mut message: MSG = std::mem::zeroed();
+            for _ in 0..400 {
+                if PeekMessageW(&mut message, null_mut(), 0, 0, PM_REMOVE) == 0 {
+                    break;
+                }
+                TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
+            DwmFlush();
+        }
+    }
+
+    fn layout_fixture(parent: &Frame, host: &Panel, ui: &AssistantUi) {
+        parent.layout();
+        host.layout();
+        ui.shell.panel.layout();
+        ui.shell.assistant_host.layout();
+        ui.shell.book.layout();
+        ui.position_chat();
+        ui.layout_chat();
+    }
+
+    fn nested_business_page(
+        shell: &Shell,
+        id: PageId,
+    ) -> (SimpleBook, Vec<(ScrolledWindow, Panel, MessageText)>) {
+        let page = Panel::builder(&shell.book).build();
+        let book = SimpleBook::builder(&page).build();
+        let mut pages = Vec::new();
+        for index in 0..2 {
+            let scroll = ScrolledWindow::builder(&book)
+                .with_style(ScrolledWindowStyle::VScroll)
+                .build();
+            scroll.set_scroll_rate(0, scroll.from_dip(8));
+            let column = BoxSizer::builder(Orientation::Vertical).build();
+            let input = MessageText::builder(&scroll)
+                .with_style(TextCtrlStyle::MultiLine)
+                .with_value("业务页原生输入框（合成数据）")
+                .build();
+            input.set_min_size(visual::dip_size(&input, 100, 110));
+            column.add(&input, 0, SizerFlag::Expand, 0);
+            let canvas = Panel::builder(&scroll).build();
+            canvas.set_min_size(visual::dip_size(&canvas, 100, 1000));
+            canvas.set_background_style(BackgroundStyle::Paint);
+            canvas.on_paint(move |_| {
+                let base = AutoBufferedPaintDC::new(&canvas);
+                let dc = GraphicsDC::new(&base);
+                let c = visual::Canvas::new(&dc, visual::scale(&canvas));
+                c.clear(Colour::rgb(157, 35 + index * 20, 67));
+                c.label(
+                    "业务图表（合成）",
+                    Rect::new(20, 24, 240, 40),
+                    16,
+                    true,
+                    Colour::rgb(255, 255, 255),
+                    false,
+                );
+            });
+            column.add(&canvas, 0, SizerFlag::Expand, 0);
+            scroll.set_sizer(column, false);
+            assert!(book.add_page(&scroll, "合成页", index == 0, None));
+            pages.push((scroll, canvas, input));
+        }
+        let column = BoxSizer::builder(Orientation::Vertical).build();
+        column.add(&book, 1, SizerFlag::Expand, 0);
+        page.set_sizer(column, false);
+        shell.register(id, &page);
+        (book, pages)
+    }
+
+    fn assert_screen_pixels(ui: &AssistantUi, background: &Panel, label: &str) {
+        assert_native_order(ui);
+        let size = ui.parent.get_client_size();
+        let screen = ui.parent.client_to_screen(Point::new(0, 0));
+        let mut bitmap = Bitmap::new(size.width, size.height).unwrap();
+        {
+            let source = ScreenDC::new();
+            let mut target = MemoryDC::new();
+            target.select_object(&mut bitmap);
+            assert!(target.blit(
+                &source,
+                BlitConfig::new(0, 0, size.width, size.height, screen.x, screen.y)
+            ));
+        }
+        let mut pixels = bitmap.get_rgba_data().unwrap();
+        for pixel in pixels.chunks_exact_mut(4) {
+            pixel[3] = 255;
+        }
+        let image =
+            image::RgbaImage::from_raw(size.width as u32, size.height as u32, pixels).unwrap();
+        if let Some(directory) = std::env::var_os("TIANCAI_NATIVE_REVIEW_DIR") {
+            let directory = std::path::PathBuf::from(directory);
+            std::fs::create_dir_all(&directory).unwrap();
+            image
+                .save(directory.join(format!("assistant-overlay-screen-{label}.png")))
+                .unwrap();
+            let chat_size = ui.chat.get_client_size();
+            let chat_origin = ui.chat.client_to_screen(Point::new(0, 0));
+            let probes = [
+                chat_size.height / 3,
+                chat_size.height * 2 / 3,
+                chat_size.height - ui.chat.from_dip(40),
+            ]
+            .map(|y| {
+                let point = ui
+                    .chat
+                    .client_to_screen(Point::new(chat_size.width - ui.chat.from_dip(5), y));
+                let local = ui.parent.screen_to_client(point);
+                json!({"screen":[point.x,point.y],"client":[local.x,local.y],
+                    "rgba":image.get_pixel(local.x as u32,local.y as u32).0})
+            });
+            let metadata = json!({"actualScreenCapture":true,"syntheticFixture":true,
+                "requestedThreadDpiAwareness":"PerMonitorV2","dwmTransitionsDisabled":true,
+                "windowDpi":unsafe{GetDpiForWindow(ui.parent.get_handle())},
+                "scale":visual::scale(&ui.parent),"clientScreenOrigin":[screen.x,screen.y],
+                "clientSize":[size.width,size.height],"chatScreenOrigin":[chat_origin.x,chat_origin.y],
+                "chatClientSize":[chat_size.width,chat_size.height],"probes":probes});
+            std::fs::write(
+                directory.join(format!("assistant-overlay-screen-{label}.json")),
+                serde_json::to_vec_pretty(&metadata).unwrap(),
+            )
+            .unwrap();
+        }
+        let chat_size = ui.chat.get_client_size();
+        for y in [
+            chat_size.height / 3,
+            chat_size.height * 2 / 3,
+            chat_size.height - ui.chat.from_dip(40),
+        ] {
+            let point = ui
+                .chat
+                .client_to_screen(Point::new(chat_size.width - ui.chat.from_dip(5), y));
+            let hit = unsafe {
+                WindowFromPoint(POINT {
+                    x: point.x,
+                    y: point.y,
+                })
+            };
+            assert!(
+                hit == ui.chat.get_handle() || unsafe { IsChild(ui.chat.get_handle(), hit) } != 0,
+                "screen hit intercepted by the business page at {point:?}: {hit:?}"
+            );
+            let local = ui.parent.screen_to_client(point);
+            let pixel = image.get_pixel(local.x as u32, local.y as u32);
+            let expected = theme::theme().bg_card;
+            assert!(
+                (pixel[0] as i16 - expected.r as i16).abs() <= 3
+                    && (pixel[1] as i16 - expected.g as i16).abs() <= 3
+                    && (pixel[2] as i16 - expected.b as i16).abs() <= 3,
+                "background painted over overlay at {point:?}: {pixel:?}"
+            );
+            // Test the native leaf DC as well: a raised parent's sibling must
+            // exclude its entire descendant branch from painting here.
+            let local = background.screen_to_client(point);
+            let bg_size = background.get_client_size();
+            if local.x >= 0 && local.y >= 0 && local.x < bg_size.width && local.y < bg_size.height {
+                let dc = unsafe { GetDCEx(background.get_handle(), null_mut(), 0x2 | 0x10) };
+                assert!(!dc.is_null());
+                let visible = unsafe { PtVisible(dc, local.x, local.y) };
+                unsafe { ReleaseDC(background.get_handle(), dc) };
+                assert_eq!(
+                    visible, 0,
+                    "business descendant DC includes the overlay rectangle"
+                );
+            }
+        }
+        for control in [&ui.input as &dyn WxWidget, &ui.send] {
+            let size = control.get_client_size();
+            let point = control.client_to_screen(Point::new(size.width / 2, size.height / 2));
+            let hit = unsafe {
+                WindowFromPoint(POINT {
+                    x: point.x,
+                    y: point.y,
+                })
+            };
+            assert!(
+                hit == control.get_handle() || unsafe { IsChild(control.get_handle(), hit) } != 0,
+                "input/send target was obscured: {hit:?}"
+            );
+        }
+    }
+
+    /// Explicitly run with --ignored --exact and --test-threads=1. This shows
+    /// only an isolated synthetic native fixture; no Hub data/backend is used.
+    #[test]
+    #[ignore = "shows an isolated native fixture and captures actual screen pixels"]
+    fn assistant_overlay_stays_above_nested_native_pages_on_screen() {
+        let _dpi_context = ReviewDpiContext::enter();
+        wxdragon::app::render_offscreen(|| {
+            for (mode, suffix) in [
+                (theme::ThemeMode::Light, "light"),
+                (theme::ThemeMode::Dark, "dark"),
+            ] {
+                theme::init(mode);
+                let parent = Frame::builder()
+                    .with_title("Hub 浮层隔离验证（合成）")
+                    .with_position(Point::new(40, 40))
+                    .build();
+                let host = Panel::builder(&parent).build();
+                let shell = Shell::new(&host, &parent);
+                let api = ApiClient::new(
+                    "http://127.0.0.1:1".into(),
+                    super::super::text::GuiText::new(super::super::text::GuiLocale::ZhCn),
+                );
+                let ui = AssistantUi::build(&parent, &shell, api, false);
+                let mut pages = Vec::new();
+                for id in [PageId::Squad, PageId::Settings] {
+                    let (book, children) = nested_business_page(&shell, id);
+                    pages.push((id, book, children));
+                }
+                let column = BoxSizer::builder(Orientation::Vertical).build();
+                column.add(&shell.panel, 1, SizerFlag::Expand, 0);
+                host.set_sizer(column, false);
+                let outer = BoxSizer::builder(Orientation::Vertical).build();
+                outer.add(&host, 1, SizerFlag::Expand, 0);
+                parent.set_sizer(outer, false);
+                let u = ui.clone();
+                shell.on_changed(move |id| u.enter(id));
+                parent.set_size(visual::dip_size(&parent, 1168, 754));
+                // ScreenDC captures the composed image, including show/resize
+                // animations, while HWND hit tests use the final rectangle.
+                // Disable transitions only for this synthetic review frame.
+                let disabled = 1i32;
+                assert_eq!(
+                    unsafe {
+                        DwmSetWindowAttribute(
+                            parent.get_handle(),
+                            3, // DWMWA_TRANSITIONS_FORCEDISABLED
+                            (&disabled as *const i32).cast(),
+                            std::mem::size_of_val(&disabled) as u32,
+                        )
+                    },
+                    0,
+                    "synthetic review frame could not disable DWM transitions"
+                );
+                parent.show(true);
+                parent.raise();
+                ui.apply(json!({"enabled":true,"runtimeReady":true,"loggedIn":true,
+                    "modelServiceReady":true,"running":false,"conversationId":"native-fixture",
+                    "messages":[{"id":"fixture-user","role":"user","text":"检查这组配置"},
+                    {"id":"fixture-answer","role":"assistant","text":"可以，先查看当前配置。"}]}));
+                ui.chat.show(true);
+                for (width, height) in [(1168, 754), (900, 560)] {
+                    parent.set_size(visual::dip_size(&parent, width, height));
+                    layout_fixture(&parent, &host, &ui);
+                    for (id, book, children) in &pages {
+                        shell.navigate(*id);
+                        for (index, (scroll, canvas, input)) in children.iter().enumerate() {
+                            book.change_selection(index);
+                            book.layout();
+                            scroll.layout();
+                            scroll.fit_inside();
+                            scroll.scroll_coords(0, index as i32 * 18);
+                            input.change_value("刷新后的原生编辑框（合成）");
+                            canvas.refresh(true, None);
+                            input.refresh(true, None);
+                            parent.refresh(true, None);
+                            pump_native_messages();
+                            assert_screen_pixels(
+                                &ui,
+                                canvas,
+                                &format!("{suffix}-{width}-{}-{index}", id.title()),
+                            );
+                        }
+                    }
+                }
+                ui.input.set_value("收起后保留的草稿");
+                ui.collapse();
+                assert!(!ui.chat.is_shown());
+                ui.chat.show(true);
+                ui.position_chat();
+                assert_eq!(ui.input.get_value(), "收起后保留的草稿");
+                parent.iconize(true);
+                pump_native_messages();
+                assert!(parent.is_iconized());
+                assert!(ui.chat.is_shown());
+                parent.iconize(false);
+                pump_native_messages();
+                ui.position_chat();
+                assert_native_order(&ui);
+                parent.hide();
+                assert!(ui.chat.is_shown());
+                parent.show(true);
+                ui.position_chat();
+                pump_native_messages();
+                assert_native_order(&ui);
+                parent.destroy();
+                pump_native_messages();
+            }
+        })
+        .unwrap();
+    }
 }

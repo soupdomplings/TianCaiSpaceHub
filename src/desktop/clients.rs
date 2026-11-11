@@ -28,6 +28,18 @@ impl ClientId {
         Self::ZCode,
         Self::WebStorm,
     ];
+    /// Desktop navigation and user-selectable destinations. Hidden clients
+    /// remain in ALL so existing configurations and API integrations work.
+    pub const VISIBLE: [Self; 5] = [
+        Self::Codex,
+        Self::WorkBuddy,
+        Self::Tiangong,
+        Self::DeepSeekHarness,
+        Self::ZCode,
+    ];
+    pub fn is_visible(self) -> bool {
+        Self::VISIBLE.contains(&self)
+    }
     pub fn name(self) -> &'static str {
         match self {
             Self::Codex => "ChatGPT / Codex",
@@ -139,7 +151,21 @@ impl RecentClients {
     pub fn slots(&self) -> &[ClientId; 3] {
         &self.slots
     }
+    pub fn normalize_visible(&mut self) {
+        for index in 0..self.slots.len() {
+            if !self.slots[index].is_visible() {
+                self.slots[index] = ClientId::VISIBLE
+                    .into_iter()
+                    .find(|id| !self.slots.contains(id))
+                    .expect("visible clients can fill three recent slots");
+                self.last_used[index] = 0;
+            }
+        }
+    }
     pub fn visit(&mut self, client: ClientId) {
+        if !client.is_visible() {
+            return;
+        }
         if self.serial == u64::MAX {
             let minimum = *self.last_used.iter().min().unwrap_or(&0);
             for v in &mut self.last_used {
@@ -222,10 +248,46 @@ mod tests {
             recent.slots(),
             &[ClientId::Codex, ClientId::ZCode, ClientId::Tiangong]
         );
-        recent.visit(ClientId::WebStorm);
+        recent.visit(ClientId::DeepSeekHarness);
         assert_eq!(
             recent.slots(),
-            &[ClientId::Codex, ClientId::ZCode, ClientId::WebStorm]
+            &[ClientId::Codex, ClientId::ZCode, ClientId::DeepSeekHarness]
+        );
+    }
+    #[test]
+    fn hidden_clients_keep_backend_identity_but_do_not_enter_recent_navigation() {
+        for id in [ClientId::VsCode, ClientId::WebStorm] {
+            assert!(ClientId::ALL.contains(&id));
+            assert!(!id.is_visible());
+            assert_eq!(
+                serde_json::from_value::<ClientId>(serde_json::json!(id.key())).unwrap(),
+                id
+            );
+        }
+        let mut recent: RecentClients = serde_json::from_value(serde_json::json!({
+            "slots":["vscode","zcode","webstorm"],"last_used":[9,7,8],"serial":9
+        }))
+        .unwrap();
+        recent.normalize_visible();
+        assert_eq!(
+            recent.slots(),
+            &[ClientId::Codex, ClientId::ZCode, ClientId::WorkBuddy]
+        );
+        assert!(recent.validate());
+        assert_eq!(recent.last_used, [0, 7, 0]);
+        let saved = serde_json::to_value(&recent).unwrap();
+        recent.visit(ClientId::VsCode);
+        recent.visit(ClientId::WebStorm);
+        recent.normalize_visible();
+        assert_eq!(serde_json::to_value(&recent).unwrap(), saved);
+        recent.visit(ClientId::DeepSeekHarness);
+        assert_eq!(
+            recent.slots(),
+            &[
+                ClientId::DeepSeekHarness,
+                ClientId::ZCode,
+                ClientId::WorkBuddy
+            ]
         );
     }
 }

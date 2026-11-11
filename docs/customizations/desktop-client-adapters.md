@@ -1,5 +1,13 @@
 # 多客户端与外部模型接入：适配规格
 
+## VS Code 与 WebStorm 界面入口隐藏（本轮开发）
+
+日期：2026-11-11。用户要求在 Hub 界面隐藏 VS Code 和 WebStorm。当前只展示 ChatGPT / Codex、WorkBuddy、天工 Work、DeepSeek Harness、ZCode；侧栏、旧最近记录、概览活动图和状态卡、配置位置选择、添加模型来源与天工模型分享均按同一可见列表处理。旧导航及助手要求跳转隐藏端时返回概览；历史请求日志和统计来源名称保留。
+
+实现入口为 `src/desktop/clients.rs::ClientId::{VISIBLE,is_visible}`、`RecentClients::normalize_visible`，以及 `src/gui/{shell,preferences,overview,model_fields,client_overview,tiangong_models}.rs` 和 `src/gui.rs` 的客户端构建/绑定。`ALL`、枚举序列化身份、配置发现、模型 writer、启动器及 API 保持，不删除已有用户资料；天才搭档的后端工具仍支持原有端，真实验收使用的临时 VS Code 目标也不因界面隐藏而失效。旧最近记录采用原 JSON 格式，下一次正常导航按原保存流程写入已替换的槽位。
+
+回滚恢复可见列表和 GUI 投影即可重新展示两端，原配置和模型无需重建。管理会话已完成GUI测试目标编译；新增三个定向用例及受影响旧用例通过，纳入本批57项定向回归，唯一包见 [V23交付](../releases/v1.0.23.md)。未启动用户原有客户端或安装器，Windows实际界面及macOS待用户验收；既有两端后台测试结果保持各自版本归属。前文入口沿革见 [桌面视觉](../development/desktop-visual-system.md#2026-11-11-客户端入口精简本轮开发)，下文七端适配资料继续作为实现和兼容参考。
+
 ## Harness 模型不可见与“待核对”修正（未发布）
 
 日期：2026-11-11；关联 TC-018。开发基线为 `main` / `16f1118` 加 V1.0.19 后累计工作区，功能已提交于 `6b86df5`。状态：已实现，Windows GUI 测试目标离线编译及本专题 7 项合成回归通过，纳入 [V1.0.20 统一测试交付](../releases/v1.0.20.md)；本次 Harness 模型修复的用户反馈见下，其他范围待实机验收，未正式发布。

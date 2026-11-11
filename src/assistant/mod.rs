@@ -1,7 +1,10 @@
 //! One ephemeral assistant conversation per Hub process. Model auth is owned by Hub.
+#[cfg(test)]
+mod acceptance;
 pub(crate) mod model;
 mod proxy;
 pub(crate) mod settings;
+mod squad_tools;
 mod telemetry;
 pub(crate) mod tools;
 mod web;
@@ -130,6 +133,9 @@ tokio::task_local! {
     static TOOL_ACCOUNT: (String, ExpectedAccount);
 }
 pub(crate) async fn ensure_current_account(state: &SharedState) -> Result<()> {
+    tool_account(state).await.map(|_| ())
+}
+async fn tool_account(state: &SharedState) -> Result<(Arc<Squad>, ExpectedAccount)> {
     let (epoch, account) = TOOL_ACCOUNT
         .try_with(Clone::clone)
         .context("工具缺少当前会话身份")?;
@@ -141,7 +147,8 @@ pub(crate) async fn ensure_current_account(state: &SharedState) -> Result<()> {
         .bridge
         .clone()
         .context("天才搭档会话已结束")?;
-    bridge.ensure_account(&epoch, &account)
+    let squad = bridge.tool_squad(&epoch, &account)?;
+    Ok((squad, account))
 }
 #[cfg(test)]
 pub(crate) async fn test_tool_scope<F: std::future::Future>(

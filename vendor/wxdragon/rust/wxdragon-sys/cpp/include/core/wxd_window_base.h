@@ -163,6 +163,9 @@ WXD_EXPORTED void
 wxd_Window_Raise(wxd_Window_t* window);
 WXD_EXPORTED void
 wxd_Window_Lower(wxd_Window_t* window);
+// Opt-in native child overlay. Does not create/activate a top-level window.
+WXD_EXPORTED bool
+wxd_Window_RaiseChildOverlay(wxd_Window_t* window);
 
 // --- Mouse Capture Functions ---
 WXD_EXPORTED void

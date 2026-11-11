@@ -12,7 +12,18 @@ use crate::ai_gateway::config::{
 use super::UiHandles;
 use super::api::ApiClient;
 use super::text::GuiText;
-use super::widgets::{ProviderLogoKind, provider_logo_bitmap};
+use super::widgets::{LucideIconKind, ProviderLogoKind, lucide_icon_bitmap, provider_logo_bitmap};
+
+pub(super) fn is_minimax_channel(provider_type: &ProviderType, name: &str, base_url: &str) -> bool {
+    *provider_type == ProviderType::ChatCompletions
+        && (name.trim().to_ascii_lowercase().starts_with("minimax")
+            || url::Url::parse(base_url).is_ok_and(|url| {
+                matches!(
+                    url.host_str(),
+                    Some("api.minimax.cn" | "api.minimax.io" | "api.minimaxi.com")
+                )
+            }))
+}
 
 pub(super) type AiGwProviderRows = Rc<RefCell<Vec<AiGwProviderRow>>>;
 pub(super) type AiGwProviderModel = Rc<RefCell<CustomDataViewVirtualListModel>>;
@@ -335,7 +346,11 @@ fn ai_gw_provider_list_rows(config: Option<&AiGatewayConfig>, scope: u32) -> Vec
 }
 
 pub(super) fn provider_logo_variant(row: &AiGwProviderRow) -> Variant {
-    let bitmap = provider_logo_bitmap(provider_logo_kind(row), 18);
+    let bitmap = if is_minimax_channel(&row.provider_type, &row.name, &row.base_url) {
+        lucide_icon_bitmap(LucideIconKind::Router, 18)
+    } else {
+        provider_logo_bitmap(provider_logo_kind(row), 18)
+    };
     (&bitmap).into()
 }
 

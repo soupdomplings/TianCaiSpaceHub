@@ -252,7 +252,13 @@ impl DraftFields {
             .as_array()
             .into_iter()
             .flatten()
-            .filter(|s| s["enabled"] == true)
+            .filter(|s| {
+                s["enabled"] == true
+                    && ClientId::ALL
+                        .iter()
+                        .find(|id| s["client"] == id.key())
+                        .is_none_or(|id| id.is_visible())
+            })
             .cloned()
             .collect::<Vec<_>>();
         self.target.clear();

@@ -789,8 +789,16 @@ impl Squad {
         result
     }
     pub async fn prepare_import(&self, id: u64) -> Result<crate::external_import::ImportDraft> {
+        let expected = self.assistant_identity()?.context("请先登录天才小分队")?;
+        self.prepare_import_checked(id, &expected).await
+    }
+    pub(crate) async fn prepare_import_checked(
+        &self,
+        id: u64,
+        expected: &ExpectedAccount,
+    ) -> Result<crate::external_import::ImportDraft> {
         ensure!(id > 0, "请选择密钥");
-        let before = self.session()?.context("请先登录天才小分队")?;
+        let before = self.assistant_account(expected)?;
         let same_account = || -> Result<()> {
             ensure!(
                 self.session()?.is_some_and(
@@ -801,11 +809,12 @@ impl Squad {
             Ok(())
         };
         let ticket = self
-            .request(
+            .request_checked(
                 "POST",
                 &format!("/keys/{id}/external-import"),
                 vec![],
                 Some(json!({"target":"tiancaispace-hub","schema_version":1})),
+                Some(expected),
             )
             .await?;
         same_account()?;

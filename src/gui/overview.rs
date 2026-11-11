@@ -39,6 +39,21 @@ struct Hit {
     action: Action,
 }
 type Slot = Arc<Mutex<Option<Result<(String, Value, Option<Value>), String>>>>;
+
+fn visible_activity(mut activity: Value) -> Value {
+    for field in ["clients", "requests", "recentRequests", "mcpCalls"] {
+        if let Some(rows) = activity[field].as_array_mut() {
+            rows.retain(|row| {
+                ClientId::ALL
+                    .iter()
+                    .find(|id| row["client"] == id.key())
+                    .is_none_or(|id| id.is_visible())
+            });
+        }
+    }
+    activity
+}
+
 #[derive(Clone)]
 pub(super) struct Overview {
     pub page: Panel,
@@ -467,8 +482,11 @@ impl Overview {
         );
         std::thread::spawn(move || {
             let result = (|| {
-                let activity = api
-                    .get_with_timeout("/api/desktop/activity?live=true", Duration::from_secs(4))?;
+                let activity =
+                    visible_activity(api.get_with_timeout(
+                        "/api/desktop/activity?live=true",
+                        Duration::from_secs(4),
+                    )?);
                 let usage = if include_usage {
                     let fields = serde_json::to_value(&filter).unwrap_or_default();
                     let url = url::Url::parse_with_params(
@@ -684,5 +702,38 @@ fn compact(n: i64) -> String {
         format!("{:.1}K", n as f64 / 1000.)
     } else {
         n.to_string()
+    }
+}
+
+#[cfg(test)]
+mod visibility_tests {
+    use super::*;
+
+    #[test]
+    fn overview_hides_clients_and_their_live_edges_without_changing_other_sources() {
+        let rows = serde_json::json!([
+            {"client":"vscode","route":"hidden-code"},
+            {"client":"webstorm","route":"hidden-webstorm"},
+            {"client":"zcode","route":"visible"},
+            {"source":"local-assistance-mcp","route":"assistance"},
+            {"client":"genius-buddy","route":"buddy"}
+        ]);
+        let mut input = serde_json::json!({"at":42,"metadata":"keep"});
+        for field in ["clients", "requests", "recentRequests", "mcpCalls"] {
+            input[field] = rows.clone();
+        }
+        let filtered = visible_activity(input);
+        assert_eq!(filtered["at"], 42);
+        assert_eq!(filtered["metadata"], "keep");
+        for field in ["clients", "requests", "recentRequests", "mcpCalls"] {
+            assert_eq!(
+                filtered[field],
+                serde_json::json!([
+                    {"client":"zcode","route":"visible"},
+                    {"source":"local-assistance-mcp","route":"assistance"},
+                    {"client":"genius-buddy","route":"buddy"}
+                ])
+            );
+        }
     }
 }

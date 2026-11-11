@@ -1,5 +1,7 @@
 # TianCaiSpaceHub 文档总入口
 
+2026-11-11 **V1.0.23 搭档配置流水线与界面精简**：修正 Windows 原生业务页遮挡浮层，补充助手操作指引及参数回读；隐藏 WebStorm/VS Code，增加 MiniMax 厂商预设。最终GUI测试目标编译及57项定向回归通过，原真实模型7轮配置流程和屏幕夹具沿原输入复用；新增密钥创建/列表选择→渠道→临时ZCode指定模型的真实3轮流程通过，测试密钥已撤销。状态、唯一包及验证边界见 [V23 交付](releases/v1.0.23.md)，行为见 [搭档](customizations/genius-buddy.md)、[账户](customizations/tiancai-squad-account.md) 与 [客户端](customizations/desktop-client-adapters.md)。集成验证已通过，正在统一构建一份Windows测试包。
+
 2026-11-11 **V1.0.22 天才搭档对话修复与 Hub 内浮层**：修复新版 Server 拒绝旧 `readOnly.access` 参数的问题，配置、能力目录和会话请求复用 Hub Codex 流程，模型仍来自天才小分队。右下角纯对话图标，框内去产品标题，消息可复制、收起可续聊。Windows GUI 测试目标及 release 编译、46 个不同定向离线用例通过，唯一 MSI `152228` 的版本/升级/六项载荷核验通过。实现见 [搭档专题](customizations/genius-buddy.md)、[桌面视觉](development/desktop-visual-system.md)，包身份和验证边界见 [V22 交付](releases/v1.0.22.md)；真实界面、调用与 macOS 待用户验收。
 
 2026-11-11 **V1.0.21 天工增强启动与搭档 Server 修复**：使用 Hub 已保存的外部模型直接初始化天工本地工作区，保留任务恢复及真实官方登录状态；接入设置保留普通启动。搭档 Server 补桌面更新后的来源发现与新版 npm 布局，修复缺少运行端时的单次安装提醒，取消不下载。当前行为见 [天工专题](customizations/gmclaw.md#外部模型免登录增强启动v1021)、[搭档专题](customizations/genius-buddy.md)，构建及唯一测试包见 [V21 交付](releases/v1.0.21.md)。用户已确认 V1.0.20 DeepSeek 问题解决；其他客户端保持原配置路径，不能据此扩大为全部实机通过。

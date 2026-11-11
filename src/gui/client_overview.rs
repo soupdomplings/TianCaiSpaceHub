@@ -54,8 +54,10 @@ impl TopologyConnector {
             let height = size.height.max(1);
             let middle = height / 2;
             let trunk = width * 5 / 12;
-            let positions = if outgoing || state.kind == OverviewKind::Codex {
+            let positions = if outgoing {
                 [height / 6, middle, height * 5 / 6]
+            } else if state.kind == OverviewKind::Codex {
+                [height / 4, middle, height * 3 / 4]
             } else {
                 [height / 4, height * 3 / 4, height * 3 / 4]
             };
@@ -66,6 +68,7 @@ impl TopologyConnector {
             for index in indices {
                 let y = positions[index];
                 let visible = match (outgoing, state.kind, index) {
+                    (false, OverviewKind::Codex, 1) => false, // VS Code is hidden.
                     (true, OverviewKind::GmClaw, 1) => false, // Telegram is Codex-only.
                     (false, OverviewKind::WorkBuddy, 1 | 2) => false,
                     (false, OverviewKind::GmClaw, 2) => false,
@@ -167,13 +170,10 @@ pub(super) fn refresh(handles: &UiHandles, snapshot: Option<&DashboardSnapshot>,
     let kind = ui.kind.get();
     let text = handles.text;
     let is_codex = kind == OverviewKind::Codex;
-    for panel in [
-        &handles.codex_status,
-        &handles.vscode_status,
-        &handles.cli_status,
-    ] {
+    for panel in [&handles.codex_status, &handles.cli_status] {
         panel.panel.show(is_codex);
     }
+    handles.vscode_status.panel.hide();
     ui.model.panel.show(!is_codex);
     ui.bridge.panel.show(!is_codex);
     let online = snapshot.is_some_and(|value| value.service_online);
