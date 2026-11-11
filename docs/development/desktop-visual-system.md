@@ -6,7 +6,7 @@
 
 读取旧 `recent-clients.json` 时，仅把隐藏端所在的槽位替换为尚未占用的可见端，保留其他槽位的顺序及最近使用信息；正常后续导航按原方式保存。已知隐藏端的旧跳转和助手导航统一返回概览并正常完成导航确认。概览活动图在 GUI 投影中移除隐藏端及其请求/MCP 连接，ChatGPT 状态区隐藏 VS Code 卡片及对应连接线；历史请求日志、来源筛选和统计归属继续保留，避免丢失既有记录的说明。
 
-本轮不删除客户端配置、程序位置、模型副本和安装资料，不停用后台发现、writer 或 API。没有新增持久开关或配置格式迁移；恢复 GUI 可见列表及投影后，原有两端资料可继续展示。`ui-ux-pro-max` 两次定向查询没有命中适合原生桌面隐藏目的地的规则，未采用 Web 溢出或层级建议；本次沿现有原生导航处理。新增离线用例覆盖旧最近记录迁移、隐藏端导航回退、概览活动投影及后台身份保留，实际执行由管理会话统一记录；本子任务仅完成静态与格式检查，不独立运行产品、Cargo 或打包。用户实机、Windows 多屏及 macOS 待验收。
+本轮不删除客户端配置、程序位置、模型副本和安装资料，不停用后台发现、writer 或 API。没有新增持久开关或配置格式迁移；恢复 GUI 可见列表及投影后，原有两端资料可继续展示。`ui-ux-pro-max` 两次定向查询没有命中适合原生桌面隐藏目的地的规则，未采用 Web 溢出或层级建议；本次沿现有原生导航处理。新增离线用例覆盖旧最近记录迁移、隐藏端导航回退、概览活动投影及后台身份保留。管理会话最终GUI测试目标编译及本批57项定向回归通过，包含新增及受影响的可见性用例，见 [V23交付](../releases/v1.0.23.md)。用户实机、Windows多屏及macOS待验收。
 
 ## 2026-11-11 操作反馈与二级弹层精简
 
@@ -28,9 +28,9 @@
 
 vendor 范围限于 `rust/wxdragon/src/window.rs`、`rust/wxdragon-sys/cpp/src/window.cpp` 与 `cpp/include/core/wxd_window_base.h`，不全局改写所有 Panel/Book 的创建样式。移除 Shell 上没有原生效果的同名样式调用。回滚相关 GUI 与此三个 vendor 改动即可，不迁移或删除用户配置、会话目录及已保存成果。
 
-验证入口为 `gui::assistant::native_overlay_tests::assistant_overlay_stays_above_nested_native_pages_on_screen`，需显式 `--ignored --exact --test-threads=1`。该用例短暂显示隔离合成窗口，包含两层 `SimpleBook`、`ScrolledWindow`、原生多行 `TextCtrl` 和醒目图表 `Canvas`；覆盖浅深色、1168×754 / 900×560、顶层和嵌套切页、滚动、重新绘制、输入与发送命中、收起、最小化及隐藏恢复。断言检查真实 `HWND` 风格/父级/命中、业务叶级 DC 可见裁剪及屏幕像素；`TIANCAI_NATIVE_REVIEW_DIR` 指向忽略的 `target/` 子目录时保存实际 `ScreenDC` 图像，区别于旧隐藏 `WM_PRINT` 合成图。既有 `assistant_account_switch_and_pending_actions_fit_the_hub_overlay` 隐藏夹具补非零尺寸与原生层级检查。本子任务未运行 Cargo、合成 GUI、实际 Hub 或模型，由管理会话统一编译及运行并登记结果；当前不能把新增断言当成已经通过。真实 Hub 复测、Windows 多屏/DPI 与 macOS 另列验收状态。
+验证入口为 `gui::assistant::native_overlay_tests::assistant_overlay_stays_above_nested_native_pages_on_screen`，需显式 `--ignored --exact --test-threads=1`。该用例短暂显示隔离合成窗口，包含两层 `SimpleBook`、`ScrolledWindow`、原生多行 `TextCtrl` 和醒目图表 `Canvas`；覆盖浅深色、1168×754 / 900×560、顶层和嵌套切页、滚动、重新绘制、输入与发送命中、收起、最小化及隐藏恢复。断言检查真实 `HWND` 风格/父级/命中、业务叶级 DC 可见裁剪及屏幕像素；`TIANCAI_NATIVE_REVIEW_DIR` 指向忽略的 `target/` 子目录时保存实际 `ScreenDC` 图像，区别于旧隐藏 `WM_PRINT` 合成图。既有 `assistant_account_switch_and_pending_actions_fit_the_hub_overlay` 隐藏夹具补非零尺寸与原生层级检查。管理会话已统一编译和执行通过，详见下段；真实Hub新包复测、Windows多屏/DPI与macOS另列验收状态。
 
-管理会话前两轮屏幕用例均在首个像素采样失败，原生层级及命中已通过；人工核对截图，红色业务图表在浮层边界截止，消息及输入完整。Rust 测试 EXE 未带正式 GUI 的 DPI manifest，夹具已增加 `PerMonitorV2` 线程上下文并在结束后恢复。第二轮元数据记录卡片宽 630 px，但合成屏幕中的卡片约 620 px、全窗边缘有额外留白，符合首显 DWM 过渡期间的整体缩放；不能据此按固定偏移修正坐标。[DwmFlush](https://learn.microsoft.com/en-us/windows/win32/api/dwmapi/nf-dwmapi-dwmflush) 仅等待已排队更新呈现，不保证窗口过渡完成。本轮仅在隔离夹具首次显示前设置 `DWMWA_TRANSITIONS_FORCEDISABLED`，避免动画表面与 HWND 最终矩形不同，生产窗口不作此设置。客户区/浮层/采样点、请求的 DPI 上下文及真实窗口 DPI 保存为元数据；原右沿采样点、纯色容差、叶级 DC 裁剪和命中断言保持，不放宽颜色阈值。修正后的用例待管理会话重编与重新运行，前两轮失败记录保留；产品代码不因这次夹具调整改变。
+管理会话前两轮屏幕用例均在首个像素采样失败，原生层级及命中已通过；人工核对截图，红色业务图表在浮层边界截止，消息及输入完整。Rust 测试 EXE 未带正式 GUI 的 DPI manifest，夹具已增加 `PerMonitorV2` 线程上下文并在结束后恢复。第二轮元数据记录卡片宽 630 px，但合成屏幕中的卡片约 620 px、全窗边缘有额外留白，符合首显 DWM 过渡期间的整体缩放；不能据此按固定偏移修正坐标。[DwmFlush](https://learn.microsoft.com/en-us/windows/win32/api/dwmapi/nf-dwmapi-dwmflush) 仅等待已排队更新呈现，不保证窗口过渡完成。本轮仅在隔离夹具首次显示前设置 `DWMWA_TRANSITIONS_FORCEDISABLED`，避免动画表面与 HWND 最终矩形不同，生产窗口不作此设置。客户区/浮层/采样点、请求的 DPI 上下文及真实窗口 DPI 保存为元数据；原右沿采样点、纯色容差、叶级 DC 裁剪和命中断言保持，不放宽颜色阈值。修正后的用例已由管理会话重编并通过，约13秒完成16组屏幕截图及几何/像素/命中/DC检查，人工查看浅深色和大小窗口的4张代表图通过，见 [V23交付](../releases/v1.0.23.md)。前两轮失败记录保留；产品代码不因夹具调整改变，后续追加需求未修改浮层产品代码，复用本结果。
 
 ## V1.0.22 天才搭档窗口内对话浮层（2026-11-11）
 

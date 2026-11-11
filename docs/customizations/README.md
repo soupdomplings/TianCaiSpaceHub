@@ -1,6 +1,6 @@
 # 二开功能总表
 
-2026-11-11 **TC-016/018/019/023 V1.0.23 搭档流水线与界面精简**：Windows 浮层补原生裁剪，同源中文指引要求执行后回读；修正参数范围、身份和导航反馈。隐藏 WebStorm/VS Code、增加MiniMax厂商模板，以及当前用户密钥列表选择/创建后用引用配置渠道与指定客户端。GUI测试目标编译和57项定向回归通过；原真实模型7轮/屏幕检查与新增密钥3轮实测分别登记，正在统一构建，见 [搭档](genius-buddy.md)、[账户](tiancai-squad-account.md)、[客户端](desktop-client-adapters.md)、[V23 交付](../releases/v1.0.23.md)。
+2026-11-11 **TC-016/018/019/023 V1.0.23 搭档流水线与界面精简**：Windows浮层补原生裁剪，同源中文指引要求执行后回读；修正参数范围、身份和导航反馈。隐藏WebStorm/VS Code、增加MiniMax厂商模板，以及当前用户密钥列表选择/创建后用引用配置渠道与指定客户端。GUI测试目标编译和57项定向回归通过；原真实模型7轮/屏幕检查与新增密钥3轮实测分别登记。Windows release及唯一MSI `181709`的版本/升级/六项载荷核验通过，源码已推送`b05775a`，见 [搭档](genius-buddy.md)、[账户](tiancai-squad-account.md)、[客户端](desktop-client-adapters.md)、[V23交付](../releases/v1.0.23.md)。
 
 2026-11-11 **TC-016/023 V1.0.22 搭档对话与浮层修复**：对话改为 Hub 内容区浮层，右下角只留图标、框内无产品标题；修正新版 Server 拒绝旧只读权限字段的问题。GPT 模型与 API 继续来自小分队配置接口，其余配置、目录和会话请求复用 Hub Codex 实现。Windows 编译、46 个不同定向离线用例、唯一 MSI `152228` 及静态核验通过，真实界面/调用和 macOS 待用户验收。细节见 [天才搭档](genius-buddy.md)、[桌面视觉](../development/desktop-visual-system.md)，包身份与验证边界见 [V22 交付](../releases/v1.0.22.md)。
 

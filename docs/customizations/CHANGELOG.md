@@ -10,6 +10,7 @@
 - 最终 GUI 测试目标编译、57 个不同定向用例通过；复用未变输入的原生屏幕夹具和真实 Server/小分队模型7轮18工具调用。新增密钥流水线另以真实模型3轮8工具调用通过，核对临时ZCode原生配置，测试密钥已撤销，见 [V23 交付](../releases/v1.0.23.md)。macOS、真实安装、用户原有客户端与MiniMax连通待验收，不触发 Actions、标签或 Release。
 - 隐藏 WebStorm/VS Code 的导航、概览和可选目标，旧最近槽按可见客户端替换，原身份、发现、writer/API 和历史记录保留；MiniMax 新增厂商模板，复用 Chat Completions、可编辑基址及已有模型获取流程。
 - 助手新增当前用户脱敏 API 密钥列表、可用分组、按要求创建与指定密钥准备导入；凭据/票据留在 Hub，模型只接收引用、掩码与真实协议/模型设置，继续原厂商与客户端保存流程。账号切换和未知写入沿原保护，不自动重放创建。
+- Windows release及唯一MSI `181709`已生成，版本/升级/六项内嵌载荷核验通过；产品提交[`b05775a`](https://github.com/soupdomplings/TianCaiSpaceHub/commit/b05775adaa38e87dcb319108198b3efae235d0a8)已正常推送`main`，一并补齐前两项V22待同步提交。用户安装与实机验收、正式发布分别记录。
 
 行为、兼容和回滚见 [搭档专题](genius-buddy.md) 与 [视觉规范](../development/desktop-visual-system.md)。
 
