@@ -19,6 +19,8 @@ use std::collections::HashMap;
 use tokio::sync::oneshot;
 
 pub(super) const WORK_GUIDE: &str = include_str!("guide.md");
+#[path = "client_downloads.rs"]
+mod client_downloads;
 
 #[derive(Default)]
 pub(crate) struct ToolState {
@@ -310,7 +312,7 @@ pub(crate) fn definitions() -> Vec<Value> {
         ),
         spec(
             "hub_open_page",
-            "打开 Hub 相关页面并等待桌面实际切页回执；仅 opened=true 表示已打开。未打开、超时或不支持时如实说明。page=client时必须传client。用户要求分享WorkBuddy登录内置模型时用workbuddy-builtin-share，仅打开面板，由用户点启用并选择模型和客户端。",
+            "打开 Hub 相关页面并等待桌面实际切页回执；仅 opened=true 表示已打开。未打开、超时或不支持时如实说明。page=client时必须传client。仅软萌猫娘可在用户明确要求时用workbuddy-builtin-share揭示并打开分享面板；入口随后保留在WorkBuddy接入设置，重启恢复。取消勾选只隐藏入口，不停用已有分享。启用分享和授权由用户另行操作，完全访问不改变性格限制。",
             json!({"page":{"type":"string","enum":["overview","squad","sources","client","settings","help","assistant","workbuddy-builtin-share"]},"client":{"type":"string"}}),
             &["page"],
         ),
@@ -323,6 +325,7 @@ pub(crate) fn definitions() -> Vec<Value> {
     ];
     definitions.extend(super::squad_tools::definitions());
     definitions.extend(super::usage_tools::definitions());
+    definitions.push(client_downloads::definition());
     definitions.push(super::questions::definition());
     definitions
 }
@@ -1758,6 +1761,10 @@ async fn open_page(
             json!({"opened":false,"page":page,"client":args["client"],"code":"unsupported","message":"此客户端页面当前隐藏，未打开"}),
         );
     }
+    if page == "workbuddy-builtin-share" {
+        super::require_builtin_sharing(state).await?;
+        state.workbuddy_builtin.reveal(&state.config_path).await?;
+    }
     let id = uuid::Uuid::new_v4().to_string();
     let (send, receive) = oneshot::channel();
     {
@@ -1810,17 +1817,20 @@ pub(crate) async fn call(state: &SharedState, name: &str, args: Value) -> Result
         "hub_squad_prepare_api_key" => super::squad_tools::prepare_key(state, args).await?,
         "hub_query_usage" => super::usage_tools::usage(state, args).await?,
         "hub_query_requests" => super::usage_tools::requests(state, args).await?,
+        "hub_client_downloads" => client_downloads::downloads(&args)?,
         "hub_open_page" => open_page(state, &args, std::time::Duration::from_secs(15)).await?,
         "hub_help" => {
-            json!({"assistant":"天才搭档可直接查询用量、实际扣费和请求记录，读取配置、添加修改普通渠道/模型、调整支持参数、配置到客户端及删除专用渠道/客户端模型。普通模式删除集中确认一次，用户开启完全访问后按明确指令直接执行；模型有歧义仍先询问选择。可选当前小分队密钥或按要求新建后准备导入，外部凭据用本机表单输入。",
-            "capabilities":{"usage":"hub_query_usage：今天/近周月/自定日期，按模型、当前用户密钥/分组筛选；squad实际人民币账单，hub本机Token/请求统计","requests":"hub_query_requests：按来源、日期及模型等分页查询记录，默认不返回正文和凭据","configuration":"hub_read_configuration、hub_resolve_model、hub_read_channel_models、hub_save_channel、hub_add_model、hub_configure_client、hub_set_model_parameters、hub_delete_configurations","questions":"hub_ask_user：必要的目标和参数选择使用本机结构化选项，不代替删除授权或凭据表单","accountKeys":"hub_squad_list_api_keys、hub_squad_key_options、hub_squad_create_api_key、hub_squad_prepare_api_key","navigation":"hub_open_page：等待桌面实际切页回执，opened=true才算已打开；只有用户要求看页面或工具确实无法完成时才打开，不替代已经支持的查询和配置"},
+            json!({"assistant":"天才搭档能帮你整理模型渠道、把模型配置到指定客户端、调整参数和删除明确配置，也能查用量、扣费与请求记录，选择或创建小分队 API 密钥并接入模型。需要安装客户端时，可提供官方下载入口和安装指引。",
+            "capabilities":{"usage":"hub_query_usage：今天/近周月/自定日期，按模型、当前用户密钥/分组筛选；squad实际人民币账单，hub本机Token/请求统计","requests":"hub_query_requests：按来源、日期及模型等分页查询记录，默认不返回正文和凭据","configuration":"hub_read_configuration、hub_resolve_model、hub_read_channel_models、hub_save_channel、hub_add_model、hub_configure_client、hub_set_model_parameters、hub_delete_configurations","questions":"hub_ask_user：必要的目标和参数选择使用本机结构化选项，不代替删除授权或凭据表单","accountKeys":"hub_squad_list_api_keys、hub_squad_key_options、hub_squad_create_api_key、hub_squad_prepare_api_key","clientDownloads":"hub_client_downloads：提供当前可见客户端的官方下载安装入口和步骤；只提供链接，安装由用户在本机完成","navigation":"hub_open_page：等待桌面实际切页回执，opened=true才算已打开；只有用户要求看页面或工具确实无法完成时才打开，不替代已经支持的查询和配置"},
+            "responseStyle":"用户问能做什么时，先用一至三句说明可做的事，可举一两个贴近问题的例子；不要主动罗列不能做的清单。只有用户提出具体未支持操作时，简短说明当前可提供的下一步。",
             "workGuide":WORK_GUIDE,
-            "localActions":{"tiangongBuiltinShare":"用户明确说‘打开天工内置模型分享’时由本机打开专用面板；默认隐藏。这里只打开界面，原生接入、登录及分享必须在现成表单中由用户选择。不能用hub_open_page或其他配置工具自动开启这个入口。","workbuddyBuiltinShare":"用户要求使用WorkBuddy登录内置模型时，hub_open_page({page:workbuddy-builtin-share})只打开分享面板；由用户启用，读取当前账户目录并选择模型和目标客户端。凭据由WorkBuddy宿主管理，调用费用和额度沿该账号，不是搭档管理员费用。已运行客户端需要用户先正常退出再启用，不替用户强退任务。"},
+            "builtinShareAllowed":super::builtin_sharing_allowed(state).await,
+            "localActions":{"tiangongBuiltinShare":"仅当前本机性格为软萌猫娘时，用户明确说‘打开天工 Work 内置模型分享’可由本机打开专用面板；默认隐藏。这里只打开界面，原生接入、登录及分享必须在现成表单中由用户选择。不能用hub_open_page或其他配置工具自动开启这个入口。","workbuddyBuiltinShare":"仅当前本机性格为软萌猫娘时，用户明确要求使用WorkBuddy登录内置模型可用hub_open_page({page:workbuddy-builtin-share})只打开分享面板，并将入口保留在WorkBuddy接入设置，重启Hub后恢复。取消勾选只隐藏入口，已有分享、授权和已配置模型继续保留；下次对话再次明确要求打开才重新揭示。入口可见不代表分享已启用，启用和停用通过独立操作管理；启用时由用户明确授权导入当前会话所需的最小授权，再选择模型和目标客户端。面板确认授权就绪后，可真正退出WorkBuddy，授权有效时由Hub独立调用；失效时需重新登录授权。授权由系统凭据库保护，不进入普通配置、工具输出或目标客户端，不读取主解密密钥。费用和额度沿WorkBuddy账户，不是搭档管理员费用。已有任务需要用户先正常退出再启用。干练搭档和温柔女友不能触发两项分享入口或启停；完全访问不覆盖此规则，切换不自动停用现有分享。"},
             "hub":"天才空间 Hub 统一连接模型渠道与多个桌面客户端；客户端模型配置为独立副本，修改来源不会自动同步副本。",
             "navigation":{"models":"左侧模型与渠道；各客户端的模型页管理独立副本","squad":"天才小分队：登录、账户、密钥、使用记录、充值和订阅；按账户权限显示组织功能","tiangongAssistance":"天工 Work → 接入设置 → 本机协助","dumpling":"左侧 Dumpling-MCP 独立入口"},
             "billing":"天才搭档模型由小分队管理员指定并承担费用；天工协助沿用其原模型来源。",
             "temporary":"收起保留对话；停止中断执行；清空删除临时内容；真正退出 Hub 结束后台并清理，已保存配置和主动另存成果保留。",
-            "boundary":"助手可查询本机用量/请求及当前账户用量/扣费，读取当前用户密钥/分组、按要求创建密钥并准备导入；不能修改或撤销已有站点密钥、安装或移除运行端、启动或修复客户端、修改账户资料/组织/支付、管理Skill/MCP、删除任意文件、执行系统命令或发起模型连通性测试；可说明步骤并请求打开对应页面。"})
+            "boundary":"按现有工具完成用户明确交办的操作；普通模式删除集中确认一次，完全访问按明确指令执行，模型有歧义时先询问。提供下载链接、打开页面、保存配置分别按实际结果说明，不把指引或排队当作已完成。具体操作暂未接入工具时，说明一个可行步骤或合适入口即可。用户模型API的后续费用沿站点原规则。"})
         }
         _ => bail!("天才搭档不支持工具 {name}"),
     };
@@ -2530,6 +2540,61 @@ mod tests {
         );
     }
     #[tokio::test]
+    async fn client_download_guidance_limits_links_and_never_claims_installation() {
+        let (_temp, state) = fixture();
+        let all = call(&state, "hub_client_downloads", json!({}))
+            .await
+            .unwrap();
+        let clients = all["clients"].as_array().unwrap();
+        assert_eq!(
+            clients
+                .iter()
+                .map(|entry| entry["client"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ClientId::VISIBLE.map(ClientId::key)
+        );
+        assert_eq!(all["automaticInstall"], false);
+        assert_eq!(all["downloaded"], false);
+        assert_eq!(all["opened"], false);
+
+        let selected = call(
+            &state,
+            "hub_client_downloads",
+            json!({"client":"workbuddy"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(selected["clients"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            selected["clients"][0]["downloadUrl"],
+            "https://www.workbuddy.cn/"
+        );
+        assert!(selected["clients"][0]["installationGuides"]["windows"].is_string());
+
+        // A caller cannot reveal hidden clients or turn guidance into a fetch
+        // of an arbitrary URL. The registered schema advertises the same scope.
+        for args in [
+            json!({"client":"vscode"}),
+            json!({"client":"webstorm"}),
+            json!({"client":"https://untrusted.example/installer.exe"}),
+            json!({"url":"https://untrusted.example/installer.exe"}),
+        ] {
+            assert!(call(&state, "hub_client_downloads", args).await.is_err());
+        }
+        let schema = definitions()
+            .into_iter()
+            .find(|entry| entry["name"] == "hub_client_downloads")
+            .unwrap();
+        assert_eq!(
+            schema["inputSchema"]["properties"]["client"]["enum"],
+            json!(ClientId::VISIBLE.map(ClientId::key))
+        );
+        assert_eq!(schema["inputSchema"]["additionalProperties"], false);
+        let help = call(&state, "hub_help", json!({})).await.unwrap();
+        assert!(help["capabilities"]["clientDownloads"].is_string());
+    }
+
+    #[tokio::test]
     async fn help_and_navigation_report_only_the_actual_desktop_acknowledgement() {
         let (_temp, state) = fixture();
         let help = call(&state, "hub_help", json!({})).await.unwrap();
@@ -2588,6 +2653,8 @@ mod tests {
         assert!(result.get("queued").is_none());
         assert!(public_status(&state).await["navigation"].is_null());
 
+        super::super::test_personality(&state, super::super::personality::Personality::Catgirl)
+            .await;
         let work = state.clone();
         let task = tokio::spawn(async move {
             call(
@@ -2637,6 +2704,102 @@ mod tests {
         })
         .await
         .unwrap()
+    }
+    #[tokio::test]
+    async fn builtin_share_navigation_uses_the_local_personality_even_with_full_access() {
+        use super::super::personality::Personality;
+        let (_temp, state) = fixture();
+        assert!(
+            !state
+                .workbuddy_builtin
+                .feature_visible(&state.config_path)
+                .unwrap(),
+            "a new Hub must not reveal the WorkBuddy feature"
+        );
+        call(&state, "hub_read_configuration", json!({}))
+            .await
+            .unwrap();
+        call(&state, "hub_help", json!({})).await.unwrap();
+        assert!(
+            !state
+                .workbuddy_builtin
+                .feature_visible(&state.config_path)
+                .unwrap(),
+            "configuration reads and help must not reveal the feature"
+        );
+        state.assistant.inner.lock().await.full_access = true;
+        for style in [Personality::Professional, Personality::Girlfriend] {
+            super::super::test_personality(&state, style).await;
+            let help = call(&state, "hub_help", json!({})).await.unwrap();
+            assert_eq!(help["builtinShareAllowed"], false);
+            let refused = call(
+                &state,
+                "hub_open_page",
+                json!({"page":"workbuddy-builtin-share","personality":"catgirl"}),
+            )
+            .await
+            .unwrap_err();
+            assert!(refused.to_string().contains("仅向软萌猫娘开放"));
+            assert!(public_status(&state).await["navigation"].is_null());
+            assert!(
+                !state
+                    .workbuddy_builtin
+                    .feature_visible(&state.config_path)
+                    .unwrap()
+            );
+        }
+        super::super::test_personality(&state, Personality::Catgirl).await;
+        assert_eq!(
+            call(&state, "hub_help", json!({})).await.unwrap()["builtinShareAllowed"],
+            true
+        );
+        assert!(public_status(&state).await["navigation"].is_null());
+        assert!(
+            !state
+                .workbuddy_builtin
+                .feature_visible(&state.config_path)
+                .unwrap()
+        );
+
+        let work = state.clone();
+        let task = tokio::spawn(async move {
+            call(
+                &work,
+                "hub_open_page",
+                json!({"page":"workbuddy-builtin-share"}),
+            )
+            .await
+        });
+        let id = pending_navigation(&state).await;
+        assert!(
+            state
+                .workbuddy_builtin
+                .feature_visible(&state.config_path)
+                .unwrap()
+        );
+        assert!(
+            !task.is_finished(),
+            "revealed is not an opened-page acknowledgement"
+        );
+        navigation_ack(
+            State(state.clone()),
+            headers(),
+            Json(NavigationAck {
+                id,
+                opened: true,
+                message: Some("分享面板已打开".into()),
+            }),
+        )
+        .await;
+        let opened = task.await.unwrap().unwrap();
+        assert_eq!(opened["opened"], true);
+        assert_eq!(opened["message"], "分享面板已打开");
+        assert!(public_status(&state).await["navigation"].is_null());
+        let restarted = crate::desktop::workbuddy_builtin::Service::default();
+        assert!(
+            restarted.feature_visible(&state.config_path).unwrap(),
+            "visibility is persisted for a fresh service after restart"
+        );
     }
     #[tokio::test]
     async fn navigation_timeout_stop_and_builtin_share_do_not_claim_a_page_opened() {

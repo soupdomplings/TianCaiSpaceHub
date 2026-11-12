@@ -1,4 +1,4 @@
-//! The target client's tools stay with that client; the host only relays bytes.
+//! The target client's tools stay with that client; Hub relays model protocol.
 use super::{GatewayError, ProviderConfig, StatusCode, provider_timeout};
 use std::time::Duration;
 
@@ -19,14 +19,22 @@ pub(super) async fn execute(
         .workbuddy_builtin
         .as_ref()
         .ok_or_else(|| GatewayError::bad_request("WorkBuddy 模型绑定不存在"))?;
+    let deadline = context
+        .and_then(|c| c.upstream_deadline)
+        .unwrap_or_else(|| tokio::time::Instant::now() + provider_timeout(provider.timeout_secs));
+    if let Some(runtime) = state
+        .workbuddy_builtin
+        .direct_for(binding)
+        .await
+        .map_err(|e| GatewayError::bad_request(e.to_string()))?
+    {
+        return runtime.forward(binding, request, deadline).await;
+    }
     let reference = state
         .workbuddy_builtin
         .reference(binding)
         .await
         .map_err(|e| GatewayError::bad_request(e.to_string()))?;
-    let deadline = context
-        .and_then(|c| c.upstream_deadline)
-        .unwrap_or_else(|| tokio::time::Instant::now() + provider_timeout(provider.timeout_secs));
     transport(request, provider, reference, deadline).await
 }
 

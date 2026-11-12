@@ -200,6 +200,7 @@ mod resource_gallery;
 mod resources;
 mod runtime_scene;
 mod session_history;
+mod tiangong_history;
 mod shell;
 mod skill_market;
 mod squad;
@@ -221,6 +222,7 @@ mod visual;
 mod widgets;
 mod workbuddy;
 mod workbuddy_builtin;
+mod workbuddy_share_settings;
 
 use self::ai_gateway::{
     AiGwActionResult, AiGwChannelToggle, AiGwProviderModel, AiGwProviderRow, AiGwProviderRows,

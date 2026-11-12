@@ -507,14 +507,17 @@ impl BuiltinSharePanel {
                 .unwrap_or(0);
             self.models.set_selection(index as u32);
         }
-        self.prepare.enable(!rows.is_empty());
+        let allowed = view["builtinShareAllowed"] == true;
+        self.prepare.enable(allowed && !rows.is_empty());
         self.share.enable(
-            self.models
+            allowed && self.models
                 .get_selection()
                 .and_then(|index| rows.get(index as usize))
                 .is_some_and(|model| model["configured"] == true),
         );
-        self.status.set_label(if rows.is_empty() {
+        self.status.set_label(if !allowed {
+            "内置模型分享仅向软萌猫娘开放，请先切换对话性格。"
+        } else if rows.is_empty() {
             "未发现内置模型，请检查天工安装及配置。"
         } else if view["parametersCurrent"] == true {
             "已读取现有配置。选择模型后分享，已有配置保留。"
@@ -615,11 +618,14 @@ pub(super) fn show_builtin_share(parent: &Frame, api: &ApiClient) -> bool {
     ) else {
         return false;
     };
+    if view["builtinShareAllowed"] != true {
+        return false;
+    }
     let panel = builtin_share_panel(parent, view);
     let selection = panel.clone();
     panel.models.on_selection_changed(move |_| {
         selection.share.enable(
-            selection
+            selection.view.borrow()["builtinShareAllowed"] == true && selection
                 .selected()
                 .is_some_and(|model| model["configured"] == true),
         )
@@ -685,11 +691,17 @@ fn hidden_builtin_share_panel_reads_state_without_preparing_or_changing_existing
     wxdragon::app::render_offscreen(|| {
         theme::init(theme::ThemeMode::Light);
         let parent=Frame::builder().with_title("hidden builtin share state").build();
-        let view=json!({"revision":"unchanged","models":[{"id":"tiangong-builtin","name":"内置模型","configured":false}],
+        let view=json!({"revision":"unchanged","builtinShareAllowed":true,"models":[{"id":"tiangong-builtin","name":"内置模型","configured":false}],
             "shares":[{"modelId":"tiangong-builtin","targetId":"existing-target"}]});
         let panel=builtin_share_panel(&parent,view.clone());
         assert_eq!(*panel.view.borrow(),view);
         assert!(panel.prepare.is_enabled()); assert!(!panel.share.is_enabled());
+        let mut other_style = view.clone();
+        other_style["builtinShareAllowed"] = false.into();
+        panel.apply(other_style.clone());
+        assert!(!panel.prepare.is_enabled() && !panel.share.is_enabled());
+        assert_eq!(*panel.view.borrow(), other_style);
+        assert_eq!(panel.view.borrow()["shares"], view["shares"]);
         assert!(!panel.dialog.is_shown());
         panel.dialog.destroy(); parent.destroy();
     }).unwrap();

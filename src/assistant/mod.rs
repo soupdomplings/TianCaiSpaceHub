@@ -130,6 +130,29 @@ pub(crate) async fn configure_personality(
 pub(crate) async fn configure_full_access(state: &SharedState, full_access: bool) -> Result<()> {
     command(state, |reply| Control::FullAccess(full_access, reply)).await
 }
+
+pub(crate) async fn builtin_sharing_allowed(state: &SharedState) -> bool {
+    state
+        .assistant
+        .inner
+        .lock()
+        .await
+        .personality
+        .allows_builtin_sharing()
+}
+
+pub(crate) async fn require_builtin_sharing(state: &SharedState) -> Result<()> {
+    ensure!(
+        builtin_sharing_allowed(state).await,
+        "内置模型分享仅向软萌猫娘开放，请先切换对话性格"
+    );
+    Ok(())
+}
+
+#[cfg(test)]
+pub(crate) async fn test_personality(state: &SharedState, personality: personality::Personality) {
+    state.assistant.inner.lock().await.personality = personality;
+}
 pub(super) async fn full_access(state: &SharedState) -> bool {
     state.assistant.inner.lock().await.full_access
 }
@@ -204,7 +227,8 @@ pub(crate) async fn status(state: &SharedState) -> Result<Value> {
     let inner = state.assistant.inner.lock().await;
     let enabled = inner.enabled;
     let mut value = json!({"enabled":enabled,"personality":inner.personality,"fullAccess":inner.full_access,
-        "tiangongBuiltinShareVisible":state.assistant.share_visible.load(Ordering::Acquire),
+        "builtinShareAllowed":inner.personality.allows_builtin_sharing(),
+        "tiangongBuiltinShareVisible":inner.personality.allows_builtin_sharing() && state.assistant.share_visible.load(Ordering::Acquire),
         "loggedIn":inner.logged_in,"conversationId":inner.conversation,
         "modelServiceReady":inner.config.is_some(),"model":inner.config.as_ref().map(|c|&c.model),
         "billing":{"payer":"administrator","chargeUser":false,"chargeOrganization":false},"notice":inner.config.as_ref().and_then(|c|c.notice.as_deref()),
@@ -393,6 +417,7 @@ pub(crate) async fn run(state: SharedState) {
                             let mut inner=state.assistant.inner.lock().await;
                             let result=if !inner.enabled {Err(anyhow::anyhow!("请先启用天才搭档"))}
                                 else if inner.running {Err(anyhow::anyhow!("请等待当前回复，或先停止"))}
+                                else if !inner.personality.allows_builtin_sharing() {Err(anyhow::anyhow!("内置模型分享仅向软萌猫娘开放，请先切换对话性格"))}
                                 else {
                                     state.assistant.share_visible.store(true,Ordering::Release);
                                     inner.messages.push(Message{id:uuid::Uuid::new_v4().to_string(),role:"user",text,status:"completed"});

@@ -29,6 +29,7 @@ mod oauth;
 mod onboarding;
 pub(crate) mod plugins;
 mod squad;
+mod tiangong_history;
 mod workbuddy_builtin;
 pub(crate) mod workbuddy_launch;
 
@@ -259,6 +260,7 @@ pub fn router(state: SharedState) -> Router {
         .merge(crate::local_assistance::web::router())
         .merge(crate::assistant::router())
         .merge(workbuddy_builtin::router())
+        .merge(tiangong_history::router())
         .merge(crate::desktop::mcp_bridge::router())
         .merge(desktop_models::router())
         .merge(squad::router())

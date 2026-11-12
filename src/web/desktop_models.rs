@@ -70,9 +70,12 @@ async fn read_tiangong_builtins(State(state): State<SharedState>, headers: Heade
     }
     let config = state.config.lock().await.clone();
     let path = state.config_path.clone();
+    let allowed = crate::assistant::builtin_sharing_allowed(&state).await;
     response(
         tokio::task::spawn_blocking(move || {
-            crate::desktop::tiangong_models::account_view(&path, &config)
+            let mut view = crate::desktop::tiangong_models::account_view(&path, &config);
+            view["builtinShareAllowed"] = allowed.into();
+            view
         })
         .await
         .map_err(|_| anyhow::anyhow!("读取中断，请重新读取天工内置模型")),
@@ -85,6 +88,11 @@ async fn connect_tiangong_builtins(
 ) -> Response {
     if let Err(e) = trusted(&headers) {
         return response::<Value>(Err(e));
+    }
+    if request.native {
+        if let Err(error) = crate::assistant::require_builtin_sharing(&state).await {
+            return response::<Value>(Err(error));
+        }
     }
     let path = state.config_path.clone();
     // Network login does not hold the live config lock. The final save checks
@@ -101,7 +109,11 @@ async fn connect_tiangong_builtins(
             *config = latest;
         }
     }
-    response(result)
+    let allowed = crate::assistant::builtin_sharing_allowed(&state).await;
+    response(result.map(|mut value| {
+        value["builtinShareAllowed"] = allowed.into();
+        value
+    }))
 }
 
 #[derive(Deserialize)]
@@ -119,6 +131,9 @@ async fn share_tiangong_builtin(
 ) -> Response {
     if let Err(e) = trusted(&headers) {
         return response::<Value>(Err(e));
+    }
+    if let Err(error) = crate::assistant::require_builtin_sharing(&state).await {
+        return response::<Value>(Err(error));
     }
     let config = state.config.lock().await.clone();
     if config.revision.as_deref() != Some(request.revision.as_str())
@@ -341,6 +356,9 @@ async fn enable_tiangong_builtins(
     if let Err(e) = trusted(&headers) {
         return response::<Value>(Err(e));
     }
+    if let Err(error) = crate::assistant::require_builtin_sharing(&state).await {
+        return response::<Value>(Err(error));
+    }
     let mut current = state.config.lock().await;
     let path = state.config_path.clone();
     let outcome = tokio::task::spawn_blocking(move || {
@@ -353,7 +371,10 @@ async fn enable_tiangong_builtins(
             if let Ok(latest) = latest {
                 *current = latest;
             }
-            response(result)
+            response(result.map(|mut value| {
+                value["builtinShareAllowed"] = true.into();
+                value
+            }))
         }
         Err(_) => response::<Value>(Err(anyhow::anyhow!(
             "操作中断，请重新读取状态，不会自动重复保存"
@@ -811,6 +832,33 @@ async fn copy_legacy(
 mod copy_contract_tests {
     use super::*;
     #[tokio::test]
+    async fn non_catgirl_builtin_actions_do_not_read_login_or_modify_configuration() {
+        use crate::assistant::personality::Personality;
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("hub.toml");
+        let mut config = AppConfig { state_path: temp.path().join("state.json"), ..Default::default() };
+        config.save(&path).unwrap();
+        let state = crate::app_state::AppState::new(path.clone(), AppConfig::load_or_default(&path).unwrap(), None, None);
+        let mut headers = HeaderMap::new();
+        headers.insert("x-tiancai-desktop", "1".parse().unwrap());
+        let before = std::fs::read(&path).unwrap();
+        for style in [Personality::Professional, Personality::Girlfriend] {
+            crate::assistant::test_personality(&state, style).await;
+            let results = [
+                connect_tiangong_builtins(State(state.clone()), headers.clone(), Json(crate::desktop::tiangong_models::ConnectRequest { revision: "not-used".into(), username: String::new(), password: String::new(), native: true })).await,
+                enable_tiangong_builtins(State(state.clone()), headers.clone(), Json(crate::desktop::tiangong_models::EnableRequest { revision: "not-used".into(), catalog_revision: String::new(), model_ids: vec![], pat: String::new(), user_id: String::new() })).await,
+                share_tiangong_builtin(State(state.clone()), headers.clone(), Json(ShareBuiltin { revision: "not-used".into(), model_id: "not-used".into(), targets: vec![] })).await,
+            ];
+            for result in results {
+                assert_eq!(result.status(), axum::http::StatusCode::CONFLICT);
+                let body = axum::body::to_bytes(result.into_body(), 4096).await.unwrap();
+                let body: Value = serde_json::from_slice(&body).unwrap();
+                assert!(body["error"].as_str().unwrap().contains("仅向软萌猫娘开放"));
+            }
+            assert_eq!(std::fs::read(&path).unwrap(), before);
+        }
+    }
+    #[tokio::test]
     async fn codex_builtin_removed_from_visible_list_is_reused_on_the_next_share() {
         use crate::desktop::{
             clients::ClientId,
@@ -858,6 +906,7 @@ mod copy_contract_tests {
             None,
             None,
         );
+        crate::assistant::test_personality(&state, crate::assistant::personality::Personality::Catgirl).await;
         let mut headers = HeaderMap::new();
         headers.insert(
             "x-tiancai-desktop",
@@ -937,6 +986,7 @@ mod copy_contract_tests {
             None,
             None,
         );
+        crate::assistant::test_personality(&state, crate::assistant::personality::Personality::Catgirl).await;
         let mut headers = HeaderMap::new();
         headers.insert(
             "x-tiancai-desktop",

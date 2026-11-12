@@ -14,7 +14,8 @@ use std::{
 const MAX_LINK_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_OWNED_REPLY_IDS: usize = 128;
 const MAX_SAFE_MESSAGE_ID: i64 = 9_007_199_254_740_991;
-static LINK_IO: std::sync::LazyLock<Arc<Mutex<()>>> =
+const IM_USER_ID: &str = crate::tiangong_session_history::GATEWAY_USER_ID;
+pub(super) static LINK_IO: std::sync::LazyLock<Arc<Mutex<()>>> =
     std::sync::LazyLock::new(|| Arc::new(Mutex::new(())));
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -213,7 +214,7 @@ pub(super) async fn register(
     let task_id = format!("tiancaispacehub-{}", uuid::Uuid::new_v4());
     session.desktop = Some(DesktopContext {
         task_id: task_id.clone(),
-        user_id: "local".into(),
+        user_id: IM_USER_ID.into(),
         model_name: model_name.clone(),
         max_steps: config.max_steps,
         owned_reply_ids: Vec::new(),
@@ -233,18 +234,10 @@ pub(super) async fn register(
         )
         .await?;
     let project = project_for(&task, &session.project_path);
-    let metadata = DesktopSessionMetadata {
-        session_id: session.id.clone(),
-        title: session.title.clone(),
-        model_name: model_name.clone(),
-        project_id: project.id.clone(),
-        max_steps: config.max_steps,
-        extra_data: json!({"desktop":true,"project":project}),
-        ..Default::default()
-    };
+    let metadata = new_session_metadata(session, &project, &model_name, config.max_steps);
     session.desktop = Some(DesktopContext {
         task_id,
-        user_id: "local".into(),
+        user_id: IM_USER_ID.into(),
         project,
         model_name,
         max_steps: config.max_steps,
@@ -252,6 +245,24 @@ pub(super) async fn register(
     });
     client.create_session_metadata(&metadata).await?;
     Ok(())
+}
+
+fn new_session_metadata(
+    session: &Session,
+    project: &GmClawProject,
+    model_name: &str,
+    max_steps: u32,
+) -> DesktopSessionMetadata {
+    DesktopSessionMetadata {
+        session_id: session.id.clone(),
+        title: session.title.clone(),
+        user_id: IM_USER_ID.into(),
+        model_name: model_name.into(),
+        project_id: project.id.clone(),
+        max_steps,
+        extra_data: json!({"desktop":true,"project":project}),
+        ..Default::default()
+    }
 }
 
 fn project_for(task: &DesktopTask, fallback: &str) -> GmClawProject {
@@ -403,12 +414,7 @@ pub(super) async fn restore(
             project.id = metadata.project_id.clone();
         }
     }
-    let user_id = metadata
-        .as_ref()
-        .map(|metadata| metadata.user_id.clone())
-        .filter(|id| !id.is_empty())
-        .or_else(|| link.as_ref().map(|link| link.context.user_id.clone()))
-        .unwrap_or_else(|| "local".into());
+    let user_id = restored_user_id(metadata.as_ref(), link.as_ref());
     let max_steps = metadata
         .as_ref()
         .map(|metadata| metadata.max_steps)
@@ -464,6 +470,17 @@ pub(super) async fn restore(
         }
     }
     Ok(restored)
+}
+
+fn restored_user_id(
+    metadata: Option<&DesktopSessionMetadata>,
+    link: Option<&SessionLink>,
+) -> String {
+    metadata
+        .map(|metadata| metadata.user_id.clone())
+        .filter(|id| !id.is_empty())
+        .or_else(|| link.map(|link| link.context.user_id.clone()))
+        .unwrap_or_else(|| "local".into())
 }
 
 pub(super) async fn claim(
@@ -680,6 +697,54 @@ fn sqlite_timestamp(value: &str) -> bool {
 #[cfg(test)]
 mod recovery_tests {
     use super::*;
+
+    #[test]
+    fn new_im_metadata_uses_ai_gateway_without_changing_agent_or_project() {
+        let config = GmClawBridgeConfig::default();
+        let session = Session::new(&config, "fixture-project-path".into());
+        let project = GmClawProject {
+            id: "fixture-project-id".into(),
+            name: "fixture project".into(),
+            path: session.project_path.clone(),
+        };
+        let metadata = new_session_metadata(&session, &project, "Fixture Model", 75);
+        assert_eq!(metadata.user_id, "ai-gateway");
+        assert_eq!(metadata.session_id, session.id);
+        assert_eq!(metadata.agent_id, "desktop-orchestration");
+        assert_eq!(metadata.project_id, project.id);
+        assert_eq!(metadata.model_name, "Fixture Model");
+        assert_eq!(metadata.max_steps, 75);
+        assert_eq!(
+            metadata.extra_data,
+            json!({"desktop":true,"project":project})
+        );
+    }
+
+    #[test]
+    fn restored_metadata_keeps_real_user_before_link_and_legacy_local_fallback() {
+        let link: SessionLink = serde_json::from_value(json!({
+            "session_id":"session", "title":"fixture", "model_id":"model", "config_fingerprint":"fixture",
+            "pending":false, "uncertain":false, "context":{
+                "task_id":"task", "user_id":"link-user", "model_name":"Model", "max_steps":10,
+                "project":{"id":"project","name":"fixture","path":"fixture-project"}
+            }
+        })).unwrap();
+        for user_id in ["original-account-user", "local", "ai-gateway"] {
+            let metadata = DesktopSessionMetadata {
+                user_id: user_id.into(),
+                ..Default::default()
+            };
+            assert_eq!(restored_user_id(Some(&metadata), Some(&link)), user_id);
+            assert_eq!(restored_user_id(Some(&metadata), None), user_id);
+        }
+        let empty = DesktopSessionMetadata {
+            user_id: String::new(),
+            ..Default::default()
+        };
+        assert_eq!(restored_user_id(Some(&empty), Some(&link)), "link-user");
+        assert_eq!(restored_user_id(None, Some(&link)), "link-user");
+        assert_eq!(restored_user_id(None, None), "local");
+    }
 
     #[test]
     fn work_native_model_wins_and_unavailable_models_never_fall_back() {

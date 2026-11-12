@@ -13,7 +13,16 @@ const preference = String.fromCharCode(36) + '{user.value.userId || "default"}';
 // Small renderer contract fixture. API implementations and Vue values are synthetic.
 const original = [
   'function isBuiltinModel(model) { return ["tiangong-builtin", "tiangong-builtin-intranet"].includes(model?.model_id); }',
+  'async function req(method, path, body, options) { return fixtureRequest(method, path, body, options); }',
+  'const enc = encodeURIComponent;',
+  'const scenarioApi = {',
+  '  list: () => req("GET", "/data/scenarios").then((r) => r.scenarios),',
+  '  searchMessages: (query) => req("GET", `/data/messages/search?q=${enc(query)}`).then((r) => r.results),',
+  '  createTask: (scenarioId, title = "新任务", modelId = "", modelOptions = {}) => req("POST", "/data/tasks", { scenario_id: scenarioId, title, model_id: modelId, model_options: modelOptions }),',
+  '  deleteTask: (id) => req("DELETE", `/data/tasks/${enc(id)}`),',
+  '};',
   'function renderSidebar(_cache = []) { return _cache[58] || (_cache[58] = createBaseVNode("span", { class: "sidebar-user-menu-action-label" }, "退出登录", -1)); }',
+  'function renderAccountStatus(_cache = []) { return [_cache[54] || (_cache[54] = createBaseVNode("small", { class: "sidebar-user-status" }, "当前已登录", -1)), _cache[55] || (_cache[55] = createBaseVNode("small", { class: "sidebar-user-menu-status" }, "当前已登录", -1))]; }',
   'const Panel = /* @__PURE__ */ defineComponent({',
   '  __name: "ChatPanel",',
   '  setup(props) {',
@@ -29,6 +38,34 @@ const original = [
   '    const runActionError = ref("");',
   '    const showModelDropdown = ref(false);',
   '    const draft = ref("保留草稿");',
+  '    const inputValue = ref("待发送消息");',
+  '    const sessionId = ref(props.conversationSessionId || "");',
+  '    const localTaskId = ref(props.taskId || "");',
+  '    async function startChatRun(recovery) {',
+  '      const modelId = selectedModelId.value;',
+  '      let activeTaskId = localTaskId.value || "";',
+  '      if (!activeTaskId) {',
+  '        try {',
+  '          const task = await scenarioApi.createTask(props.activeScenarioId || "default", "新任务", modelId, {});',
+  '          sessionId.value = task.session_id;',
+  '          activeTaskId = task.task_id;',
+  '          localTaskId.value = task.task_id;',
+  '        } catch (e) {',
+  '          console.warn("[chat] 自动创建默认任务失败:", e);',
+  '        }',
+  '      }',
+  '      const chatId = recovery?.run.chat_id || await window.electronAPI.generateId();',
+  '        const requestBody = {',
+  '          session_id: sessionId.value, chat_id: chatId, query: inputValue.value,',
+  '          user_id: "local",',
+  '          agent_id: "desktop-orchestration",',
+  '          project_id: "default",',
+  '          project: props.conversationProject || {id:"0",path:"D:/synthetic/workspace"}, model_id: modelId,',
+  '        };',
+  '      const result = await chatRunsApi.create(requestBody);',
+  '      inputValue.value = "";',
+  '      return result;',
+  '    }',
   '    async function loadDbModels() {',
   '      dbModelsLoaded.value = false;',
   '      try {',
@@ -46,7 +83,7 @@ const original = [
   '      showNoModelPrompt(); return false;',
   '    }',
   '    function showNoModelPrompt() { showModelDropdown.value = true; }',
-  '    return {loadDbModels, ensureModelAvailable, selectedModelId, selectedModelName, dbModels, runActionError, showModelDropdown, draft, hasActiveRun};',
+  '    return {loadDbModels, ensureModelAvailable, selectedModelId, selectedModelName, dbModels, runActionError, showModelDropdown, draft, hasActiveRun, startChatRun, inputValue, sessionId};',
   '  }',
   '});',
   'const ChatPanel = /* @__PURE__ */ _export_sfc(Panel, []);',
@@ -73,9 +110,17 @@ const original = [
   '    function isTaskVisible(taskId) { return clawLoggedIn.value && windowFocused.value && windowVisible.value && activePage.value === "chat" && activeInst.value?.taskId === taskId; }',
   '    function lastModelPreferenceKey() { return ' + template('gmclaw-last-model:' + preference) + '; }',
   '    function activeTaskRecoveryKey() { return ' + template('tiangong-active-task:' + preference) + '; }',
-  '    async function refreshScenarios() { fixture.scenarioReads++; if (fixture.scenarioError) return false; scenarios.value = [{tasks: []}]; return true; }',
+  '    async function refreshScenarios() { fixture.scenarioReads++; if (fixture.scenarioError) return false; try { scenarios.value = await scenarioApi.list(); return true; } catch { return false; } }',
   '    function ensureInitialInstance() { if (!chatInstances.value.length) chatInstances.value.push({taskId: null, draft: "保留草稿", modelId: ""}); }',
-  '    async function restoreActiveTask() { fixture.recoveries++; }',
+  '    async function restoreActiveTask() { fixture.recoveries++; const taskId = readRecovery(activeTaskRecoveryKey()); const task = scenarios.value.flatMap((item) => item.tasks).find((item) => item.task_id === taskId); if (task) await onOpenTask(task); }',
+  '    async function onOpenTask(task, messageId, query) {',
+  '      fixture.opened.push(task.task_id);',
+  '    }',
+  '    async function onDeleteTask(task) {',
+  '      await scenarioApi.deleteTask(task.task_id);',
+  '    }',
+  '    async function onDeleteScenario(scenarioId) { await req("DELETE", "/data/scenarios/" + enc(scenarioId)); }',
+  '    async function onRenameTask(task, title) { }',
   '    async function checkClawSession(attempt = authAttempt) {',
   '      const session = await clawAuthApi.getSession();',
   '      if (attempt !== authAttempt) return false;',
@@ -131,18 +176,26 @@ const original = [
   '          onSuccess: onClawLoginSuccess',
   '        })) : authReady.value && clawLoggedIn.value ? (openBlock(), createElementBlock("div", _hoisted_4, [',
   '          createVNode(Sidebar, {',
+  '            "user-name": user.value.userId || user.value.display_name || user.value.username,',
+  '            "running-task-ids": new Set(),',
   '            onOpenUserPanel: _cache[0] || (_cache[0] = ($event) => showUserPanel.value = true),',
+  '          }),',
+  '          createVNode(ChatPanel, {',
+  '                  "user-name": user.value.userId || user.value.display_name || user.value.username,',
+  '                  "is-active": true,',
   '          })',
   '        ])) : createCommentVNode("", true)',
   '      ]);',
   '    }',
-  '    return {initializeSession, bootstrapAppData, onSessionInvalid, onClawLoginSuccess, onLogout, render, clawLoggedIn, authReady, authError, bootstrapError, bootstrapLoading, user, chatInstances, modelListVersion, defaultWorkspacePath, lastModelPreferenceKey, activeTaskRecoveryKey, syncMcpCatalogOnBootstrap};',
+  '    return {initializeSession, bootstrapAppData, onSessionInvalid, onClawLoginSuccess, onLogout, render, clawLoggedIn, authReady, authError, bootstrapError, bootstrapLoading, user, chatInstances, modelListVersion, defaultWorkspacePath, lastModelPreferenceKey, activeTaskRecoveryKey, syncMcpCatalogOnBootstrap, onOpenTask, onDeleteTask, onDeleteScenario, scenarios, refreshScenarios};',
   '  }',
   '});',
   'const App = /* @__PURE__ */ _export_sfc(Root, []);',
   'globalThis.makeApp = () => App.setup({});',
   'globalThis.makePanel = (props) => ChatPanel.setup(props);',
   'globalThis.sidebarLabel = () => renderSidebar().children;',
+  'globalThis.accountStatus = () => renderAccountStatus().map((node) => node.children);',
+  'globalThis.fixtureScenarioApi = scenarioApi;',
 ].join('\n');
 const startupLoader = [
   'const notice = document.getElementById("startup-notice");',
@@ -164,7 +217,8 @@ function environment(source = original, behavior = {}) {
   const watched = new WeakMap();
   const fixture = {models: models.map((model) => ({...model})), recoveries: 0, scenarioReads: 0,
     workspaceReads: 0, cloudSyncs: 0, skillLogins: 0, introspects: 0, logouts: 0, loggedIn: false,
-    focusReturns: 0, ...behavior};
+    focusReturns: 0, scenarios: [{scenario_id: 'default', tasks: []}], sessions: [], searchResults: [],
+    requests: [], modelCalls: [], opened: [], notifications: [], nextTaskId: 1, recovery: {}, ...behavior};
   const ref = (initial) => {
     let value = initial;
     const target = {__v_isRef: true};
@@ -175,22 +229,62 @@ function environment(source = original, behavior = {}) {
     return target;
   };
   const node = (type, props, children) => ({type, props, children});
+  const fixtureRequest = async (method, route, body) => {
+    fixture.requests.push({method, route, body});
+    const parsed = new URL(route, 'http://fixture.invalid');
+    if (method === 'GET' && parsed.pathname === '/data/scenarios') return {scenarios: fixture.scenarios};
+    if (method === 'GET' && parsed.pathname === '/data/sessions') {
+      if (fixture.ownerReadError) throw new Error('synthetic ownership read failure');
+      const owned = fixture.sessions.filter((session) => session.user_id === parsed.searchParams.get('user_id'));
+      const offset = Number(parsed.searchParams.get('offset')), limit = Number(parsed.searchParams.get('limit'));
+      return {sessions: owned.slice(offset, offset + limit)};
+    }
+    if (method === 'GET' && parsed.pathname.startsWith('/data/sessions/')) {
+      const id = decodeURIComponent(parsed.pathname.slice('/data/sessions/'.length));
+      const session = fixture.sessions.find((row) => row.session_id === id);
+      if (!session) throw new Error('synthetic missing session');
+      return {...session};
+    }
+    if (method === 'GET' && parsed.pathname === '/data/messages/search') return {results: fixture.searchResults};
+    if (method === 'POST' && parsed.pathname === '/data/tasks') {
+      if (fixture.taskCreateError) throw new Error('synthetic task creation failure');
+      const id = fixture.nextTaskId++;
+      const task = {...body, task_id: 'new-task-' + id, session_id: 'new-session-' + id};
+      fixture.scenarios.find((scenario) => scenario.scenario_id === body.scenario_id).tasks.push(task);
+      return task;
+    }
+    if (method === 'POST' && parsed.pathname === '/data/sessions') {
+      if (fixture.registerError) throw new Error('synthetic session registration failure');
+      fixture.sessions.push({...body}); return {session_id: body.session_id};
+    }
+    if (method === 'DELETE' && parsed.pathname.startsWith('/data/tasks/')) {
+      const id = decodeURIComponent(parsed.pathname.slice('/data/tasks/'.length));
+      for (const scenario of fixture.scenarios) scenario.tasks = scenario.tasks.filter((task) => task.task_id !== id);
+      return {status: 'deleted'};
+    }
+    if (method === 'DELETE' && parsed.pathname.startsWith('/data/scenarios/')) return {status: 'deleted'};
+    throw new Error('unhandled synthetic route: ' + method + ' ' + route);
+  };
   const context = vm.createContext({
-    fixture, ref, computed: (get) => ({get value() { return get(); }}),
+    fixture, fixtureRequest, ref, computed: (get) => ({get value() { return get(); }}),
     watch: (target, callback) => {if (target && typeof target === 'object') watched.set(target, [...watched.get(target) || [], callback]);},
     defineComponent: (value) => value, _export_sfc: (value) => value,
     modelDisplayName: (model) => model?.display_name || model?.model_id || '',
     modelApi: {list: async () => fixture.models},
+    chatRunsApi: {create: async (body) => {fixture.modelCalls.push(body); return {run_id: 'fixture-run'};}},
+    readRecovery: (key) => fixture.recovery[key],
     withDeadline: (work) => work, nextTick: (callback) => Promise.resolve().then(() => callback?.()),
     openBlock: () => {}, createVNode: node, createBaseVNode: node, createBlock: node,
     createElementBlock: node, createCommentVNode: () => null,
     UpdateBanner: 'banner', Sidebar: 'sidebar', ClawQrLoginPage: 'login', Teleport: 'teleport', _hoisted_4: {},
-    ElMessage: {error: () => {}},
+    ElMessage: {error: (message) => fixture.notifications.push({kind: 'error', message}), warning: (message) => fixture.notifications.push({kind: 'warning', message})},
+    console: {warn: () => {}},
     document: {activeElement: {isConnected: true, focus() {fixture.focusReturns++;}}},
     window: {electronAPI: {
       getDataUrl: async () => 'http://127.0.0.1:18768', getAuthToken: async () => 'synthetic',
       getDefaultWorkspace: async () => {fixture.workspaceReads++; return fixture.workspacePromise ? fixture.workspacePromise : 'D:/synthetic/workspace';},
       skillhubLogin: async () => {fixture.skillLogins++;},
+      generateId: async () => 'synthetic-generated-id',
     }},
     clawAuthApi: {
       getSession: async () => fixture.sessionPromise ? fixture.sessionPromise : {loggedIn: fixture.loggedIn, userId: fixture.loggedIn ? 'synthetic-user' : ''},
@@ -257,7 +351,12 @@ async function main() {
     await app.initializeSession(); await flush();
     assert.equal(context.window.__tiancaiWorkspace.ready, true);
     assert.equal(app.clawLoggedIn.value, false); assert.equal(app.authReady.value, true);
-    assert.equal(app.user.value.display_name, '本地工作区');
+    assert.equal(app.user.value.display_name, 'AI Gateway');
+    assert.equal(context.window.__tiancaiWorkspace.version, 2);
+    assert.equal(context.window.__tiancaiWorkspace.scope, 'ai-gateway');
+    assert.equal(app.activeTaskRecoveryKey(), 'tiangong-active-task:ai-gateway');
+    assert.equal(app.lastModelPreferenceKey(), 'gmclaw-last-model:ai-gateway');
+    assert.deepEqual(Array.from(context.accountStatus()), ['本地账号', '本地账号']);
     assert.equal(fixture.workspaceReads, 1); assert.equal(fixture.recoveries, 1);
     assert.equal(fixture.cloudSyncs, 0); assert.equal(fixture.skillLogins, 0);
     assert.equal(context.sidebarLabel(), '登录官方账号');
@@ -302,10 +401,18 @@ async function main() {
     const {app, fixture, context} = environment(output.source);
     await app.initializeSession();
     const instance = app.chatInstances.value[0], recovery = app.activeTaskRecoveryKey();
+    const localNodes = app.render().children.find((child) => child?.type === 'div').children;
+    assert.equal(localNodes[0].props['user-name'], 'AI Gateway');
+    assert.equal(localNodes[1].props['user-name'], 'ai-gateway');
     fixture.loggedIn = true; await app.onClawLoginSuccess(); await flush();
     assert.equal(app.clawLoggedIn.value, true); assert.equal(app.user.value.userId, 'synthetic-user');
     assert.equal(app.chatInstances.value[0], instance); assert.equal(fixture.workspaceReads, 1);
     assert.equal(app.activeTaskRecoveryKey(), recovery); assert.equal(context.sidebarLabel(), '退出登录');
+    const officialNodes = app.render().children.find((child) => child?.type === 'div').children;
+    assert.equal(officialNodes[0].props['user-name'], 'synthetic-user');
+    assert.equal(officialNodes[1].props['user-name'], 'ai-gateway');
+    assert.deepEqual(Array.from(context.accountStatus()), ['当前已登录', '当前已登录']);
+    assert.equal(await context.window.electronAPI.getAuthToken(), 'synthetic');
     await app.onLogout();
     assert.equal(app.clawLoggedIn.value, false); assert.equal(app.chatInstances.value[0], instance);
     assert.equal(context.window.__tiancaiWorkspace.ready, true); assert.equal(fixture.logouts, 1);
@@ -390,6 +497,115 @@ async function main() {
     assert.equal(app.defaultWorkspacePath.value, 'D:/synthetic/workspace');
     assert.equal(context.window.__tiancaiWorkspace.ready, true);
   });
+  const owned = (session_id, extra = {}) => ({session_id, user_id: 'ai-gateway', agent_id: 'desktop-orchestration', project_id: 'default', ...extra});
+  const historyTask = (id, session_id = id) => ({task_id: 'task-' + id, session_id, scenario_id: 'default', model_id: 'external-a', model_options: {temperature: 0.4}});
+  await test('owner-scoped list traverses every page and preserves project and task identities', async () => {
+    const tasks = Array.from({length: 203}, (_, i) => historyTask('owned-' + i));
+    const old = historyTask('legacy'), cloud = historyTask('cloud'), missing = historyTask('orphan');
+    const sessions = tasks.map((task) => owned(task.session_id));
+    sessions.push(owned(old.session_id, {user_id: 'local'}), owned(cloud.session_id, {user_id: 'official-user'}));
+    const {app, fixture, context} = environment(output.source, {sessions,
+      scenarios: [{scenario_id: 'default', name: '原项目', work_dir: 'D:/original/project', tasks: [...tasks, old, cloud, missing]}],
+      searchResults: [...tasks.slice(0, 1), old, cloud, missing].map((task) => ({task_id: task.task_id, snippet: task.session_id}))});
+    await app.initializeSession();
+    const visible = app.scenarios.value[0];
+    assert.equal(visible.tasks.length, 203); assert.equal(visible.work_dir, 'D:/original/project');
+    assert.equal(visible.tasks[202], tasks[202]); assert.equal(fixture.scenarios[0].tasks.length, 206);
+    assert.equal(fixture.requests.filter((request) => request.route.startsWith('/data/sessions?')).length, 2);
+    const results = await context.fixtureScenarioApi.searchMessages('synthetic');
+    assert.deepEqual(Array.from(results, (row) => row.task_id), ['task-owned-0']);
+    assert.equal(fixture.requests.some((request) => request.method !== 'GET'), false);
+  });
+  await test('legacy local history is invisible until explicit owner migration and new key restoration', async () => {
+    const task = historyTask('legacy');
+    const session = owned(task.session_id, {user_id: 'local', agent_id: 'original-agent', project_id: 'original-project'});
+    const {app, fixture} = environment(output.source, {sessions: [session], scenarios: [{scenario_id: 'default', tasks: [task]}],
+      recovery: {'tiangong-active-task:default': task.task_id, 'tiangong-active-task:ai-gateway': task.task_id}});
+    await app.initializeSession();
+    assert.equal(app.scenarios.value[0].tasks.length, 0); assert.equal(fixture.opened.length, 0);
+    await app.onOpenTask(task); assert.equal(fixture.opened.length, 0);
+    assert.match(fixture.notifications[0].message, /不属于 AI Gateway/);
+    session.user_id = 'ai-gateway'; // Represents the separate, explicit Hub migration.
+    await app.bootstrapAppData();
+    assert.equal(app.scenarios.value[0].tasks[0], task);
+    assert.deepEqual(fixture.opened, [task.task_id]);
+    assert.equal(session.agent_id, 'original-agent'); assert.equal(session.project_id, 'original-project');
+  });
+  await test('new conversation registers local ownership before generation and reuses the task on later messages', async () => {
+    const {context, fixture} = environment(output.source);
+    const project = {id: 'scene-original', name: '原项目', path: 'D:/original/project'};
+    const panel = context.makePanel({initialModelId: 'external-a', conversationProject: project});
+    await panel.startChatRun();
+    assert.equal(fixture.modelCalls.length, 1); assert.equal(fixture.sessions.length, 1);
+    const session = fixture.sessions[0], request = fixture.modelCalls[0];
+    assert.equal(session.user_id, 'ai-gateway'); assert.equal(session.agent_id, 'desktop-orchestration');
+    assert.equal(session.project_id, 'default'); assert.equal(request.session_id, session.session_id);
+    assert.equal(request.user_id, 'ai-gateway'); assert.equal(request.project, project); assert.equal(request.model_id, 'external-a');
+    assert.equal(fixture.requests[0].route, '/data/tasks'); assert.equal(fixture.requests[1].route, '/data/sessions');
+    assert.equal(fixture.requests[2].route, '/data/sessions/' + session.session_id);
+    panel.inputValue.value = '第二轮'; await panel.startChatRun();
+    assert.equal(fixture.modelCalls.length, 2); assert.equal(fixture.sessions.length, 1);
+    assert.equal(fixture.modelCalls[1].session_id, session.session_id);
+    assert.equal(fixture.requests.filter((request) => request.route === '/data/tasks').length, 1);
+  });
+  await test('existing run preserves migrated agent project model and IDs while ignoring cloud account changes', async () => {
+    const session = owned('preserved-session', {agent_id: 'agent-from-history', project_id: 'project-from-history', model_name: 'original-model'});
+    const {app, context, fixture} = environment(output.source, {sessions: [session], loggedIn: true});
+    await app.initializeSession(); await flush();
+    const project = {id: 'original-project-object', path: 'D:/original/project', name: '原项目'};
+    const panel = context.makePanel({taskId: 'original-task', conversationSessionId: session.session_id,
+      initialModelId: 'external-a', conversationProject: project});
+    await panel.startChatRun();
+    const request = fixture.modelCalls[0];
+    assert.equal(request.user_id, 'ai-gateway'); assert.equal(request.agent_id, session.agent_id);
+    assert.equal(request.project_id, session.project_id); assert.equal(request.project, project);
+    assert.equal(request.session_id, 'preserved-session'); assert.equal(request.model_id, 'external-a');
+    assert.equal(app.user.value.userId, 'synthetic-user');
+    assert.equal(fixture.requests.some((request) => request.method !== 'GET'), false);
+    session.user_id = 'local';
+    panel.inputValue.value = '不能发送';
+    await assert.rejects(panel.startChatRun(), /不属于 AI Gateway/);
+    assert.equal(fixture.modelCalls.length, 1); assert.equal(panel.inputValue.value, '不能发送');
+  });
+  await test('failed task creation or session registration never falls through to generation or clears input', async () => {
+    for (const behavior of [{taskCreateError: true}, {registerError: true}]) {
+      const {context, fixture} = environment(output.source, behavior);
+      const panel = context.makePanel({initialModelId: 'external-a'});
+      await assert.rejects(panel.startChatRun());
+      assert.equal(fixture.modelCalls.length, 0); assert.equal(panel.inputValue.value, '待发送消息');
+      assert.equal(fixture.scenarios[0].tasks.length, 0);
+      assert.equal(fixture.sessions.length, 0);
+      assert.equal(fixture.requests.filter((request) => request.method === 'DELETE').length, behavior.registerError ? 1 : 0);
+    }
+  });
+  await test('ownership loading failure stays unready instead of showing unfiltered history', async () => {
+    const {app, fixture, context} = environment(output.source, {ownerReadError: true,
+      scenarios: [{scenario_id: 'default', tasks: [historyTask('legacy')]}]});
+    await app.initializeSession();
+    assert.equal(context.window.__tiancaiWorkspace.ready, false);
+    assert.equal(app.scenarios.value.length, 0); assert.equal(fixture.opened.length, 0);
+  });
+  await test('enhanced project removal explains shared memory while individual owned task deletion remains available', async () => {
+    const task = historyTask('owned'), legacy = historyTask('legacy');
+    const {app, fixture} = environment(output.source, {sessions: [owned(task.session_id), owned(legacy.session_id, {user_id:'local'})],
+      scenarios: [{scenario_id:'default', tasks:[task, legacy]}]});
+    await app.initializeSession();
+    await app.onDeleteScenario('default');
+    assert.match(fixture.notifications[0].message, /共享历史和记忆/);
+    assert.equal(fixture.requests.some((request) => request.method === 'DELETE'), false);
+    await app.onDeleteTask(legacy);
+    assert.equal(fixture.requests.some((request) => request.method === 'DELETE'), false);
+    await app.onDeleteTask(task);
+    assert.equal(fixture.scenarios[0].tasks.length, 1); assert.equal(fixture.scenarios[0].tasks[0], legacy);
+  });
+  await test('legacy adapter and changed ownership API contract are not overwritten', () => {
+    const old = original + '\n/*TIANCAISPACEHUB_EXTERNAL_WORKSPACE_V1*/';
+    const legacy = adapt(old, options);
+    assert.equal(legacy.source, old); assert.equal(legacy.reason, 'incompatible_adapter');
+    const unknown = original.replace('async function req(method, path, body, options)', 'async function changedRequest(method, path, body, options)');
+    const unsupported = adapt(unknown, options);
+    assert.equal(unsupported.source, unknown); assert.equal(unsupported.reason, 'unsupported_renderer');
+  });
   await test('Windows CRLF renderer is supported atomically', () => {
     assert.equal(adapt(original.replace(/\n/g, '\r\n'), options).adapted, true);
   });
@@ -408,7 +624,7 @@ async function main() {
         result = adapt(renderer, options);
       }
       assert.equal(result.adapted, true);
-      assert.equal(result.source.split('/*TIANCAISPACEHUB_EXTERNAL_WORKSPACE_V1*/').length, 2);
+      assert.equal(result.source.split('/*TIANCAISPACEHUB_EXTERNAL_WORKSPACE_V2*/').length, 2);
       const parsed = spawnSync(process.execPath, ['--input-type=module', '--check'], {input: result.source, encoding: 'utf8'});
       assert.equal(parsed.status, 0, 'adapted installed renderer must be valid ECMAScript');
       // No bundle contents or source excerpts enter logs.

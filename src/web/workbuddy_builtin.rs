@@ -16,11 +16,23 @@ pub(super) fn router() -> Router<SharedState> {
         .route("/api/desktop/workbuddy-builtin/enable", post(enable))
         .route("/api/desktop/workbuddy-builtin/disable", post(disable))
         .route("/api/desktop/workbuddy-builtin/share", post(share))
+        .route(
+            "/api/desktop/workbuddy-builtin/account-refresh",
+            post(account_refresh),
+        )
+        .route(
+            "/api/desktop/workbuddy-builtin/visibility",
+            post(visibility),
+        )
 }
 
 #[derive(Deserialize)]
 struct Revision {
     revision: String,
+}
+#[derive(Deserialize)]
+struct Visibility {
+    visible: bool,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -32,16 +44,61 @@ struct Share {
 
 async fn view(state: &SharedState) -> Result<Value> {
     let config = state.config.lock().await.clone();
-    state
+    let mut value = state
         .workbuddy_builtin
         .view(&state.config_path, &config)
+        .await?;
+    value["builtinShareAllowed"] = crate::assistant::builtin_sharing_allowed(state)
         .await
+        .into();
+    Ok(value)
 }
 async fn read(State(state): State<SharedState>, headers: HeaderMap) -> Response {
     if let Err(error) = trusted(&headers) {
         return response::<Value>(Err(error));
     }
     response(view(&state).await)
+}
+async fn account_refresh(State(state): State<SharedState>, headers: HeaderMap) -> Response {
+    if let Err(error) = trusted(&headers) {
+        return response::<Value>(Err(error));
+    }
+    response(
+        async {
+            // This is a query of an existing grant, not a new sharing action.
+            // Keep the last balance and its timestamp visible when an update
+            // fails; the runtime marks the account query as stale/error.
+            let _ = state.workbuddy_builtin.refresh_account().await;
+            let current = view(&state).await?;
+            ensure!(
+                current["enabled"] == true
+                    && current["account"]["authorization"]["status"] != "missing",
+                "请先启用 WorkBuddy 分享并完成授权"
+            );
+            Ok(current)
+        }
+        .await,
+    )
+}
+async fn visibility(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Json(request): Json<Visibility>,
+) -> Response {
+    if let Err(error) = trusted(&headers) {
+        return response::<Value>(Err(error));
+    }
+    response(
+        async {
+            ensure!(
+                !request.visible,
+                "请在天才搭档对话中明确要求打开 WorkBuddy 内置模型分享"
+            );
+            state.workbuddy_builtin.hide(&state.config_path).await?;
+            view(&state).await
+        }
+        .await,
+    )
 }
 async fn revision(state: &SharedState, expected: &str) -> Result<()> {
     ensure!(
@@ -60,8 +117,12 @@ async fn enable(
     }
     response(
         async {
+            crate::assistant::require_builtin_sharing(&state).await?;
             revision(&state, &request.revision).await?;
             state.workbuddy_builtin.enable(&state.config_path).await?;
+            // A failed balance query must not undo a successful sharing grant.
+            // Its status and any last known balance remain visible in account.
+            let _ = state.workbuddy_builtin.refresh_account().await;
             view(&state).await
         }
         .await,
@@ -77,8 +138,9 @@ async fn disable(
     }
     response(
         async {
+            crate::assistant::require_builtin_sharing(&state).await?;
             revision(&state, &request.revision).await?;
-            state.workbuddy_builtin.disable().await;
+            state.workbuddy_builtin.disable().await?;
             view(&state).await
         }
         .await,
@@ -94,6 +156,7 @@ async fn share(
     }
     response(
         async {
+            crate::assistant::require_builtin_sharing(&state).await?;
             revision(&state, &request.revision).await?;
             ensure!(
                 !request.targets.is_empty() && request.targets.len() <= 32,
@@ -185,4 +248,134 @@ async fn share(
         }
         .await,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::StatusCode;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn entry_visibility_only_hides_and_cannot_reveal_or_load_authorization() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("hub.toml");
+        let mut config = AppConfig {
+            state_path: temp.path().join("state.json"),
+            ..Default::default()
+        };
+        config.save(&path).unwrap();
+        let state = crate::app_state::AppState::new(
+            path.clone(),
+            AppConfig::load_or_default(&path).unwrap(),
+            None,
+            None,
+        );
+        let before = std::fs::read(&path).unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert("x-tiancai-desktop", "1".parse().unwrap());
+        assert_eq!(view(&state).await.unwrap()["featureVisible"], false);
+        let forbidden = visibility(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(Visibility { visible: false }),
+        )
+        .await;
+        assert!(!forbidden.status().is_success());
+        let reveal = visibility(
+            State(state.clone()),
+            headers.clone(),
+            Json(Visibility { visible: true }),
+        )
+        .await;
+        assert_eq!(reveal.status(), StatusCode::CONFLICT);
+        assert!(!state.workbuddy_builtin.feature_visible(&path).unwrap());
+        state.workbuddy_builtin.reveal(&path).await.unwrap();
+        let hidden = visibility(
+            State(state.clone()),
+            headers.clone(),
+            Json(Visibility { visible: false }),
+        )
+        .await;
+        assert_eq!(hidden.status(), StatusCode::OK);
+        let value = view(&state).await.unwrap();
+        assert_eq!(value["featureVisible"], false);
+        assert_eq!(value["enabled"], false);
+        assert_eq!(value["account"]["authorization"]["status"], "missing");
+        let refresh = account_refresh(State(state.clone()), headers).await;
+        assert_eq!(refresh.status(), StatusCode::CONFLICT);
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn only_catgirl_can_change_the_host_and_rejected_actions_do_not_prepare_it() {
+        use crate::assistant::personality::Personality;
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("hub.toml");
+        let mut config = AppConfig {
+            state_path: temp.path().join("state.json"),
+            ..Default::default()
+        };
+        config.save(&path).unwrap();
+        let state = crate::app_state::AppState::new(
+            path.clone(),
+            AppConfig::load_or_default(&path).unwrap(),
+            None,
+            None,
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert("x-tiancai-desktop", "1".parse().unwrap());
+        let before = std::fs::read(&path).unwrap();
+        for style in [Personality::Professional, Personality::Girlfriend] {
+            crate::assistant::test_personality(&state, style).await;
+            for result in [
+                enable(
+                    State(state.clone()),
+                    headers.clone(),
+                    Json(Revision {
+                        revision: "not-used".into(),
+                    }),
+                )
+                .await,
+                disable(
+                    State(state.clone()),
+                    headers.clone(),
+                    Json(Revision {
+                        revision: "not-used".into(),
+                    }),
+                )
+                .await,
+                share(
+                    State(state.clone()),
+                    headers.clone(),
+                    Json(Share {
+                        revision: "not-used".into(),
+                        model_id: "not-used".into(),
+                        targets: vec![],
+                    }),
+                )
+                .await,
+            ] {
+                assert_eq!(result.status(), StatusCode::CONFLICT);
+                let body = axum::body::to_bytes(result.into_body(), 4096)
+                    .await
+                    .unwrap();
+                let body: Value = serde_json::from_slice(&body).unwrap();
+                assert!(body["error"].as_str().unwrap().contains("仅向软萌猫娘开放"));
+            }
+            assert_eq!(std::fs::read(&path).unwrap(), before);
+            assert_eq!(view(&state).await.unwrap()["enabled"], false);
+        }
+        crate::assistant::test_personality(&state, Personality::Catgirl).await;
+        let revision = state.config.lock().await.revision.clone().unwrap();
+        let result = disable(State(state.clone()), headers, Json(Revision { revision })).await;
+        assert_eq!(result.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(result.into_body(), 128 * 1024)
+            .await
+            .unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["builtinShareAllowed"], true);
+        assert_eq!(body["enabled"], false);
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
 }

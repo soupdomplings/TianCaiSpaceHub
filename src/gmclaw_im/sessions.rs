@@ -380,6 +380,7 @@ pub(crate) async fn create(
     options: ThreadStartOptions,
     request_id: Option<&str>,
 ) -> Result<String> {
+    let _history = state.gmclaw_im.history_gate.clone().read_owned().await;
     let binding = binding_for(state, message).await.context("请先发送 /tg")?;
     let mut sessions = binding
         .sessions
@@ -455,6 +456,7 @@ pub(crate) async fn resume(
     id: &str,
     request_id: Option<&str>,
 ) -> Result<serde_json::Value> {
+    let _history = state.gmclaw_im.history_gate.clone().read_owned().await;
     let binding = binding_for(state, message).await.context("请先发送 /tg")?;
     let mut sessions = binding
         .sessions

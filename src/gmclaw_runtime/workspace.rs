@@ -86,7 +86,7 @@ pub(crate) async fn enhance_workspace(options: WorkspaceOptions) -> Result<()> {
     let socket = super::display::target(&executable, &installation.process_ids).await?;
     let mut cdp = Cdp::connect(&socket, "天工").await?;
     let probe = cdp.evaluate(PROBE).await?;
-    let installed = probe["installed"] == true;
+    let installed = installed_workspace(&probe)?;
     if installed {
         ensure!(
             probe["ready"] == true,
@@ -133,7 +133,8 @@ pub(crate) async fn enhance_workspace(options: WorkspaceOptions) -> Result<()> {
             cdp.call("Fetch.enable", json!({"patterns":[{"urlPattern":entry,"requestStage":"Response","resourceType":"Script"}]})).await?;
             if installed {
                 // Reattach after a Hub restart without reloading an active workspace.
-                ensure!(cdp.evaluate(PROBE).await?["ready"] == true,
+                let probe = cdp.evaluate(PROBE).await?;
+                ensure!(installed_workspace(&probe)? && probe["ready"] == true,
                     "天工工作区已切换，请重新点击增强启动");
                 Ok(())
             } else {
@@ -188,7 +189,7 @@ pub(crate) async fn enhance_workspace(options: WorkspaceOptions) -> Result<()> {
 
 async fn update_models(cdp: &mut Cdp, options: &WorkspaceOptions) -> Result<()> {
     let expression = format!(
-        "window.__tiancaiWorkspace?.updateModels?.({}) === true",
+        "window.__tiancaiWorkspace?.version === 2 && window.__tiancaiWorkspace.scope === 'ai-gateway' && window.__tiancaiWorkspace.updateModels?.({}) === true",
         serde_json::to_string(options)?
     );
     ensure!(
@@ -211,7 +212,7 @@ async fn wait_ready(cdp: &mut Cdp, options: &WorkspaceOptions, entry: &str) -> R
             }
             _ = timer.tick(), if adapted => {
                 let value = cdp.evaluate(
-                    "({ready:window.__tiancaiWorkspace?.version===1&&window.__tiancaiWorkspace.ready===true,failed:!!window.__tiancaiWorkspace?.error})"
+                    "({ready:window.__tiancaiWorkspace?.version===2&&window.__tiancaiWorkspace.scope==='ai-gateway'&&window.__tiancaiWorkspace.ready===true,failed:!!window.__tiancaiWorkspace?.error})"
                 ).await?;
                 if value["ready"] == true { return Ok(()); }
                 ensure!(value["failed"] != true,
@@ -336,13 +337,25 @@ fn startup_renderer_entry(entry: &str, module: &str) -> Option<String> {
 }
 
 const PROBE: &str = r#"({
- installed: window.__tiancaiWorkspace?.version === 1,
+ adapterVersion: window.__tiancaiWorkspace?.version,
+ scope: window.__tiancaiWorkspace?.scope,
+ installed: window.__tiancaiWorkspace?.version === 2 && window.__tiancaiWorkspace.scope === 'ai-gateway',
  ready: window.__tiancaiWorkspace?.ready === true,
  workspaceOpen: !!document.querySelector('.app-main'),
  hasInput: [...document.querySelectorAll('textarea,input:not([type="hidden"])')].some(e => !!e.value?.trim()),
  entries: [...document.querySelectorAll('script[type="module"][src]')].map(e => e.src),
  page: location.href
 })"#;
+
+fn installed_workspace(probe: &Value) -> Result<bool> {
+    if probe.get("adapterVersion").is_some_and(|v| !v.is_null()) {
+        ensure!(
+            probe["adapterVersion"] == 2 && probe["scope"] == "ai-gateway",
+            "当前天工窗口使用旧版增强工作区或其他会话归属；请先正常退出天工，再从 Hub 增强启动，当前任务和草稿保持原样"
+        );
+    }
+    Ok(probe["installed"] == true)
+}
 
 fn same_renderer_entry(page: &str, entry: &str) -> bool {
     let (Ok(page), Ok(entry)) = (Url::parse(page), Url::parse(entry)) else {
@@ -365,6 +378,26 @@ mod tests {
     use super::*;
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::Message;
+
+    #[test]
+    fn workspace_scope_upgrade_requires_normal_exit_instead_of_hot_switch() {
+        assert!(!installed_workspace(&json!({"installed":false})).unwrap());
+        assert!(!installed_workspace(&json!({"adapterVersion":null,"installed":false})).unwrap());
+        assert!(
+            installed_workspace(&json!({"adapterVersion":2,"scope":"ai-gateway","installed":true}))
+                .unwrap()
+        );
+        for probe in [
+            json!({"adapterVersion":1,"installed":false,"ready":true}),
+            json!({"adapterVersion":2,"scope":"local","installed":false}),
+            json!({"adapterVersion":2,"installed":false}),
+            json!({"adapterVersion":3,"scope":"ai-gateway","installed":false}),
+        ] {
+            let error = installed_workspace(&probe).unwrap_err().to_string();
+            assert!(error.contains("正常退出"));
+            assert!(error.contains("草稿保持原样"));
+        }
+    }
 
     #[test]
     fn entry_must_stay_in_the_verified_renderer_directory() {
@@ -525,6 +558,8 @@ mod tests {
             assert_eq!(requests.len(), 1);
             let expression = requests[0]["params"]["expression"].as_str().unwrap();
             assert!(expression.contains("updateModels"));
+            assert!(expression.contains("version === 2"));
+            assert!(expression.contains("scope === 'ai-gateway'"));
             assert!(expression.contains("\"externalModelIds\":[\"tiancaispacehub\"]"));
             assert!(!expression.contains("Page.reload"));
         }

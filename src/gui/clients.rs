@@ -39,6 +39,7 @@ pub(super) struct ClientPage {
     pub skills_host: Panel,
     pub mcp_host: Panel,
     settings: super::client_header::ClientSettings,
+    workbuddy_share: Option<super::workbuddy_share_settings::ShareSettings>,
     id: ClientId,
     graph: Panel,
     state_label: StaticText,
@@ -147,6 +148,9 @@ impl ClientPage {
                 page.from_dip(18),
             );
         }
+        let workbuddy_share = (id == ClientId::WorkBuddy).then(|| {
+            super::workbuddy_share_settings::ShareSettings::new(&hosts[2], frame, api.clone())
+        });
         column.add(&book, 1, SizerFlag::Expand, 0);
         let error = StaticText::builder(&page).with_label("").build();
         error.set_foreground_color(t.error);
@@ -174,6 +178,7 @@ impl ClientPage {
             mcp_host: hosts[1],
             settings_host: hosts[2],
             settings,
+            workbuddy_share,
             id,
             graph,
             state_label,
@@ -327,6 +332,9 @@ impl ClientPage {
                 u.render();
             }
             u.apply_pending();
+            if let Some(share) = &u.workbuddy_share {
+                share.tick(u.book.selection() == 4 && u.frame.is_shown() && !u.frame.is_iconized());
+            }
             if u.last.get().elapsed() > Duration::from_secs(5) {
                 u.fetch();
             }
@@ -534,6 +542,9 @@ impl ClientPage {
                 if entering {
                     self.refresh_pending.set(true);
                     self.refresh_legacy_models(false);
+                    if let Some(share) = &self.workbuddy_share {
+                        share.read();
+                    }
                 }
                 timer.start(160, false);
                 self.fetch();
@@ -1288,6 +1299,9 @@ impl ClientPage {
             self.model_view.show_draft(draft);
         } else if index == 4 {
             self.settings.set_targets(&self.models.borrow(), self.id);
+            if let Some(share) = &self.workbuddy_share {
+                share.read();
+            }
         }
         for (i, tab) in self.tabs.iter().enumerate() {
             tab.set_selected(i == index);

@@ -12,7 +12,7 @@ use std::{
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tokio::sync::{Mutex, Semaphore};
+use tokio::sync::{Mutex, RwLock, Semaphore};
 
 use crate::{
     app_state::SharedState,
@@ -36,7 +36,10 @@ const APPROVAL_TTL: Duration = Duration::from_secs(15 * 60);
 const EXECUTION_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
 mod desktop;
+mod history;
 pub(crate) mod sessions;
+
+pub(crate) use history::edit_history;
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -213,6 +216,7 @@ struct SenderBinding {
 }
 
 pub struct GmClawImState {
+    history_gate: Arc<RwLock<()>>,
     sessions: Mutex<HashMap<SenderKey, Arc<SenderBinding>>>,
     desktop_claims: Mutex<HashMap<String, String>>,
     seen: Mutex<VecDeque<(SenderKey, String)>>,
@@ -226,6 +230,7 @@ pub struct GmClawImState {
 impl Default for GmClawImState {
     fn default() -> Self {
         Self {
+            history_gate: Arc::new(RwLock::new(())),
             sessions: Mutex::new(HashMap::new()),
             desktop_claims: Mutex::new(HashMap::new()),
             seen: Mutex::new(VecDeque::new()),
@@ -519,6 +524,7 @@ pub(crate) async fn handle_inbound(
     if !sender_allowed(&app_config, message) {
         return Ok(true);
     }
+    let _history = state.gmclaw_im.history_gate.clone().read_owned().await;
     if approval_button.is_some() && !selected {
         reply(
             outbound,
@@ -1331,7 +1337,7 @@ fn bounded_reply(answer: &str) -> String {
 mod tests {
     use super::*;
 
-    fn approval_fixture_state() -> SharedState {
+    pub(super) fn approval_fixture_state() -> SharedState {
         use crate::app_state::{
             AppState, FeishuWsState, RemoteControlState, TelegramState, WechatRecoveryState,
             WechatState,
@@ -1390,7 +1396,7 @@ mod tests {
         state
     }
 
-    fn approval_fixture_message(sender: &str) -> InboundMessage {
+    pub(super) fn approval_fixture_message(sender: &str) -> InboundMessage {
         serde_json::from_value(serde_json::json!({
             "platform":"feishu", "accountId":"fixture-account", "senderId":sender,
             "chatId":"fixture-group", "chatType":"group", "messageId":"fixture-card",
@@ -1399,7 +1405,7 @@ mod tests {
         .unwrap()
     }
 
-    fn approval_fixture_pending() -> PendingApproval {
+    pub(super) fn approval_fixture_pending() -> PendingApproval {
         PendingApproval {
             code: "fixture-code".into(),
             card: GmClawApproval {
@@ -1422,7 +1428,10 @@ mod tests {
         }
     }
 
-    fn approval_fixture_binding(selected: bool, session: Option<Session>) -> Arc<SenderBinding> {
+    pub(super) fn approval_fixture_binding(
+        selected: bool,
+        session: Option<Session>,
+    ) -> Arc<SenderBinding> {
         Arc::new(SenderBinding {
             selected: AtomicBool::new(selected),
             ui_epoch: AtomicU64::new(0),

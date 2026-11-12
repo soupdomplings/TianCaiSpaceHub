@@ -352,8 +352,9 @@ impl PersonalityChoices {
         panel.set_background_color(theme::theme().bg_app);
         panel.set_min_size(Size::new(0, -1));
         panel.set_name("对话性格");
-        let column = BoxSizer::builder(Orientation::Vertical).build();
+        let row = BoxSizer::builder(Orientation::Horizontal).build();
         let entries = Personality::ALL.map(|style| {
+            let column = BoxSizer::builder(Orientation::Vertical).build();
             let radio = RadioButton::builder(&panel)
                 .with_label(style.label())
                 .with_style(if style == Personality::default() {
@@ -378,10 +379,13 @@ impl PersonalityChoices {
                 SizerFlag::Expand | SizerFlag::Left,
                 panel.from_dip(24),
             );
-            column.add_spacer(panel.from_dip(8));
+            if style != Personality::Professional {
+                row.add_spacer(panel.from_dip(12));
+            }
+            row.add_sizer(&column, 1, SizerFlag::Expand, 0);
             (radio, description)
         });
-        panel.set_sizer(column, false);
+        panel.set_sizer(row, false);
         let choices = Self {
             panel,
             items: entries.map(|(radio, _)| radio),
@@ -409,7 +413,7 @@ impl PersonalityChoices {
         self.panel.enable(enabled);
     }
     fn layout(&self, width: i32) {
-        let width = (width - self.panel.from_dip(24)).max(1);
+        let width = ((width - self.panel.from_dip(12) * 2) / 3 - self.panel.from_dip(24)).max(1);
         let metrics = (width, self.panel.from_dip(100));
         if self.layout_metrics.replace(Some(metrics)) == Some(metrics) {
             return;
@@ -1875,6 +1879,10 @@ impl AssistantUi {
                 return;
             }
             *self.navigated.borrow_mut() = Some(id.to_string());
+            if self.state.borrow()["builtinShareAllowed"] != true {
+                self.post("navigation/ack", json!({"id":id,"opened":false,"message":"内置模型分享仅向软萌猫娘开放，请先切换对话性格"}), Action::Navigate);
+                return;
+            }
             let (ui, id) = (self.clone(), id.to_string());
             super::workbuddy_builtin::show(&self.parent, &self.api, move |opened| {
                 ui.post("navigation/ack", json!({"id":id,"opened":opened,"message":if opened {"WorkBuddy 分享面板已打开"} else {"WorkBuddy 分享面板未能打开"}}), Action::Navigate);
@@ -2177,6 +2185,22 @@ fn personality_choices_are_visible_exclusive_and_keep_the_conversation_and_draft
         for width in [ui.page.from_dip(300), ui.page.from_dip(620)] {
             ui.personality.panel.set_size(Size::new(width, ui.page.from_dip(260)));
             ui.personality.layout(width);
+            let rectangles = ui.personality.items.map(|radio| (radio.get_position(), radio.get_size()));
+            for pair in rectangles.windows(2) {
+                assert_eq!(pair[0].0.y, pair[1].0.y, "all three choices must stay in one horizontal row");
+                assert!(pair[0].0.x + pair[0].1.width + ui.page.from_dip(12) <= pair[1].0.x,
+                    "each directly clickable choice must keep its horizontal spacing");
+            }
+            assert!(rectangles[2].0.x + rectangles[2].1.width <= width);
+            for (radio, description) in ui.personality.items.into_iter().zip(ui.personality.descriptions) {
+                assert_eq!(radio.get_parent().unwrap().handle_ptr(), ui.personality.panel.handle_ptr(),
+                    "all radios must remain native siblings in one group");
+                let origin = radio.get_position();
+                let size = radio.get_size();
+                assert!(description.get_position().x >= origin.x);
+                assert!(description.get_position().x + description.get_size().width <= origin.x + size.width);
+                assert!(description.get_position().y >= origin.y + size.height);
+            }
             for (style, radio) in Personality::ALL.into_iter().zip(ui.personality.items) {
                 assert!(radio.is_shown());
                 assert_eq!(radio.get_label().as_deref(), Some(style.label()));

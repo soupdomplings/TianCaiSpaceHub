@@ -1,5 +1,27 @@
 # 天工 Work 兼容性评估与适配
 
+V1.0.31 用户已明确先按当前结构实施本地 AI Gateway 账号与历史管理，不再等待新版；现行实现和验证见 [历史专题](tiangong-session-history.md)。下节 V30 保留原阶段评估，未知新版自建智能体的存储／权限结构仍需后续适配。
+
+## V1.0.30 会话与智能体归属管理评估（待实施）
+
+评估日期：2026-11-12；关联 TC-011/012/016。用户希望新版天工按登录账号隔离会话、智能体后，Hub 外部模型工作区仍有稳定的本地 AI Gateway 归属，并能显式迁移、归档和恢复已有本地历史。用户已确认该天工版本尚未发布／未安装，待取得新版程序资源后继续实施。**本批只记录评估，未实现迁移、未改天工增强启动、未承诺未来版兼容。** 原增强启动及用户已确认的 V1.0.27 使用结果见 [模型接入](gmclaw.md#外部模型免登录增强启动v1021)。下方 v8 资料保留原版本和验收归属。
+
+本轮只读核对 Windows 已安装程序的 `package.json`、主进程／renderer 代码及 Harness 程序源码，版本仍为 `tiangong-desktop 1.0.4`。当前 `sessions` 已有 `user_id`、`agent_id`、`project_id`，`/data/sessions` 支持按 `user_id` 查询及定向更新；但 `scenarios`／`tasks` 尚无账号列，`/data/scenarios` 返回全量本地任务，主对话请求仍固定 `user_id="local"`、`agent_id="desktop-orchestration"`。官方 `userId` 当前用于账号显示及恢复／模型偏好键，[增强适配](../../src/gmclaw_runtime/workspace-adapter.js)只将后两项本地键统一到 `default`。这份样本未包含用户所述的完整新版隔离结构。
+
+迁移必须覆盖以下关联，不能只修改会话表的 `user_id`：
+
+- 会话元数据、`session_messages`、`compaction_records`，以及任务的原 `task_id`／`session_id`、模型选择、`task_messages` 正文、执行信息和 `files_json` 附件引用。保留原内容和身份，归档不等于删除原记录。
+- 工作目录下 `.tiangong/memory/<user>/memory/<project>/session-<id>.jsonl` 的会话正文、上下文压缩及运行／审批状态；同一 memory 根目录的 `images/` 保存图片快照。`memory_entries`、`memory_index`、`memory_sync_state` 与用户／项目 `MEMORY.md` 各有作用域，不能因选择一条会话而整体搬走其他历史的共享记忆或附件。
+- [IM 会话关联](../../src/gmclaw_im/desktop.rs)保存 `context.user_id`、项目及回复来源记录，恢复／续聊会核对这些身份；迁移、撤销及可见恢复必须与关联一致。已有[模型备份](../../src/gmclaw_config.rs)只保护模型配置，不能代替完整历史备份。
+
+实施方向是将本地 `ai-gateway` 作用域与官方 `userId`、登录令牌分离，统一新建会话、运行请求、列表过滤、最近任务恢复和记忆选择；官方账号及服务端权限继续沿原真实状态。`agent_id` 是执行智能体身份，不作为用户归属字段覆盖。旧 `local` 历史默认保留，用户明确选中后才预览迁移范围、保存相应原记录与文件备份，登记原／目标归属并提供撤销；正在执行、排队、收尾或等待审批的会话不迁移。按选定历史进行本地归档和可见恢复，不擅自读取其他账号的云端资料或绕过服务端授权。
+
+[DesktopClient](../../src/gmclaw_desktop.rs)的任务、会话元数据读取和定向更新可继续复用；[ChatGPT 会话管理](../../src/gui/session_history.rs)可借鉴选择与迁移回执交互，其 [rollout／state DB provider 修改](../../src/codex_session_history.rs)不能直接套用天工结构。当前 Harness 的 `get_agent_full_config` 仍返回固定 orchestration 配置，安装包仅发现 `init_agent` 模板，未发现桌面自建智能体表或 `/data/agents` API。新版智能体的定义、账号作用域、附件及迁移接口须待取得新版安装程序资源后确定，再决定是否复用原 API 或增加版本适配，不能提前改写未知结构。
+
+本次仅完成 Windows 安装程序资源与仓库代码静态核对，没有读取用户数据库、账号、会话文件或日志，没有启动产品、安装器和真实请求；macOS 未核对。本批没有新增配置键或数据库迁移，也无用户数据回滚动作；实际迁移、备份撤销、新版智能体和跨账号可见性均待实施与用户验收。
+
+## v0.4.30-8 历史适配记录
+
 2026-10-27 发布状态：用户初步反馈本地包正常，产品提交 `f322634` 已推送，`v0.4.30-8` 标签和非草稿 Pre-release 已创建；Windows/macOS job 均已开始，按要求停止等待。产品源码与本地包一致；准确运行与产物状态见 [v8 交付](../releases/v0.4.30-8.md#2026-10-27-源码与-release-已发布两平台-actions-已开始)。完整实机验收待确认，下方未提交状态保留开发阶段事实。
 
 维护日期：2026-10-22。关联 TC-002、TC-004、TC-007、TC-011、TC-012、TC-014。唯一 `main` 基线 `ed71d31507e4377649a5c6f4acb899c25ce60d4a`，本轮在其上开发 `v0.4.30-8`，源码未提交推送。

@@ -85,6 +85,7 @@ pub(super) struct GmClawTab {
     restore_button: Button,
     start_button: Button,
     normal_start_button: Button,
+    history_button: Button,
     state: Rc<RefCell<SelectionState>>,
     in_flight: Arc<AtomicBool>,
     refresh_pending: Rc<RefCell<super::configuration_refresh::PendingRefresh>>,
@@ -317,6 +318,10 @@ pub(super) fn create_with_settings(
     let normal_start_button = Button::builder(maintenance)
         .with_label(tr(text, "普通启动天工 Work", "Start TianGong normally"))
         .build();
+    let history_button = Button::builder(maintenance)
+        .with_label(tr(text, "会话历史管理", "Manage session history"))
+        .with_kind(super::controls::ButtonKind::Secondary)
+        .build();
     let reload_button = header_actions.map(|a| a.1).unwrap_or_else(|| {
         Button::builder(maintenance)
             .with_label(tr(text, "重新读取", "Reload"))
@@ -334,11 +339,12 @@ pub(super) fn create_with_settings(
         .build();
     let utilities = BoxSizer::builder(Orientation::Vertical).build();
     let maintenance_buttons = if header_actions.is_some() {
-        vec![&normal_start_button, &restore_button]
+        vec![&normal_start_button, &history_button, &restore_button]
     } else {
         vec![
             &start_button,
             &normal_start_button,
+            &history_button,
             &reload_button,
             &restore_button,
         ]
@@ -432,6 +438,7 @@ pub(super) fn create_with_settings(
         restore_button,
         start_button,
         normal_start_button,
+        history_button,
         state: Rc::new(RefCell::new(SelectionState {
             reasoning_efforts: vec!["auto"],
             ..SelectionState::default()
@@ -543,6 +550,12 @@ pub(super) fn bind_actions(
     text: GuiText,
     gui_tx: &tokio::sync::mpsc::UnboundedSender<super::GuiMessage>,
 ) {
+    {
+        let frame = *frame;
+        let api = api.clone();
+        tab.history_button
+            .on_click(move |_| super::tiangong_history::show(&frame, &api));
+    }
     for (button, enhanced) in [(tab.start_button, true), (tab.normal_start_button, false)] {
         let start_tab = tab.clone();
         let start_api = api.clone();
@@ -1488,6 +1501,7 @@ fn update_controls(tab: &GmClawTab) {
     }
     tab.start_button.enable(!busy);
     tab.normal_start_button.enable(!busy);
+    tab.history_button.enable(!busy);
     tab.entry.enable(ready);
     let selected = state
         .status

@@ -1,10 +1,11 @@
 // Pure, atomic renderer adapter. The caller only supplies Hub-owned model IDs.
 // It never reads credentials, edits an installation, or marks an account logged in.
 (function adaptTiangongWorkspace(source, options = {}) {
-  const marker = 'TIANCAISPACEHUB_EXTERNAL_WORKSPACE_V1';
+  const marker = 'TIANCAISPACEHUB_EXTERNAL_WORKSPACE_V2';
   const unchanged = (reason) => ({source, adapted: false, reason});
   if (typeof source !== 'string') return unchanged('invalid_source');
   if (source.includes(marker)) return unchanged('already_adapted');
+  if (/TIANCAISPACEHUB_EXTERNAL_WORKSPACE_V\d+/.test(source)) return unchanged('incompatible_adapter');
   const ids = options && options.externalModelIds;
   if (!Array.isArray(ids) || !ids.length || ids.some((id) => typeof id !== 'string' ||
       !id || id.length > 128 || /[\u0000-\u001f]/.test(id) ||
@@ -49,6 +50,13 @@
     if (panelStart >= appStart || panelEnd < panelStart || panelEnd >= appStart || appEnd < appStart) {
       return unchanged('unsupported_renderer');
     }
+    for (const required of ['const scenarioApi = {', 'async function req(method, path, body, options)',
+      'list: () => req("GET", "/data/scenarios").then((r) => r.scenarios)',
+      'searchMessages: (query) => req("GET", `/data/messages/search?q=${enc(query)}`).then((r) => r.results)',
+      'createTask: (scenarioId, title = "新任务", modelId = "", modelOptions = {}) => req("POST", "/data/tasks", { scenario_id: scenarioId, title, model_id: modelId, model_options: modelOptions })',
+      'deleteTask: (id) => req("DELETE", `/data/tasks/${enc(id)}`)']) {
+      if (!changed.includes(required)) throw new Error('unsupported_renderer');
+    }
     let app = changed.slice(appStart, appEnd);
     let panel = changed.slice(panelStart, panelEnd);
     for (const required of ['async function checkClawSession(', 'async function bootstrapAppData()',
@@ -62,7 +70,10 @@
     for (const required of ['function isTaskVisible(', 'function activeTaskRecoveryKey()', 'function lastModelPreferenceKey()']) {
       if (!app.includes(required)) throw new Error('unsupported_renderer');
     }
-    app = replace(app, '      display_name: "Admin",', '      display_name: "本地工作区",');
+    app = replace(app, '      display_name: "Admin",', '      display_name: "AI Gateway",');
+    app = replace(app, '    const scenarios = ref([]);',
+      '    const scenarios = ref([]);\n' +
+      '    __tcwVisibleTaskIds = () => new Set(scenarios.value.flatMap((scenario) => scenario.tasks.map((task) => task.task_id)));');
     app = replace(app, '    const clawLoggedIn = ref(false);',
       '    const clawLoggedIn = ref(false);\n' +
       '    const hubWorkspaceReady = computed(() => clawLoggedIn.value || __tcwLocalReady.value);\n' +
@@ -163,7 +174,27 @@
     // Local preferences stay in one namespace across optional cloud login changes.
     const templateEnd = String.fromCharCode(96) + ';';
     app = replace(app, String.fromCharCode(36) + '{user.value.userId || "default"}' + templateEnd,
-      String.fromCharCode(36) + '{__tcwLocalReady.value ? "default" : user.value.userId || "default"}' + templateEnd, 2);
+      String.fromCharCode(36) + '{__tcwScope}' + templateEnd, 2);
+    app = replace(app,
+      '"user-name": user.value.userId || user.value.display_name || user.value.username,\n            "running-task-ids":',
+      '"user-name": __tcwOfficialLoggedIn.value ? user.value.userId || user.value.display_name || user.value.username : "AI Gateway",\n            "running-task-ids":');
+    app = replace(app,
+      '"user-name": user.value.userId || user.value.display_name || user.value.username,\n                  "is-active":',
+      '"user-name": __tcwScope,\n                  "is-active":');
+    app = replace(app, '    async function onOpenTask(task, messageId, query) {\n',
+      '    async function onOpenTask(task, messageId, query) {\n' +
+      '      try { await __tcwRequireSession(task.session_id); }\n' +
+      '      catch (error) { ElMessage.error(error.message || "该任务不属于 AI Gateway，请在 Hub 历史管理中确认归属。"); return; }\n');
+    app = replace(app, '    async function onDeleteTask(task) {\n',
+      '    async function onDeleteTask(task) {\n' +
+      '      try { await __tcwRequireSession(task.session_id); }\n' +
+      '      catch (error) { ElMessage.error(error.message || "会话归属未能确认，尚未删除任务。"); return; }\n');
+    // Native project removal deletes the whole shared .tiangong directory.
+    // Keep that entry explicit, while the existing per-task deletion stays usable.
+    app = section(app, '    async function onDeleteScenario(scenarioId) {', '    async function onRenameTask(task, title) {',
+      '    async function onDeleteScenario(scenarioId) {\n' +
+      '      ElMessage.warning("项目包含共享历史和记忆，请分别删除当前可见任务；本地工作区保留项目及工作目录。");\n' +
+      '    }\n');
     app = replace(app, 'onOpenUserPanel: _cache[0] || (_cache[0] = ($event) => showUserPanel.value = true),',
       'onOpenUserPanel: _cache[0] || (_cache[0] = ($event) => { if (clawLoggedIn.value) showUserPanel.value = true; else hubOpenLogin(); }),');
     app = replace(app, '        createVNode(UpdateBanner, { class: "app-root" }),',
@@ -197,17 +228,72 @@
       '        return false;\n' +
       '      }\n' +
       '      if (dbModels.value.some((model) => model.model_id === selectedModelId.value && (!isBuiltinModel(model) || model.is_configured))) return true;');
+    panel = replace(panel, '          console.warn("[chat] 自动创建默认任务失败:", e);',
+      '          console.warn("[chat] 自动创建默认任务失败:", e);\n          throw e;');
+    panel = replace(panel, '      const chatId = recovery?.run.chat_id || await window.electronAPI.generateId();',
+      '      const hubSession = await __tcwRequireSession(sessionId.value);\n' +
+      '      const chatId = recovery?.run.chat_id || await window.electronAPI.generateId();');
+    panel = replace(panel, '          user_id: "local",\n          agent_id: "desktop-orchestration",\n          project_id: "default",',
+      '          user_id: hubSession.user_id,\n          agent_id: hubSession.agent_id,\n          project_id: hubSession.project_id,');
     changed = replace(changed,
       '_cache[58] || (_cache[58] = createBaseVNode("span", { class: "sidebar-user-menu-action-label" }, "退出登录", -1))',
       'createBaseVNode("span", { class: "sidebar-user-menu-action-label" }, __tcwOfficialLoggedIn.value ? "退出登录" : "登录官方账号")');
+    for (const [cache, className] of [[54, 'sidebar-user-status'], [55, 'sidebar-user-menu-status']]) {
+      changed = replace(changed,
+        '_cache[' + cache + '] || (_cache[' + cache + '] = createBaseVNode("small", { class: "' + className + '" }, "当前已登录", -1))',
+        'createBaseVNode("small", { class: "' + className + '" }, __tcwOfficialLoggedIn.value ? "当前已登录" : "本地账号")');
+    }
     const helpers = '\n/*' + marker + '*/\n' +
       'let __tcwModelIds = ' + JSON.stringify(selectedIds) + ';\n' +
       'let __tcwPreferredModel = ' + JSON.stringify(preferred) + ';\n' +
       'const __tcwOfficialLoggedIn = ref(false);\n' +
       'const __tcwLocalReady = ref(false);\n' +
-      'const __tcwState = window.__tiancaiWorkspace = { version: 1, mode: "external", ready: false, error: "" };\n' +
+      'const __tcwScope = "ai-gateway";\n' +
+      'const __tcwState = window.__tiancaiWorkspace = { version: 2, scope: __tcwScope, mode: "external", ready: false, error: "" };\n' +
       'function __tcwExternalModel(model) { return !!model && __tcwModelIds.includes(model.model_id) && !isBuiltinModel(model); }\n' +
-      'function __tcwChooseExternal(models) { return models.find((model) => model.model_id === __tcwPreferredModel && __tcwExternalModel(model))?.model_id || models.find(__tcwExternalModel)?.model_id || ""; }\n';
+      'function __tcwChooseExternal(models) { return models.find((model) => model.model_id === __tcwPreferredModel && __tcwExternalModel(model))?.model_id || models.find(__tcwExternalModel)?.model_id || ""; }\n' +
+      String.raw`
+const __tcwNativeScenarios = { list: scenarioApi.list, searchMessages: scenarioApi.searchMessages, createTask: scenarioApi.createTask, deleteTask: scenarioApi.deleteTask };
+let __tcwVisibleTaskIds = () => new Set();
+async function __tcwRequireSession(id) {
+  if (typeof id !== "string" || !id) throw new Error("任务缺少会话归属，请在 Hub 历史管理中核对。");
+  const session = await req("GET", "/data/sessions/" + enc(id));
+  if (session?.session_id !== id || session.user_id !== __tcwScope) throw new Error("该任务不属于 AI Gateway，请先在 Hub 历史管理中迁入。");
+  if (typeof session.agent_id !== "string" || typeof session.project_id !== "string") throw new Error("会话的智能体或项目身份不完整，请在 Hub 历史管理中核对。");
+  return session;
+}
+async function __tcwOwnedSessionIds() {
+  const result = new Set();
+  const limit = 200;
+  for (let offset = 0; ; offset += limit) {
+    const page = await req("GET", "/data/sessions?user_id=" + enc(__tcwScope) + "&limit=" + limit + "&offset=" + offset);
+    if (!Array.isArray(page?.sessions)) throw new Error("读取本地会话归属失败，请重试加载。");
+    for (const session of page.sessions) if (session.user_id === __tcwScope) result.add(session.session_id);
+    if (page.sessions.length < limit) return result;
+  }
+}
+scenarioApi.list = async () => {
+  const [scenarios, owned] = await Promise.all([__tcwNativeScenarios.list(), __tcwOwnedSessionIds()]);
+  return scenarios.map((scenario) => ({ ...scenario, tasks: scenario.tasks.filter((task) => owned.has(task.session_id)) }));
+};
+scenarioApi.searchMessages = async (query) => {
+  const results = await __tcwNativeScenarios.searchMessages(query);
+  const visible = __tcwVisibleTaskIds();
+  return results.filter((row) => visible.has(row.task_id));
+};
+scenarioApi.createTask = async (...args) => {
+  const task = await __tcwNativeScenarios.createTask(...args);
+  try {
+    await req("POST", "/data/sessions", { session_id: task.session_id, title: task.title, user_id: __tcwScope,
+      agent_id: "desktop-orchestration", project_id: "default", model_name: task.model_id || "", max_steps: 1000 });
+  } catch (error) {
+    // Only this new, still empty task is rolled back; no legacy owner is changed.
+    await __tcwNativeScenarios.deleteTask(task.task_id).catch(() => {});
+    throw new Error("本地会话归属未能保存，消息尚未发送，请重试。");
+  }
+  return task;
+};
+`;
     const originalPanel = source.replace(/\r\n/g, '\n').slice(panelStart, panelEnd);
     const originalApp = source.replace(/\r\n/g, '\n').slice(appStart, appEnd);
     changed = replace(changed, originalPanel, panel);

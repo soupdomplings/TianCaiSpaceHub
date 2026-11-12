@@ -1,5 +1,13 @@
 # TianCaiSpaceHub 文档总入口
 
+2026-11-12 **V1.0.31：天工 AI Gateway 本地账号与历史管理**：[历史管理](customizations/tiangong-session-history.md) 统一增强工作区和新 IM 会话的本地身份、新建／列表／恢复与记忆；接入设置支持多选迁入及恢复原归属，旧历史不自动迁移。Windows GUI／release、61 项不同 Rust、29 项 Node 和唯一 MSI `120156` 的版本／升级／六项载荷核验通过。用户随后授权累计源码提交、创建 `v1.0.31` Release 并启动 Windows／macOS Actions；包身份、发布进度和平台边界见 [V31 交付](releases/v1.0.31.md)。未来自建智能体存储仍需新版适配，实机待验。
+
+2026-11-12 **V1.0.30 测试交付：WorkBuddy 常驻分享设置与真实积分**：[分享](customizations/workbuddy-builtin-sharing-assessment.md)入口持久放入 WorkBuddy 接入设置，提供授权账号、状态和真实余额刷新；取消勾选仅隐藏，已有分享／授权／模型保留。[搭档](customizations/genius-buddy.md) 保留实际导航回执及猫娘启停资格。Windows GUI/release、40 项受影响 Rust 和唯一 MSI `112520` 的版本／升级／六项载荷核验通过，真实积分与 macOS 待验。天工新版会话／智能体归属管理仅[评估](customizations/tiangong-work-compatibility-assessment.md)，用户确认新版尚未发布／安装，后续继续；分工、包身份及待办见 [V30 交付](releases/v1.0.30.md)，暂不推送。
+
+2026-11-12 **V1.0.29 测试交付：WorkBuddy 独立分享、积分倍率与助手下载指引**：[分享专题](customizations/workbuddy-builtin-sharing-assessment.md) 改为首次显式授权后由 Hub 保护保存并独立请求／续期，就绪后可真正退出 WorkBuddy，重启 Hub 后显式启用恢复。目录沿主 Agent 筛选、按 ID 去重、同名加标识，并显示真实积分倍率；[搭档](customizations/genius-buddy.md) 简短介绍可做能力，新增五端官方下载指引。Windows GUI/release、53 项不同 Rust、17 项 Node 及唯一 MSI `103014` 核验通过，真实独立请求与扣费待用户验收，详见 [V29 交付](releases/v1.0.29.md)；暂不推送，V28 原包身份保持。
+
+2026-11-12 **V1.0.28 测试交付**：[WorkBuddy 分享](customizations/workbuddy-builtin-sharing-assessment.md) 修正正式包过滤预加载参数后一直等待宿主的问题；[搭档性格](customizations/genius-buddy-personalities-draft.md) 改横向选择、细化自然初恋感，两项内置分享限定软萌猫娘触发。Windows GUI/release、45 项不同 Rust、6 项 Node 及唯一 MSI `005946` 的版本／升级／六项载荷核验通过，实际 WorkBuddy 连接与 macOS 待验。用户已确认 V27 天工和 ZCode 增强启动可用；本轮未提交、未推送，包身份及验证边界见 [V28 交付](releases/v1.0.28.md)。
+
 2026-11-12 **V1.0.27 测试交付**：同步用户修改的[搭档性格](customizations/genius-buddy-personalities-draft.md)，设置页改三项直接选择；修 ZCode 事件积压 409 和天工未登录增强启动的模块识别；新增 [WorkBuddy 登录模型分享](customizations/workbuddy-builtin-sharing-assessment.md) 首个可测试版本。MiniMax [API／订阅说明](customizations/desktop-capability-management.md)核对同地址、不同 Key 和额度。Windows GUI/release、58 项不同 Rust、23 项 Node 和唯一 MSI `001105` 核验通过，产品源码 `67fda53` 已推送；用户实机和 macOS 待验。包身份、分工及边界见 [V27 交付](releases/v1.0.27.md)，下列历史记录保持原版本归属。
 
 2026-11-11 **V1.0.26 测试交付**：[搭档](customizations/genius-buddy.md) 接入三套已审核性格、完全访问、Hub 内半宽最大化、选择／填写追问、专用模型删除及导航回执；[操作反馈](development/operation-feedback.md) 与[小分队](customizations/tiancai-squad-account.md) 处理空提示、倒计时、首屏布局和闪烁等待窗。本批追加模块／页签、公共弹窗及提示收放的[轻量动态](development/desktop-visual-system.md)，数据加载动态单独在页内提示。[ZCode](customizations/desktop-client-adapters.md) 补登录服务加载时的探针与本 Hub 连接重试；[WorkBuddy 模型分享](customizations/workbuddy-builtin-sharing-assessment.md) 仅静态评估。源码、必要检查、唯一测试包和实机待验范围见 [V26 交付](releases/v1.0.26.md)，以下 V25 草案和检查保留当时状态。 Windows GUI/release、57 项不同 Rust、12 项 Node 和唯一 MSI `230102` 核验通过，产品源码 `eac0ea2` 已推送；实机待用户验收。

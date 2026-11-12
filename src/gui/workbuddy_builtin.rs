@@ -19,6 +19,7 @@ use wxdragon::prelude::*;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Operation {
     Read,
+    Refresh,
     Enable,
     Disable,
     Share,
@@ -27,6 +28,7 @@ impl Operation {
     fn title(self) -> &'static str {
         match self {
             Self::Read => "读取 WorkBuddy 分享状态",
+            Self::Refresh => "刷新 WorkBuddy 状态与积分",
             Self::Enable => "启用 WorkBuddy 模型分享",
             Self::Disable => "停用 WorkBuddy 模型分享",
             Self::Share => "保存模型到客户端",
@@ -38,9 +40,13 @@ impl Operation {
         model: Option<&Value>,
         targets: &BTreeSet<String>,
     ) -> Result<(String, Value), String> {
+        if !matches!(self, Self::Read | Self::Refresh) && view["builtinShareAllowed"] != true {
+            return Err("内置模型分享仅向软萌猫娘开放，请先切换对话性格".into());
+        }
         let mut body = json!({});
         let operation = match self {
             Self::Read => "read",
+            Self::Refresh => "account-refresh",
             Self::Enable => "enable",
             Self::Disable => "disable",
             Self::Share => {
@@ -58,7 +64,7 @@ impl Operation {
                 "share"
             }
         };
-        if self != Self::Read && view["revision"].is_string() {
+        if !matches!(self, Self::Read | Self::Refresh) && view["revision"].is_string() {
             body["revision"] = view["revision"].clone();
         }
         Ok((format!("/api/desktop/workbuddy-builtin/{operation}"), body))
@@ -98,6 +104,88 @@ fn models(view: &Value) -> &[Value] {
     view["models"].as_array().map(Vec::as_slice).unwrap_or(&[])
 }
 
+fn model_billing(model: &Value) -> (Option<f64>, Option<&str>) {
+    let billing = &model["billing"];
+    if billing["unit"] != "credits" {
+        return (None, None);
+    }
+    (
+        billing["multiplier"]
+            .as_f64()
+            .filter(|value| value.is_finite() && *value >= 0.0),
+        billing["display"]
+            .as_str()
+            .map(str::trim)
+            .filter(|display| !display.is_empty()),
+    )
+}
+
+fn model_option_label(model: &Value) -> String {
+    let name = model["name"]
+        .as_str()
+        .or_else(|| model["id"].as_str())
+        .unwrap_or("WorkBuddy 内置模型");
+    let (multiplier, display) = model_billing(model);
+    let price = if let Some(multiplier) = multiplier {
+        format!("积分 ×{multiplier}")
+    } else if let Some(display) = display {
+        // Keep unusual catalog text brief in the picker; the full public
+        // description remains available below it, without inferring a rate.
+        let localized = display
+            .split_whitespace()
+            .map(|word| {
+                if word.eq_ignore_ascii_case("credits") {
+                    "积分"
+                } else {
+                    word
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        let mut characters = localized.chars();
+        let mut brief: String = characters.by_ref().take(24).collect();
+        if characters.next().is_some() {
+            brief.push('…');
+        }
+        format!("积分 · {brief}")
+    } else {
+        "积分倍率未提供".into()
+    };
+    format!("{name} · {price}")
+}
+
+fn model_description(model: &Value) -> String {
+    let mut details = Vec::new();
+    if let Some(context) = model["contextWindow"].as_u64().filter(|v| *v > 0) {
+        details.push(format!("上下文 {context}"));
+    }
+    if let Some(output) = model["maxOutputTokens"].as_u64().filter(|v| *v > 0) {
+        details.push(format!("最大输出 {output}"));
+    }
+    if model["supportsThinking"] == true {
+        let effort = model["defaultThinkingLevel"].as_str().unwrap_or("");
+        details.push(if effort.is_empty() {
+            "支持思考".into()
+        } else {
+            format!("默认思考强度 {effort}")
+        });
+    }
+    let (multiplier, display) = model_billing(model);
+    let price = if let Some(multiplier) = multiplier {
+        format!("目录倍率 ×{multiplier}")
+    } else if let Some(display) = display {
+        format!("目录说明：{display}")
+    } else {
+        "目录未提供倍率".into()
+    };
+    let billing = format!("按 WorkBuddy 账户积分扣费；{price}。实际扣费以 WorkBuddy 为准。");
+    if details.is_empty() {
+        billing
+    } else {
+        format!("{}\n{billing}", details.join(" · "))
+    }
+}
+
 /// An open receipt belongs to visibility, not the end of a modal event loop.
 #[derive(Clone)]
 struct OpenReceipt(Rc<RefCell<Option<Box<dyn FnOnce(bool)>>>>);
@@ -131,6 +219,8 @@ struct SharePanel {
     body: ScrolledWindow,
     job_owner: Panel,
     account: StaticText,
+    account_status: StaticText,
+    credits: StaticText,
     detail: StaticText,
     models: Choice,
     model_detail: StaticText,
@@ -146,6 +236,7 @@ struct SharePanel {
     outcome: StaticText,
     view: Rc<RefCell<Value>>,
     busy: Rc<Cell<bool>>,
+    refresh_failed: Rc<Cell<bool>>,
 }
 impl SharePanel {
     fn selected_model(&self) -> Option<Value> {
@@ -158,59 +249,45 @@ impl SharePanel {
         let idle = !self.busy.get();
         let ready = view["ready"] == true;
         let read = view["revision"].is_string();
+        let allowed = view["builtinShareAllowed"] == true;
         self.read.enable(idle);
         self.close.enable(idle);
-        self.enable.enable(idle && read && view["enabled"] != true);
-        self.disable.enable(idle && view["enabled"] == true);
+        let reauthorize = view["reauthorizationRequired"] == true;
+        self.enable.set_label(if reauthorize {
+            "重新授权"
+        } else {
+            "启用分享"
+        });
+        self.enable
+            .enable(idle && allowed && read && (view["enabled"] != true || reauthorize));
+        self.disable
+            .enable(idle && allowed && view["enabled"] == true);
         self.models
             .enable(idle && ready && !models(&view).is_empty());
         self.share.enable(
-            idle && ready && self.selected_model().is_some() && !self.selected.borrow().is_empty(),
+            idle && allowed
+                && ready
+                && self.selected_model().is_some()
+                && !self.selected.borrow().is_empty(),
         );
         for (_, checkbox) in self.choices.borrow().iter() {
             checkbox.enable(idle && ready);
         }
     }
     fn model_description(&self) -> String {
-        let mut details = Vec::new();
-        if let Some(model) = self.selected_model() {
-            if let Some(context) = model["contextWindow"].as_u64().filter(|v| *v > 0) {
-                details.push(format!("上下文 {context}"));
-            }
-            if let Some(output) = model["maxOutputTokens"].as_u64().filter(|v| *v > 0) {
-                details.push(format!("最大输出 {output}"));
-            }
-            if model["supportsThinking"] == true {
-                let effort = model["defaultThinkingLevel"].as_str().unwrap_or("");
-                details.push(if effort.is_empty() {
-                    "支持思考".into()
-                } else {
-                    format!("默认思考强度 {effort}")
-                });
-            }
-        }
-        details.join(" · ")
+        self.selected_model()
+            .as_ref()
+            .map(model_description)
+            .unwrap_or_default()
     }
     fn apply(&self, view: Value) {
         let selected = self
             .selected_model()
             .and_then(|model| model["id"].as_str().map(str::to_owned));
-        self.account.set_label(if view["loggedIn"] == true {
-            view["accountName"].as_str().unwrap_or("WorkBuddy 已登录")
-        } else if view["enabled"] == true {
-            "等待 WorkBuddy 登录"
-        } else {
-            "WorkBuddy 分享未启用"
-        });
         self.models.clear();
         let rows = models(&view);
         for model in rows {
-            self.models.append(
-                model["name"]
-                    .as_str()
-                    .or_else(|| model["id"].as_str())
-                    .unwrap_or("WorkBuddy 内置模型"),
-            );
+            self.models.append(&model_option_label(model));
         }
         if !rows.is_empty() {
             let index = selected
@@ -281,8 +358,19 @@ impl SharePanel {
         let view = self.view.borrow();
         let detail = view["detail"]
             .as_str()
-            .unwrap_or("只有点击“启用分享”才会准备并启动 WorkBuddy。");
+            .unwrap_or("首次启用时获取 WorkBuddy 授权，独立分享就绪后即可彻底退出客户端。");
         let description = self.model_description();
+        let account =
+            super::workbuddy_share_settings::account_summary(&view, self.refresh_failed.get());
+        let account_name = format!("授权账号：{}", account.account);
+        let account_status = format!("本机授权：{}", account.authorization);
+        let mut credits = format!(
+            "剩余积分：{}\n积分更新时间：{}",
+            account.credits, account.updated
+        );
+        if !account.detail.is_empty() {
+            credits.push_str(&format!("\n{}", account.detail));
+        }
         let has_failure = view["outcomes"]
             .as_array()
             .is_some_and(|rows| rows.iter().any(|row| row["ok"] != true));
@@ -292,6 +380,9 @@ impl SharePanel {
             String::new()
         };
         for (label, text) in [
+            (self.account, account_name.as_str()),
+            (self.account_status, account_status.as_str()),
+            (self.credits, credits.as_str()),
             (self.detail, detail),
             (self.model_detail, description.as_str()),
             (self.targets_empty, "未发现可保存的客户端。"),
@@ -336,6 +427,9 @@ impl SharePanel {
             move |result| {
                 panel.busy.set(false);
                 if let Ok(value) = result {
+                    if operation == Operation::Refresh {
+                        panel.refresh_failed.set(false);
+                    }
                     let needs_restart = value["needsRestart"] == true;
                     let ready = value["ready"] == true;
                     let detail = value["detail"].as_str().unwrap_or("").to_owned();
@@ -358,6 +452,9 @@ impl SharePanel {
                         }
                     }
                 } else {
+                    if operation == Operation::Refresh {
+                        panel.refresh_failed.set(true);
+                    }
                     panel.update_controls();
                     panel.layout();
                 }
@@ -399,13 +496,30 @@ fn panel(parent: &Frame) -> (SquadDialog, SharePanel) {
     let chrome = SquadDialog::new(
         parent,
         "WorkBuddy 内置模型分享",
-        "启用后使用当前 WorkBuddy 账号的内置模型，可同时保存到多个客户端。",
+        "首次授权后由 Hub 独立调用，可退出 WorkBuddy；使用原账户积分，模型倍率随目录显示。",
         Size::new(680, 620),
     );
     let (state_card, state_column) = chrome.section("分享状态");
     let account = squad_dialog::field_label(&state_card, "正在读取 WorkBuddy 状态…");
     state_column.add(&account, 0, SizerFlag::Expand, 0);
-    let detail = squad_dialog::note(&state_card, "只有点击“启用分享”才会准备并启动 WorkBuddy。");
+    let account_status = squad_dialog::note(&state_card, "本机授权：尚未读取");
+    state_column.add(
+        &account_status,
+        0,
+        SizerFlag::Expand | SizerFlag::Top,
+        state_card.from_dip(8),
+    );
+    let credits = squad_dialog::note(&state_card, "剩余积分：尚未获取");
+    state_column.add(
+        &credits,
+        0,
+        SizerFlag::Expand | SizerFlag::Top,
+        state_card.from_dip(8),
+    );
+    let detail = squad_dialog::note(
+        &state_card,
+        "首次启用时获取 WorkBuddy 授权，独立分享就绪后即可彻底退出客户端。",
+    );
     state_column.add(
         &detail,
         0,
@@ -451,7 +565,7 @@ fn panel(parent: &Frame) -> (SquadDialog, SharePanel) {
         targets_host.from_dip(8),
     );
     let read = Button::builder(&chrome.dialog)
-        .with_label("刷新状态")
+        .with_label("刷新状态与积分")
         .with_kind(ButtonKind::Ghost)
         .build();
     let close = Button::builder(&chrome.dialog)
@@ -472,6 +586,8 @@ fn panel(parent: &Frame) -> (SquadDialog, SharePanel) {
         body: chrome.body,
         job_owner: state_card,
         account,
+        account_status,
+        credits,
         detail,
         models,
         model_detail,
@@ -487,6 +603,7 @@ fn panel(parent: &Frame) -> (SquadDialog, SharePanel) {
         outcome,
         view: Default::default(),
         busy: Default::default(),
+        refresh_failed: Default::default(),
     };
     panel.update_controls();
     let changed = panel.clone();
@@ -503,12 +620,12 @@ fn panel(parent: &Frame) -> (SquadDialog, SharePanel) {
     (chrome, panel)
 }
 
-/// Only the explicit assistant page request reveals this form. No eager host startup.
+/// The revealed settings entry and explicit assistant request share this form.
 pub(super) fn show(parent: &Frame, api: &ApiClient, on_open: impl FnOnce(bool) + 'static) {
     let (chrome, panel) = panel(parent);
     let job = Rc::new(InlineJob::new(panel.job_owner, chrome.status));
     for (button, operation) in [
-        (panel.read, Operation::Read),
+        (panel.read, Operation::Refresh),
         (panel.enable, Operation::Enable),
         (panel.disable, Operation::Disable),
         (panel.share, Operation::Share),
@@ -563,6 +680,37 @@ mod tests {
     use super::*;
 
     #[test]
+    fn model_pricing_shows_catalog_credits_without_inventing_unknown_or_free_rates() {
+        let priced = json!({"id":"deepseek-v4-pro","name":"DeepSeek V4 Pro","contextWindow":128000,
+            "billing":{"unit":"credits","display":"x0.51 credits","multiplier":0.51}});
+        assert_eq!(model_option_label(&priced), "DeepSeek V4 Pro · 积分 ×0.51");
+        let detail = model_description(&priced);
+        assert!(detail.starts_with("上下文 128000\n"));
+        assert!(detail.contains("按 WorkBuddy 账户积分扣费；目录倍率 ×0.51"));
+        assert!(detail.contains("实际扣费以 WorkBuddy 为准"));
+
+        let zero = json!({"id":"hy3","name":"Hy3 · hy3",
+            "billing":{"unit":"credits","display":"x0.00 credits","multiplier":0}});
+        assert_eq!(model_option_label(&zero), "Hy3 · hy3 · 积分 ×0");
+        assert!(!model_description(&zero).contains("免费"));
+
+        let unknown = json!({"id":"unknown","billing":{"unit":"credits"}});
+        assert_eq!(model_option_label(&unknown), "unknown · 积分倍率未提供");
+        assert!(model_description(&unknown).contains("目录未提供倍率"));
+        let legacy = json!({"id":"legacy"});
+        assert_eq!(model_option_label(&legacy), "legacy · 积分倍率未提供");
+
+        let described =
+            json!({"id":"described","billing":{"unit":"credits","display":"每次 2 credits"}});
+        assert_eq!(
+            model_option_label(&described),
+            "described · 积分 · 每次 2 积分"
+        );
+        assert!(model_description(&described).contains("目录说明：每次 2 credits"));
+        assert!(!model_description(&described).contains("目录倍率"));
+    }
+
+    #[test]
     fn explicit_open_reads_only_and_visible_receipt_does_not_wait_for_close() {
         let calls = Rc::new(RefCell::new(Vec::new()));
         let recorded = calls.clone();
@@ -585,6 +733,19 @@ mod tests {
             .unwrap();
         assert_eq!(path, "/api/desktop/workbuddy-builtin/read");
         assert_eq!(body, json!({}));
+        assert_eq!(
+            Operation::Refresh
+                .request(
+                    &json!({"builtinShareAllowed":false}),
+                    None,
+                    &BTreeSet::new()
+                )
+                .unwrap(),
+            (
+                "/api/desktop/workbuddy-builtin/account-refresh".into(),
+                json!({})
+            )
+        );
         assert!(
             Operation::Share
                 .request(&json!({"ready":false}), None, &BTreeSet::new())
@@ -594,7 +755,7 @@ mod tests {
 
     #[test]
     fn destinations_exclude_self_hidden_and_inherited_and_share_uses_catalog_ids() {
-        let view = json!({"revision":"current","ready":true,"targets":[
+        let view = json!({"revision":"current","ready":true,"builtinShareAllowed":true,"targets":[
             {"id":"wb","client":"workbuddy"},
             {"id":"ide","client":"vscode"},
             {"id":"webstorm","client":"webstorm"},
@@ -635,7 +796,7 @@ mod tests {
                 assert!(!panel.enable.is_enabled());
                 assert!(!panel.share.is_enabled());
                 assert!(!panel.dialog.is_shown());
-                let mut view = json!({"revision":"one","enabled":false,"ready":false,
+                let mut view = json!({"revision":"one","enabled":false,"ready":false,"builtinShareAllowed":true,
                     "needsRestart":true,"detail":"请先退出 WorkBuddy，再点击启用分享；现有任务不会自动关闭",
                     "models":[],"targets":[]});
                 panel.apply(view.clone());
@@ -666,6 +827,15 @@ mod tests {
                 assert!(panel.share.is_enabled());
                 assert!(!panel.enable.is_enabled());
                 assert!(panel.disable.is_enabled());
+                let enabled_view = view.clone();
+                view["builtinShareAllowed"] = false.into();
+                panel.apply(view.clone());
+                assert!(!panel.enable.is_enabled());
+                assert!(!panel.disable.is_enabled());
+                assert!(!panel.share.is_enabled());
+                assert_eq!(view["enabled"], true, "changing personality must not stop an active host");
+                view = enabled_view;
+                panel.apply(view.clone());
                 assert!(panel.model_detail.get_label().contains("high"));
                 let original_checkbox = panel.choices.borrow()[0].1.handle_ptr();
                 view["models"].as_array_mut().unwrap().reverse();

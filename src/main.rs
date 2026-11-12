@@ -23,6 +23,7 @@ mod gmclaw_desktop;
 mod gmclaw_executor;
 mod gmclaw_im;
 mod gmclaw_runtime;
+mod tiangong_session_history;
 #[cfg(feature = "gui")]
 mod gui;
 mod im;

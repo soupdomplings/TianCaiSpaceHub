@@ -565,7 +565,10 @@ pub(crate) async fn run_connection_monitor(
     mut shutdown: watch::Receiver<bool>,
 ) {
     tokio::spawn(run_display_monitor(state.clone(), shutdown.clone()));
-    tokio::spawn(crate::local_assistance::run_monitor(state.clone(), shutdown.clone()));
+    tokio::spawn(crate::local_assistance::run_monitor(
+        state.clone(),
+        shutdown.clone(),
+    ));
     let mut interval = tokio::time::interval(MONITOR_INTERVAL);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
@@ -707,6 +710,26 @@ pub(crate) async fn desktop_process_ids() -> Vec<u32> {
         installation.process_ids
     })
     .unwrap_or_default()
+}
+
+/// Keep Hub launches paused until the history writer finishes. Unlike the
+/// informational PID view, discovery errors here cannot mean "not running".
+pub(crate) async fn history_edit_permit() -> Result<tokio::sync::MutexGuard<'static, ()>> {
+    let permit = LAUNCH_LOCK
+        .try_lock()
+        .context("天工正在启动，请稍后再管理会话归属")?;
+    let installation = tokio::time::timeout(
+        Duration::from_secs(5),
+        tokio::task::spawn_blocking(discover),
+    )
+    .await
+    .context("未能确认天工已退出，请稍后重试")?
+    .context("未能检查天工进程")??;
+    ensure!(
+        !installation.running,
+        "请先完全退出天工 Work（包括托盘），再调整会话归属；查看历史无需退出"
+    );
+    Ok(permit)
 }
 
 async fn bounded_status(
@@ -1195,14 +1218,28 @@ where
 
 /// Read-only location for the installed model adapter. Does not launch a client.
 pub(crate) fn model_archive(config: &GmClawBridgeConfig) -> Result<PathBuf> {
-    let executable = config.desktop_path.as_deref().and_then(|p| resolve_executable(Path::new(p)))
-        .or(discover()?.executable).context("未找到天工 Work，请先安装或在接入设置选择程序")?;
+    let executable = config
+        .desktop_path
+        .as_deref()
+        .and_then(|p| resolve_executable(Path::new(p)))
+        .or(discover()?.executable)
+        .context("未找到天工 Work，请先安装或在接入设置选择程序")?;
     #[cfg(windows)]
-    let resources = executable.parent().context("天工安装位置无效")?.join("resources");
+    let resources = executable
+        .parent()
+        .context("天工安装位置无效")?
+        .join("resources");
     #[cfg(target_os = "macos")]
-    let resources = executable.parent().and_then(Path::parent).context("天工安装位置无效")?.join("Resources");
+    let resources = executable
+        .parent()
+        .and_then(Path::parent)
+        .context("天工安装位置无效")?
+        .join("Resources");
     #[cfg(not(any(windows, target_os = "macos")))]
-    let resources = { let _ = executable; anyhow::bail!("当前平台不支持天工内置模型") };
+    let resources = {
+        let _ = executable;
+        anyhow::bail!("当前平台不支持天工内置模型")
+    };
     Ok(resources.join("app.asar"))
 }
 
