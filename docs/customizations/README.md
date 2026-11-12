@@ -1,6 +1,6 @@
 # 二开功能总表
 
-2026-11-12 **V1.0.31（TC-024）**：[天工 AI Gateway 本地账号与会话历史](tiangong-session-history.md) 已按当前结构贯通新建／列表／恢复与记忆，支持选中历史迁入和恢复原归属。Windows GUI／release、61 项不同 Rust、29 项 Node 及唯一 MSI `120156` 的版本／升级／六项载荷核验通过，真实续聊、IM、macOS 和未来新版智能体仍待验证。用户已进一步授权累计提交、`v1.0.31` Release 和两平台 Actions，实际进度及边界见 [V31](../releases/v1.0.31.md)。
+2026-11-12 **V1.0.31 已提交并启动发布（TC-024）**：[天工 AI Gateway 本地账号与会话历史](tiangong-session-history.md) 贯通新建／列表／恢复与记忆，支持选中迁入和恢复原归属；累计 WorkBuddy、搭档等源码 `674f6df` 已推送，`v1.0.31` 标签与 Release 已创建，Windows／macOS Actions 已运行。Windows 本地 GUI／release、61 项不同 Rust、29 项 Node 及唯一 MSI `120156` 核验通过；Actions 最终构建、真实续聊／IM／macOS 与未来新版智能体仍待验证。运行链接和边界见 [V31](../releases/v1.0.31.md)。
 
 2026-11-12 **V1.0.30 测试交付（TC-002/021/023）**：[WorkBuddy 分享](workbuddy-builtin-sharing-assessment.md) 在接入设置持久保留入口，增加授权账号、有效状态、真实积分及刷新；取消勾选只隐藏，分享和模型保留。[搭档](genius-buddy.md) 沿猫娘资格揭示并等待实际打开回执。Windows GUI/release、40 项受影响 Rust 和唯一 MSI `112520` 静态核验通过，真实积分与 macOS 待验；[天工新版归属管理](tiangong-work-compatibility-assessment.md) 仅评估，待尚未发布的新版本资源。身份及待办见 [V30 交付](../releases/v1.0.30.md)，暂不推送。
 
