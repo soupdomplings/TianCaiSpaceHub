@@ -29,21 +29,26 @@ async function run(f, hook) {
   let hooked = false;
   const previous = {fetch: global.fetch, window: global.window, document: global.document};
   global.window = {electronAPI: {getDataUrl: async () => 'http://127.0.0.1:18768', getAuthToken: async () => 'fixture'}};
+  if (f.localScope) global.window.__tiancaiWorkspace = {scope: f.localScope};
   global.document = {querySelectorAll: () => []};
   global.fetch = async (url, options) => {
     requests++;
     assert.equal(options.method, 'GET');
     assert.equal(options.headers.Authorization, 'Bearer fixture');
+    assert.equal(options.headers['X-Tiangong-Account'], f.expectedAccount);
     if (!hooked && hook) { hooked = true; hook(f); }
     let value;
     if (url.endsWith('/data/scenarios')) {
       value = {scenarios: [{scenario_id: 'project', tasks: [{task_id: f.props.taskId,
-        session_id: f.props.conversationSessionId, model_id: 'chosen-model'}]}]};
+        session_id: f.props.conversationSessionId, model_id: 'chosen-model',
+        ...(f.taskOwner ? {owner_id: f.taskOwner} : {})}]}]};
     } else if (url.endsWith('/messages?limit=100')) {
       value = {has_more: false, messages: [{id: 1, task_id: f.props.taskId, role: 'system', content: 'IM 回复',
-        created_at: '2026-10-22 10:00:00', files: [], thinking_steps: []}]};
+        created_at: '2026-10-22 10:00:00', files: [], thinking_steps: [], ...f.messageFields}]};
     } else if (url.endsWith('/messages/summaries')) {
       value = {messages: [{id: 1, role: 'system', content: 'IM 回复'}]};
+    } else if (url.includes('/data/sessions?')) {
+      value = {sessions: [{session_id: f.props.conversationSessionId, user_id: f.sessionOwner || 'ai-gateway'}]};
     } else { throw new Error('Unexpected fixture request'); }
     return new Response(JSON.stringify(value));
   };
@@ -107,6 +112,43 @@ async function main() {
   assert.equal(setup('panel', ...partial.panel), false);
   assert.equal(schema(...partial.panel, ...partial.app, partial.props), 'panel_fields');
   assert.equal((await run(partial)).outcome, 'panel_fields');
+  passed++;
+  for (const owner of ['ai-gateway', 'official-account']) {
+    const f = fixture();
+    f.expectedAccount = owner;
+    f.taskOwner = owner;
+    f.args.push(ref(owner));
+    assert.equal(setup('app', ...f.app, f.args.at(-1)), true);
+    assert.equal((await run(f)).outcome, 'updated');
+    assert.equal(f.instance.draft, '保留草稿');
+    passed++;
+  }
+  const switched = fixture();
+  switched.args.push(ref('official-a'));
+  switched.expectedAccount = 'official-a';
+  assert.equal((await run(switched, (f) => {f.args.at(-1).value = 'official-b';})).outcome, 'changed');
+  assert.equal(switched.panel[0].value.length, 0);
+  passed++;
+  const mismatch = fixture();
+  mismatch.args.push(ref('official-a'));
+  mismatch.expectedAccount = 'official-a'; mismatch.taskOwner = 'official-b';
+  assert.equal((await run(mismatch)).outcome, 'account_identity');
+  assert.equal(mismatch.panel[0].value.length, 0);
+  passed++;
+  for (const owner of ['ai-gateway', 'other-account']) {
+    const f = fixture(); f.localScope = 'ai-gateway'; f.sessionOwner = owner;
+    assert.equal((await run(f)).outcome, owner === 'ai-gateway' ? 'updated' : 'task_identity');
+    passed++;
+  }
+  const metadata = fixture();
+  metadata.messageFields = {execution: {version:1,status:'completed',blocks:[{type:'tool',name:'shell'}]},
+    usage: {tokens:123}, user_error: {message:'已恢复'}, response: {model:'fixture'}};
+  assert.equal((await run(metadata)).outcome, 'updated');
+  for (const field of ['execution', 'usage', 'response']) {
+    assert.deepEqual(metadata.panel[0].value[0][field], metadata.messageFields[field]);
+    assert.deepEqual(metadata.instance.seedMessages[0][field], metadata.messageFields[field]);
+  }
+  assert.equal(metadata.panel[0].value[0].userError.message, '已恢复');
   passed++;
   console.log(`TianGong display: ${passed} offline cases passed`);
 }

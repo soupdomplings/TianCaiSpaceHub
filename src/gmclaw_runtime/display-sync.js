@@ -1,4 +1,4 @@
-async function (messages, streaming, confirmation, welcome, older, scroll, loadingOlder, modelsLoaded, localTaskIdRef, sessionIdRef, nativeCleanup, runState, hasActiveRun, reconnecting, instances, scenarios, openingTasks, deletingTaskIds, props, taskId, sessionId, hubRowIds) {
+async function (messages, streaming, confirmation, welcome, older, scroll, loadingOlder, modelsLoaded, localTaskIdRef, sessionIdRef, nativeCleanup, runState, hasActiveRun, reconnecting, instances, scenarios, openingTasks, deletingTaskIds, props, taskId, sessionId, hubRowIds, accountRef = null) {
   // Requests run inside the verified renderer; only an outcome is returned.
   // Scope discovery may transiently receive primitive values in Hub memory.
   const isRef = (value) => value && value.__v_isRef === true;
@@ -37,6 +37,9 @@ async function (messages, streaming, confirmation, welcome, older, scroll, loadi
   if (!(opening instanceof Set) || !(deleting instanceof Set)) return 'app_sets';
   if (!Array.isArray(hubRowIds) || hubRowIds.length > 128 || hubRowIds.some((id) => !Number.isSafeInteger(id) || id <= 0)) return 'incompatible';
   const ownedRows = new Set(hubRowIds);
+  const account = accountRef === null ? null : isRef(accountRef) && typeof accountRef.value === 'string' && accountRef.value ? accountRef.value : undefined;
+  if (account === undefined) return 'account_identity';
+  const sameAccount = () => accountRef === null || accountRef.value === account;
   const instanceArray = instances.value;
   const scenarioArray = scenarios.value;
   const messageArray = props ? messages?.value : null;
@@ -70,7 +73,7 @@ async function (messages, streaming, confirmation, welcome, older, scroll, loadi
   const get = async (path, maximum) => {
     const response = await fetch('http://127.0.0.1:18768' + path, {
       method: 'GET', redirect: 'error', cache: 'no-store', signal: abort.signal,
-      headers: {'Authorization': 'Bearer ' + authorization},
+      headers: {'Authorization': 'Bearer ' + authorization, ...(account === null ? {} : {'X-Tiangong-Account': account})},
     });
     if (!response.ok || Number(response.headers.get('content-length') || 0) > maximum) throw new Error('data unavailable');
     const reader = response.body.getReader();
@@ -99,6 +102,20 @@ async function (messages, streaming, confirmation, welcome, older, scroll, loadi
       get('/data/tasks/' + enc(taskId) + '/messages?limit=100', 8 * 1024 * 1024),
       get('/data/tasks/' + enc(taskId) + '/messages/summaries', 8 * 1024 * 1024),
     ]);
+    if (!sameAccount()) return 'changed';
+    // Legacy workspaces have no native account header. The enhanced renderer
+    // still owns a single local scope and must not receive another owner's list.
+    const localScope = account === null ? window.__tiancaiWorkspace?.scope : null;
+    if (localScope === 'ai-gateway') {
+      const sessions = new Set();
+      for (let offset = 0; ; offset += 200) {
+        const owned = await get('/data/sessions?user_id=ai-gateway&limit=200&offset=' + offset, 8 * 1024 * 1024);
+        if (!Array.isArray(owned.sessions)) return 'account_identity';
+        for (const session of owned.sessions) if (session.user_id === localScope) sessions.add(session.session_id);
+        if (owned.sessions.length < 200) break;
+      }
+      list.scenarios = list.scenarios.map((scenario) => ({...scenario, tasks: scenario.tasks.filter((task) => sessions.has(task.session_id))}));
+    }
     if (!Array.isArray(list.scenarios) || list.scenarios.length > 20000 || list.scenarios.some((scenario) => !Array.isArray(scenario.tasks))) return 'scenario_shape';
     if (!Array.isArray(page.messages) || page.messages.length > 100 || typeof page.has_more !== 'boolean') return 'page_shape';
     if (!Array.isArray(summary.messages) || summary.messages.length > 20000) return 'summary_shape';
@@ -106,6 +123,7 @@ async function (messages, streaming, confirmation, welcome, older, scroll, loadi
     if (tasks.length > 20000) return 'scenario_shape';
     const task = tasks.filter((task) => task.task_id === taskId);
     if (task.length !== 1 || task[0].session_id !== sessionId) return 'task_identity';
+    if (account !== null && task[0].owner_id !== undefined && task[0].owner_id !== account) return 'account_identity';
     const validPage = (value) => {
       if (!Array.isArray(value.messages) || value.messages.length > 100 || typeof value.has_more !== 'boolean') return false;
       let previous = 0;
@@ -136,7 +154,7 @@ async function (messages, streaming, confirmation, welcome, older, scroll, loadi
     }
     // An opening/closing panel or a new native execution during the read wins.
     const unchanged = () => {
-      if (instances.value !== instanceArray || scenarios.value !== scenarioArray) return false;
+      if (!sameAccount() || instances.value !== instanceArray || scenarios.value !== scenarioArray) return false;
       const nowBound = instanceArray.filter((instance) => instance.taskId === taskId);
       return nowBound.length === bound.length && !nowBound.some((instance, index) => instance !== bound[index] || instance.sessionId !== sessionId) && idle() && JSON.stringify(scenarios.value) === scenarioSnapshot && (!props || (messages.value === messageArray && hasPanelProps(props) && props.taskId === taskId && props.conversationSessionId === sessionId && JSON.stringify(messages.value) === snapshot && cacheFields.every((key, index) => bound[0][key] === cacheSnapshot[index])));
     };
@@ -207,6 +225,8 @@ async function (messages, streaming, confirmation, welcome, older, scroll, loadi
       files: row.files.length ? row.files : undefined,
       thinking: !!row.thinking_steps?.length,
       thinkingSteps: row.thinking_steps?.length ? row.thinking_steps : undefined,
+      execution: row.execution ?? undefined, usage: row.usage ?? undefined,
+      userError: row.user_error ?? undefined, response: row.response,
       _tiancaispaceHub: row.role === 'system' && (ownedRows.has(row.id) || identities.get(row.id)?._tiancaispaceHub === true),
     }));
     const hosts = props.isActive ? [...document.querySelectorAll('.chat-panel-host')] : [];
@@ -220,6 +240,7 @@ async function (messages, streaming, confirmation, welcome, older, scroll, loadi
     const nextSeedMessages = nextMessages.map((message) => ({
       type: message.type, content: message.content, dbId: message.dbId,
       createdAt: stored.get(message.dbId)?.created_at ?? previousTimes.get(message.dbId), thinkingSteps: message.thinkingSteps, files: message.files,
+      execution: message.execution, usage: message.usage, userError: message.userError, response: message.response,
     }));
     // Compute every replacement and recheck writable targets after asynchronous
     // reads, before the first assignment to the view or its cached instance.

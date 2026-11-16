@@ -8,6 +8,9 @@ use tokio_tungstenite::{
 };
 
 const RULES: &str = "【天才 Hub 本机协助规则】你仍负责用户原任务。当同一方法两次失败、现有工具缺少关键能力、或关键验证仍失败时，应主动调用本机协助 MCP 的 assist_start，不要要求用户点名 Codex 或手选 Skill。交接具体目标、必要错误证据、已尝试方法、用户禁止事项。使用系统提供的 context_ref，相同问题固定 problem_key；分析任务设 analysis_only=true，用户已授权修复才可设为false。启动后自动用 assist_wait 等待；starting、running、waiting_user 都继续等待同一任务，不因工具返回这些状态就结束主任务。waiting_user 表示天工窗口正在等待人类，禁止你代答或代批；用户处理后继续等待结果。协助工作期间不要同时修改相同项目文件；结果回到这里后继续原任务、复核实际验证与限制。确有新证据可用 assist_followup 追问同任务，最多两次。完成采纳后必须 assist_finish；用户停止时 assist_cancel，等待终态，不自动重放失败工作。不把子助手声称成功当作已验证。";
+const RUN_FETCH_ADAPTER: &str = include_str!("run-fetch-adapter.js");
+const RUN_FETCH_MARKER: &str = "TIANCAISPACEHUB_ASSISTANCE_RUN_FETCH_V1";
+const RENDERER_WIRE_LIMIT: usize = 16 * 1024 * 1024;
 
 pub(super) async fn monitor(state: SharedState, mut shutdown: watch::Receiver<bool>) {
     let mut disable_retry = None::<Instant>;
@@ -49,16 +52,21 @@ pub(super) async fn catalogue_monitor(state: SharedState, mut shutdown: watch::R
             _ = tokio::time::sleep(Duration::from_secs(15)) => {},
             _ = shutdown.changed() => { if *shutdown.borrow() { break; } }
         }
-        if *shutdown.borrow() { break; }
-        if settings::read(&state.config_path).is_ok_and(|(s,_)|s.enabled) {
+        if *shutdown.borrow() {
+            break;
+        }
+        if settings::read(&state.config_path).is_ok_and(|(s, _)| s.enabled) {
             if let Err(error) = web::sync_catalogue(&state).await {
-                state.local_assistance.inner.lock().await.host_detail = format!("本机协助同步未完成：{error}");
+                state.local_assistance.inner.lock().await.host_detail =
+                    format!("本机协助同步未完成：{error}");
             }
         }
     }
 }
 
-pub(super) fn rules() -> &'static str { RULES }
+pub(super) fn rules() -> &'static str {
+    RULES
+}
 
 type Socket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
@@ -92,11 +100,142 @@ async fn call(socket: &mut Socket, id: u64, method: &str, params: Value) -> Resu
     .await
     .context("天工协助窗口响应超时")?
 }
+
+/// The verified page may already contain drafts or a running task. Update only
+/// its existing runFetch body; never reload it or replace its frozen IPC bridge.
+async fn native_transport(socket: &mut Socket, context: i64, page: &str) -> Result<()> {
+    let probe = call(socket, 100, "Runtime.evaluate", json!({
+        "contextId":context,"returnByValue":true,
+        "expression":"({ipc:typeof window.electronAPI?.chatRunOpen==='function',ready:window.__tiancaiAssistanceTransportV1===true})"
+    })).await?;
+    ensure!(
+        probe.get("exceptionDetails").is_none(),
+        "无法核对天工原生任务通道"
+    );
+    if probe["result"]["value"]["ipc"] != true || probe["result"]["value"]["ready"] == true {
+        return Ok(());
+    }
+    let outcome = async {
+        let script = native_transport_script(socket, context, page).await?;
+        let original = call(socket, 102, "Debugger.getScriptSource", json!({"scriptId":script})).await?;
+        let source = original["scriptSource"].as_str().context("天工原生任务脚本暂不可读")?;
+        ensure!(source.len() <= 8 * 1024 * 1024, "天工原生任务脚本超过适配范围");
+        let adapted = call(socket, 103, "Runtime.evaluate", json!({
+            "contextId":context,"returnByValue":true,"silent":true,
+            "expression":format!("({RUN_FETCH_ADAPTER})({})",serde_json::to_string(source)?)
+        })).await?;
+        ensure!(adapted.get("exceptionDetails").is_none() && adapted["result"]["value"]["adapted"] == true,
+            "当前天工原生任务结构尚未适配，本机协助未就绪；原任务和草稿已保留");
+        if adapted["result"]["value"]["present"] != true {
+            let changed = adapted["result"]["value"]["source"].as_str().context("天工任务适配结果缺失")?;
+            let mut may_have_changed = true;
+            let apply = async {
+                let result = call(socket, 104, "Debugger.setScriptSource", json!({"scriptId":script,"scriptSource":changed})).await?;
+                may_have_changed = result["status"] == "Ok";
+                ensure!(result["status"] == "Ok", "天工任务通道暂时无法接入，请待原任务结束后重试；未重新加载页面");
+                let readback = call(socket, 105, "Debugger.getScriptSource", json!({"scriptId":script})).await?;
+                ensure!(readback["scriptSource"].as_str() == Some(changed), "天工任务通道改写尚未生效，本机协助未就绪");
+                Ok::<_,anyhow::Error>(())
+            }.await;
+            if let Err(error) = apply {
+                // A passive wrapper is also transparent without the assistant,
+                // but restore the original body whenever LiveEdit permits it.
+                if may_have_changed {
+                    let restored = call(socket, 106, "Debugger.setScriptSource", json!({"scriptId":script,"scriptSource":source})).await;
+                    ensure!(restored.is_ok_and(|value|value["status"]=="Ok"),
+                        "天工本机协助未就绪，任务通道恢复未获确认；原任务未重发，可正常退出天工后重试");
+                }
+                return Err(error);
+            }
+        } else {
+            ensure!(source.contains(RUN_FETCH_MARKER) || source.contains("async function __tchNativeRunFetch(path, options = {}) {"),
+                "天工协助任务通道标记无法核对");
+        }
+        let ready = call(socket, 107, "Runtime.evaluate", json!({
+            "contextId":context,"returnByValue":true,
+            "expression":"window.__tiancaiAssistanceTransportV1=true"
+        })).await?;
+        ensure!(ready.get("exceptionDetails").is_none() && ready["result"]["value"]==true,
+            "天工协助任务通道尚未就绪");
+        Ok(())
+    }.await;
+    let _ = call(socket, 108, "Debugger.disable", json!({})).await;
+    outcome
+}
+
+async fn native_transport_script(socket: &mut Socket, context: i64, page: &str) -> Result<String> {
+    send(socket, 101, "Debugger.enable", json!({})).await?;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let mut acknowledged = false;
+        let mut script = None;
+        loop {
+            let message = socket.next().await.context("天工协助窗口已关闭")??;
+            let Message::Text(text) = message else {
+                continue;
+            };
+            let value: Value = serde_json::from_str(&text)?;
+            if value["id"].as_u64() == Some(101) {
+                ensure!(value.get("error").is_none(), "天工任务通道不支持内存接入");
+                acknowledged = true;
+            }
+            if value["method"] == "Debugger.scriptParsed"
+                && value["params"]["executionContextId"].as_i64() == Some(context)
+                && value["params"]["url"]
+                    .as_str()
+                    .is_some_and(|url| native_main_script(page, url))
+            {
+                ensure!(script.is_none(), "天工任务主脚本不唯一，本机协助未接入");
+                script = value["params"]["scriptId"].as_str().map(str::to_owned);
+            }
+            if acknowledged && let Some(script) = script.take() {
+                return Ok(script);
+            }
+        }
+    })
+    .await
+    .context("天工任务主脚本尚未就绪，本机协助未接入")?
+}
+
+fn native_main_script(page: &str, candidate: &str) -> bool {
+    let (Ok(page), Ok(candidate)) = (url::Url::parse(page), url::Url::parse(candidate)) else {
+        return false;
+    };
+    if page.scheme() != "file"
+        || candidate.scheme() != "file"
+        || candidate.query().is_some()
+        || candidate.fragment().is_some()
+    {
+        return false;
+    }
+    let Some(name) = candidate
+        .path_segments()
+        .and_then(|segments| segments.last())
+    else {
+        return false;
+    };
+    if !name.starts_with("main-")
+        || !name.ends_with(".js")
+        || !name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    {
+        return false;
+    }
+    let (Ok(expected), Ok(actual)) = (page.join("assets/"), candidate.join(".")) else {
+        return false;
+    };
+    if cfg!(windows) {
+        expected.as_str().eq_ignore_ascii_case(actual.as_str())
+    } else {
+        expected == actual
+    }
+}
+
 async fn session(state: &SharedState, shutdown: &mut watch::Receiver<bool>) -> Result<()> {
     let url = crate::gmclaw_runtime::assistance_socket().await?;
     let config = WebSocketConfig {
-        max_message_size: Some(MAX_WIRE),
-        max_frame_size: Some(MAX_WIRE),
+        max_message_size: Some(RENDERER_WIRE_LIMIT),
+        max_frame_size: Some(RENDERER_WIRE_LIMIT),
         ..Default::default()
     };
     let (mut socket, _) = connect_async_with_config(url.as_str(), Some(config), false)
@@ -109,6 +248,10 @@ async fn session(state: &SharedState, shutdown: &mut watch::Receiver<bool>) -> R
         .as_str()
         .context("无法核对天工主页面")?;
     let context = default_context(&mut socket, frame).await?;
+    let page = frames["frameTree"]["frame"]["url"]
+        .as_str()
+        .context("无法核对天工页面位置")?;
+    native_transport(&mut socket, context, page).await?;
     call(
         &mut socket,
         3,
@@ -457,4 +600,173 @@ fn valid_id(s: &str) -> bool {
         && s.len() <= 128
         && s.chars()
             .all(|c| c.is_ascii_alphanumeric() || "_-".contains(c))
+}
+
+#[cfg(test)]
+mod native_transport_tests {
+    use super::*;
+    use tokio::net::TcpListener;
+    use tokio_tungstenite::{WebSocketStream, accept_async, connect_async};
+
+    type ServerSocket = WebSocketStream<tokio::net::TcpStream>;
+
+    async fn request(socket: &mut ServerSocket, method: &str) -> Value {
+        let Message::Text(raw) = socket.next().await.unwrap().unwrap() else {
+            panic!("expected CDP request");
+        };
+        let value: Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(value["method"], method);
+        value
+    }
+    async fn reply(socket: &mut ServerSocket, request: &Value, result: Value) {
+        socket
+            .send(Message::Text(
+                json!({"id":request["id"],"result":result}).to_string(),
+            ))
+            .await
+            .unwrap();
+    }
+    async fn parsed(socket: &mut ServerSocket, context: i64, url: &str, script: &str) {
+        socket
+            .send(Message::Text(
+                json!({"method":"Debugger.scriptParsed","params":{
+                    "executionContextId":context,"url":url,"scriptId":script
+                }})
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+    }
+
+    #[test]
+    fn renderer_transport_script_stays_in_verified_installed_assets() {
+        let windows = "file:///D:/Program%20Files/Work/resources/app.asar/out/renderer/index.html";
+        let mac =
+            "file:///Applications/Work.app/Contents/Resources/app.asar/out/renderer/index.html";
+        for page in [windows, mac] {
+            let expected = url::Url::parse(page)
+                .unwrap()
+                .join("assets/main-fixture.js")
+                .unwrap();
+            assert!(native_main_script(page, expected.as_str()));
+            for candidate in [
+                expected.join("../main-fixture.js").unwrap().to_string(),
+                expected.join("vendor-fixture.js").unwrap().to_string(),
+                format!("{expected}?other=1"),
+                format!("{expected}#other"),
+                "https://example.invalid/assets/main-fixture.js".into(),
+            ] {
+                assert!(!native_main_script(page, &candidate));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn renderer_transport_script_ignores_other_contexts_and_unrelated_notification_volume() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = accept_async(stream).await.unwrap();
+            let enabled = request(&mut socket, "Debugger.enable").await;
+            for index in 0..256 {
+                parsed(
+                    &mut socket,
+                    7,
+                    "file:///fixture/assets/vendor-noise.js",
+                    &index.to_string(),
+                )
+                .await;
+            }
+            parsed(
+                &mut socket,
+                9,
+                "file:///fixture/assets/main-current.js",
+                "other-context",
+            )
+            .await;
+            parsed(
+                &mut socket,
+                7,
+                "file:///other/assets/main-current.js",
+                "other-install",
+            )
+            .await;
+            parsed(
+                &mut socket,
+                7,
+                "file:///fixture/assets/main-current.js",
+                "correct-main",
+            )
+            .await;
+            reply(&mut socket, &enabled, json!({})).await;
+        });
+        let (mut socket, _) = connect_async(format!("ws://{address}")).await.unwrap();
+        assert_eq!(
+            native_transport_script(&mut socket, 7, "file:///fixture/index.html")
+                .await
+                .unwrap(),
+            "correct-main"
+        );
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn refused_live_edit_never_sets_ready_or_replays_an_edit_and_disables_debugger() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = accept_async(stream).await.unwrap();
+            let probe = request(&mut socket, "Runtime.evaluate").await;
+            reply(
+                &mut socket,
+                &probe,
+                json!({"result":{"value":{"ipc":true,"ready":false}}}),
+            )
+            .await;
+            let enabled = request(&mut socket, "Debugger.enable").await;
+            parsed(
+                &mut socket,
+                7,
+                "file:///fixture/assets/main-current.js",
+                "main",
+            )
+            .await;
+            reply(&mut socket, &enabled, json!({})).await;
+            let source = request(&mut socket, "Debugger.getScriptSource").await;
+            reply(
+                &mut socket,
+                &source,
+                json!({"scriptSource":"original-source"}),
+            )
+            .await;
+            let adapted = request(&mut socket, "Runtime.evaluate").await;
+            reply(
+                &mut socket,
+                &adapted,
+                json!({"result":{"value":{"adapted":true,"source":"adapted-source"}}}),
+            )
+            .await;
+            let edit = request(&mut socket, "Debugger.setScriptSource").await;
+            reply(
+                &mut socket,
+                &edit,
+                json!({"status":"BlockedByActiveGenerator"}),
+            )
+            .await;
+            // No marker evaluation or redundant rollback after a refused edit.
+            let disabled = request(&mut socket, "Debugger.disable").await;
+            reply(&mut socket, &disabled, json!({})).await;
+        });
+        let (mut socket, _) = connect_async(format!("ws://{address}")).await.unwrap();
+        assert!(
+            native_transport(&mut socket, 7, "file:///fixture/index.html")
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("待原任务结束")
+        );
+        server.await.unwrap();
+    }
 }

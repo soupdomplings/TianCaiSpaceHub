@@ -244,8 +244,13 @@ impl Default for GmClawImState {
 impl GmClawImState {
     /// The browser shares admission with IM instead of running a competing
     /// executor. Waiting on a browser connection never holds this permit.
-    pub(crate) async fn acquire_remote_execution(&self) -> Result<tokio::sync::SemaphorePermit<'_>> {
-        self.execution.acquire().await.map_err(|_| anyhow::anyhow!("天工执行队列已关闭"))
+    pub(crate) async fn acquire_remote_execution(
+        &self,
+    ) -> Result<tokio::sync::SemaphorePermit<'_>> {
+        self.execution
+            .acquire()
+            .await
+            .map_err(|_| anyhow::anyhow!("天工执行队列已关闭"))
     }
 }
 
@@ -1045,15 +1050,18 @@ pub(crate) async fn handle_inbound(
         &config.endpoint,
         authorization.clone(),
     )?;
-    if let Err(error) =
-        desktop::validate_live(&desktop_client, session, confirmation.is_some()).await
-    {
-        turn_display.finish(format!("天工任务未提交：{error}"))?;
-        return Ok(true);
-    }
+    let desktop_client =
+        match desktop::validate_live(&desktop_client, session, confirmation.is_some()).await {
+            Ok(client) => client,
+            Err(error) => {
+                turn_display.finish(format!("天工任务未提交：{error}"))?;
+                return Ok(true);
+            }
+        };
     let client = GmClawClient::with_authorization(&config.endpoint, authorization)?;
     let desktop_context = session.desktop.clone().context("此会话未绑定天工桌面")?;
     let request = GmClawChatRequest {
+        native: desktop_context.native.clone(),
         user_id: desktop_context.user_id.clone(),
         session_id: session.id.clone(),
         chat_id: uuid::Uuid::new_v4().to_string(),
@@ -1067,6 +1075,7 @@ pub(crate) async fn handle_inbound(
         project: desktop_context.project.clone(),
         confirmation,
     };
+    let desktop_client = desktop_client.with_turn_context(&request.chat_id);
     if let Err(error) = request.body() {
         turn_display.finish(format!(
             "天工任务未提交：{error}。原会话与审批仍保留，请先恢复项目目录或检查配置。"
@@ -1234,6 +1243,10 @@ pub(crate) async fn handle_inbound(
     }
     let desktop_content = if let Some(pending) = &result.pending_confirmation {
         format!("{}\n（等待确认：{}）", result.answer, pending.prompt)
+    } else if result.waiting {
+        format!("{}\n（任务已暂停，请在天工继续或停止）", result.answer)
+            .trim()
+            .to_owned()
     } else if result.answer.trim().is_empty() {
         "天工本轮已结束，没有返回文字。".into()
     } else {
@@ -1247,6 +1260,15 @@ pub(crate) async fn handle_inbound(
         return Ok(true);
     }
     crate::gmclaw_runtime::queue_desktop_refresh(&task_id, &session.id, Some(message_id)).await;
+    if result.waiting {
+        session.uncertain = false;
+        desktop::save(state, session).await?;
+        turn_display.finish(format!(
+            "{}\n\n任务已暂停并保留原运行，请在天工点击继续或停止。",
+            bounded_reply(&result.answer)
+        ))?;
+        return Ok(true);
+    }
     if let Some(pending) = result.pending_confirmation {
         let summary = approval_summary(&pending);
         let summary = match summary {

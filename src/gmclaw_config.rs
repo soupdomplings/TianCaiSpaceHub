@@ -414,15 +414,31 @@ fn row_extra(row: Option<&ModelRow>) -> Result<serde_json::Map<String, serde_jso
 fn context_window(row: &ModelRow) -> u32 {
     row_extra(Some(row))
         .ok()
-        .and_then(|value| {
-            value
-                .get("context_window")
-                .or_else(|| value.get("contextWindow"))
-                .and_then(serde_json::Value::as_u64)
-        })
-        .and_then(|value| u32::try_from(value).ok())
-        .filter(|value| *value > 0)
+        .and_then(|extra| configured_context_window(&extra).ok())
         .unwrap_or(DEFAULT_CONTEXT_WINDOW)
+}
+
+fn configured_context_window(extra: &serde_json::Map<String, serde_json::Value>) -> Result<u32> {
+    let explicit = extra
+        .get("model_tuning")
+        .and_then(|tuning| tuning.get("context_window"))
+        .filter(|value| !value.is_null())
+        .or_else(|| extra.get("context_window").filter(|value| !value.is_null()))
+        .or_else(|| extra.get("contextWindow").filter(|value| !value.is_null()));
+    let valid_window = |value: &serde_json::Value| {
+        value
+            .as_u64()
+            .filter(|value| (1024..=2_147_483_647).contains(value))
+            .map(|value| value as u32)
+    };
+    match explicit {
+        Some(value) => valid_window(value)
+            .ok_or_else(|| anyhow!("天工上下文窗口必须为 1024 至 2147483647 之间的整数")),
+        None => Ok(extra
+            .get("discovered_context_window")
+            .and_then(valid_window)
+            .unwrap_or(DEFAULT_CONTEXT_WINDOW)),
+    }
 }
 
 fn read_metadata(path: &Path) -> Result<(Option<Vec<u8>>, Option<Metadata>)> {
@@ -632,8 +648,18 @@ fn model_choices_at(
     Option<String>,
 )> {
     let connection = open_existing(path, false)?;
+    let columns = connection
+        .prepare("PRAGMA table_info(model_configs)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    // 1.1.0 adds a user-facing label; the selected value remains the native ID.
+    let label_column = if columns.iter().any(|name| name == "display_name") {
+        "COALESCE(NULLIF(TRIM(display_name), ''), model_name)"
+    } else {
+        "model_name"
+    };
     let mut statement = connection
-        .prepare("SELECT model_id, model_name, is_active FROM model_configs ORDER BY is_active DESC, model_name, model_id")
+        .prepare(&format!("SELECT model_id, {label_column} AS model_label, is_active FROM model_configs ORDER BY is_active DESC, model_label, model_id"))
         .context("无法读取天工模型列表，请确认已完成天工模型配置")?;
     let mut rows = statement.query([])?;
     let mut choices = Vec::new();
@@ -954,6 +980,12 @@ fn save_with_source(
     if target.row.is_none() {
         extra.insert("context_window".into(), DEFAULT_CONTEXT_WINDOW.into());
     }
+    let context_window = configured_context_window(&extra)?;
+    ensure!(
+        request.max_tokens < context_window,
+        "最大输出 tokens 必须小于上下文窗口（当前为 {} / {context_window}），请减小最大输出或增大上下文窗口",
+        request.max_tokens
+    );
     let model_id = model_id(&entry_id);
     let active = request.make_active || before.active_ids.iter().any(|id| id == &model_id);
     if request.make_active {
@@ -1420,6 +1452,35 @@ mod tests {
         assert!(model_choices_at(&database).is_err());
     }
 
+    #[test]
+    fn session_model_choices_prefer_native_display_name_without_changing_identity() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("models.db");
+        let connection = Connection::open(&database).unwrap();
+        connection.execute_batch(
+            "CREATE TABLE model_configs (model_id TEXT PRIMARY KEY, model_name TEXT NOT NULL, display_name TEXT, is_active INTEGER NOT NULL);
+             INSERT INTO model_configs VALUES ('native-row', 'upstream-model', ' 我的模型 ', 1);
+             INSERT INTO model_configs VALUES ('empty-label', 'original-name', '  ', 0);
+             INSERT INTO model_configs VALUES ('null-label', 'fallback-name', NULL, 0);"
+        ).unwrap();
+        let (choices, active) = model_choices_at(&database).unwrap();
+        assert_eq!(active.as_deref(), Some("native-row"));
+        assert_eq!(choices[0].label, "我的模型 · native-row");
+        assert_eq!(choices[0].value, "native-row");
+        assert_eq!(choices[1].label, "fallback-name · null-label");
+        assert_eq!(choices[2].label, "original-name · empty-label");
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT model_name FROM model_configs WHERE model_id='native-row'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            "upstream-model"
+        );
+    }
+
     fn fixture() -> (tempfile::TempDir, PathBuf, PathBuf, AppConfig) {
         let directory = tempfile::tempdir().unwrap();
         let database = directory.path().join("electron-data.db");
@@ -1464,23 +1525,110 @@ mod tests {
     }
 
     #[test]
+    fn native_budget_validation_preserves_display_names_and_rejects_before_writing() {
+        let (_directory, path, hub_path, mut config) = fixture();
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "ALTER TABLE model_configs ADD COLUMN display_name TEXT NOT NULL DEFAULT '';",
+            )
+            .unwrap();
+        let mut pending = request(&path, &config, None);
+        pending.max_tokens = DEFAULT_CONTEXT_WINDOW;
+        let database_before = fs::read(&path).unwrap();
+        let hub_before = fs::read(&hub_path).unwrap();
+        assert!(
+            save_at(&path, &pending, &mut config, &hub_path)
+                .unwrap_err()
+                .to_string()
+                .contains("必须小于上下文窗口")
+        );
+        assert_eq!(fs::read(&path).unwrap(), database_before);
+        assert_eq!(fs::read(&hub_path).unwrap(), hub_before);
+        assert!(!metadata_path(&path).exists());
+
+        pending.max_tokens = 8192;
+        let saved = save_at(&path, &pending, &mut config, &hub_path).unwrap();
+        let entry_id = saved.selected_entry_id.unwrap();
+        let extra = serde_json::json!({"context_window":65536,"model_tuning":{"context_window":96000},"discovered_context_window":256000,"futureOption":true});
+        connection.execute("UPDATE model_configs SET display_name='保留显示名称',extra_params=?1 WHERE model_id=?2", params![extra.to_string(), model_id(&entry_id)]).unwrap();
+        pending = request(&path, &config, Some(&entry_id));
+        pending.max_tokens = 96000;
+        let database_before = fs::read(&path).unwrap();
+        let hub_before = fs::read(&hub_path).unwrap();
+        let backup_before = fs::read(metadata_path(&path)).unwrap();
+        assert!(save_at(&path, &pending, &mut config, &hub_path).is_err());
+        assert_eq!(fs::read(&path).unwrap(), database_before);
+        assert_eq!(fs::read(&hub_path).unwrap(), hub_before);
+        assert_eq!(fs::read(metadata_path(&path)).unwrap(), backup_before);
+
+        pending.max_tokens = 65536;
+        let saved = save_at(&path, &pending, &mut config, &hub_path).unwrap();
+        assert_eq!(saved.model.unwrap().context_window, 96000);
+        let (label, raw): (String, String) = connection
+            .query_row(
+                "SELECT display_name, extra_params FROM model_configs WHERE model_id=?1",
+                [model_id(&entry_id)],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(label, "保留显示名称");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&raw).unwrap(),
+            extra
+        );
+
+        connection
+            .execute(
+                "UPDATE model_configs SET extra_params=?1 WHERE model_id=?2",
+                params![
+                    r#"{"discovered_context_window":256000}"#,
+                    model_id(&entry_id)
+                ],
+            )
+            .unwrap();
+        pending = request(&path, &config, Some(&entry_id));
+        pending.max_tokens = 128000;
+        let saved = save_at(&path, &pending, &mut config, &hub_path).unwrap();
+        let model = saved.model.unwrap();
+        assert_eq!((model.context_window, model.max_tokens), (256000, 128000));
+    }
+
+    #[test]
     fn tiangong_builtin_copy_keeps_native_models_and_gateway_authorization_separate() {
         let (_directory, path, hub_path, mut config) = fixture();
-        let mut source=config.ai_gateway.providers[0].clone();
-        source.provider_type=ProviderType::ChatCompletions;
-        source.base_url="https://tiangong.jiuqi.com.cn/api/v2/tg".into();source.api_key.clear();
-        source.tiangong_builtin=Some(crate::desktop::tiangong_models::BuiltinBinding {
-            model_id:"tiangong-builtin".into(),upstream_model:"real-model".into(),credential_ref:uuid::Uuid::new_v4().to_string(),parameters:None,
+        let mut source = config.ai_gateway.providers[0].clone();
+        source.provider_type = ProviderType::ChatCompletions;
+        source.base_url = "https://tiangong.jiuqi.com.cn/api/v2/tg".into();
+        source.api_key.clear();
+        source.tiangong_builtin = Some(crate::desktop::tiangong_models::BuiltinBinding {
+            model_id: "tiangong-builtin".into(),
+            upstream_model: "real-model".into(),
+            credential_ref: uuid::Uuid::new_v4().to_string(),
+            parameters: None,
         });
-        let mut pending=request(&path,&config,None);pending.make_active=false;
-        let saved=save_with_source(&path,&pending,&mut config,&hub_path,Some(&source)).unwrap();
-        let id=saved.selected_entry_id.unwrap();
-        let copy=&config.ai_gateway.providers[provider_position(&config,&id).unwrap().unwrap()];
-        assert_eq!(copy.tiangong_builtin,source.tiangong_builtin);assert!(copy.api_key.is_empty());
-        let db=Connection::open(&path).unwrap();
-        let (key,url):(String,String)=db.query_row("SELECT api_key,base_url FROM model_configs WHERE model_id=?1",[model_id(&id)],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
-        assert_eq!(key,GMCLAW_LOCAL_KEY);assert!(url.starts_with("http://127.0.0.1:"));
-        assert!(!String::from_utf8_lossy(&fs::read(&path).unwrap()).contains(&source.tiangong_builtin.unwrap().credential_ref));
+        let mut pending = request(&path, &config, None);
+        pending.make_active = false;
+        let saved =
+            save_with_source(&path, &pending, &mut config, &hub_path, Some(&source)).unwrap();
+        let id = saved.selected_entry_id.unwrap();
+        let copy = &config.ai_gateway.providers[provider_position(&config, &id).unwrap().unwrap()];
+        assert_eq!(copy.tiangong_builtin, source.tiangong_builtin);
+        assert!(copy.api_key.is_empty());
+        let db = Connection::open(&path).unwrap();
+        let (key, url): (String, String) = db
+            .query_row(
+                "SELECT api_key,base_url FROM model_configs WHERE model_id=?1",
+                [model_id(&id)],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(key, GMCLAW_LOCAL_KEY);
+        assert!(url.starts_with("http://127.0.0.1:"));
+        assert!(
+            !String::from_utf8_lossy(&fs::read(&path).unwrap())
+                .contains(&source.tiangong_builtin.unwrap().credential_ref)
+        );
     }
 
     #[test]

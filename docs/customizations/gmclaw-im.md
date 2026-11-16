@@ -1,5 +1,7 @@
 # 天工 Work 外部消息执行端
 
+2026-11-16 Work 1.1.0 兼容更新：已补账号作用域、原任务目录／Agent／模型参数、会话版本及检查点暂停状态；本轮编译与离线测试由管理会话统一执行，Windows／macOS 实机仍待用户验收。基线 `main / 27568b5`；本段不改变下方历史发布和验收记录。
+
 2026-10-27 发布状态：用户初步反馈本地包正常；产品提交 `f322634`、完整 `v0.4.30-8` 标签和 Pre-release 已发布，Windows/macOS Actions 已确认开始后停止等待。准确源码、运行链接和尚待确认的包及验收范围见 [v8 交付](../releases/v0.4.30-8.md#2026-10-27-源码与-release-已发布两平台-actions-已开始)。下方未发布或待用户反馈的表述保留开发阶段归属。
 2026-10-22 当前适配：`v0.4.30-8` 已实现 Work 主任务收尾/审批、任务模型绑定、后台活动检查及桌面同步保护。IM 新任务写入原生 `model_id`，恢复优先天工任务实际选择；已有显式桌面选择保留，旧 API 继续兼容。默认选项从 Hub 移除。实现依据见 [评估与适配](tiangong-work-compatibility-assessment.md)，Windows 隔离验证和本地包见 [v8 交付](../releases/v0.4.30-8.md)；实际 IM 后回桌面继续、审批及 macOS 待用户验收。
 
@@ -8,6 +10,21 @@
 `v0.4.30-4` 产品源码 `7b5dd6e…`、注释标签与 Pre-release 已公开：同步移除固定版本号、renderer 文件名与 SHA-256 门槛，以天工身份、HTML 脚本入口和实际能力识别，写入 Ref/缓存须可写、异步读取后再核对。两平台 Actions 与八项附件下载静态核验通过，Mac 首次 DMG 失败及工作流修复/重建分别记录，见 [v0.4.30-4](../releases/v0.4.30-4.md)。天工升级后结构兼容即可尝试同步；未知、只读或原生忙状态仍保留窗口，旧反馈不替代本轮实机验收。发布后核验文档使用单独提交进入 `main`，产品标签和包不变。
 
 此前已发布 `v0.4.30-2` 仅含第二阶段首版 `/gmclaw`（原提交 `9b9702e`），其 [交付记录](../releases/v0.4.30-2.md) 不作为本版构建证据。Windows 优先、macOS 次之。用户已有限确认自动重连、历史对话、`fe48829e…` 桌面更新和 `71c3043d…` 审批；本轮 `c0952f61…` Windows 调试程序测试后反馈“目前看着没什么了”，仅登记本机实际操作，不扩大为全部平台/异常验收。该调试 EXE 仍属 `0.4.30-2`，本版 Actions 产物单列；历史“未发布”与失败/诊断记录保留原归属。
+
+## Work 1.1.0 账号与会话适配
+
+本轮只读核对 Work 1.1.0 安装包的 `out/main/index.js`、`harness-sidecar/packaging/desktop_chat_runs.py` 与配套 Harness 源码，不读取用户数据库、会话正文、凭据或私有日志。原生会话路由已要求 `X-Tiangong-Account`，任务新增 `owner_id`、可空 `task_work_dir`，消息／执行新增会话版本及 `waiting` 检查点。
+
+- `DesktopClient` 首次读取原有脱敏接口 `GET /data/claw/session`，优先使用 Hub 增强启动注入的 `hubConversationOwner`，普通登录使用真实 `loggedIn/userId`。账号固定到本次客户端及其 clone；任务、场景、会话等原生请求携带同一账号头，原生返回切换账号错误后不会换账号重试。增强启动的 `ai-gateway` 是独立会话归属，不伪造官方登录、官方用户 ID 或访问令牌。
+- IM 新任务记忆采用本次真实会话账号；恢复继续保持原 `user_id`、`agent_id` 与项目。默认场景优先用原生分配的 `task_work_dir`，独立任务目录同时携带 `project.task_workspace_id`；普通项目沿用原目录。发送使用当前任务选中模型对应的 `task.model_options[model_id]`，不把整个模型参数表或其他模型参数提交给 Harness。
+- 恢复和提交前读取原生 `revision-state`，消息回写及 Harness 请求保持相同 `conversation_revision`；用户消息同时记录本轮 `turn_context.chat_id`。桌面编辑重发、切换模型／参数／Agent／目录后，旧 IM 关联要求重新恢复，避免把旧任务继续写入已改变的会话版本。
+- `POST /v2/chat` 显式请求 `X-TG-Event-Format: legacy`，沿用已有行协议及 run／seq 绑定。`stopping` 按原生停止过程处理；`waiting` 表示原运行的暂停检查点，不标成完成或未知错误。本轮 IM 不新增检查点继续命令，收到该状态会保留原任务并提示在天工窗口继续或停止；远程网页的继续／停止见[会话专题](remote-sessions.md#work-110-兼容更新)。
+
+远程网页指定项目时另走 `DesktopClient::create_task_in_scenario`，按原场景 ID 创建；同目录的多个历史项目壳不会改变选中项目。IM 原有 `create_task` 保持按目录复用首个项目的行为，不因远程改动改变目录菜单或创建规则。
+
+配置与回滚：不新增 TOML 配置；关联文件仍为版本 1，新增 `context.native` 默认可选，旧关联可继续读取；原生账号／版本接口明确返回 404 时保留旧版兼容路径，其他错误按实际结果报告。回退前停止或完成当前任务，旧版 Hub 可能忽略并在重写关联时丢弃新增上下文字段；原客户端历史和用户文件不会被删除。原生新版账号隔离仍生效，不承诺旧 Hub 可跨新版作用域继续发送。
+
+新增合成检查覆盖固定账号及切换拒绝、消息版本／轮次／附件、独立任务目录和模型参数、原账号／Agent 关联，以及 waiting／stopping 状态；命名为 `work_v110_*`，分布在 `gmclaw_desktop::tests`、`gmclaw_executor::work_protocol_tests` 和 `gmclaw_im::desktop::recovery_tests`。管理已统一执行，本批 `gmclaw` 141 项及 Windows GUI 测试目标编译通过；默认项目另在既有用例中验证顶层 `project_id=default`、嵌套 `project.id=0` 且原会话对象不变，明细见[V33](../releases/v1.0.33.md)。Windows 真实 IM → 桌面续聊、检查点接续及 macOS 仍待验收，既有测试数量不作为本轮通过证据。
 
 ## 范围
 

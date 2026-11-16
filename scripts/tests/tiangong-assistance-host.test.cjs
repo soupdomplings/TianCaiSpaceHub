@@ -32,6 +32,11 @@ async function fixture(options={}) {
   const window={electronAPI:{getHarnessUrl:async()=>options.base ?? 'http://127.0.0.1:7861'},fetch:async(...args)=>{
     fetches.push(args);return options.fetch ? options.fetch(...args) : new Response('{"run_id":"fixture-run"}',{status:200});
   }};
+  if(options.nativeTransport){
+    Object.assign(window.electronAPI,{chatRunOpen:async()=>{},chatRunRead:async()=>{},chatRunCancel:async()=>{}});
+    Object.freeze(window.electronAPI);
+    if(options.transportHook!==false)window.__tiancaiAssistanceTransportV1=true;
+  }
   window.__fixturebinding=raw=>{
     const message=JSON.parse(raw);messages.push(message);
     queueMicrotask(()=>window.__tiancaiAssistance?.reply({host:'fixture-host',id:message.id,
@@ -54,6 +59,35 @@ const create=overrides=>({method:'POST',headers:{'content-type':'application/jso
 test('only the verified supported renderer installs; no approval binding is left on window',async()=>{
   const f=await fixture();assert.equal(f.installed,'installed');assert.equal(f.window.__fixturebinding,undefined);assert.equal(typeof f.window.__tiancaiAssistance.reply,'function');f.dispose();assert.equal(f.window.fetch,f.original);
   const wrong=await fixture({base:'http://untrusted.invalid'});assert.equal(wrong.installed,'incompatible');assert.equal(wrong.window.fetch,wrong.original);
+});
+
+test('native IPC transport requires the renderer callback and never mutates the frozen bridge',async()=>{
+  const absent=await fixture({nativeTransport:true,transportHook:false});
+  assert.equal(absent.installed,'incompatible');assert.equal(absent.window.fetch,absent.original);
+  const f=await fixture({nativeTransport:true});try{
+    assert.equal(f.installed,'installed');assert.ok(Object.isFrozen(f.window.electronAPI));
+    const originals=f.window.electronAPI;
+    const submitted=[];const response=new Response('{"run_id":"ipc-run"}',{status:200});
+    const result=await f.window.__tiancaiAssistance.runRequest('/v2/chat/runs',create(),async init=>{submitted.push(init);return response;});
+    await new Promise(setImmediate);
+    assert.equal(result,response);assert.equal(f.fetches.length,0);assert.equal(submitted.length,1);
+    assert.match(JSON.parse(submitted[0].body).extra_data.orch_extra_system_prompt,/context_ref=fixture-context/);
+    assert.deepEqual(f.messages.map(m=>m.op),['register','run']);assert.equal(f.messages[1].run,'ipc-run');
+    assert.equal(f.window.electronAPI,originals);
+  }finally{f.dispose();}
+});
+
+test('native IPC stop invalidates scope and failed submission never replays',async()=>{
+  const f=await fixture({nativeTransport:true});try{
+    let sends=0;
+    await assert.rejects(()=>f.window.__tiancaiAssistance.runRequest('/v2/chat/runs',create(),async()=>{sends++;throw Error('synthetic IPC failure');}),/synthetic IPC/);
+    assert.equal(sends,1);assert.ok(f.messages.some(m=>m.op==='abandon'));
+    const response=new Response('{}',{status:200});
+    const result=await f.window.__tiancaiAssistance.runRequest('/v2/chat/runs/ipc-run/stop',{method:'POST',body:'{}'},async()=>response);
+    await new Promise(setImmediate);
+    assert.equal(result,response);assert.ok(f.messages.some(m=>m.op==='invalidate'&&m.run==='ipc-run'));
+    assert.equal(f.fetches.length,0);
+  }finally{f.dispose();}
 });
 test('a native task gets context and automatic rules without changing its project or permission',async()=>{
   const f=await fixture();try{

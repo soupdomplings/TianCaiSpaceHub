@@ -1,4 +1,4 @@
-//! Ownership changes for the verified TianGong Desktop 1.0.4 local schema.
+//! Ownership changes for TianGong Desktop 1.0.4 and 1.1.0 local schemas.
 //!
 //! The caller holds the desktop-stop and IM/link guards. This module neither
 //! starts the desktop nor edits its login, models, task IDs, or message bodies.
@@ -18,7 +18,7 @@ mod memory;
 mod tests;
 
 pub(crate) const GATEWAY_USER_ID: &str = "ai-gateway";
-const LEDGER_VERSION: u32 = 1;
+const LEDGER_VERSION: u32 = 2;
 const MAX_SELECTIONS: usize = 1_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -95,6 +95,10 @@ struct OwnershipMove {
     files: Vec<memory::FileRecord>,
     // Only identities are needed; never snapshot a whole DB or link file.
     links: Vec<links::LinkOwner>,
+    /// Work 1.1 separates task/project ownership from sessions.user_id.
+    /// Old ledgers deserialize without inventing a source project.
+    #[serde(default)]
+    task_ownership: Vec<database::TaskOwnership>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -118,7 +122,7 @@ impl Ledger {
         let ledger: Self = serde_json::from_slice(&bytes)
             .context("天工历史撤销记录格式不兼容，请保留记录后再处理")?;
         ensure!(
-            ledger.version == LEDGER_VERSION && ledger.database == database,
+            (1..=LEDGER_VERSION).contains(&ledger.version) && ledger.database == database,
             "天工历史撤销记录的版本或数据库位置不一致，未修改历史"
         );
         ensure!(ledger.moves.len() <= 20_000, "天工历史撤销记录数量过多");
@@ -219,9 +223,11 @@ pub(crate) fn move_at(
         .context("天工历史正在被其他程序使用，请退出天工后重试")?;
     let mut ledger = Ledger::load(database, hub_config)?;
     let before_ledger = serde_json::to_vec_pretty(&ledger)?;
+    ledger.version = LEDGER_VERSION;
     let mut link_file = links::LinkFile::load(hub_config)?;
     let mut edits = Vec::new();
     let mut warnings = Vec::new();
+    let mut project_copies = std::collections::HashMap::new();
     let first_record = ledger.moves.len();
     for selected in &request.sessions {
         let state = database::selected(&transaction, database, selected)?;
@@ -256,6 +262,7 @@ pub(crate) fn move_at(
             GATEWAY_USER_ID,
             &keys,
         )?;
+        let task_ownership = database::move_tasks(&transaction, &state.entry, &mut project_copies)?;
         ledger.moves.push(OwnershipMove {
             id: uuid::Uuid::new_v4().to_string(),
             session_id: state.entry.session_id,
@@ -266,6 +273,7 @@ pub(crate) fn move_at(
             phase: Phase::Preparing,
             files,
             links: original_links,
+            task_ownership,
         });
     }
     ensure!(ledger.moves.len() <= 20_000, "天工历史撤销记录数量已达上限");
@@ -300,6 +308,7 @@ pub(crate) fn restore_at(
         .context("天工历史正在被其他程序使用，请退出天工后重试")?;
     let mut ledger = Ledger::load(database, hub_config)?;
     let before_ledger = serde_json::to_vec_pretty(&ledger)?;
+    ledger.version = LEDGER_VERSION;
     let mut link_file = links::LinkFile::load(hub_config)?;
     let mut edits = Vec::new();
     let mut warnings = Vec::new();
@@ -345,6 +354,7 @@ pub(crate) fn restore_at(
         // Query current session-scoped rows so memory created since the move is
         // restored as well. Messages, task records, and compaction stay in place.
         database::restore_owner(&transaction, &state.entry, &item.original_user_id, &keys)?;
+        database::restore_tasks(&transaction, &state.entry, item)?;
         ledger.moves[index].phase = Phase::Restoring;
         restored.push(index);
     }

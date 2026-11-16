@@ -45,6 +45,19 @@ pub struct GmClawChatRequest {
     pub project: GmClawProject,
     pub max_steps: u32,
     pub confirmation: Option<GmClawConfirmationDecision>,
+    pub native: GmClawNativeContext,
+}
+
+/// Native task settings captured together with the original desktop session.
+/// Optional fields keep links from older Work versions readable.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct GmClawNativeContext {
+    pub task_id: String,
+    pub agent_id: String,
+    pub model_options: Value,
+    pub conversation_revision: Option<String>,
+    pub task_workspace_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -108,6 +121,9 @@ pub struct GmClawChatResult {
     pub error: Option<String>,
     /// A confirm frame followed by over is a suspended turn, not completion.
     pub pending_confirmation: Option<GmClawPendingConfirmation>,
+    /// A checkpoint is still the original run, not an unknown failure or a
+    /// completed task. Its explicit continue/stop actions remain in Work.
+    pub waiting: bool,
 }
 
 impl GmClawChatRequest {
@@ -140,6 +156,25 @@ impl GmClawChatRequest {
             "max_steps": self.max_steps,
             "tool_execution_mode": "confirm",
         });
+        body["project_id"] = self.project.id.as_str().into();
+        if self.project.id == "default" {
+            body["project"]["id"] = "0".into();
+        }
+        if !self.native.task_id.is_empty() {
+            body["task_id"] = self.native.task_id.as_str().into();
+        }
+        if !self.native.agent_id.is_empty() {
+            body["agent_id"] = self.native.agent_id.as_str().into();
+        }
+        if self.native.model_options.is_object() {
+            body["model_options"] = self.native.model_options.clone();
+        }
+        if let Some(revision) = &self.native.conversation_revision {
+            body["conversation_revision"] = revision.as_str().into();
+        }
+        if let Some(task) = &self.native.task_workspace_id {
+            body["project"]["task_workspace_id"] = task.as_str().into();
+        }
         if let Some(model) = self
             .model_id
             .as_deref()
@@ -256,6 +291,7 @@ impl GmClawClient {
                 .post(self.chat_url.clone())
                 .header(reqwest::header::AUTHORIZATION, self.authorization.clone())
                 .header(reqwest::header::ACCEPT, "text/event-stream")
+                .header("X-TG-Event-Format", "legacy")
                 .json(&request.body()?)
                 .send()
                 .await
@@ -411,6 +447,7 @@ fn validate_result(result: &GmClawChatResult, finished: bool) -> Result<()> {
     ensure!(
         !result.answer.trim().is_empty()
             || result.pending_confirmation.is_some()
+            || result.waiting
             || result.error.is_some(),
         "天工返回了空结束事件，未提供答复或待确认工具；请检查天工中的任务状态"
     );
@@ -435,6 +472,13 @@ fn accumulate_event(
                 *finished && result.pending_confirmation.is_some(),
                 "天工审批等待状态与答复不一致"
             ),
+            Some("waiting") => {
+                ensure!(
+                    *finished && result.pending_confirmation.is_none(),
+                    "天工检查点等待状态与答复不一致"
+                );
+                result.waiting = true;
+            }
             Some("failed" | "stopped" | "interrupted") => {
                 result.error = Some(
                     data.get("error")
@@ -445,7 +489,7 @@ fn accumulate_event(
                 );
                 result.pending_confirmation = None;
             }
-            Some("running")
+            Some("running" | "stopping")
                 if !*finished
                     || data.get("phase").and_then(Value::as_str) == Some("finalizing") => {}
             _ => bail!("天工返回了未支持的运行变化；请到天工核对，不会自动重放"),
@@ -518,7 +562,12 @@ impl StreamIdentity {
                 && matches!(
                     data["status"].as_str(),
                     Some(
-                        "completed" | "failed" | "stopped" | "interrupted" | "waiting_confirmation"
+                        "completed"
+                            | "failed"
+                            | "stopped"
+                            | "interrupted"
+                            | "waiting_confirmation"
+                            | "waiting"
                     )
                 )
             {
@@ -753,6 +802,7 @@ mod tests {
     fn request_preserves_scoped_identity_and_uses_exact_approval_ids() {
         let workspace = tempfile::tempdir().unwrap();
         let mut request = GmClawChatRequest {
+            native: GmClawNativeContext::default(),
             session_id: "session-one".into(),
             chat_id: "turn-two".into(),
             user_id: "hub-im-isolated".into(),
@@ -778,6 +828,26 @@ mod tests {
         assert_eq!(body["tool_execution_mode"], "confirm");
         assert_eq!(body["confirm_action"], "deny");
         assert_eq!(body["approved_call_ids"], json!(["call-exact"]));
+        request.native = GmClawNativeContext {
+            task_id: "task-original".into(),
+            agent_id: "agent-original".into(),
+            model_options: json!({"temperature":0.6}),
+            conversation_revision: Some("revision-original".into()),
+            task_workspace_id: Some("task-original".into()),
+        };
+        let body = request.body().unwrap();
+        assert_eq!(body["task_id"], "task-original");
+        assert_eq!(body["agent_id"], "agent-original");
+        assert_eq!(body["project_id"], "hub-im-project");
+        assert_eq!(body["model_options"]["temperature"], 0.6);
+        assert_eq!(body["conversation_revision"], "revision-original");
+        assert_eq!(body["project"]["task_workspace_id"], "task-original");
+        request.project.id = "default".into();
+        let body = request.body().unwrap();
+        assert_eq!(body["project_id"], "default");
+        assert_eq!(body["project"]["id"], "0");
+        assert_eq!(body["project"]["task_workspace_id"], "task-original");
+        assert_eq!(request.project.id, "default");
         for invalid_steps in [0, 1001, u32::MAX] {
             request.max_steps = invalid_steps;
             assert!(request.body().is_err());
@@ -848,6 +918,29 @@ mod work_protocol_tests {
         ensure!(decoder.identity.terminal, "missing run terminal");
         validate_result(&result, finished)?;
         Ok(result)
+    }
+
+    #[test]
+    fn work_v110_waiting_checkpoint_and_stop_are_native_settled_states() {
+        let result = collect_frames(vec![
+            frame(
+                1,
+                "over",
+                json!({"answer":"","run_outcome":{"status":"waiting"}}),
+            ),
+            frame(2, "run_status", json!({"status":"waiting"})),
+        ])
+        .unwrap();
+        assert!(result.waiting);
+        assert!(result.error.is_none());
+        let result = collect_frames(vec![
+            frame(1, "run_status", json!({"status":"stopping"})),
+            frame(2, "over", json!({"answer":"partial","stopped":true})),
+            frame(3, "run_status", json!({"status":"stopped"})),
+        ])
+        .unwrap();
+        assert!(result.error.is_some());
+        assert!(!result.waiting);
     }
     #[test]
     fn work_accepts_finalizing_and_terminal_but_not_more_execution() {
@@ -958,6 +1051,7 @@ mod work_protocol_tests {
             let client = GmClawClient::new(&format!("http://{address}"), "synthetic").unwrap();
             let directory = tempfile::tempdir().unwrap();
             let request = GmClawChatRequest {
+                native: GmClawNativeContext::default(),
                 session_id: "session".into(),
                 chat_id: "new-approval-message".into(),
                 user_id: "local".into(),

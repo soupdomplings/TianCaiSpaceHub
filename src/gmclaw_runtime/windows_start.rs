@@ -17,10 +17,15 @@ use windows_sys::Win32::{
     },
 };
 
-pub(super) fn start(executable: &Path, token: &str, display_port: u16) -> Result<()> {
+pub(super) fn start(
+    executable: &Path,
+    token: &str,
+    display_port: u16,
+    inspector_port: Option<u16>,
+) -> Result<u32> {
     let application = terminated(executable.as_os_str())?;
     let cwd = terminated(executable.parent().context("天工安装目录无效")?.as_os_str())?;
-    let mut command_line = desktop_command_line(executable, display_port)?;
+    let mut command_line = desktop_command_line(executable, display_port, inspector_port)?;
     let mut environment = desktop_environment(std::env::vars_os(), OsStr::new(token))?;
     let startup = STARTUPINFOW {
         cb: std::mem::size_of::<STARTUPINFOW>() as u32,
@@ -54,7 +59,7 @@ pub(super) fn start(executable: &Path, token: &str, display_port: u16) -> Result
         CloseHandle(information.hThread);
         CloseHandle(information.hProcess);
     }
-    Ok(())
+    Ok(information.dwProcessId)
 }
 
 fn wide(value: &OsStr) -> Result<Vec<u16>> {
@@ -72,7 +77,11 @@ fn terminated(value: &OsStr) -> Result<Vec<u16>> {
     Ok(value)
 }
 
-fn desktop_command_line(executable: &Path, display_port: u16) -> Result<Vec<u16>> {
+fn desktop_command_line(
+    executable: &Path,
+    display_port: u16,
+    inspector_port: Option<u16>,
+) -> Result<Vec<u16>> {
     // A verified Windows executable path cannot contain a quote or end in a
     // directory separator. lpApplicationName is also explicit, so no PATH or
     // Program.exe fallback can select a different executable.
@@ -88,6 +97,9 @@ fn desktop_command_line(executable: &Path, display_port: u16) -> Result<Vec<u16>
         format!(" --remote-debugging-address=127.0.0.1 --remote-debugging-port={display_port}")
             .encode_utf16(),
     );
+    if let Some(port) = inspector_port {
+        result.extend(format!(" --inspect=127.0.0.1:{port}").encode_utf16());
+    }
     result.push(0);
     Ok(result)
 }
@@ -198,10 +210,16 @@ mod tests {
     #[test]
     fn desktop_launch_quotes_exact_path_and_rejects_nul_values() {
         let executable = Path::new(r"D:\Program Files\天工\tiangong-desktop.exe");
-        let arguments = desktop_command_line(executable, 18769).unwrap();
+        let arguments = desktop_command_line(executable, 18769, None).unwrap();
         assert_eq!(
             String::from_utf16(&arguments).unwrap(),
             "\"D:\\Program Files\\天工\\tiangong-desktop.exe\" --remote-debugging-address=127.0.0.1 --remote-debugging-port=18769\0"
+        );
+        let enhanced = desktop_command_line(executable, 18769, Some(49001)).unwrap();
+        assert!(
+            String::from_utf16(&enhanced)
+                .unwrap()
+                .ends_with(" --inspect=127.0.0.1:49001\0")
         );
         assert!(desktop_environment(std::iter::empty(), OsStr::new("fixture\0token")).is_err());
         let invalid = std::iter::once((OsString::from("name=value"), OsString::from("fixture")));

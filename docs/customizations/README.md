@@ -1,5 +1,7 @@
 # 二开功能总表
 
+2026-11-16 **V1.0.33 天工 Work 1.1.0 适配（TC-011/012/022/024/025）**：根据新版实际资源和官方清单，补本地 AI Gateway 主进程／renderer 账号、任务／项目归属迁移与撤销、独立目录、模型显示／预算、协助 IPC、会话版本与子运行隔离。安装布局、分享和 MCP 原接口继续复用；云端智能体仍按真实账号使用。见[当前核对](tiangong-work-compatibility-assessment.md)和[V33 交付](../releases/v1.0.33.md)；Windows 实机及 macOS 待验，不触发 Actions／标签／Release。
+
 2026-11-15 **TC-025 远程连接首版**：[远程连接](remote-connection.md) 将设备组网、配对及 Codex／天工原会话网页入口纳入 Hub；默认关闭，确认后准备组件。源码集成、Windows GUI 检查、105 项不同 Rust 和 25 项网页离线测试通过；1.0.32 Windows release 与唯一 MSI `20261116-131913` 的版本／升级及 5 项内嵌载荷核验通过，包身份见 [V32 交付](../releases/v1.0.32.md)。双机和 macOS 构建／实机待验，不触发 Actions、标签或 Release。
 
 2026-11-12 **V1.0.31 已提交并启动发布（TC-024）**：[天工 AI Gateway 本地账号与会话历史](tiangong-session-history.md) 贯通新建／列表／恢复与记忆，支持选中迁入和恢复原归属；累计 WorkBuddy、搭档等源码 `674f6df` 已推送，`v1.0.31` 标签与 Release 已创建，Windows／macOS Actions 已运行。Windows 本地 GUI／release、61 项不同 Rust、29 项 Node 及唯一 MSI `120156` 核验通过；Actions 最终构建、真实续聊／IM／macOS 与未来新版智能体仍待验证。运行链接和边界见 [V31](../releases/v1.0.31.md)。

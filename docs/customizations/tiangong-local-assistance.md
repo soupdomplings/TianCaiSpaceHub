@@ -1,5 +1,15 @@
 # 天工 Work 本机协助
 
+## 2026-11-16：天工 1.1.0 原生 IPC 提交兼容
+
+Windows 1.1.0 renderer 的 `runFetch` 优先调用冻结的 `electronAPI.chatRunOpen/Read/Cancel`，旧版单独拦截 `window.fetch` 已无法取得原生任务。增强工作区在内存源码适配时增加窄回调；已经官方登录、普通启动的工作区则由协助挂载在已核验页面的默认上下文中定位唯一安装主模块，以 LiveEdit 仅调整现有 `runFetch` 函数体，保留其原模块绑定。改写读回成功才设置 `__tiancaiAssistanceTransportV1`，已具备回调时直接复用。本机协助以 `runRequest` 复用原有任务注册、目录规则和随机上下文，再委托原生函数提交一次并原样返回 `Response`。不修改冻结的 `electronAPI`、原生鉴权、任务项目、权限或流式协议，不重新加载页面、切换账号或清除草稿。旧 HTTP 路径仍走既有 fetch 挂钩，IPC 分支不会再次走该挂钩。
+
+存在 IPC API 但无法准备配套回调时，协助安装明确返回原因，不把 MCP 配置登记或脚本挂载误报为任务已接入。V8 拒绝修改正在执行的异步函数时，保持原函数并提示等待任务结束后再接入；不强行重载或重发。仅改写可能已发生而读回未确认时尝试恢复原函数体，关闭本次 Debugger 域；被明确拒绝的改写不重复恢复。失败提交撤销本次上下文且不重发，原生停止／设置／提示修改仍使对应上下文失效；后续审批保留原真人事件与请求身份要求。新版受管 MCP 的 HTTP 字段和 CRUD 与既有逻辑兼容，新增 `web-mcp:`／`app_login`／`web_sync` 同步条目不由 Hub 接管。
+
+修改入口为 `src/local_assistance/{host.rs,tiangong-host.js,run-fetch-adapter.js}`，增强加载由 `src/gmclaw_runtime/workspace-adapter.js` 提供。`tiangong-assistance-host.test.cjs` 本批 16/16、`tiangong-assistance-transport.test.cjs` 4/4 通过，后者含 Node inspector 更新预先捕获的合成闭包、冻结 IPC、单次委托、响应／信号透传及旧 fetch 不重复挂钩。实际 1.1.0 业务模块改写后仅解析通过，没有执行安装脚本。新增 Rust 合成通道覆盖安装目录和上下文匹配、无关通知洪流、改写被拒不假报就绪与 Debugger 收尾；执行结果由管理会话统一登记。CDP 源码传输上限沿已有 renderer 适配的 16 MiB，单脚本最大 8 MiB，正常连接不周期读取源码。安装资源另有 16 项静态合同核对，脱敏记录为 `target/v1.0.33-tiangong-20261115/model-mcp-contracts.json`。本批未启动客户端或真实协助；真实自动触发、原生 IPC 工具续轮和 macOS 仍待用户验收。
+
+没有新增用户配置或凭据迁移。停用协助后卸载本页挂钩，保留的原生回调被动透传原请求；没有后台协助时不追加规则。回退到没有 IPC 配套的旧 Hub 后，1.1.0 普通 fetch 挂钩不足以提供完整协助，需使用兼容版本，不重放旧任务或放宽权限。
+
 维护：2026-11-11；TC-022。当前正文说明 V1.0.17 后的“共享天才搭档 Server”开发批次：与天才搭档共用一份持久运行包，真人确认准备、品牌程序和退出清理已实现，现已纳入 [V1.0.18 唯一测试包](../releases/v1.0.18.md)，未正式发布，真实启动待用户验收。本批必要编译和离线结果由管理会话汇总。用户确认 V1.0.16 的天工已能通过协助 MCP 实际工作；V1.0.17 的 104 项定向离线回归、Windows release 和 MSI 核验仅归属 [V17 交付](../releases/v1.0.17.md)，此前 1354 个不同 Rust 用例和 14 项 Node 检查仅归属 [V16 统一交付](../releases/v1.0.16.md)，不作为本批新代码证据。
 
 ## 入口、默认值与使用

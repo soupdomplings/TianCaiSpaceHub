@@ -107,9 +107,13 @@ async fn prepare_and_start(
     };
     // Shared with /tg: serialized startup, process/port checks and bounded
     // readiness wait. An already-running desktop is never restarted.
-    let mut status =
-        crate::gmclaw_runtime::launch(&config.gmclaw_bridge, executable, validate_before_spawn)
-            .await?;
+    let mut status = crate::gmclaw_runtime::launch(
+        &config.gmclaw_bridge,
+        executable,
+        request.enhanced,
+        validate_before_spawn,
+    )
+    .await?;
     if let Some(options) = workspace
         && status.state == crate::gmclaw_runtime::GmClawConnectionState::Connected
     {

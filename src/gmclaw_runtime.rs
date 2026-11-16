@@ -31,9 +31,10 @@ use crate::{
 
 mod credentials;
 mod display;
+mod main_workspace;
 mod workspace;
-pub(crate) use workspace::{WorkspaceOptions, enhance_workspace, workspace_options};
 pub(crate) use workspace::gateway_workspace_active;
+pub(crate) use workspace::{WorkspaceOptions, enhance_workspace, workspace_options};
 #[cfg(windows)]
 mod windows_start;
 
@@ -496,7 +497,13 @@ pub async fn prepare_for_im(
         );
         Ok::<_, anyhow::Error>(guard)
     };
-    let runtime = launch(&config.gmclaw_bridge, executable, validate_before_spawn).await?;
+    let runtime = launch(
+        &config.gmclaw_bridge,
+        executable,
+        false,
+        validate_before_spawn,
+    )
+    .await?;
 
     // `launch` may return an already-running instance without spawning. Recheck
     // disk permissions/configuration in that path too before handing a session
@@ -1058,6 +1065,7 @@ async fn authenticated_status(
 pub async fn launch<F, Fut, Guard>(
     config: &GmClawBridgeConfig,
     executable: Option<PathBuf>,
+    enhanced: bool,
     validate_before_spawn: F,
 ) -> Result<GmClawRuntimeStatus>
 where
@@ -1075,6 +1083,9 @@ where
         use GmClawConnectionState::*;
         match runtime.state {
             Connected => {
+                if enhanced && !spawned {
+                    main_workspace::check_existing(config, executable.as_deref()).await?;
+                }
                 *LAST_LAUNCH.lock().await = None;
                 return Ok(append_display_status(runtime).await);
             }
@@ -1087,9 +1098,14 @@ where
                 .await
                 .is_some_and(|started| started.elapsed() < Duration::from_secs(60));
             if !recently_started {
-                let started =
-                    start_desktop(config, &url, executable.clone(), &mut validate_before_spawn)
-                        .await?;
+                let started = start_desktop(
+                    config,
+                    &url,
+                    executable.clone(),
+                    enhanced,
+                    &mut validate_before_spawn,
+                )
+                .await?;
                 if let Some(status) = started {
                     runtime = status;
                     if runtime.state == Error {
@@ -1132,6 +1148,7 @@ async fn start_desktop<F, Fut, Guard>(
     config: &GmClawBridgeConfig,
     url: &url::Url,
     executable: Option<PathBuf>,
+    enhanced: bool,
     validate_before_spawn: &mut Option<F>,
 ) -> Result<Option<GmClawRuntimeStatus>>
 where
@@ -1170,6 +1187,12 @@ where
         .context("未找到天工 Work 安装，请先在 Hub 所在电脑安装天工 Work 后重试 /tg")?;
     let executable = resolve_executable(&executable)
         .context("天工桌面安装不完整或已有程序路径无效，请检查安装后重试 /tg")?;
+    let main_workspace = if enhanced {
+        main_workspace::prepare(&executable)?
+    } else {
+        None
+    };
+    let inspector_port = main_workspace.as_ref().map(|prepared| prepared.port);
     // Explicit startup enables the local display adapter once. An existing
     // normally-started desktop is never closed or relaunched to add this flag.
     let display_listener =
@@ -1189,6 +1212,9 @@ where
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
+        if let Some(port) = inspector_port {
+            command.arg(format!("--inspect=127.0.0.1:{port}"));
+        }
         command
     };
     // The caller rechecks the saved revision after discovery/probing and can
@@ -1198,22 +1224,32 @@ where
         .context("本次连接已发起启动，请等待天工就绪后重试 /tg")?()
     .await?;
     #[cfg(windows)]
-    {
+    let process_id = {
         // Stable Command::spawn inherits all inheritable Windows handles even
         // with Stdio::null(). The desktop must never retain Hub's sockets.
-        windows_start::start(&executable, config.auth_token.trim(), display::DISPLAY_PORT)
-            .context("无法启动天工桌面，请检查程序安装及访问权限")?;
-    }
+        windows_start::start(
+            &executable,
+            config.auth_token.trim(),
+            display::DISPLAY_PORT,
+            inspector_port,
+        )
+        .context("无法启动天工桌面，请检查程序安装及访问权限")?
+    };
     #[cfg(not(windows))]
     let mut child = command
         .spawn()
         .context("无法启动天工桌面，请检查程序安装及访问权限")?;
+    #[cfg(not(windows))]
+    let process_id = child.id();
     drop(configuration_guard);
     // Reap on Unix without tying desktop lifetime to a Hub task/request.
     #[cfg(not(windows))]
     std::thread::spawn(move || {
         let _ = child.wait();
     });
+    if let Some(prepared) = main_workspace {
+        prepared.activate(process_id, config).await?;
+    }
     Ok(None)
 }
 

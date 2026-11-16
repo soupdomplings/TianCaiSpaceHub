@@ -59,6 +59,7 @@ enum ViewIssue {
     ApiUnavailable,
     DataEndpoint,
     Authorization,
+    AccountIdentity,
     ScenarioShape,
     PageShape,
     SummaryShape,
@@ -80,6 +81,7 @@ impl ViewIssue {
             Self::ApiUnavailable => "桌面消息读取接口不可用，页面未修改",
             Self::DataEndpoint => "桌面消息读取地址未通过本机核对，页面未修改",
             Self::Authorization => "桌面消息读取授权尚未就绪，页面未修改",
+            Self::AccountIdentity => "桌面账号与会话归属不一致，请在当前账号重新打开会话",
             Self::ScenarioShape => "桌面项目或任务列表结构不兼容，页面未修改",
             Self::PageShape => "桌面完整消息或分页结构不兼容，页面未修改",
             Self::SummaryShape => "桌面消息摘要结构不兼容，页面未修改",
@@ -112,6 +114,7 @@ fn view_issue(code: &str) -> Option<ViewIssue> {
         "api_fields" => Some(ViewIssue::ApiUnavailable),
         "data_endpoint" => Some(ViewIssue::DataEndpoint),
         "authorization" => Some(ViewIssue::Authorization),
+        "account_identity" => Some(ViewIssue::AccountIdentity),
         "scenario_shape" => Some(ViewIssue::ScenarioShape),
         "page_shape" => Some(ViewIssue::PageShape),
         "summary_shape" => Some(ViewIssue::SummaryShape),
@@ -387,6 +390,19 @@ impl Cdp {
                 })
                 .collect();
             if let Some(mut arguments) = arguments {
+                if matches!(view, SetupView::App) {
+                    let owner = values
+                        .iter()
+                        .find(|value| {
+                            value.get("name").and_then(Value::as_str) == Some("workspaceOwner")
+                        })
+                        .and_then(|value| value.get("value"));
+                    arguments.push(match owner.and_then(object_id) {
+                        Some(id) => json!({"objectId":id}),
+                        None if owner.is_none() => json!({"value":null}),
+                        _ => json!({"value":"incompatible"}),
+                    });
+                }
                 if matches!(view, SetupView::Panel) {
                     for name in ["runState", "hasActiveRun", "isReconnecting"] {
                         let value = values
@@ -481,7 +497,7 @@ async fn renderer_arguments(
             .and_then(object_id)
     };
     let app = handle("appRender").ok_or_else(|| anyhow::anyhow!("天工桌面视图尚未准备"))?;
-    let app_refs = cdp
+    let mut app_refs = cdp
         .setup_refs(
             &app,
             &[
@@ -493,6 +509,9 @@ async fn renderer_arguments(
             SetupView::App,
         )
         .await?;
+    let account_ref = app_refs
+        .pop()
+        .expect("app setup includes optional workspace owner");
     let panel = handle("panelRender");
     let props = handle("panelProps");
     ensure!(panel.is_some() == props.is_some(), "天工桌面会话视图不完整");
@@ -532,6 +551,7 @@ async fn renderer_arguments(
     arguments.push(json!({"value": task_id}));
     arguments.push(json!({"value": session_id}));
     arguments.push(json!({"value": hub_row_ids}));
+    arguments.push(account_ref);
     Ok((target, arguments))
 }
 

@@ -1,6 +1,10 @@
 async function installTiangongAssistance(options) {
   'use strict';
   if (!document.getElementById('app')?._vnode?.component || typeof window.electronAPI?.getHarnessUrl !== 'function') return 'incompatible';
+  // New Work versions route native runs through a frozen contextBridge API.
+  // The in-memory renderer adapter supplies a narrow runFetch callback instead
+  // of trying to replace electronAPI or falling back to an unauthorised fetch.
+  if (typeof window.electronAPI.chatRunOpen === 'function' && window.__tiancaiAssistanceTransportV1 !== true) return 'incompatible';
   const base = await window.electronAPI.getHarnessUrl();
   if (base !== 'http://127.0.0.1:7861' || typeof window[options.binding] !== 'function') return 'incompatible';
   window.__tiancaiAssistance?.dispose();
@@ -129,17 +133,17 @@ async function installTiangongAssistance(options) {
   }
   const contexts=new Map();
   const warn = (text, code) => {notice=text;render();if(code)void send('notice',{code}).catch(()=>{});};
-  const wrapped=async function(input,init){
-    let url;try{url=new URL(typeof input==='string'?input:input.url,location.href);}catch{return original.apply(this,arguments);}
+  const request=async function(input,init,invoke){
+    let url;try{url=new URL(typeof input==='string'?input:input.url,location.href);}catch{return invoke(init);}
     const isRun=url.origin===base && url.pathname.startsWith('/v2/chat/runs');
-    if(!isRun || init?.method!=='POST' && init?.method!=='PATCH')return original.apply(this,arguments);
+    if(disposed || !isRun || init?.method!=='POST' && init?.method!=='PATCH')return invoke(init);
     const path=url.pathname.slice('/v2/chat/runs'.length);
     if(path==='' && init?.method==='POST' && typeof init.body==='string'){
-      let body;try{body=JSON.parse(init.body);}catch{return original.apply(this,arguments);}
-      if(!body || !body.session_id || !body.request_id || !body.project?.path || !body.query){warn('此任务缺少可核对的项目或任务身份，未接入本机协助。','unsupported');return original.apply(this,arguments);}
-      if(Array.isArray(body.mcp_servers)&&body.mcp_servers.length&&!body.mcp_servers.some(s=>typeof s==='string'&&s.trim()==='tiancai-local-assistance')){warn('本轮只选择了其他连接，本机协助未加入。','excluded');return original.apply(this,arguments);}
+      let body;try{body=JSON.parse(init.body);}catch{return invoke(init);}
+      if(!body || !body.session_id || !body.request_id || !body.project?.path || !body.query){warn('此任务缺少可核对的项目或任务身份，未接入本机协助。','unsupported');return invoke(init);}
+      if(Array.isArray(body.mcp_servers)&&body.mcp_servers.length&&!body.mcp_servers.some(s=>typeof s==='string'&&s.trim()==='tiancai-local-assistance')){warn('本轮只选择了其他连接，本机协助未加入。','excluded');return invoke(init);}
       const currentExtra={...(body.extra_data||{}),...(body.extraData||{})};
-      if(Array.isArray(currentExtra.tool_allowlist)&&!currentExtra.tool_allowlist.includes('mcp_call')){warn('本轮工具范围未包含 MCP 调用，未加入自动协助。','blocked');return original.apply(this,arguments);}
+      if(Array.isArray(currentExtra.tool_allowlist)&&!currentExtra.tool_allowlist.includes('mcp_call')){warn('本轮工具范围未包含 MCP 调用，未加入自动协助。','blocked');return invoke(init);}
       let scope, prepared=init;
       try{
         scope=await send('register',{parent:{session_id:body.session_id,request_id:body.request_id,project:{path:body.project.path,id:String(body.project.id||body.project_id||'default')},query:body.query,tool_execution_mode:body.tool_execution_mode,
@@ -155,7 +159,7 @@ async function installTiangongAssistance(options) {
       }catch(error){if(scope?.contextRef)void send('abandon',{context:scope.contextRef}).catch(()=>{});scope=null;warn(error.message);}
       // Submit exactly once. A response/JSON error must never replay the task.
       let response;
-      try{response=await original.call(this,input,prepared);}
+      try{response=await invoke(prepared);}
       catch(error){if(scope)void send('abandon',{context:scope.contextRef}).catch(()=>{});warn('天工任务提交未完成，协助上下文已撤销。','submit_failed');throw error;}
       if(scope){
         if(response.ok){try{const created=await response.clone().json();if(created.run_id){contexts.set(created.run_id,scope.contextRef);void send('run',{context:scope.contextRef,run:created.run_id}).catch(e=>warn(e.message));}else{void send('abandon',{context:scope.contextRef}).catch(()=>{});warn('天工未返回可核对的运行身份，未继续接入协助。','submit_failed');}}catch{void send('abandon',{context:scope.contextRef}).catch(()=>{});warn('天工任务响应无法解析，未继续接入协助。','submit_failed');}}
@@ -163,14 +167,16 @@ async function installTiangongAssistance(options) {
       }
       return response;
     }
-    const response=await original.apply(this,arguments);
+    const response=await invoke(init);
     if(response.ok){
       const match=/^\/([A-Za-z0-9_-]+)\/(stop|settings|prompts)$/.exec(path);
       if(match){void send('invalidate',{run:match[1]}).catch(()=>{});contexts.delete(match[1]);}
     }return response;
   };
+  const wrapped=function(input,init){return request(input,init,prepared=>original.call(this,input,prepared));};
   window.fetch=wrapped;
   window.__tiancaiAssistance={
+    runRequest(path,init,proceed){return request(new URL(path,base).href,init,proceed);},
     reply(message){if(message.host!==options.host)return;const pending=requests.get(message.id);if(!pending)return;clearTimeout(pending.timer);requests.delete(message.id);message.error?pending.reject(new Error(message.error)):pending.resolve(message.data);},
     update(message){if(message.host!==options.host||disposed)return;const next=Array.isArray(message.tasks)?message.tasks:[];
       if(JSON.stringify(next)===JSON.stringify(latest))return;latest=next;

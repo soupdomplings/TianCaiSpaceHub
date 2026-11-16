@@ -1,6 +1,40 @@
 # 天工 Work 兼容性评估与适配
 
-V1.0.31 用户已明确先按当前结构实施本地 AI Gateway 账号与历史管理，不再等待新版；现行实现和验证见 [历史专题](tiangong-session-history.md)。下节 V30 保留原阶段评估，未知新版自建智能体的存储／权限结构仍需后续适配。
+## V1.0.33 · Work 1.1.0 当前核对
+
+维护日期：2026-11-16。关联 TC-011/012/022/024/025，开发基线 `main / 27568b5`。本轮用户要求核对大版本更新后 Hub 既有全部天工接入能力，必要适配合并后统一本地测试；不新增独立子任务安装包、不触发 Actions／标签／Release。
+
+核对对象为 Windows 安装的 `tiangong-desktop 1.1.0`：卸载登记、`app.asar/package.json` 及[官方更新清单](https://tiangong.jiuqi.com.cn/updates/tiangong-claw/latest.yml)一致，官方发布时间 `2026-11-14T02:56:12.907Z`。依据是实际安装资源中的 main／renderer／preload 和 Harness Python 接口；旧 Work 1.0.4、早期 Claw 1.1.1 和 Electron 文件版本分别保留原归属，不混用。
+
+### 差异与处理
+
+| 范围 | 新版实际差异 | 当前处理 |
+| --- | --- | --- |
+| 安装发现与本地授权 | EXE、ASAR、Python／Harness 布局及默认 7861／18768 端口继续存在，支持可配置端口属于新版原生能力 | 继续复用 Hub 原有安装识别、默认端口接入和仅内存授权，不迁移安装、不扩展自定义端口支持 |
+| 增强启动 | renderer 新增 `conversationAccount`／epoch，DataServer 的 `conversationAccount` 回调同时强制账号；旧 renderer 规则不足以打开本地会话 | 增加 1.1 能力分支；显式增强启动时，临时主进程适配将本地会话作用域固定为 `ai-gateway`，renderer 使用同一账号头和本地恢复键；官方登录与云资源保持真实账号 |
+| 历史与项目 | `tasks`／`scenarios` 新增 `owner_id`，默认任务新增独立 `task_work_dir` | 选中迁移同时更新任务和会话归属；跨账号项目复制项目壳，不修改其他任务／原项目；撤销恢复原任务项目与归属，保留 session／agent／project 及记忆目录 |
+| 新版智能体 | `/data/web-resources/agents/*` 为云端资源，`resource_usage_agents` 和账号目录下 preferences 是缓存／偏好 | 保留真实登录和云端权限；本地历史迁移保留原 `agent_id`，不转移云端智能体、账号目录缓存或官方偏好 |
+| 模型配置与内置分享 | 模型表继续兼容，新增 `display_name` 和输出／上下文预算约束；原生启动会迁移旧默认预算 | ID 和真实上游模型保持原值，显示名只用于标签；保存前按原生能力检查输出预算；复用原生已迁移值，分享地址／两项内置 ID 及凭据边界保留 |
+| 本机协助与 MCP | 新 renderer 的 `runFetch` 优先使用冻结 `electronAPI` 的 chatRun IPC，旧 fetch 钩子无法收到任务 | 增强 renderer 在加载时提供 `runRequest` 钩子；普通登录工作区在已核验页面内 LiveEdit 同一入口，复用单次注入／审批／停止逻辑，不刷新页面或覆写冻结 API。Dumpling 和原生 MCP 管理端点／字段继续复用 |
+| IM 与远程 | 会话请求需要账号头；任务独立目录、模型参数和 `conversation_revision` 参与续聊；子事件将 `run_id` 改写为主运行并带 `subagent_run_id` | DesktopClient 固定首次确认的本地账号，切账号不自动重试；承接原目录、模型参数、会话版本；分离子运行内容和审批，按真实接口处理停止／等待继续 |
+
+### 增强启动与回滚
+
+新增维护入口为 `src/gmclaw_runtime/main_workspace.rs`、`main-workspace-adapter.js`、`main-workspace-context.js`，与既有 workspace／display 适配配合。新版仅在用户显式增强启动且本次确实新开天工进程时使用本机临时主进程 Inspector，核对本次 PID 和安装入口后 LiveEdit 原回调，读回真实账号作用域再关闭 Inspector；无调试暂停，不改 ASAR 或用户登录记录。旧布局继续 renderer 路径。
+
+`GET /data/claw/session` 在增强进程内追加独立 `hubConversationOwner="ai-gateway"`；`loggedIn`、`userId`、有效期等仍返回官方真实状态。`DesktopClient` 与桌面同步使用这个本地归属或原生真实 userId，不传模型密钥或登录令牌到浏览器。主进程发送、编辑重发和历史版本请求复用原 session 的 user／agent／project；`project.id` 对齐原记忆作用域，不能因为项目壳变更另建上下文。增强访问不会自动认领所有旧 `local` 历史，迁入仍走显式历史管理。
+
+已经普通启动的新版天工不在运行中切换本地账号；提示正常退出后重新增强启动，保留当前任务和草稿。主进程 PID 核验后的收尾会请求关闭本次 Inspector；发现地址或建立连接阶段失败时无法发出关闭请求，须正常退出天工后重试，不能保证早期失败已关闭端口。真正退出天工后内存适配消失，普通启动恢复原生规则；已保存模型／历史迁移按各专题回执恢复。未知结构适配失败保留原程序并报具体不可用状态，不静默宣称已接入。官方资源和云端智能体不因本地增强获得额外权限。
+
+### 本批协作与验证状态
+
+管理负责主进程本地作用域、集成、共享文档和唯一包；三个复用开发任务分别负责增强 renderer／历史、IM／远程协议、模型／分享／协助。共同 `main` 分开文件责任，开发不分别打包。
+
+上述定向适配已集成，266 项不同 Rust、86 项 Node、16 项安装资源静态合同及 Windows GUI 测试目标编译通过。合成 Node 主进程证明既有闭包回调 LiveEdit 生效、官方账号不变、旧会话不自动认领和失败回滚；1.1.0 实际脚本仅执行改写／语法解析，未执行其中的产品代码。release、唯一 MSI 身份及用户验收清单集中写入 [V1.0.33 交付](../releases/v1.0.33.md)。不读取用户数据库、私有会话、凭据或日志；没有启动实际 Hub、天工、Codex、安装器或真实模型。Windows 实机待用户统一验收，macOS 未取得 1.1.0 原生安装资源、未构建或实机验证，不将跨平台源码视为已验收。
+
+## 历史基线
+
+V1.0.31 已按当时结构实施 AI Gateway 本地账号与历史管理，见 [历史专题](tiangong-session-history.md)。以下 V30 和 v8 保留当时评估／验收事实；“待新版”不再代表当前本批状态。
 
 ## V1.0.30 会话与智能体归属管理评估（待实施）
 

@@ -1,5 +1,7 @@
 # TianCaiSpaceHub 文档总入口
 
+2026-11-16 **V1.0.33 天工 Work 1.1.0 兼容测试**：按新版实际资源核对增强启动、历史归属、模型与分享、协助 IPC、IM 及远程原会话，必要适配同批交付。[兼容依据与回滚](customizations/tiangong-work-compatibility-assessment.md)，[唯一包及检查状态](releases/v1.0.33.md)；Windows 实机由用户统一测试，macOS 待验，不触发 Actions／标签／Release。
+
 2026-11-15 **V1.0.32 本地测试交付**：远程连接首版唯一 Windows x64 MSI `20261116-131913` 已生成，release、版本／升级及 5 项内嵌载荷核验通过；复用 105 项 Rust、25 项网页与 GUI 检查。构建和包身份集中在 [V32 交付](releases/v1.0.32.md)，真实双机与 macOS 待验。本批不触发 Actions、标签或 Release。
 
 - [Hub 远程连接与浏览器会话](customizations/remote-connection.md)：Windows／macOS 自己的设备组网及 Codex／天工真实会话首版；源码集成、Windows GUI 检查、105 项 Rust 和 25 项网页离线测试完成，V1.0.32 Windows 测试包已核验，双机和 macOS 待验。专题包括[组网](customizations/remote-network.md)、[会话](customizations/remote-sessions.md)、[网页](customizations/remote-web.md)及[接口协作契约](development/remote-session-contract.md)。

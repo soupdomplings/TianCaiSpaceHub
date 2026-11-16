@@ -25,6 +25,18 @@ struct Task {
     updated_at: String,
     message_count: u64,
     execution_status: String,
+    owner_id: Option<String>,
+    scenario_owner: Option<String>,
+    native_pending: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct TaskOwnership {
+    task_id: String,
+    original_owner_id: String,
+    original_scenario_id: String,
+    gateway_scenario_id: String,
 }
 
 pub(super) fn open(database: &Path, writable: bool) -> Result<Connection> {
@@ -98,12 +110,21 @@ pub(super) fn check_schema(connection: &Connection) -> Result<()> {
         !tasks.contains_key("user_id") && !scenarios.contains_key("user_id"),
         "此天工版本增加了任务或项目账号归属，须先适配，未修改数据库"
     );
+    ensure!(
+        tasks.contains_key("owner_id") == scenarios.contains_key("owner_id"),
+        "天工任务与项目账号结构不完整，未修改历史"
+    );
     require(
         connection,
         "task_messages",
         &["id", "task_id", "execution_json"],
     )?;
     for (table, fields) in [
+        (
+            "work_task_runs",
+            &["session_id", "task_id", "owner", "synced", "run_json"][..],
+        ),
+        ("conversation_heads", &["task_id", "pending"][..]),
         (
             "memory_entries",
             &["user_id", "project_id", "session_id"][..],
@@ -125,18 +146,44 @@ pub(super) fn check_schema(connection: &Connection) -> Result<()> {
 }
 
 fn tasks(connection: &Connection, filter: Option<&str>) -> Result<HashMap<String, Vec<Task>>> {
-    let mut statement = connection.prepare(
-        "SELECT t.task_id,t.title,t.scenario_id,s.work_dir,t.updated_at,
+    let fields = columns(connection, "tasks")?;
+    let owner_fields = if fields.contains_key("owner_id") {
+        "t.owner_id,s.owner_id"
+    } else {
+        "NULL,NULL"
+    };
+    let work_dir = if fields.contains_key("task_work_dir") {
+        "CASE WHEN t.scenario_id='default' AND coalesce(t.task_work_dir,'')<>'' THEN t.task_work_dir ELSE s.work_dir END"
+    } else {
+        "s.work_dir"
+    };
+    let native_pending = if !columns(connection, "work_task_runs")?.is_empty() {
+        "EXISTS(SELECT 1 FROM work_task_runs w WHERE w.task_id=t.task_id AND (w.synced<>1 OR
+          CASE WHEN json_valid(w.run_json) THEN coalesce(json_extract(w.run_json,'$.status'),'unknown') NOT IN ('completed','stopped','failed','interrupted')
+            OR coalesce(json_extract(w.run_json,'$.phase'),'')='finalizing'
+            OR coalesce(json_extract(w.run_json,'$.awaiting_confirmation'),0)<>0
+            OR EXISTS(SELECT 1 FROM json_each(w.run_json,'$.prompts') p WHERE json_extract(p.value,'$.status')='queued')
+          ELSE 1 END))"
+    } else {
+        "0"
+    };
+    let edit_pending = if !columns(connection, "conversation_heads")?.is_empty() {
+        "EXISTS(SELECT 1 FROM conversation_heads h WHERE h.task_id=t.task_id AND h.pending<>'')"
+    } else {
+        "0"
+    };
+    let mut statement = connection.prepare(&format!(
+        "SELECT t.task_id,t.title,t.scenario_id,{work_dir},t.updated_at,
           (SELECT count(*) FROM task_messages m WHERE m.task_id=t.task_id),
           coalesce((SELECT CASE WHEN json_valid(m.execution_json)
               AND json_extract(m.execution_json,'$.version')=1
             THEN coalesce(json_extract(m.execution_json,'$.status'),'unknown') ELSE 'unknown' END
             FROM task_messages m WHERE m.task_id=t.task_id
               AND m.execution_json IS NOT NULL AND m.execution_json NOT IN ('','null')
-            ORDER BY m.id DESC LIMIT 1),''),t.session_id
+            ORDER BY m.id DESC LIMIT 1),''),t.session_id,{owner_fields},({native_pending} OR {edit_pending})
          FROM tasks t LEFT JOIN scenarios s ON s.scenario_id=t.scenario_id
-         WHERE (?1 IS NULL OR t.session_id=?1) ORDER BY t.updated_at DESC,t.task_id",
-    )?;
+         WHERE (?1 IS NULL OR t.session_id=?1) ORDER BY t.updated_at DESC,t.task_id"
+    ))?;
     let mut groups: HashMap<String, Vec<Task>> = HashMap::new();
     for row in statement.query_map([filter], |row| {
         Ok((
@@ -149,6 +196,9 @@ fn tasks(connection: &Connection, filter: Option<&str>) -> Result<HashMap<String
                 updated_at: row.get(4)?,
                 message_count: row.get(5)?,
                 execution_status: row.get(6)?,
+                owner_id: row.get(8)?,
+                scenario_owner: row.get(9)?,
+                native_pending: row.get(10)?,
             },
         ))
     })? {
@@ -261,6 +311,26 @@ fn enrich(
         .join("workspace");
     let mut directories = BTreeMap::new();
     for task in tasks {
+        ensure!(
+            !task.native_pending,
+            "此会话有运行、排队、待同步或编辑中的任务，请先在天工完成后再迁移"
+        );
+        if let Some(owner) = &task.owner_id {
+            ensure!(
+                owner.is_empty() || owner == &entry.user_id,
+                "任务与会话账号归属不一致，请先在天工核对"
+            );
+            if task.scenario_id != "default" {
+                ensure!(
+                    task.scenario_owner
+                        .as_ref()
+                        .is_some_and(
+                            |project_owner| project_owner.is_empty() || project_owner == owner
+                        ),
+                    "任务与项目账号归属不一致，请先在天工核对"
+                );
+            }
+        }
         if entry.title.is_empty() {
             entry.title = task.title.clone();
         }
@@ -287,7 +357,10 @@ fn enrich(
             }
         }
         if let Some(id) = project.get("id").and_then(Value::as_str) {
-            ensure!(id == entry.project_id, "会话记录的项目身份不一致");
+            ensure!(
+                id == entry.project_id || (entry.project_id == "default" && id == "0"),
+                "会话记录的项目身份不一致"
+            );
         }
     }
     if directories.is_empty() && !entry.project_id.is_empty() {
@@ -476,6 +549,7 @@ pub(super) fn change_owner(
         params![to, entry.session_id, from],
     )?;
     ensure!(changed == 1, "会话归属已变化，未修改历史");
+    move_native_owners(connection, entry, from, to)?;
     move_memory(connection, entry, from, to, keys)
 }
 
@@ -490,5 +564,207 @@ pub(super) fn restore_owner(
         params![to, entry.session_id, entry.user_id],
     )?;
     ensure!(changed == 1, "会话归属已变化，未撤销历史迁移");
+    move_native_owners(connection, entry, GATEWAY_USER_ID, to)?;
     move_memory(connection, entry, GATEWAY_USER_ID, to, keys)
+}
+
+fn move_native_owners(
+    connection: &Connection,
+    entry: &HistoryEntry,
+    from: &str,
+    to: &str,
+) -> Result<()> {
+    if columns(connection, "work_task_runs")?.is_empty() {
+        return Ok(());
+    }
+    let other_owner: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM work_task_runs WHERE session_id=?1 AND owner NOT IN (?2,?3))",
+        params![entry.session_id, from, to],
+        |row| row.get(0),
+    )?;
+    ensure!(!other_owner, "会话运行记录属于其他账号，未修改归属");
+    // These are completed, fully synced routing records, not replayable model
+    // requests. Keep request_json/run_json and all original event IDs intact.
+    connection.execute(
+        "UPDATE work_task_runs SET owner=?1 WHERE session_id=?2 AND owner=?3",
+        params![to, entry.session_id, from],
+    )?;
+    Ok(())
+}
+
+/// Copy only a project's metadata shell. Never move its shared directory or
+/// retag the source project, other sessions, or agent definitions.
+fn copy_project(connection: &Connection, source: &str) -> Result<String> {
+    let mut names: Vec<_> = columns(connection, "scenarios")?.into_keys().collect();
+    names.sort();
+    let quoted = names
+        .iter()
+        .map(|name| format!("\"{}\"", name.replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(",");
+    let values = connection
+        .query_row(
+            &format!("SELECT {quoted} FROM scenarios WHERE scenario_id=?1"),
+            [source],
+            |row| {
+                (0..names.len())
+                    .map(|index| row.get::<_, rusqlite::types::Value>(index))
+                    .collect::<rusqlite::Result<Vec<_>>>()
+            },
+        )
+        .context("迁移会话的原项目已不存在")?;
+    let target = format!("hub-gateway-{}", uuid::Uuid::new_v4());
+    let values = names
+        .iter()
+        .zip(values)
+        .map(|(name, value)| match name.as_str() {
+            "scenario_id" => rusqlite::types::Value::Text(target.clone()),
+            "owner_id" => rusqlite::types::Value::Text(GATEWAY_USER_ID.into()),
+            _ => value,
+        });
+    connection.execute(
+        &format!(
+            "INSERT INTO scenarios ({quoted}) VALUES ({})",
+            vec!["?"; names.len()].join(",")
+        ),
+        rusqlite::params_from_iter(values),
+    )?;
+    Ok(target)
+}
+
+pub(super) fn move_tasks(
+    connection: &Connection,
+    entry: &HistoryEntry,
+    project_copies: &mut HashMap<String, String>,
+) -> Result<Vec<TaskOwnership>> {
+    if !columns(connection, "tasks")?.contains_key("owner_id") {
+        return Ok(Vec::new());
+    }
+    let mut statement = connection.prepare(
+        "SELECT task_id,scenario_id,owner_id FROM tasks WHERE session_id=?1 ORDER BY task_id",
+    )?;
+    let rows = statement
+        .query_map([&entry.session_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut records = Vec::new();
+    for (task_id, original_scenario_id, original_owner_id) in rows {
+        ensure!(
+            original_owner_id.is_empty() || original_owner_id == entry.user_id,
+            "任务归属已变化，未迁移"
+        );
+        let gateway_scenario_id = if original_scenario_id == "default" {
+            "default".into()
+        } else if let Some(id) = project_copies.get(&original_scenario_id) {
+            id.clone()
+        } else {
+            let id = copy_project(connection, &original_scenario_id)?;
+            project_copies.insert(original_scenario_id.clone(), id.clone());
+            id
+        };
+        ensure!(connection.execute("UPDATE tasks SET owner_id=?1,scenario_id=?2 WHERE task_id=?3 AND session_id=?4 AND owner_id=?5 AND scenario_id=?6",
+            params![GATEWAY_USER_ID,gateway_scenario_id,task_id,entry.session_id,original_owner_id,original_scenario_id])? == 1,
+            "任务或项目归属已变化，未迁移");
+        records.push(TaskOwnership {
+            task_id,
+            original_owner_id,
+            original_scenario_id,
+            gateway_scenario_id,
+        });
+    }
+    Ok(records)
+}
+
+pub(super) fn restore_tasks(
+    connection: &Connection,
+    entry: &HistoryEntry,
+    movement: &OwnershipMove,
+) -> Result<()> {
+    if !columns(connection, "tasks")?.contains_key("owner_id") {
+        ensure!(
+            movement.task_ownership.is_empty(),
+            "天工任务结构已变化，未撤销迁移"
+        );
+        return Ok(());
+    }
+    if movement.task_ownership.is_empty() {
+        // A pre-1.1 move did not record project copies. Default-group tasks
+        // can still be restored; a changed non-default project cannot be guessed.
+        let non_default: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM tasks WHERE session_id=?1 AND scenario_id<>'default')",
+            [&entry.session_id],
+            |row| row.get(0),
+        )?;
+        ensure!(
+            !non_default,
+            "此旧版迁移记录缺少新版项目归属，请保留历史并先核对原项目"
+        );
+        connection.execute(
+            "UPDATE tasks SET owner_id=?1 WHERE session_id=?2 AND owner_id IN ('',?3)",
+            params![movement.original_user_id, entry.session_id, entry.user_id],
+        )?;
+        return Ok(());
+    }
+    let recorded: HashSet<_> = movement
+        .task_ownership
+        .iter()
+        .map(|record| record.task_id.as_str())
+        .collect();
+    let current_ids: Vec<String> = connection
+        .prepare("SELECT task_id FROM tasks WHERE session_id=?1")?
+        .query_map([&entry.session_id], |row| row.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    ensure!(
+        current_ids.len() == recorded.len()
+            && current_ids.iter().all(|id| recorded.contains(id.as_str())),
+        "迁移后任务关联已变化，请先核对再恢复原归属"
+    );
+    for record in &movement.task_ownership {
+        let (owner, scenario): (String, String) = connection.query_row(
+            "SELECT owner_id,scenario_id FROM tasks WHERE task_id=?1 AND session_id=?2",
+            params![record.task_id, entry.session_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let already_restored =
+            owner == record.original_owner_id && scenario == record.original_scenario_id;
+        ensure!(
+            already_restored
+                || (owner == GATEWAY_USER_ID && scenario == record.gateway_scenario_id),
+            "任务归属或项目已修改，未覆盖现有改动"
+        );
+        if record.original_scenario_id != "default" {
+            let project_owner: Option<String> = connection
+                .query_row(
+                    "SELECT owner_id FROM scenarios WHERE scenario_id=?1",
+                    [&record.original_scenario_id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            ensure!(
+                project_owner
+                    .as_ref()
+                    .is_some_and(|owner| owner.is_empty() || owner == &movement.original_user_id),
+                "原项目已不存在或已归属其他账号，未恢复"
+            );
+        }
+        if !already_restored {
+            connection.execute(
+                "UPDATE tasks SET owner_id=?1,scenario_id=?2 WHERE task_id=?3 AND session_id=?4",
+                params![
+                    record.original_owner_id,
+                    record.original_scenario_id,
+                    record.task_id,
+                    entry.session_id
+                ],
+            )?;
+        }
+    }
+    // Keep even empty copied projects: the user may have renamed one or added
+    // files while using it. Only the selected tasks change ownership.
+    Ok(())
 }

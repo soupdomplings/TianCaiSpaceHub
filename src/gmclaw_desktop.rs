@@ -2,7 +2,7 @@
 //!
 //! This client only uses the authenticated local DataServer. It does not access
 //! the desktop database, execute models, refresh the renderer, or retry writes.
-use std::{collections::HashSet, path::Path, time::Duration};
+use std::{collections::HashSet, path::Path, sync::Arc, time::Duration};
 
 use anyhow::{Result, bail, ensure};
 use futures_util::StreamExt;
@@ -36,6 +36,9 @@ pub(crate) struct DesktopClient {
     base_url: Url,
     harness_url: Url,
     authorization: HeaderValue,
+    conversation_account: Arc<tokio::sync::OnceCell<Option<String>>>,
+    task_revision: Option<(String, String)>,
+    turn_context: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -51,6 +54,12 @@ pub(crate) struct DesktopTask {
     pub completed_at: Option<String>,
     #[serde(default)]
     pub model_id: Option<String>,
+    #[serde(default)]
+    pub owner_id: Option<String>,
+    #[serde(default)]
+    pub task_work_dir: String,
+    #[serde(default = "empty_extra_data")]
+    pub model_options: Value,
 }
 
 /// Directory metadata also exists for desktop projects that have no tasks.
@@ -122,6 +131,10 @@ pub(crate) struct DesktopMessage {
     #[serde(default)]
     pub files: Vec<Value>,
     #[serde(default)]
+    pub execution: Option<Value>,
+    #[serde(default)]
+    pub response: Option<Value>,
+    #[serde(default)]
     pub created_at: String,
 }
 
@@ -179,6 +192,12 @@ struct TaskRow {
     completed_at: Option<String>,
     #[serde(default)]
     model_id: Option<String>,
+    #[serde(default)]
+    owner_id: Option<String>,
+    #[serde(default)]
+    task_work_dir: Option<String>,
+    #[serde(default = "empty_extra_data")]
+    model_options: Value,
 }
 
 #[derive(Deserialize)]
@@ -201,11 +220,25 @@ struct WriteStatus {
 impl DesktopClient {
     /// Exact task-scoped catalog used by the native harness. Contains local
     /// authentication fields: callers may only expose whitelisted metadata.
-    pub(crate) async fn task_mcp_catalog(&self, agent: &str, user: &str, project: &str) -> Result<Vec<Value>> {
+    pub(crate) async fn task_mcp_catalog(
+        &self,
+        agent: &str,
+        user: &str,
+        project: &str,
+    ) -> Result<Vec<Value>> {
         validate_id(agent)?;
         let query = [("user_id", user.into()), ("project_id", project.into())];
-        let value = self.request_json(Method::GET, &["data", "mcp", "catalog", agent],
-            Some(&query), None, MAX_MCP_BYTES, false).await?.unwrap_or(Value::Null);
+        let value = self
+            .request_json(
+                Method::GET,
+                &["data", "mcp", "catalog", agent],
+                Some(&query),
+                None,
+                MAX_MCP_BYTES,
+                false,
+            )
+            .await?
+            .unwrap_or(Value::Null);
         let catalog = value.get("catalog").unwrap_or(&value);
         match catalog {
             Value::Array(rows) => Ok(rows.clone()),
@@ -331,7 +364,115 @@ impl DesktopClient {
                 .map_err(|_| anyhow::anyhow!("天工桌面本地地址无效"))?,
             harness_url: harness,
             authorization,
+            conversation_account: Arc::new(tokio::sync::OnceCell::new()),
+            task_revision: None,
+            turn_context: None,
         })
+    }
+
+    /// The native account header is fixed for this client and its clones.
+    /// Account changes fail in DataServer; writes are never retried as another user.
+    pub(crate) fn with_conversation_account(mut self, owner: &str) -> Result<Self> {
+        validate_text(owner, 256, "天工会话账号身份无效")?;
+        HeaderValue::from_str(owner).map_err(|_| anyhow::anyhow!("天工会话账号身份无效"))?;
+        self.conversation_account = Arc::new(tokio::sync::OnceCell::new_with(Some(Some(
+            owner.to_owned(),
+        ))));
+        Ok(self)
+    }
+
+    pub(crate) async fn conversation_account(&self) -> Result<Option<String>> {
+        let account = self
+            .conversation_account
+            .get_or_try_init(|| async {
+                let mut url = self.base_url.clone();
+                url.set_path("/data/claw/session");
+                let response = self
+                    .http
+                    .get(url)
+                    .header(reqwest::header::AUTHORIZATION, self.authorization.clone())
+                    .send()
+                    .await
+                    .map_err(|_| anyhow::anyhow!("无法读取天工当前会话账号，请检查客户端状态"))?;
+                if response.status() == StatusCode::NOT_FOUND {
+                    return Ok(None);
+                }
+                ensure!(
+                    response.status().is_success(),
+                    "天工当前会话账号无法确认，请重新连接客户端"
+                );
+                let mut bytes = Vec::new();
+                let mut stream = response.bytes_stream();
+                while let Some(chunk) = stream.next().await {
+                    let chunk = chunk.map_err(|_| anyhow::anyhow!("天工会话账号响应中断"))?;
+                    ensure!(
+                        bytes.len() + chunk.len() <= 32 * 1024,
+                        "天工会话账号响应过大"
+                    );
+                    bytes.extend_from_slice(&chunk);
+                }
+                let value: Value = serde_json::from_slice(&bytes)
+                    .map_err(|_| anyhow::anyhow!("天工会话账号格式不兼容"))?;
+                let owner = value["hubConversationOwner"]
+                    .as_str()
+                    .filter(|id| !id.is_empty())
+                    .or_else(|| {
+                        (value["loggedIn"] == true)
+                            .then(|| value["userId"].as_str())
+                            .flatten()
+                    });
+                if let Some(owner) = owner {
+                    validate_text(owner, 256, "天工会话账号身份无效")?;
+                    HeaderValue::from_str(owner)
+                        .map_err(|_| anyhow::anyhow!("天工会话账号身份无效"))?;
+                }
+                Ok::<_, anyhow::Error>(owner.map(str::to_owned))
+            })
+            .await?;
+        Ok(account.clone())
+    }
+
+    /// Editing a past message changes the native conversation revision.
+    /// A missing route is legacy; pending edits cannot receive new writes.
+    pub(crate) async fn current_task_revision(&self, task_id: &str) -> Result<Option<String>> {
+        validate_id(task_id)?;
+        let value = self
+            .request_json(
+                Method::GET,
+                &["data", "tasks", task_id, "revision-state"],
+                None,
+                None,
+                MAX_METADATA_BYTES,
+                true,
+            )
+            .await?;
+        let Some(value) = value else {
+            return Ok(None);
+        };
+        ensure!(
+            value["pending"].as_str().is_none_or(str::is_empty),
+            "天工会话正在编辑重发，请先核对原任务"
+        );
+        let revision = value["revision"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("天工会话版本格式不兼容"))?;
+        validate_id(revision)?;
+        Ok(Some(revision.to_owned()))
+    }
+
+    pub(crate) fn with_task_revision(mut self, task: &str, revision: Option<&str>) -> Result<Self> {
+        validate_id(task)?;
+        self.task_revision = revision.map(|revision| (task.to_owned(), revision.to_owned()));
+        Ok(self)
+    }
+    pub(crate) fn scoped_revision(&self) -> Option<&str> {
+        self.task_revision
+            .as_ref()
+            .map(|(_, revision)| revision.as_str())
+    }
+    pub(crate) fn with_turn_context(mut self, chat_id: &str) -> Self {
+        self.turn_context = Some(chat_id.to_owned());
+        self
     }
     #[cfg(test)]
     pub(crate) fn fixture(base: &str) -> Self {
@@ -344,6 +485,7 @@ impl DesktopClient {
         assert_eq!(url.host_str(), Some("127.0.0.1"));
         client.base_url = url.clone();
         client.harness_url = url;
+        client.conversation_account = Arc::new(tokio::sync::OnceCell::new_with(Some(None)));
         client
     }
 
@@ -582,6 +724,42 @@ impl DesktopClient {
         task_id: &str,
         model_id: &str,
     ) -> Result<DesktopTask> {
+        self.create_task_scoped(work_dir, title, session_id, task_id, model_id, None)
+            .await
+    }
+
+    /// A remote selection names a native project, even when another project
+    /// has the same directory. Never replace it with the first path match.
+    pub(crate) async fn create_task_in_scenario(
+        &self,
+        scenario_id: &str,
+        work_dir: &str,
+        title: &str,
+        session_id: &str,
+        task_id: &str,
+        model_id: &str,
+    ) -> Result<DesktopTask> {
+        validate_id(scenario_id)?;
+        self.create_task_scoped(
+            work_dir,
+            title,
+            session_id,
+            task_id,
+            model_id,
+            Some(scenario_id),
+        )
+        .await
+    }
+
+    async fn create_task_scoped(
+        &self,
+        work_dir: &str,
+        title: &str,
+        session_id: &str,
+        task_id: &str,
+        model_id: &str,
+        scenario_id: Option<&str>,
+    ) -> Result<DesktopTask> {
         validate_id(session_id)?;
         validate_id(task_id)?;
         validate_text(model_id, 256, "天工任务模型标识无效")?;
@@ -603,39 +781,62 @@ impl DesktopClient {
                     .any(|task| { task.task_id == task_id || task.session_id == session_id }),
                 "天工桌面会话身份已存在；请核对之前的创建结果"
             );
-            let scenario = match scenarios.into_iter().find(|scenario| {
-                Path::new(&scenario.work_dir).is_absolute()
-                    && project_path_key(&scenario.work_dir) == project_path_key(work_dir)
-            }) {
-                Some(scenario) => scenario,
-                None => {
-                    let scenario_id = format!("tiancaispacehub-{}", Uuid::new_v4());
-                    let folder_name = Path::new(work_dir)
-                        .file_name()
-                        .and_then(|name| name.to_str())
-                        .unwrap_or("IM");
-                    let name = format!("TianCaiSpaceHub · {}", folder_name)
-                        .chars()
-                        .take(128)
-                        .collect::<String>();
-                    let body = json!({
-                        "scenario_id": scenario_id,
-                        "name": name,
-                        "work_dir": work_dir,
-                    });
-                    let scenario: Scenario = self
-                        .required_json(
-                            Method::POST,
-                            &["data", "scenarios"],
-                            Some(body),
-                            MAX_METADATA_BYTES,
-                        )
-                        .await?;
-                    ensure!(
-                        scenario.scenario_id == scenario_id && scenario.work_dir == work_dir,
-                        "天工桌面返回的项目身份不匹配；请核对创建结果"
-                    );
-                    scenario
+            let scenario = if let Some(id) = scenario_id {
+                let scenario = scenarios
+                    .into_iter()
+                    .find(|scenario| scenario.scenario_id == id)
+                    .ok_or_else(|| anyhow::anyhow!("所选天工项目已不存在，请重新选择"))?;
+                let current_path = if scenario.work_dir.is_empty() && matches!(id, "default" | "0")
+                {
+                    crate::gmclaw_config::native_config_path()
+                        .parent()
+                        .unwrap_or_else(|| Path::new("."))
+                        .join("workspace")
+                        .to_string_lossy()
+                        .into_owned()
+                } else {
+                    scenario.work_dir.clone()
+                };
+                ensure!(
+                    project_path_key(&current_path) == project_path_key(work_dir),
+                    "所选天工项目目录已变化，请重新选择；本次未创建任务"
+                );
+                scenario
+            } else {
+                match scenarios.into_iter().find(|scenario| {
+                    Path::new(&scenario.work_dir).is_absolute()
+                        && project_path_key(&scenario.work_dir) == project_path_key(work_dir)
+                }) {
+                    Some(scenario) => scenario,
+                    None => {
+                        let scenario_id = format!("tiancaispacehub-{}", Uuid::new_v4());
+                        let folder_name = Path::new(work_dir)
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .unwrap_or("IM");
+                        let name = format!("TianCaiSpaceHub · {}", folder_name)
+                            .chars()
+                            .take(128)
+                            .collect::<String>();
+                        let body = json!({
+                            "scenario_id": scenario_id,
+                            "name": name,
+                            "work_dir": work_dir,
+                        });
+                        let scenario: Scenario = self
+                            .required_json(
+                                Method::POST,
+                                &["data", "scenarios"],
+                                Some(body),
+                                MAX_METADATA_BYTES,
+                            )
+                            .await?;
+                        ensure!(
+                            scenario.scenario_id == scenario_id && scenario.work_dir == work_dir,
+                            "天工桌面返回的项目身份不匹配；请核对创建结果"
+                        );
+                        scenario
+                    }
                 }
             };
             validate_id(&scenario.scenario_id)?;
@@ -800,7 +1001,8 @@ impl DesktopClient {
         content: &str,
         thinking_steps: &[Value],
     ) -> Result<i64> {
-        self.append_message_with_files(task_id, role, content, thinking_steps, &[]).await
+        self.append_message_with_files(task_id, role, content, thinking_steps, &[])
+            .await
     }
 
     /// File references are generated from this machine's accepted uploads or
@@ -843,7 +1045,8 @@ impl DesktopClient {
         content: &str,
         thinking_steps: &[Value],
     ) -> Result<()> {
-        self.update_message_files(task_id, message_id, content, thinking_steps, None).await
+        self.update_message_files(task_id, message_id, content, thinking_steps, None)
+            .await
     }
 
     pub(crate) async fn update_message_with_files(
@@ -854,7 +1057,8 @@ impl DesktopClient {
         thinking_steps: &[Value],
         files: &[Value],
     ) -> Result<()> {
-        self.update_message_files(task_id, message_id, content, thinking_steps, Some(files)).await
+        self.update_message_files(task_id, message_id, content, thinking_steps, Some(files))
+            .await
     }
 
     async fn update_message_files(
@@ -869,7 +1073,9 @@ impl DesktopClient {
         ensure!(message_id > 0, "天工桌面消息身份无效");
         ensure!(content.len() <= 4 * 1024 * 1024, "天工桌面消息超过保存范围");
         let mut body = json!({"content":content,"thinking_steps":thinking_steps});
-        if let Some(files) = files { body["files"] = json!(files); }
+        if let Some(files) = files {
+            body["files"] = json!(files);
+        }
         let result: WriteStatus = self
             .required_json(
                 Method::PUT,
@@ -974,7 +1180,7 @@ impl DesktopClient {
         method: Method,
         path: &[&str],
         query: Option<&[(&str, String)]>,
-        body: Option<Value>,
+        mut body: Option<Value>,
         max_bytes: usize,
         allow_not_found: bool,
     ) -> Result<Option<Value>> {
@@ -991,6 +1197,32 @@ impl DesktopClient {
             .request(method, url)
             .header(reqwest::header::AUTHORIZATION, self.authorization.clone())
             .header(reqwest::header::ACCEPT, "application/json");
+        if path.first() == Some(&"data")
+            && path.get(1).is_some_and(|part| {
+                matches!(
+                    *part,
+                    "tasks" | "scenarios" | "sessions" | "skill-invocations"
+                ) || (*part == "messages" && path.get(2) == Some(&"search"))
+                    || (*part == "usage" && path.get(2) == Some(&"stats"))
+            })
+            && let Some(owner) = self.conversation_account().await?
+        {
+            request = request.header("X-Tiangong-Account", owner);
+        }
+        if let (Some((task, revision)), Some(body)) = (&self.task_revision, body.as_mut())
+            && path.get(1) == Some(&"tasks")
+            && path.get(2) == Some(&task.as_str())
+            && path.get(3) == Some(&"messages")
+        {
+            body["conversation_revision"] = revision.as_str().into();
+        }
+        if let (Some(chat_id), Some(body)) = (&self.turn_context, body.as_mut())
+            && path.get(1) == Some(&"tasks")
+            && path.get(3) == Some(&"messages")
+            && body["role"] == "user"
+        {
+            body["turn_context"] = json!({"chat_id":chat_id});
+        }
         if let Some(body) = body {
             let bytes = serde_json::to_vec(&body)
                 .map_err(|_| anyhow::anyhow!("天工桌面保存内容格式无效"))?;
@@ -1159,17 +1391,25 @@ fn project_path_key_for_platform(value: &str, windows: bool) -> String {
 }
 
 fn task_from_row(scenario: &Scenario, row: TaskRow) -> DesktopTask {
+    let task_work_dir = row.task_work_dir.unwrap_or_default();
     DesktopTask {
         task_id: row.task_id,
         session_id: row.session_id,
         scenario_id: row.scenario_id,
         scenario_name: scenario.name.clone(),
-        work_dir: scenario.work_dir.clone(),
+        work_dir: if scenario.scenario_id == "default" && !task_work_dir.is_empty() {
+            task_work_dir.clone()
+        } else {
+            scenario.work_dir.clone()
+        },
         title: row.title,
         created_at: row.created_at,
         updated_at: row.updated_at,
         completed_at: row.completed_at,
         model_id: row.model_id,
+        owner_id: row.owner_id,
+        task_work_dir,
+        model_options: row.model_options,
     }
 }
 
@@ -1255,6 +1495,195 @@ fn metadata_update_body(changes: &Value) -> Result<Map<String, Value>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn work_v110_account_scope_is_fixed_and_never_follows_account_switch() {
+        use axum::{Json, Router, http::HeaderMap, routing::get};
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        let changed = Arc::new(AtomicBool::new(false));
+        let reads = Arc::new(AtomicUsize::new(0));
+        let status_reads = reads.clone();
+        let current = changed.clone();
+        let app = Router::new()
+            .route("/data/claw/session", get(move || {let reads=status_reads.clone();async move {
+                reads.fetch_add(1, Ordering::SeqCst);
+                Json(json!({"loggedIn":false,"hubConversationOwner":"ai-gateway","hasAccessToken":false}))
+            }}))
+            .route("/data/scenarios", get(move |headers:HeaderMap| {let changed=current.clone();async move {
+                assert_eq!(headers["x-tiangong-account"], "ai-gateway");
+                if changed.load(Ordering::SeqCst) {(StatusCode::CONFLICT, Json(json!({"error":"account changed"})))}
+                else {(StatusCode::OK, Json(json!({"scenarios":[]})))}
+            }}));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut client =
+            DesktopClient::fixture(&format!("http://{}", listener.local_addr().unwrap()));
+        client.conversation_account = Arc::new(tokio::sync::OnceCell::new());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        assert!(client.list_tasks().await.unwrap().is_empty());
+        assert!(client.clone().list_projects().await.unwrap().is_empty());
+        changed.store(true, Ordering::SeqCst);
+        assert!(client.list_tasks().await.is_err());
+        assert_eq!(reads.load(Ordering::SeqCst), 1);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn work_v110_creation_keeps_selected_scenario_with_shared_directory() {
+        use axum::{
+            Json, Router,
+            extract::State,
+            routing::{get, post},
+        };
+        use std::sync::Mutex;
+        type Fixture = (String, Arc<Mutex<Vec<Value>>>);
+        async fn list(State((path, _)): State<Fixture>) -> Json<Value> {
+            Json(json!({"scenarios":[
+                {"scenario_id":"first-shell","name":"First","work_dir":path,"tasks":[]},
+                {"scenario_id":"chosen-shell","name":"Chosen","work_dir":path,"tasks":[]},
+                {"scenario_id":"default","name":"Default","work_dir":path,"tasks":[]}
+            ]}))
+        }
+        async fn create(
+            State((path, writes)): State<Fixture>,
+            Json(mut body): Json<Value>,
+        ) -> Json<Value> {
+            writes.lock().unwrap().push(body.clone());
+            if body["scenario_id"] == "default" {
+                body["task_work_dir"] = Path::new(&path)
+                    .join("native-task")
+                    .to_string_lossy()
+                    .into_owned()
+                    .into();
+            }
+            Json(body)
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().to_string_lossy().into_owned();
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        let app = Router::new()
+            .route("/data/scenarios", get(list))
+            .route("/data/tasks", post(create))
+            .with_state((path.clone(), writes.clone()));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let client = DesktopClient::fixture(&format!("http://{}", listener.local_addr().unwrap()));
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let task = client
+            .create_task_in_scenario(
+                "chosen-shell",
+                &path,
+                "Chosen",
+                "chosen-session",
+                "chosen-task",
+                "model",
+            )
+            .await
+            .unwrap();
+        assert_eq!(task.scenario_id, "chosen-shell");
+        assert_eq!(task.work_dir, path);
+        let task = client
+            .create_task_in_scenario(
+                "default",
+                &path,
+                "Default",
+                "default-session",
+                "default-task",
+                "model",
+            )
+            .await
+            .unwrap();
+        assert_eq!(task.scenario_id, "default");
+        assert_eq!(
+            Path::new(&task.work_dir),
+            directory.path().join("native-task")
+        );
+        assert!(
+            client
+                .create_task_in_scenario(
+                    "removed",
+                    &path,
+                    "Removed",
+                    "removed-session",
+                    "removed-task",
+                    "model"
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(writes.lock().unwrap().len(), 2);
+        assert_eq!(writes.lock().unwrap()[0]["scenario_id"], "chosen-shell");
+        assert_eq!(writes.lock().unwrap()[1]["scenario_id"], "default");
+        // The original IM directory-only entry retains its existing behavior.
+        assert_eq!(
+            client
+                .create_task(&path, "IM", "im-session", "im-task", "model")
+                .await
+                .unwrap()
+                .scenario_id,
+            "first-shell"
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn work_v110_message_write_keeps_revision_turn_and_native_files() {
+        use axum::{
+            Json, Router,
+            http::HeaderMap,
+            routing::{get, post},
+        };
+        let app = Router::new()
+            .route(
+                "/data/tasks/task/revision-state",
+                get(|| async { Json(json!({"revision":"revision-one","pending":""})) }),
+            )
+            .route(
+                "/data/tasks/task/messages",
+                post(|headers: HeaderMap, Json(body): Json<Value>| async move {
+                    assert_eq!(headers["x-tiangong-account"], "account-a");
+                    assert_eq!(body["conversation_revision"], "revision-one");
+                    assert_eq!(body["turn_context"]["chat_id"], "chat-one");
+                    assert_eq!(body["files"][0]["file_path"], "fixture.txt");
+                    Json(json!({"id":17,"status":"created"}))
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let client = DesktopClient::fixture(&format!("http://{}", listener.local_addr().unwrap()))
+            .with_conversation_account("account-a")
+            .unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let revision = client.current_task_revision("task").await.unwrap();
+        let client = client
+            .with_task_revision("task", revision.as_deref())
+            .unwrap()
+            .with_turn_context("chat-one");
+        assert_eq!(
+            client
+                .append_message_with_files(
+                    "task",
+                    "user",
+                    "hello",
+                    &[],
+                    &[json!({"file_path":"fixture.txt"})]
+                )
+                .await
+                .unwrap(),
+            17
+        );
+        server.abort();
+    }
+
+    #[test]
+    fn work_v110_task_uses_allocated_workspace_and_preserves_owner_and_parameters() {
+        let list:ScenarioList=serde_json::from_value(json!({"scenarios":[{
+            "scenario_id":"default","name":"任务","work_dir":"C:/fixture/shared",
+            "tasks":[{"task_id":"task","session_id":"session","scenario_id":"default","title":"native",
+                "owner_id":"account-a","task_work_dir":"C:/fixture/shared/task-one","model_id":"model-one",
+                "model_options":{"model-one":{"temperature":0.7},"model-two":{"temperature":0.1}}}]}]})).unwrap();
+        let tasks = flatten_tasks(list.scenarios).unwrap();
+        assert_eq!(tasks[0].work_dir, "C:/fixture/shared/task-one");
+        assert_eq!(tasks[0].owner_id.as_deref(), Some("account-a"));
+        assert_eq!(tasks[0].model_options["model-one"]["temperature"], 0.7);
+    }
 
     #[tokio::test]
     async fn work_background_run_guard_uses_capabilities_and_rejects_uncertain_state() {

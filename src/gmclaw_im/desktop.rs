@@ -3,7 +3,7 @@ use super::*;
 use crate::gmclaw_desktop::{
     DesktopClient, DesktopSessionEvent, DesktopSessionMetadata, DesktopTask,
 };
-use crate::gmclaw_executor::MAX_SESSION_STEPS;
+use crate::gmclaw_executor::{GmClawNativeContext, MAX_SESSION_STEPS};
 use anyhow::Context;
 use serde_json::json;
 use std::{
@@ -25,6 +25,8 @@ pub(super) struct DesktopContext {
     pub project: GmClawProject,
     pub model_name: String,
     pub max_steps: u32,
+    #[serde(default)]
+    pub native: GmClawNativeContext,
     // IDs come only from this Hub's confirmed official system-message insert.
     // Keep display ownership separate from message content and task execution.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -212,11 +214,16 @@ pub(super) async fn register(
         .context("所选天工模型已不存在")?
         .1;
     let task_id = format!("tiancaispacehub-{}", uuid::Uuid::new_v4());
+    let owner = client
+        .conversation_account()
+        .await?
+        .unwrap_or_else(|| IM_USER_ID.into());
     session.desktop = Some(DesktopContext {
         task_id: task_id.clone(),
-        user_id: IM_USER_ID.into(),
+        user_id: owner.clone(),
         model_name: model_name.clone(),
         max_steps: config.max_steps,
+        native: GmClawNativeContext::default(),
         owned_reply_ids: Vec::new(),
         project: GmClawProject {
             id: format!("pending-{}", session.id),
@@ -235,12 +242,18 @@ pub(super) async fn register(
         .await?;
     let project = project_for(&task, &session.project_path);
     let metadata = new_session_metadata(session, &project, &model_name, config.max_steps);
+    let native = native_context(
+        &task,
+        &metadata,
+        client.current_task_revision(&task_id).await?,
+    );
     session.desktop = Some(DesktopContext {
         task_id,
-        user_id: IM_USER_ID.into(),
+        user_id: owner,
         project,
         model_name,
         max_steps: config.max_steps,
+        native,
         owned_reply_ids: Vec::new(),
     });
     client.create_session_metadata(&metadata).await?;
@@ -256,12 +269,40 @@ fn new_session_metadata(
     DesktopSessionMetadata {
         session_id: session.id.clone(),
         title: session.title.clone(),
-        user_id: IM_USER_ID.into(),
+        user_id: session
+            .desktop
+            .as_ref()
+            .map(|context| context.user_id.clone())
+            .unwrap_or_else(|| IM_USER_ID.into()),
         model_name: model_name.into(),
         project_id: project.id.clone(),
         max_steps,
         extra_data: json!({"desktop":true,"project":project}),
         ..Default::default()
+    }
+}
+
+fn native_context(
+    task: &DesktopTask,
+    metadata: &DesktopSessionMetadata,
+    revision: Option<String>,
+) -> GmClawNativeContext {
+    GmClawNativeContext {
+        task_id: task.task_id.clone(),
+        agent_id: if metadata.agent_id.is_empty() {
+            "desktop-orchestration".into()
+        } else {
+            metadata.agent_id.clone()
+        },
+        model_options: task
+            .model_id
+            .as_deref()
+            .and_then(|model| task.model_options.get(model))
+            .cloned()
+            .unwrap_or_else(|| json!({})),
+        conversation_revision: revision,
+        task_workspace_id: (task.scenario_id == "default" && !task.task_work_dir.is_empty())
+            .then(|| task.task_id.clone()),
     }
 }
 
@@ -414,6 +455,9 @@ pub(super) async fn restore(
             project.id = metadata.project_id.clone();
         }
     }
+    if !task.task_work_dir.is_empty() && task.scenario_id == "default" {
+        project.path = task.work_dir.clone();
+    }
     let user_id = restored_user_id(metadata.as_ref(), link.as_ref());
     let max_steps = metadata
         .as_ref()
@@ -437,6 +481,14 @@ pub(super) async fn restore(
     if task.model_id.as_deref() == Some("") {
         client.bind_task_model(&task, &model_id).await?;
     }
+    let revision = client.current_task_revision(&task.task_id).await?;
+    let native = native_context(
+        &task,
+        metadata
+            .as_ref()
+            .unwrap_or(&DesktopSessionMetadata::default()),
+        revision,
+    );
     let restored = Session {
         id: task.session_id,
         title: task.title,
@@ -451,6 +503,7 @@ pub(super) async fn restore(
             project,
             model_name,
             max_steps,
+            native,
             owned_reply_ids,
         }),
     };
@@ -526,7 +579,7 @@ pub(super) async fn validate_live(
     client: &DesktopClient,
     session: &Session,
     approving: bool,
-) -> Result<()> {
+) -> Result<DesktopClient> {
     let context = session
         .desktop
         .as_ref()
@@ -562,8 +615,28 @@ pub(super) async fn validate_live(
         metadata = checked_idle(client, metadata).await?;
     }
     ensure!(
-        metadata.user_id == context.user_id && metadata.project_id == context.project.id,
+        metadata.user_id == context.user_id
+            && metadata.project_id == context.project.id
+            && (context.native.agent_id.is_empty()
+                || metadata.agent_id == context.native.agent_id
+                || (metadata.agent_id.is_empty()
+                    && context.native.agent_id == "desktop-orchestration")),
         "天工会话记忆身份已变化，请退出当前会话并重新选择"
+    );
+    let revision = client.current_task_revision(&task.task_id).await?;
+    let current_native = native_context(&task, &metadata, revision.clone());
+    ensure!(
+        context
+            .native
+            .conversation_revision
+            .as_ref()
+            .is_none_or(|old| Some(old) == revision.as_ref())
+            && (context.native.model_options.is_null()
+                || context.native.model_options == current_native.model_options)
+            && (task.work_dir.is_empty()
+                || crate::gmclaw_desktop::project_path_key(&task.work_dir)
+                    == crate::gmclaw_desktop::project_path_key(&context.project.path)),
+        "天工会话的版本、模型参数或工作目录已变化，请重新恢复会话；本次未提交任务"
     );
     if task.model_id.as_deref() == Some("") {
         client
@@ -573,7 +646,9 @@ pub(super) async fn validate_live(
             )
             .await?;
     }
-    Ok(())
+    client
+        .clone()
+        .with_task_revision(&task.task_id, revision.as_deref())
 }
 
 /// The native renderer aborts its SSE on `over`, before Harness writes the
@@ -718,6 +793,42 @@ mod recovery_tests {
             metadata.extra_data,
             json!({"desktop":true,"project":project})
         );
+    }
+
+    #[test]
+    fn work_v110_registered_metadata_preserves_native_account_and_agent_context() {
+        let config = GmClawBridgeConfig::default();
+        let mut session = Session::new(&config, "fixture-project-path".into());
+        let project = GmClawProject {
+            id: "project".into(),
+            name: "Project".into(),
+            path: session.project_path.clone(),
+        };
+        session.desktop = Some(DesktopContext {
+            task_id: "task".into(),
+            user_id: "account-a".into(),
+            project: project.clone(),
+            model_name: "Model".into(),
+            max_steps: 30,
+            owned_reply_ids: Vec::new(),
+            native: GmClawNativeContext::default(),
+        });
+        let metadata = new_session_metadata(&session, &project, "Model", 30);
+        assert_eq!(metadata.user_id, "account-a");
+        let task:DesktopTask=serde_json::from_value(json!({"task_id":"task","session_id":session.id,"scenario_id":"default",
+            "scenario_name":"任务","work_dir":"C:/fixture/task","task_work_dir":"C:/fixture/task","title":"Native","created_at":"","updated_at":"",
+            "completed_at":null,"model_id":"model-a","model_options":{"model-a":{"temperature":0.8},"other":{"temperature":0.2}}})).unwrap();
+        let native = native_context(
+            &task,
+            &DesktopSessionMetadata {
+                agent_id: "native-agent".into(),
+                ..metadata
+            },
+            Some("revision-a".into()),
+        );
+        assert_eq!(native.agent_id, "native-agent");
+        assert_eq!(native.model_options, json!({"temperature":0.8}));
+        assert_eq!(native.task_workspace_id.as_deref(), Some("task"));
     }
 
     #[test]

@@ -60,6 +60,14 @@ impl Fixture {
         Connection::open(&self.database).unwrap()
     }
 
+    fn work_110(&self) {
+        self.db().execute_batch("ALTER TABLE tasks ADD COLUMN owner_id TEXT NOT NULL DEFAULT '';
+          ALTER TABLE tasks ADD COLUMN task_work_dir TEXT DEFAULT NULL;
+          ALTER TABLE scenarios ADD COLUMN owner_id TEXT NOT NULL DEFAULT '';
+          ALTER TABLE scenarios ADD COLUMN pinned_at TEXT;
+          UPDATE tasks SET owner_id=coalesce((SELECT user_id FROM sessions WHERE sessions.session_id=tasks.session_id),'');").unwrap();
+    }
+
     fn add(&self, session: &str, owner: &str, project: &str, scenario: &str, work: &Path) {
         let task = format!("task-{session}");
         let db = self.db();
@@ -644,6 +652,337 @@ fn unknown_schema_missing_database_and_illegal_paths_never_create_or_rebuild_a_d
                 .get::<_, i64>(0))
             .unwrap(),
         1
+    );
+}
+
+#[test]
+fn work_110_default_task_owner_follows_session_and_restores_without_rewriting_content() {
+    let fixture = Fixture::new();
+    fixture.add_default("chosen", "official-a");
+    fixture.add_default("unselected", "official-a");
+    fixture.add_default("other", "official-b");
+    fixture.work_110();
+    fixture.move_one("chosen", "official-a").unwrap();
+    let db = fixture.db();
+    let owners: Vec<(String, String)> = db
+        .prepare("SELECT session_id,owner_id FROM tasks ORDER BY session_id")
+        .unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(
+        owners,
+        vec![
+            ("chosen".into(), GATEWAY_USER_ID.into()),
+            ("other".into(), "official-b".into()),
+            ("unselected".into(), "official-a".into())
+        ]
+    );
+    assert_eq!(fixture.owner("chosen"), GATEWAY_USER_ID);
+    fixture.restore_one("chosen", GATEWAY_USER_ID).unwrap();
+    assert_eq!(fixture.owner("chosen"), "official-a");
+    assert_eq!(
+        db.query_row(
+            "SELECT owner_id FROM tasks WHERE session_id='chosen'",
+            [],
+            |row| row.get::<_, String>(0)
+        )
+        .unwrap(),
+        "official-a"
+    );
+    assert_eq!(
+        db.query_row(
+            "SELECT content FROM task_messages WHERE task_id='task-chosen'",
+            [],
+            |row| row.get::<_, String>(0)
+        )
+        .unwrap(),
+        "BODY-MUST-STAY"
+    );
+}
+
+#[test]
+fn work_110_selected_project_tasks_use_a_shared_copy_and_restore_original_project() {
+    let fixture = Fixture::new();
+    let db = fixture.db();
+    db.execute(
+        "INSERT INTO scenarios(scenario_id,name,work_dir) VALUES('source-project','原项目',?1)",
+        [fixture.workspace.to_str().unwrap()],
+    )
+    .unwrap();
+    for id in ["chosen-a", "chosen-b", "unselected"] {
+        fixture.add(
+            id,
+            "official-a",
+            "source-project",
+            "source-project",
+            &fixture.workspace,
+        );
+    }
+    fixture.work_110();
+    db.execute("UPDATE scenarios SET owner_id='official-a',pinned_at='keep-pinned' WHERE scenario_id='source-project'",[]).unwrap();
+    move_at(
+        &fixture.database,
+        &fixture.config,
+        &MoveRequest {
+            sessions: vec![
+                selection("chosen-a", "official-a"),
+                selection("chosen-b", "official-a"),
+            ],
+        },
+    )
+    .unwrap();
+    let copied: String = db
+        .query_row(
+            "SELECT scenario_id FROM tasks WHERE session_id='chosen-a'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_ne!(copied, "source-project");
+    let copied_count: i64 = db
+        .query_row(
+            "SELECT count(*) FROM tasks WHERE scenario_id=?1 AND owner_id='ai-gateway'",
+            [&copied],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(copied_count, 2);
+    assert_eq!(
+        db.query_row(
+            "SELECT owner_id FROM scenarios WHERE scenario_id='source-project'",
+            [],
+            |row| row.get::<_, String>(0)
+        )
+        .unwrap(),
+        "official-a"
+    );
+    assert_eq!(
+        db.query_row(
+            "SELECT scenario_id FROM tasks WHERE session_id='unselected'",
+            [],
+            |row| row.get::<_, String>(0)
+        )
+        .unwrap(),
+        "source-project"
+    );
+    assert_eq!(
+        db.query_row(
+            "SELECT pinned_at FROM scenarios WHERE scenario_id=?1",
+            [&copied],
+            |row| row.get::<_, String>(0)
+        )
+        .unwrap(),
+        "keep-pinned"
+    );
+    let listed = list_at(&fixture.database, &fixture.config).unwrap();
+    assert!(
+        listed
+            .entries
+            .iter()
+            .filter(|entry| entry.is_gateway)
+            .all(|entry| entry.can_restore && entry.project_id == "source-project")
+    );
+    fixture.restore_one("chosen-a", GATEWAY_USER_ID).unwrap();
+    assert_eq!(
+        db.query_row(
+            "SELECT scenario_id FROM tasks WHERE session_id='chosen-a'",
+            [],
+            |row| row.get::<_, String>(0)
+        )
+        .unwrap(),
+        "source-project"
+    );
+    assert_eq!(
+        db.query_row(
+            "SELECT scenario_id FROM tasks WHERE session_id='chosen-b'",
+            [],
+            |row| row.get::<_, String>(0)
+        )
+        .unwrap(),
+        copied
+    );
+    assert_eq!(
+        db.query_row(
+            "SELECT agent_id||':'||project_id FROM sessions WHERE session_id='chosen-a'",
+            [],
+            |row| row.get::<_, String>(0)
+        )
+        .unwrap(),
+        "desktop-orchestration:source-project"
+    );
+}
+
+#[test]
+fn work_110_task_workspace_is_used_for_memory_and_attachments_remain_in_place() {
+    let fixture = Fixture::new();
+    let task_work = fixture.workspace.join("tasks/task-isolated");
+    fs::create_dir_all(&task_work).unwrap();
+    fixture.add("isolated", "official-a", "0", "default", &task_work);
+    fixture.work_110();
+    fixture
+        .db()
+        .execute(
+            "UPDATE tasks SET task_work_dir=?1 WHERE session_id='isolated'",
+            [task_work.to_str().unwrap()],
+        )
+        .unwrap();
+    let image = task_work.join(".tiangong/memory/images/original.png");
+    fs::create_dir_all(image.parent().unwrap()).unwrap();
+    fs::write(&image, b"SYNTHETIC-IMAGE").unwrap();
+    let list = list_at(&fixture.database, &fixture.config).unwrap();
+    assert!(list.entries[0].can_move);
+    assert_eq!(
+        memory::path_key(Path::new(&list.entries[0].work_dir)),
+        memory::path_key(&task_work)
+    );
+    fixture.move_one("isolated", "official-a").unwrap();
+    assert!(
+        fixture
+            .file_at(&task_work, "isolated", GATEWAY_USER_ID, "0")
+            .is_file()
+    );
+    assert_eq!(fs::read(&image).unwrap(), b"SYNTHETIC-IMAGE");
+    fixture.restore_one("isolated", GATEWAY_USER_ID).unwrap();
+    assert!(
+        fixture
+            .file_at(&task_work, "isolated", "official-a", "0")
+            .is_file()
+    );
+}
+
+#[test]
+fn work_110_mismatched_owner_and_changed_project_do_not_modify_other_accounts() {
+    let fixture = Fixture::new();
+    fixture.add_default("chosen", "official-a");
+    fixture.work_110();
+    fixture
+        .db()
+        .execute("UPDATE tasks SET owner_id='official-b'", [])
+        .unwrap();
+    assert!(fixture.move_one("chosen", "official-a").is_err());
+    assert_eq!(fixture.owner("chosen"), "official-a");
+    fixture
+        .db()
+        .execute("UPDATE tasks SET owner_id='official-a'", [])
+        .unwrap();
+    fixture.move_one("chosen", "official-a").unwrap();
+    fixture
+        .db()
+        .execute("UPDATE tasks SET owner_id='official-b'", [])
+        .unwrap();
+    assert!(fixture.restore_one("chosen", GATEWAY_USER_ID).is_err());
+    assert_eq!(fixture.owner("chosen"), GATEWAY_USER_ID);
+    assert_eq!(
+        fixture
+            .db()
+            .query_row("SELECT owner_id FROM tasks", [], |row| row
+                .get::<_, String>(0))
+            .unwrap(),
+        "official-b"
+    );
+}
+
+#[test]
+fn work_110_partial_account_schema_is_reported_without_upgrading_it() {
+    let fixture = Fixture::new();
+    fixture.add_default("chosen", "official-a");
+    fixture
+        .db()
+        .execute(
+            "ALTER TABLE tasks ADD COLUMN owner_id TEXT NOT NULL DEFAULT ''",
+            [],
+        )
+        .unwrap();
+    assert!(list_at(&fixture.database, &fixture.config).is_err());
+    assert!(fixture.move_one("chosen", "official-a").is_err());
+    assert_eq!(fixture.owner("chosen"), "official-a");
+    assert_eq!(
+        fixture
+            .db()
+            .query_row(
+                "SELECT count(*) FROM pragma_table_info('scenarios') WHERE name='owner_id'",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn old_ownership_ledger_is_read_but_new_writes_use_the_account_aware_version() {
+    let fixture = Fixture::new();
+    fixture.add_default("chosen", "local");
+    fixture.move_one("chosen", "local").unwrap();
+    let path = ledger_path(&fixture.config);
+    let mut old: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(old["version"], 2);
+    old["version"] = json!(1);
+    old["moves"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("taskOwnership");
+    fs::write(&path, serde_json::to_vec(&old).unwrap()).unwrap();
+    assert!(list_at(&fixture.database, &fixture.config).unwrap().entries[0].can_restore);
+    fixture.restore_one("chosen", GATEWAY_USER_ID).unwrap();
+    let current: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(current["version"], 2);
+    assert_eq!(fixture.owner("chosen"), "local");
+}
+
+#[test]
+fn work_110_native_runs_and_edit_heads_must_be_idle_and_terminal_owner_is_restored() {
+    for (status, synced, pending) in [
+        ("running", 0, ""),
+        ("completed", 0, ""),
+        ("waiting_confirmation", 0, ""),
+        ("completed", 1, "editing"),
+    ] {
+        let fixture = Fixture::new();
+        fixture.add_default("chosen", "official-a");
+        fixture.work_110();
+        let db = fixture.db();
+        db.execute_batch("CREATE TABLE work_task_runs(task_id TEXT,session_id TEXT,owner TEXT,synced INTEGER,run_json TEXT,request_json TEXT);
+          CREATE TABLE conversation_heads(task_id TEXT PRIMARY KEY,pending TEXT);").unwrap();
+        db.execute("INSERT INTO work_task_runs VALUES('task-chosen','chosen','official-a',?1,?2,'HISTORICAL-REQUEST')",
+            params![synced,json!({"status":status,"prompts":[]}).to_string()]).unwrap();
+        db.execute(
+            "INSERT INTO conversation_heads VALUES('task-chosen',?1)",
+            [pending],
+        )
+        .unwrap();
+        assert!(fixture.move_one("chosen", "official-a").is_err());
+        assert_eq!(fixture.owner("chosen"), "official-a");
+    }
+    let fixture = Fixture::new();
+    fixture.add_default("chosen", "official-a");
+    fixture.work_110();
+    let db = fixture.db();
+    db.execute_batch("CREATE TABLE work_task_runs(task_id TEXT,session_id TEXT,owner TEXT,synced INTEGER,run_json TEXT,request_json TEXT);
+      INSERT INTO work_task_runs VALUES('task-chosen','chosen','official-a',1,'{\"status\":\"completed\",\"prompts\":[]}','HISTORICAL-REQUEST');").unwrap();
+    fixture.move_one("chosen", "official-a").unwrap();
+    assert_eq!(
+        db.query_row("SELECT owner FROM work_task_runs", [], |row| row
+            .get::<_, String>(0))
+            .unwrap(),
+        GATEWAY_USER_ID
+    );
+    assert_eq!(
+        db.query_row("SELECT request_json FROM work_task_runs", [], |row| row
+            .get::<_, String>(
+            0
+        ))
+        .unwrap(),
+        "HISTORICAL-REQUEST"
+    );
+    fixture.restore_one("chosen", GATEWAY_USER_ID).unwrap();
+    assert_eq!(
+        db.query_row("SELECT owner FROM work_task_runs", [], |row| row
+            .get::<_, String>(0))
+            .unwrap(),
+        "official-a"
     );
 }
 

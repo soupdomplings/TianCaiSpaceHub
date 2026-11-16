@@ -39,6 +39,20 @@ App Server 协议依据官方[接口文档](https://learn.chatgpt.com/docs/app-s
 - 停止／审批校验同一 run 和 session，审批还绑定原运行授权身份。子 Agent 的独立确认仍需在天工桌面处理，不把子运行审批误发给主任务；结构化追问能力暂不宣称支持。
 - 旧天工版本缺少完整 run 管理能力时关闭执行、停止和审批能力，已有历史仍通过 DataServer 读取。不能以断开事件订阅冒充真实停止。
 
+### Work 1.1.0 兼容更新
+
+2026-11-16 基于 `main / 27568b5` 只读核对 Work 1.1.0 安装包主进程及 Harness 源码后更新以下原生字段与运行状态。源码已集成，本模块 8 项离线回归与 Windows GUI 测试目标编译通过，统一构建见[V33](../releases/v1.0.33.md)；真实双机和 macOS 尚未验收。
+
+- 原生 DataServer 请求固定当前会话账号头：复用 `/data/claw/session` 的脱敏真实登录状态，增强启动优先读取独立 `hubConversationOwner: ai-gateway`。原任务 `owner_id` 与会话元数据不一致时停止当前操作；账号变化不自动换账号重试，也不另建替代历史。网页新建仍限于实际增强工作区，普通账号已有会话保持原归属。
+- 默认任务使用原生分配的 `task_work_dir`，Harness 同时携带原 `task_id`、`agent_id`、对应模型的 `model_options[model_id]`、`conversation_revision` 及适用的 `project.task_workspace_id`。用户消息写入与执行使用同一 `chat_id`；附件继续回写原生 `files`。编辑重发产生的新版会话 revision 沿原生版本规则处理，不覆盖或重放旧消息。
+- 新建显式 `projectId` 优先于目录，DataServer 按该原场景 ID 创建任务；同目录多个历史项目壳不取首项，没有显式 ID 时目录匹配必须唯一。保存的记忆项目路径沿新任务返回的实际目录，项目 ID 与 `metadata.project_id` 保持一致。执行已有原生 `project_id: default` 会话时，顶层值保留 `default`，仅嵌套 `project.id` 映射为 `0`，与桌面及主进程的默认工作区身份一致。
+- 历史优先沿用旧 `thinking_steps`，为空时读取新版 `execution.blocks` 中的工具／思考块。子 Agent 帧可能沿用主运行的 `run_id/session_id/seq`，必须另识别 `subagent_run_id` 与 `child_session_id`；其序号正常消费，但不把子回复、结束或审批覆盖到主消息。子审批仍提示用户在目标天工处理。
+- 新 `waiting` 状态展示“继续／停止”卡片。继续只向同一原 run 提交 `resume_action: continue`，停止调用原 stop；不会新建一轮任务。该状态在观察开始、流式处理、断线核对和审批回执中均保持为待处理状态，刷新后由原事件恢复。工具审批另核对当前 `pending_calls`，只对仍待处理的原 call ID 提交 `approval_scope: operation`；过期卡片不转成另一项工具执行。
+
+兼容与回滚：账号／revision 路由明确 404 的旧版仍沿旧协议处理；不迁移原生数据库，不改变会话归属或模型配置，不新存运行令牌。停用远程或回退前完成／停止网页任务，保留已发送附件及原生历史；新版原生账号隔离不因回退 Hub 而放宽。关键入口为 `src/gmclaw_desktop.rs`、`src/remote_sessions/tiangong.rs`；增强账号来源由共用主进程适配提供，详见[Work 兼容专题](tiangong-work-compatibility-assessment.md)。
+
+本轮新增四项 `remote_sessions::tiangong::tests::work_v110_*` 合成用例，覆盖原检查点接续／停止与旧工具拒绝、新版历史块、包装子帧隔离及等待卡片、项目 ID 优先与目录歧义；共用 DataServer／IM 另增六项相关用例，含指定同目录项目创建及默认任务独立目录。数据与服务均为临时夹具，不调用真实客户端／模型。定向 rustfmt、本模块 8 项及共用 `gmclaw` 141 项回归通过；两设备桌面 → 网页 → 桌面、真实附件／工具／审批和 Windows／macOS 交叉组合仍待用户验收。
+
 ## 附件与产物
 
 上传字节及关联索引集中在目标端 `<Hub 配置文件名>.remote-files/<会话范围标识>/`。该目录独立于天才搭档临时目录；真正退出和搭档清理不删除已发送附件、原生产物或用户原文件。

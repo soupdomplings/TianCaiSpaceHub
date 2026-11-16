@@ -1,5 +1,13 @@
 # Dumpling-MCP 接入（NVWA）
 
+## 2026-11-16：天工 Work 1.1.0 接入兼容核对
+
+本批只读核对 Windows 1.1.0 安装程序资源。原生 `/data/mcp/connections` 的 GET／POST／PUT／DELETE 及 HTTP 所用 `connect_type=1`、`header_config`、`config_param`、`tools_json`、`status`、`is_connected` 字段仍兼容，现有 Dumpling-MCP 定向 writer 不因版本号改写协议。新版原生区分 `web-mcp:` 与 `authMode=app_login/web_sync` 的官方同步条目；Hub 继续只处理自己登记的独立 HTTP 条目，不接管这些账号同步连接。
+
+新版含运行字段的保存会先关闭原 MCP 连接，再在后续原生调用时按最新配置建立。CRUD 成功、读回一致和重载仅证明配置环节，不代表真实工具调用或续认证已通过。Hub 不为本次核对触发登录、取票、真实 MCP／业务请求或实际配置写入，既有环境、系统保护秘密、接入备份和移除／恢复规则保持。
+
+16 项安装资源静态合同核对通过，脱敏结果在 `target/v1.0.33-tiangong-20261115/model-mcp-contracts.json`。必要的既有 HTTP／受管连接离线回归与本批构建由管理会话统一登记；1.1.0 实际新增、刷新、调用、账号同步隔离及 macOS 仍待用户验收。此核对未新增配置格式、凭据迁移或安装文件变更；回退不自动撤销已有受管连接，按所用版本的显式断开／恢复入口处理。下方历史验证保持各自版本归属。
+
 2026-11-11 当前开发：通用 Skill/MCP 管理隐藏后，Dumpling-MCP 改为左侧独立入口，可见性仍沿用设置开关；不再经“MCP 管理”进入。认证、环境及客户端接入流程保持原实现。天工协助仅在天工 Work 的“接入设置”管理，共享运行端见 [天才搭档](genius-buddy.md)。本轮未打包，真实使用及 macOS 待用户验收；以下旧入口说明保留原阶段归属。
 
 V1.0.6：Dumpling 的已准入真实工具调用可在概览 MCP 分支显示；初始化和工具列表不算调用，结束后延迟暗淡。观测无参数、结果、令牌，不改变原准入、断线等待、到期或不重放语义；未真实调用验收。见[运行图](../gui-runtime-maintenance.zh-CN.md#v106-运行图与-mcp-分支)。

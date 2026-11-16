@@ -7,7 +7,7 @@ use super::{
 };
 use crate::{
     app_state::SharedState,
-    gmclaw_desktop::{DesktopClient, DesktopSessionMetadata, DesktopTask},
+    gmclaw_desktop::{DesktopClient, DesktopMessage, DesktopSessionMetadata, DesktopTask},
     gmclaw_runtime,
 };
 use anyhow::{Context, Result, ensure};
@@ -163,6 +163,13 @@ async fn context(state: &SharedState, session: &str) -> Result<ContextData> {
         .await?
         .context("原会话缺少账号和项目元数据，请先在天工打开该会话")?;
     ensure!(
+        task.owner_id
+            .as_deref()
+            .filter(|id| !id.is_empty())
+            .is_none_or(|owner| owner == metadata.user_id),
+        "天工任务与原会话账号不一致，请先在目标客户端核对"
+    );
+    ensure!(
         !metadata.user_id.is_empty(),
         "无法确认原会话所属账号，未修改归属或创建替代会话"
     );
@@ -171,6 +178,8 @@ async fn context(state: &SharedState, session: &str) -> Result<ContextData> {
         Path::new(&directory).is_absolute() && Path::new(&directory).is_dir(),
         "原会话项目目录不存在，请在目标电脑核对"
     );
+    let revision = desktop.current_task_revision(&task.task_id).await?;
+    let desktop = desktop.with_task_revision(&task.task_id, revision.as_deref())?;
     Ok(ContextData {
         desktop,
         run,
@@ -269,17 +278,17 @@ pub(super) async fn create(state: &SharedState, options: &CreateRequest) -> Resu
         "请先在目标电脑使用天工增强启动，再新建 AI Gateway 会话；普通登录会话仍可远程续聊"
     );
     let (desktop, _) = connection(state).await?;
+    ensure!(
+        desktop
+            .conversation_account()
+            .await?
+            .as_deref()
+            .is_none_or(|owner| owner == crate::tiangong_session_history::GATEWAY_USER_ID),
+        "天工当前仍是普通账号工作区，请先使用增强启动再新建 AI Gateway 会话"
+    );
     let projects = project_rows(&desktop).await?;
-    let project = projects
-        .iter()
-        .find(|p| {
-            options
-                .project_id
-                .as_deref()
-                .is_some_and(|id| p["id"] == id)
-                || options.cwd.as_deref().is_some_and(|cwd| p["path"] == cwd)
-        })
-        .context("请选择目标天工中已有的项目")?;
+    let project = selected_project(&projects, options)?;
+    let scenario_id = project["id"].as_str().context("项目标识无效")?;
     let cwd = project["path"].as_str().context("项目目录无效")?;
     ensure!(
         Path::new(cwd).is_dir(),
@@ -309,13 +318,18 @@ pub(super) async fn create(state: &SharedState, options: &CreateRequest) -> Resu
         .filter(|t| !t.trim().is_empty())
         .unwrap_or("新会话");
     let task = desktop
-        .create_task(cwd, title, &session, &task_id, model)
+        .create_task_in_scenario(scenario_id, cwd, title, &session, &task_id, model)
         .await?;
+    let project_id = if task.scenario_id == "default" {
+        "0".to_owned()
+    } else {
+        task.scenario_id.clone()
+    };
     desktop.create_session_metadata(&DesktopSessionMetadata {
         session_id:session.clone(),title:title.into(),user_id:crate::tiangong_session_history::GATEWAY_USER_ID.into(),
-        project_id:if task.scenario_id == "default" {"0".into()} else {task.scenario_id.clone()},model_name,
+        project_id:project_id.clone(),model_name,
         max_steps:crate::gmclaw_executor::MAX_SESSION_STEPS,
-        extra_data:json!({"desktop":true,"project":{"id":task.scenario_id,"name":task.scenario_name,"path":cwd}}),
+        extra_data:json!({"desktop":true,"project":{"id":project_id,"name":task.scenario_name,"path":directory(&task)}}),
         ..Default::default()
     }).await?;
     state
@@ -324,6 +338,39 @@ pub(super) async fn create(state: &SharedState, options: &CreateRequest) -> Resu
         .await;
     gmclaw_runtime::queue_desktop_refresh(&task_id, &session, None).await;
     Ok(json!({"session":session_row(&task)}))
+}
+fn selected_project<'a>(projects: &'a [Value], options: &CreateRequest) -> Result<&'a Value> {
+    if let Some(id) = options.project_id.as_deref() {
+        return projects
+            .iter()
+            .find(|project| project["id"] == id)
+            .context("所选天工项目已不存在，请重新选择；不会改用同目录的其他项目");
+    }
+    let cwd = options
+        .cwd
+        .as_deref()
+        .context("请选择目标天工中已有的项目")?;
+    let key = crate::gmclaw_desktop::project_path_key(cwd);
+    let mut matches = projects.iter().filter(|project| {
+        project["path"]
+            .as_str()
+            .is_some_and(|path| crate::gmclaw_desktop::project_path_key(path) == key)
+    });
+    let selected = matches
+        .next()
+        .context("所选目录没有对应的天工项目，请重新选择")?;
+    ensure!(
+        matches.next().is_none(),
+        "此目录对应多个天工项目，请明确选择项目后新建会话"
+    );
+    Ok(selected)
+}
+fn native_project_id(project_id: &str) -> &str {
+    if project_id == "default" {
+        "0"
+    } else {
+        project_id
+    }
 }
 pub(super) async fn history(state: &SharedState, scope: &Scope, page: &PageQuery) -> Result<Value> {
     let context = context(state, &scope.session).await?;
@@ -374,13 +421,8 @@ pub(super) async fn history(state: &SharedState, scope: &Scope, page: &PageQuery
         }
         items.push(json!({"id":message.id.to_string(),"role":if message.role == "system" {"assistant"} else {message.role.as_str()},
             "type":"message","text":message.content,"files":attachments}));
-        for (index, step) in message
-            .thinking_steps
-            .as_deref()
-            .unwrap_or_default()
-            .iter()
-            .enumerate()
-        {
+        let steps = history_steps(message);
+        for (index, step) in steps.iter().enumerate() {
             items.push(json!({"id":step["id"].as_str().or_else(||step["call_id"].as_str()).map(str::to_owned).unwrap_or_else(||format!("{}-step-{index}",message.id)),"role":"tool","type":"tool",
                 "text":step["content"].as_str().or_else(||step["result"].as_str()).unwrap_or_default(),"data":sanitize(step)}));
         }
@@ -419,6 +461,22 @@ pub(super) async fn history(state: &SharedState, scope: &Scope, page: &PageQuery
     Ok(
         json!({"items":items,"nextCursor":next,"status":status,"turnId":turn_id,"approvals":approvals,"cursor":snapshot_cursor}),
     )
+}
+fn history_steps(message: &DesktopMessage) -> Vec<Value> {
+    if let Some(steps) = &message.thinking_steps
+        && !steps.is_empty()
+    {
+        return steps.clone();
+    }
+    message
+        .execution
+        .as_ref()
+        .and_then(|execution| execution["blocks"].as_array())
+        .into_iter()
+        .flatten()
+        .filter(|block| matches!(block["kind"].as_str(), Some("tool" | "reasoning")))
+        .cloned()
+        .collect()
 }
 pub(super) async fn send(state: &SharedState, scope: &Scope, input: &TurnRequest) -> Result<Value> {
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
@@ -483,7 +541,7 @@ async fn prepare_turn(
     scope: &Scope,
     input: &TurnRequest,
 ) -> Result<(ContextData, Value, OwnedReply)> {
-    let context = context(state, &scope.session).await?;
+    let mut context = context(state, &scope.session).await?;
     ensure!(
         context.run.active(&scope.session).await?.is_empty(),
         "天工原会话仍在执行或等待审批，请先完成或停止"
@@ -511,6 +569,8 @@ async fn prepare_turn(
         .iter()
         .map(files::native_descriptor)
         .collect::<Vec<_>>();
+    let chat_id = uuid::Uuid::new_v4().to_string();
+    context.desktop = context.desktop.with_turn_context(&chat_id);
     files::mark_sent(state, scope, &input.attachment_ids).await?;
     let user_row = context
         .desktop
@@ -530,18 +590,23 @@ async fn prepare_turn(
         .append_message(&context.task.task_id, "system", "", &[])
         .await
         .map_err(super::unconfirmed)?;
-    let chat_id = uuid::Uuid::new_v4().to_string();
     let original_options = context
-        .metadata
-        .extra_data
-        .get("model_options")
+        .task
+        .model_options
+        .get(model)
         .cloned()
         .unwrap_or_else(|| json!({}));
     let mut body = json!({"session_id":scope.session,"chat_id":chat_id,
-        "user_id":context.metadata.user_id,"agent_id":context.metadata.agent_id,"project_id":context.metadata.project_id,
+        "user_id":context.metadata.user_id,"agent_id":context.metadata.agent_id,"project_id":context.metadata.project_id,"task_id":context.task.task_id,
         "query":input.text,"files":descriptors,"model_id":model,"model_options":original_options,
-        "project":{"id":context.metadata.project_id,"name":context.task.scenario_name,"path":context.directory},
+        "project":{"id":native_project_id(&context.metadata.project_id),"name":context.task.scenario_name,"path":context.directory},
         "max_steps":context.metadata.max_steps,"request_id":input.request_id});
+    if let Some(revision) = context.desktop.scoped_revision() {
+        body["conversation_revision"] = revision.into();
+    }
+    if context.task.scenario_id == "default" && !context.task.task_work_dir.is_empty() {
+        body["project"]["task_workspace_id"] = context.task.task_id.as_str().into();
+    }
     if let Some(mode) = context
         .metadata
         .extra_data
@@ -610,7 +675,7 @@ async fn observe_run(
     if !should_start {
         return Ok(());
     }
-    let status = super::codex::normalize_status(run["status"].as_str().unwrap_or("running"));
+    let status = normalize_status(run["status"].as_str().unwrap_or("running"));
     state
         .remote_sessions
         .publish(
@@ -677,7 +742,15 @@ async fn run_worker(
                 run = current;
                 let status = run["status"].as_str().unwrap_or("unknown");
                 if terminal(status) {
-                    state.remote_sessions.publish(scope,"turn.updated",None,json!({"status":super::codex::normalize_status(status),"turnId":run_id})).await;
+                    state
+                        .remote_sessions
+                        .publish(
+                            scope,
+                            "turn.updated",
+                            None,
+                            json!({"status":normalize_status(status),"turnId":run_id}),
+                        )
+                        .await;
                     break;
                 }
             }
@@ -789,11 +862,19 @@ async fn process_line(
     if line.is_empty() || line.starts_with(':') {
         return Ok(false);
     }
-    let (kind, payload) = line.split_once('|').context("天工事件格式不兼容")?;
+    let (native_kind, payload) = line.split_once('|').context("天工事件格式不兼容")?;
     let data: Value = serde_json::from_str(payload)?;
     let Some(seq) = checked_event(&data, run_id, &scope.session, *after)? else {
         return Ok(false);
     };
+    // Work 1.1 wraps child frames in the parent's run/session/seq identity.
+    // Consume their sequence without treating child text or confirmations as
+    // the parent's reply or approval.
+    let child = ["subagent_run_id", "child_session_id"].iter().any(|key| {
+        data.get(*key)
+            .is_some_and(|value| !value.is_null() && value.as_str() != Some(""))
+    });
+    let kind = if child { "subagent" } else { native_kind };
     if let Some(observed) = owned.as_mut().filter(|o| o.replaying) {
         if seq <= observed.replay_until {
             // An already-running desktop task is replayed only into this
@@ -808,6 +889,9 @@ async fn process_line(
                     }
                 }
                 "confirm" => observed.replay_pending = Some((seq, data.clone())),
+                "run_status" if data["status"] == "waiting" => {
+                    observed.replay_pending = Some((seq, data.clone()))
+                }
                 "run_status" if data["status"] != "waiting_confirmation" => {
                     observed.replay_pending = None
                 }
@@ -817,8 +901,12 @@ async fn process_line(
             if seq >= observed.replay_until {
                 observed.replaying = false;
                 if let Some((pending_seq, pending)) = observed.replay_pending.take() {
-                    publish_confirmation(state, scope, context, run_id, pending_seq, &pending)
-                        .await?;
+                    if pending["status"] == "waiting" {
+                        publish_waiting(state, scope, context, run_id, pending_seq).await;
+                    } else {
+                        publish_confirmation(state, scope, context, run_id, pending_seq, &pending)
+                            .await?;
+                    }
                 }
                 state
                     .remote_sessions
@@ -854,9 +942,12 @@ async fn process_line(
         "confirm"=>{
             publish_confirmation(state,scope,context,run_id,seq,&data).await?;
         }
+        "subagent" if native_kind == "confirm"=>{
+            state.remote_sessions.publish(scope,"error",None,json!({"code":"child_approval_on_desktop","message":"子 Agent 需要确认，请在目标天工窗口处理。"})).await;
+        }
         "run_status"=>{
             let native_status = data["status"].as_str().unwrap_or("unknown");
-            let status = super::codex::normalize_status(native_status);
+            let status = normalize_status(native_status);
             if terminal(native_status) {
                 *after=seq;
                 if let Some(owned) = owned.as_mut() {
@@ -872,6 +963,7 @@ async fn process_line(
                     matches!(&p.source,ApprovalSource::Tiangong {run_id:original,..} if original == run_id).then(||id.clone())).collect::<Vec<_>>()).unwrap_or_default();
                 for id in ids {state.remote_sessions.resolve_approval(scope,&id).await;}
             }
+            if native_status == "waiting" {publish_waiting(state,scope,context,run_id,seq).await;}
             state.remote_sessions.publish(scope,"turn.updated",None,json!({"status":status,"turnId":run_id})).await;
         }
         "think"|"tool_start"|"tool_input"|"tool_end"|"tool_error"|"file_read"|"file_write"|"cmd_end"=>{
@@ -977,6 +1069,25 @@ async fn publish_confirmation(
         .await;
     Ok(())
 }
+async fn publish_waiting(
+    state: &SharedState,
+    scope: &Scope,
+    context: &ContextData,
+    run: &str,
+    seq: u64,
+) {
+    let id = format!("tiangong-{run}-waiting-{seq}");
+    state.remote_sessions.add_approval(scope,id.clone(),json!({"id":id,"type":"approval","title":"任务已暂停",
+        "message":"继续原任务，或停止这次执行？","choices":[{"value":"accept","label":"继续"},{"value":"decline","label":"停止"}]}),
+        ApprovalSource::Tiangong {run_id:run.into(),call_ids:Vec::new(),authorization_identity:context.run.identity.clone()}).await;
+}
+fn normalize_status(status: &str) -> &str {
+    if status == "waiting" {
+        "waiting_approval"
+    } else {
+        super::codex::normalize_status(status)
+    }
+}
 fn terminal(status: &str) -> bool {
     matches!(
         status,
@@ -1041,10 +1152,10 @@ pub(super) async fn stop(
                     scope,
                     "turn.updated",
                     None,
-                    json!({"status":super::codex::normalize_status(status),"turnId":id}),
+                    json!({"status":normalize_status(status),"turnId":id}),
                 )
                 .await;
-            return Ok(json!({"status":super::codex::normalize_status(status)}));
+            return Ok(json!({"status":normalize_status(status)}));
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
         result = context.run.request(Method::GET, id, None).await?;
@@ -1076,33 +1187,179 @@ pub(super) async fn approve(
     );
     let run = context.run.request(Method::GET, run_id, None).await?;
     validate_run(&run, &scope.session, Some(run_id))?;
-    ensure!(
-        run["status"] == "waiting_confirmation",
-        "天工任务已不在等待这项确认，请刷新会话"
-    );
+    let (operation, body) = approval_control(&run, decision, call_ids)?;
+    let result = context
+        .run
+        .request(Method::POST, &format!("{run_id}/{operation}"), Some(body))
+        .await
+        .map_err(super::unconfirmed)?;
+    validate_run(&result, &scope.session, Some(run_id)).map_err(super::unconfirmed)?;
+    state.remote_sessions.resolve_approval(scope, id).await;
+    state.remote_sessions.publish(scope,"turn.updated",None,json!({"status":normalize_status(result["status"].as_str().unwrap_or("running")),"turnId":run_id})).await;
+    Ok(())
+}
+fn approval_control(
+    run: &Value,
+    decision: &ApprovalDecision,
+    call_ids: &[String],
+) -> Result<(&'static str, Value)> {
     let action = match decision.decision.as_str() {
         "accept" => "approve",
         "decline" | "cancel" => "deny",
         _ => anyhow::bail!("确认选项无效"),
     };
-    let result = context
-        .run
-        .request(
-            Method::POST,
-            &format!("{run_id}/resume"),
-            Some(json!({"confirm_action":action,"approved_call_ids":call_ids})),
+    let control = if call_ids.is_empty() {
+        ensure!(
+            run["status"] == "waiting",
+            "原天工任务已不在等待接续，请刷新会话"
+        );
+        if action == "approve" {
+            ("resume", json!({"resume_action":"continue","query":""}))
+        } else {
+            ("stop", json!({}))
+        }
+    } else {
+        ensure!(
+            run["status"] == "waiting_confirmation",
+            "天工任务已不在等待这项确认，请刷新会话"
+        );
+        let current = run["pending_calls"]
+            .as_array()
+            .context("天工未返回当前待确认工具，请刷新任务")?;
+        ensure!(
+            call_ids
+                .iter()
+                .all(|id| current.iter().any(|call| call["call_id"] == *id)),
+            "原工具确认已变化，请刷新任务；本次未提交"
+        );
+        (
+            "resume",
+            json!({"confirm_action":action,"approved_call_ids":call_ids,"approval_scope":"operation"}),
         )
-        .await
-        .map_err(super::unconfirmed)?;
-    validate_run(&result, &scope.session, Some(run_id)).map_err(super::unconfirmed)?;
-    state.remote_sessions.resolve_approval(scope, id).await;
-    state.remote_sessions.publish(scope,"turn.updated",None,json!({"status":super::codex::normalize_status(result["status"].as_str().unwrap_or("running")),"turnId":run_id})).await;
-    Ok(())
+    };
+    Ok(control)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn work_v110_project_selection_keeps_id_and_rejects_ambiguous_directories() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().to_string_lossy().into_owned();
+        let projects = vec![
+            json!({"id":"first-shell","path":path}),
+            json!({"id":"chosen-shell","path":path}),
+        ];
+        let mut options = CreateRequest {
+            project_id: Some("chosen-shell".into()),
+            cwd: Some(path),
+            ..Default::default()
+        };
+        assert_eq!(
+            selected_project(&projects, &options).unwrap()["id"],
+            "chosen-shell"
+        );
+        options.project_id = Some("removed".into());
+        assert!(selected_project(&projects, &options).is_err());
+        options.project_id = None;
+        assert!(selected_project(&projects, &options).is_err());
+        assert_eq!(
+            selected_project(&projects[1..], &options).unwrap()["id"],
+            "chosen-shell"
+        );
+        assert_eq!(native_project_id("default"), "0");
+        assert_eq!(native_project_id("chosen-shell"), "chosen-shell");
+    }
+
+    #[test]
+    fn work_v110_controls_continue_original_checkpoint_and_reject_stale_tool_ids() {
+        let decision = ApprovalDecision {
+            decision: "accept".into(),
+            answers: Value::Null,
+        };
+        let (path, body) = approval_control(&json!({"status":"waiting"}), &decision, &[]).unwrap();
+        assert_eq!(path, "resume");
+        assert_eq!(body, json!({"resume_action":"continue","query":""}));
+        let deny = ApprovalDecision {
+            decision: "decline".into(),
+            answers: Value::Null,
+        };
+        assert_eq!(
+            approval_control(&json!({"status":"waiting"}), &deny, &[])
+                .unwrap()
+                .0,
+            "stop"
+        );
+        let approval =
+            json!({"status":"waiting_confirmation","pending_calls":[{"call_id":"current"}]});
+        assert!(approval_control(&approval, &decision, &["old".into()]).is_err());
+        let (_, body) = approval_control(&approval, &decision, &["current".into()]).unwrap();
+        assert_eq!(body["approval_scope"], "operation");
+    }
+
+    #[test]
+    fn work_v110_history_reads_native_execution_blocks() {
+        let message:DesktopMessage=serde_json::from_value(json!({"id":1,"task_id":"task","role":"system","content":"answer",
+            "thinking_steps":null,"execution":{"version":1,"blocks":[{"id":"tool-one","kind":"tool","content":"done"},{"id":"text-one","kind":"text","content":"answer"}]}})).unwrap();
+        let steps = history_steps(&message);
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0]["id"], "tool-one");
+    }
+
+    #[tokio::test]
+    async fn work_v110_wrapped_child_frames_do_not_replace_parent_or_approve_child() {
+        let (directory, state) = super::super::test_state();
+        let context = context_fixture(directory.path());
+        let scope = Scope::new("tiangong", "session");
+        state.remote_sessions.watch(&scope, None).await;
+        let mut owned = Some(observed(12, 0));
+        let mut after = 0;
+        for (seq, kind, payload) in [
+            (1, "text", json!({"content":"parent"})),
+            (
+                2,
+                "over",
+                json!({"answer":"child","subagent_run_id":"child-run"}),
+            ),
+            (
+                3,
+                "confirm",
+                json!({"pending_calls":[{"call_id":"child-call"}],"child_session_id":"child"}),
+            ),
+            (4, "run_status", json!({"status":"waiting"})),
+        ] {
+            let mut data = payload;
+            data["run_id"] = "run".into();
+            data["session_id"] = "session".into();
+            data["seq"] = seq.into();
+            process_line(
+                &state,
+                &scope,
+                &context,
+                "run",
+                "12",
+                format!("{kind}|{data}").as_bytes(),
+                &mut after,
+                &mut owned,
+            )
+            .await
+            .unwrap();
+        }
+        assert_eq!(owned.unwrap().text, "parent");
+        assert_eq!(after, 4);
+        let (status, _, approvals, _) = state.remote_sessions.snapshot(&scope).await;
+        assert_eq!(status, "waiting_approval");
+        assert_eq!(approvals.len(), 1);
+        assert_eq!(approvals[0]["choices"][0]["label"], "继续");
+        let feeds = state.remote_sessions.feeds.lock().await;
+        assert!(
+            feeds[&scope]
+                .events
+                .iter()
+                .any(|e| e.kind == "error" && e.data["code"] == "child_approval_on_desktop")
+        );
+    }
     #[test]
     fn native_cursor_replay_and_child_run_do_not_duplicate_parent() {
         let event = json!({"run_id":"run-a","session_id":"session-a","seq":4});
@@ -1148,6 +1405,9 @@ mod tests {
                 updated_at: String::new(),
                 completed_at: None,
                 model_id: Some("model".into()),
+                owner_id: Some("original-account".into()),
+                task_work_dir: String::new(),
+                model_options: json!({}),
             },
             metadata: DesktopSessionMetadata {
                 session_id: "session".into(),

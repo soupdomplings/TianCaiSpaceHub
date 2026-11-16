@@ -612,6 +612,7 @@ async function main() {
   const at = process.argv.indexOf('--renderer');
   if (at !== -1) {
     const rendererPath = path.resolve(process.argv[at + 1]);
+    let installedAdaptation;
     await test('installed startup route reaches one adapted renderer without executing it', () => {
       let renderer = fs.readFileSync(rendererPath, 'utf8');
       let result = adapt(renderer, options);
@@ -624,12 +625,120 @@ async function main() {
         result = adapt(renderer, options);
       }
       assert.equal(result.adapted, true);
+      installedAdaptation = result.source;
       assert.equal(result.source.split('/*TIANCAISPACEHUB_EXTERNAL_WORKSPACE_V2*/').length, 2);
       const parsed = spawnSync(process.execPath, ['--input-type=module', '--check'], {input: result.source, encoding: 'utf8'});
       assert.equal(parsed.status, 0, 'adapted installed renderer must be valid ECMAScript');
       // No bundle contents or source excerpts enter logs.
       process.stdout.write(JSON.stringify({rendererBytes: renderer.length, adaptedBytes: result.source.length, startupLoaderPreserved, parsePassed: true}) + '\n');
     });
+    if (installedAdaptation.includes('accountScoped: true')) {
+      const source = installedAdaptation;
+      const extract = (start, end) => {
+        const from = source.indexOf(start), to = source.indexOf(end, from + start.length);
+        assert(from >= 0 && to > from, 'exact installed function boundaries');
+        return source.slice(from, to);
+      };
+      const helpers = extract('/*TIANCAISPACEHUB_EXTERNAL_WORKSPACE_V2*/', 'const _sfc_main = /* @__PURE__ */ defineComponent({');
+      const scopedEnvironment = () => {
+        const sessions = new Map(), requests = [], tasks = new Map();
+        const context = vm.createContext({
+          ref: (value) => ({value}), window: {}, enc: encodeURIComponent,
+          isBuiltinModel: (model) => model.model_id === 'tiangong-builtin',
+          scenarioApi: {createTask: async (scenario, title, modelId, options, identity = {}) => {
+            const id = identity.task_id || 'task-created';
+            if (!tasks.has(id)) tasks.set(id, {task_id:id, session_id:identity.session_id || 'session-created', title, model_id:modelId});
+            return tasks.get(id);
+          }},
+          req: async (method, route, body) => {
+            requests.push({method,route,body});
+            if (method === 'GET') {
+              const session = sessions.get(decodeURIComponent(route.slice('/data/sessions/'.length)));
+              if (!session) throw Object.assign(new Error('synthetic missing session'),{status:404});
+              return {...session};
+            }
+            if (context.failRegistration) throw new Error('synthetic registration failed');
+            sessions.set(body.session_id,{...body}); return {session_id:body.session_id};
+          },
+        });
+        vm.runInContext(helpers + '\nglobalThis.api = {create: scenarioApi.createTask, require:__tcwRequireSession, choose:__tcwChooseExternal, setModels:__tcwSetModels};',context);
+        return {context, sessions, requests, tasks, api: context.api};
+      };
+      await test('Work 1.1 task registration preserves native IDs and retries without duplicate sessions', async () => {
+        const f = scopedEnvironment();
+        const identity = {task_id:'exact-task',session_id:'exact-session'};
+        const task = await f.api.create('default','任务','external-a',{},identity);
+        assert.equal(task.task_id,identity.task_id); assert.equal(task.session_id,identity.session_id);
+        assert.equal(f.sessions.get(identity.session_id).user_id,'ai-gateway');
+        await f.api.create('default','任务','external-a',{},identity);
+        assert.equal(f.tasks.size,1); assert.equal(f.sessions.size,1);
+        assert.equal(f.requests.filter((request) => request.method === 'POST').length,1);
+      });
+      await test('Work 1.1 refuses other owners and retains task identity after registration failure', async () => {
+        const f = scopedEnvironment();
+        f.context.failRegistration = true;
+        await assert.rejects(f.api.create('default','任务','external-a',{}),/registration/);
+        assert.equal(f.tasks.size,1); assert.equal(f.sessions.size,0);
+        assert.equal(f.requests.some((request) => request.method === 'DELETE'),false);
+        f.sessions.set('session-created',{session_id:'session-created',user_id:'official-a',agent_id:'agent',project_id:'original'});
+        await assert.rejects(f.api.create('default','任务','external-a',{}),/不属于 AI Gateway/);
+        assert.equal(f.sessions.get('session-created').user_id,'official-a');
+      });
+      await test('Work 1.1 preserves migrated agent/project and updates models atomically', async () => {
+        const f = scopedEnvironment();
+        f.sessions.set('migrated',{session_id:'migrated',user_id:'ai-gateway',agent_id:'original-agent',project_id:'original-project'});
+        const session = await f.api.require('migrated');
+        assert.equal(session.agent_id,'original-agent'); assert.equal(session.project_id,'original-project');
+        assert.equal(f.api.setModels({externalModelIds:['external-a'],preferredModelId:'missing'}),false);
+        assert.equal(f.api.choose(models),'external-b');
+        assert.equal(f.api.setModels({externalModelIds:['external-a'],preferredModelId:'external-a'}),true);
+        assert.equal(f.api.choose(models),'external-a');
+        assert(source.includes('project: { ...turnProject, id: hubSession.project_id === "default" ? "0" : hubSession.project_id }'));
+      });
+      await test('Work 1.1 request classifier authenticates query-only session pages and rejects account changes', async () => {
+        const requests=[];
+        const context = vm.createContext({
+          ensure: async () => ({base:'http://synthetic.invalid',token:'synthetic'}),
+          DisplayError: class extends Error {constructor(message, fallback, source, status){super(message);this.status=status;}},
+          fetch: async (url,init) => {requests.push({url,init}); if(context.switchAccount) vm.runInContext('conversationEpoch++;',context); return {ok:true,json:async()=>({sessions:[]})};},
+        });
+        vm.runInContext('let conversationAccount="ai-gateway", conversationEpoch=0;\n' + extract('async function req(method, path, body, options) {','const enc = encodeURIComponent;') + '\nglobalThis.request=req;',context);
+        await context.request('GET','/data/sessions?user_id=ai-gateway&limit=200');
+        assert.equal(requests[0].init.headers['X-Tiangong-Account'],'ai-gateway');
+        assert.equal(requests[0].init.headers.Authorization,'Bearer synthetic');
+        context.switchAccount=true;
+        await assert.rejects(context.request('GET','/data/scenarios'),/账号已变化/);
+      });
+      await test('Work 1.1 local bootstrap and official login expiry retain local instances and ready scope', async () => {
+        const f = scopedEnvironment();
+        Object.assign(f.context, {modelApi:{list:async()=>models},withDeadline:(work)=>work,resetWebAgentDirectory:()=>{},
+          checkClawSession:async()=>false,syncMcpCatalogOnBootstrap:async()=>{},
+          bootstrapAppData:async()=>{f.context.window.__tiancaiWorkspace.ready=true;},
+        });
+        f.context.window.electronAPI={getDataUrl:async()=>'',getAuthToken:async()=>''};
+        vm.runInContext('let authAttempt=0;const authReady=ref(false),authError=ref(""),clawLoggedIn=ref(true),DEFAULT_USER={},user=ref({userId:"official-a"});\n' +
+          extract('    async function initializeSession() {','    function stopBootstrapFeedback() {') +
+          extract('    function onSessionInvalid() {','    async function onClawLoginSuccess() {') +
+          '\nglobalThis.initialize=initializeSession;globalThis.expire=onSessionInvalid;', f.context);
+        await f.context.initialize();
+        assert.equal(f.context.window.__tiancaiWorkspace.ready,true);
+        f.context.expire();
+        assert.equal(f.context.window.__tiancaiWorkspace.ready,true);
+        assert.equal(vm.runInContext('clawLoggedIn.value',f.context),false);
+        assert(source.includes('const workspaceOwner = computed(() => __tcwScope);'));
+        assert(source.includes('tiangong-active-draft:${__tcwScope}'));
+      });
+      await test('Work 1.1 IPC assistance wrapper forwards one native request and the same Response', async () => {
+        const calls=[], reply={body:'synthetic response'}, context=vm.createContext({window:{electronAPI:{chatRunOpen:()=>{}}},
+          __tchNativeRunFetch:async(path,options)=>{calls.push({path,options});return reply;}});
+        vm.runInContext(extract('window.__tiancaiAssistanceTransportV1 = true;','async function __tchNativeRunFetch(')+'\nglobalThis.run=runFetch;',context);
+        const init={method:'POST',body:'synthetic'};
+        assert.equal(await context.run('/v2/chat/runs',init),reply); assert.equal(calls.length,1); assert.equal(calls[0].options,init);
+        context.window.__tiancaiAssistance={runRequest:async(path,options,next)=>next({...options,body:'injected'})};
+        assert.equal(await context.run('/v2/chat/runs',init),reply); assert.equal(calls.length,2); assert.equal(calls[1].options.body,'injected');
+        assert.equal(context.window.__tiancaiAssistanceTransportV1,true);
+      });
+    }
   }
   process.stdout.write(JSON.stringify({passed, failed: 0, productStarted: false, realModelCalled: false}) + '\n');
 }

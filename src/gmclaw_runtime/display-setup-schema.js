@@ -15,8 +15,9 @@ function (view, ...values) {
   const isWritableRef = (value) => isRef(value) && canAssign(value, 'value', true);
   const isSet = (value) => (isRef(value) ? value.value : value) instanceof Set;
   if (view === 'app') {
-    const [instances, scenarios, opening, deleting] = values;
-    return values.length === 4 && isRef(instances) && Array.isArray(instances.value)
+    const [instances, scenarios, opening, deleting, account = null] = values;
+    return (values.length === 4 || values.length === 5) && (account === null || (isRef(account) && typeof account.value === 'string'))
+      && isRef(instances) && Array.isArray(instances.value)
       && isWritableRef(scenarios) && Array.isArray(scenarios.value) && isSet(opening) && isSet(deleting);
   }
   if (view === 'panel') {
