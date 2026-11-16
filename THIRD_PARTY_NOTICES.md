@@ -1,5 +1,13 @@
 # 第三方参考及许可
 
+## 远程连接与网页
+
+V1.0.32 的远程连接在用户启用并确认准备后，从 [EasyTier 官方 v2.6.4 Releases](https://github.com/EasyTier/EasyTier/releases/tag/v2.6.4) 下载独立运行组件；MSI 不预装或静默下载它。官方程序未经修改，使用 LGPL-3.0；许可全文保留在 `src/remote_network/EasyTier-LICENSE`，准备时写入运行目录的 `LICENSE-EasyTier`，`SOURCE.txt` 保留固定版本源码地址。
+
+随程序嵌入的远程会话网页使用 React、React DOM、Lucide、react-markdown、remark-gfm 及其运行依赖。依赖版权和许可全文汇总在 `assets/remote-web/THIRD_PARTY_NOTICES.txt`，与网页资源一并嵌入 Hub，可通过远程网页资源路径 `/remote/THIRD_PARTY_NOTICES.txt` 读取。源码和锁文件位于 `web-remote/`；用户运行 Hub 无需安装 Node.js。
+
+## 既有客户端参考
+
 V1.0.0 的客户端配置适配参考 Magpie 的原生配置格式和客户端发现路径，并由 TianCaiSpaceHub 的 Rust 事务与路由实现承接。没有嵌入 Magpie 可执行程序。固定参考提交：
 
 - 项目：https://github.com/yetone/magpie
