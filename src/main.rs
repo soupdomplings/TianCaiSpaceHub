@@ -33,6 +33,9 @@ mod assistant;
 mod nvwa;
 mod outbound_http;
 mod remote_control_backend;
+mod remote_frontend;
+mod remote_network;
+mod remote_sessions;
 mod store;
 mod types;
 mod vscode_extension_patch;
@@ -256,6 +259,14 @@ async fn run_daemon(config_path: PathBuf, config: AppConfig) -> anyhow::Result<(
     tracing::info!(target: "codexhub::startup", addr = %addr, "binding local service");
     let listener = bind_service_listener(addr).await?;
     let assistant_supervisor = tokio::spawn(assistant::run(state.clone()));
+    let remote_state = state.clone();
+    let remote_startup = tokio::spawn(async move {
+        if let Err(error) = remote_network::startup(remote_state.clone()).await {
+            remote_state
+                .push_event("warn", "remote_network_startup_failed", error.to_string())
+                .await;
+        }
+    });
     println!("TianCaiSpaceHub web: http://{addr}");
     tracing::info!(target: "codexhub::startup", addr = %addr, "local service listener ready");
 
@@ -369,6 +380,9 @@ async fn run_daemon(config_path: PathBuf, config: AppConfig) -> anyhow::Result<(
     let shutdown_task = tokio::spawn(async move {
         let _ = shutdown_rx.await;
         let _ = shutdown_task_tx.send(true);
+        remote_startup.abort();
+        let _ = remote_startup.await;
+        remote_network::shutdown(&shutdown_state).await;
         let (_, assistance) = tokio::join!(
             assistant::shutdown_and_cleanup(&shutdown_state),
             local_assistance::shutdown_and_cleanup(&shutdown_state),

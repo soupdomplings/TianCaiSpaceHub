@@ -1,5 +1,9 @@
 # TianCaiSpaceHub 文档总入口
 
+- [Hub 远程连接与浏览器会话](customizations/remote-connection.md)：Windows／macOS 自己的设备组网及 Codex／天工真实会话首版；源码集成、Windows GUI 检查、105 项 Rust 和 25 项网页离线测试完成，未出包，双机和 macOS 待验。专题包括[组网](customizations/remote-network.md)、[会话](customizations/remote-sessions.md)、[网页](customizations/remote-web.md)及[接口协作契约](development/remote-session-contract.md)。
+
+- [1.0 系列累计更新发布稿](releases/v1.0-series-announcement.md)：面向用户的 v1.0.0—v1.0.31 功能汇总，按当前实际入口归并，包含平台说明。
+
 2026-11-12 **V1.0.31 已提交并启动发布**：累计 WorkBuddy 独立分享、授权积分、搭档和[天工历史管理](customizations/tiangong-session-history.md) 源码 `674f6df` 已推送，`v1.0.31` 标签及 [Release](https://github.com/soupdomplings/TianCaiSpaceHub/releases/tag/v1.0.31) 已创建。Windows／macOS Actions 均已确认运行中，尚未等待完成；包身份、运行链接及平台边界见 [V31 交付](releases/v1.0.31.md)。本地 Windows GUI／release、61 项不同 Rust、29 项 Node 和唯一 MSI `120156` 核验通过；真实续聊／IM／macOS 和未来新版智能体仍待验证。
 
 2026-11-12 **V1.0.30 测试交付：WorkBuddy 常驻分享设置与真实积分**：[分享](customizations/workbuddy-builtin-sharing-assessment.md)入口持久放入 WorkBuddy 接入设置，提供授权账号、状态和真实余额刷新；取消勾选仅隐藏，已有分享／授权／模型保留。[搭档](customizations/genius-buddy.md) 保留实际导航回执及猫娘启停资格。Windows GUI/release、40 项受影响 Rust 和唯一 MSI `112520` 的版本／升级／六项载荷核验通过，真实积分与 macOS 待验。天工新版会话／智能体归属管理仅[评估](customizations/tiangong-work-compatibility-assessment.md)，用户确认新版尚未发布／安装，后续继续；分工、包身份及待办见 [V30 交付](releases/v1.0.30.md)，暂不推送。

@@ -578,7 +578,9 @@ pub(super) fn post(api: &ApiClient, path: &str, body: &Value) -> Result<Value, S
                 .timeout(Duration::from_secs(
                     if matches!(
                         path,
-                        "/api/desktop/assistance/prepare" | "/api/desktop/assistance"
+                        "/api/desktop/assistance/prepare"
+                            | "/api/desktop/assistance"
+                            | "/api/remote-network/prepare"
                     ) {
                         600
                     } else {
@@ -589,6 +591,8 @@ pub(super) fn post(api: &ApiClient, path: &str, body: &Value) -> Result<Value, S
         .map_err(|error| {
             if path.starts_with("/api/desktop/squad/") {
                 super::squad_browser::friendly_error(&error)
+            } else if path.starts_with("/api/remote-network/") {
+                super::remote_connection::friendly_error(&error)
             } else {
                 error
             }

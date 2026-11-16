@@ -33,7 +33,26 @@ pub async fn request_for_client(
     method: &str,
     params: Value,
 ) -> Result<Value> {
+    if method == "turn/start"
+        && let Some(thread_id) = params.get("threadId").and_then(Value::as_str)
+    {
+        crate::remote_sessions::ensure_im_admission(state, client_key, thread_id).await?;
+    }
     request_with_timeout_for_client(state, client_key, method, params, REMOTE_REQUEST_TIMEOUT).await
+}
+
+/// Browser requests stay on the selected native connection, without changing
+/// the IM client's current thread or retrying a non-idempotent operation.
+pub(crate) async fn request_for_browser(
+    state: &SharedState,
+    connection_epoch: u64,
+    client_key: &str,
+    method: &str,
+    params: Value,
+) -> Result<Value> {
+    request_once_with_timeout_for_client_on_connection(
+        state, connection_epoch, client_key, method, params, REMOTE_REQUEST_TIMEOUT,
+    ).await
 }
 
 async fn request_with_timeout_for_client(

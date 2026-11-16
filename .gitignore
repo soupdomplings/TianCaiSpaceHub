@@ -1,5 +1,9 @@
 /target
 /target-verify
+/web-remote/node_modules/
+/web-remote/.vite/
+/web-remote/coverage/
+/*.remote-files/
 /outputs
 .DS_Store
 config.toml

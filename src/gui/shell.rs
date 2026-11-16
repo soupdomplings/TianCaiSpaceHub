@@ -17,6 +17,7 @@ pub(super) enum PageId {
     Overview,
     Squad,
     Assistant,
+    Remote,
     Client(ClientId),
     Sources,
     Skills,
@@ -40,6 +41,7 @@ impl PageId {
             Self::Overview => "概览",
             Self::Squad => "天才小分队",
             Self::Assistant => "天才搭档",
+            Self::Remote => "远程连接",
             Self::Client(id) => id.name(),
             Self::Sources => "模型与渠道",
             Self::Skills => "Skill 管理",
@@ -210,6 +212,7 @@ impl Shell {
             (PageId::Sources, Icon::Model),
             (PageId::Dumpling, Icon::Mcp),
             (PageId::Chat, Icon::Chat),
+            (PageId::Remote, Icon::Hub),
             (PageId::Logs, Icon::Logs),
         ] {
             let b = nav_button(&sidebar, id.title());
@@ -491,7 +494,7 @@ impl Shell {
                 "共用能力"
             }
             PageId::Squad => "账户服务",
-            PageId::Dumpling | PageId::Assistant => "共用能力",
+            PageId::Dumpling | PageId::Assistant | PageId::Remote => "共用能力",
             _ => "工作台",
         });
         self.status.set_label("");
@@ -570,6 +573,9 @@ fn help_text(page: PageId) -> String {
         }
         PageId::Chat => {
             "添加聊天账号后，可在聊天平台内选择目录、模型和会话并处理审批。WorkBuddy 暂无外部任务执行；天工的执行授权、桌面同步与模型连接分别显示。"
+        }
+        PageId::Remote => {
+            "将自己的电脑加入同一个网络，首次连接时在目标 Hub 确认一次。两端 Hub 和目标客户端保持运行，即可在浏览器继续原有 Codex 或天工会话。最小化到托盘保持连接，退出 Hub 会关闭远程入口。"
         }
         PageId::Logs => {
             "记录开关沿用原设置。筛选和分页针对全部已记录请求，详情保留客户端请求与实际上游请求、缓存和首字等原始字段。未记录的历史无法补回。"

@@ -42,7 +42,7 @@ pub async fn send_response_for_client(
     send_envelopes(state, envelopes).await
 }
 
-pub(super) async fn send_response_for_stream(
+pub(crate) async fn send_response_for_stream(
     state: &SharedState,
     connection_epoch: u64,
     client_id: &str,

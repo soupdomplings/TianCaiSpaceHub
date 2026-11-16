@@ -22,6 +22,12 @@ const READY_TIMEOUT: Duration = Duration::from_secs(30);
 static ENHANCE_LOCK: Mutex<()> = Mutex::const_new(());
 static SESSION: Mutex<Option<WorkspaceSession>> = Mutex::const_new(None);
 
+/// A remote-created AI Gateway task is offered only while this Hub's verified
+/// enhanced workspace is still attached. This does not launch or alter it.
+pub(crate) async fn gateway_workspace_active() -> bool {
+    SESSION.lock().await.as_ref().is_some_and(|session| !session.task.is_finished())
+}
+
 struct WorkspaceSession {
     task: JoinHandle<()>,
     options: watch::Sender<WorkspaceOptions>,

@@ -91,7 +91,6 @@ pub fn apply_async_proxy(
     }
 }
 
-#[cfg(feature = "gui")]
 pub fn apply_blocking_proxy(
     builder: reqwest::blocking::ClientBuilder,
     config: &OutboundProxyConfig,

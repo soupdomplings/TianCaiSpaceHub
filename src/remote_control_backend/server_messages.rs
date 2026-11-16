@@ -45,6 +45,11 @@ pub(super) async fn observe_app_server_message(
         remote_client_key_for_stream_locked(&remote, client_id, stream_id)
     };
     let message = message.get("message").unwrap_or(message);
+    // A browser observes only explicitly opened native sessions. Dispatch
+    // before the IM owner/selected-connection filters, preserving source IDs.
+    crate::remote_sessions::observe_codex(
+        state, connection_epoch, client_id, stream_id, message,
+    ).await;
     chain_log::write_line(format!(
         "[remote_control] event=server_message_in connection_epoch={} client_key={} client_id={} stream_id={} summary={}",
         connection_epoch,

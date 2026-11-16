@@ -241,6 +241,14 @@ impl Default for GmClawImState {
     }
 }
 
+impl GmClawImState {
+    /// The browser shares admission with IM instead of running a competing
+    /// executor. Waiting on a browser connection never holds this permit.
+    pub(crate) async fn acquire_remote_execution(&self) -> Result<tokio::sync::SemaphorePermit<'_>> {
+        self.execution.acquire().await.map_err(|_| anyhow::anyhow!("天工执行队列已关闭"))
+    }
+}
+
 pub(crate) fn reply(
     outbound: &ImOutboundSender,
     message: &InboundMessage,
@@ -1361,6 +1369,8 @@ mod tests {
             workbuddy_builtin: crate::desktop::workbuddy_builtin::Service::default(),
             local_assistance: crate::local_assistance::Service::default(),
             assistant: crate::assistant::AssistantState::default(),
+            remote_network: crate::remote_network::NetworkState::default(),
+            remote_sessions: crate::remote_sessions::SessionService::default(),
             config_path: PathBuf::from(":memory:"),
             daemon_identity: crate::daemon_process::DaemonIdentity {
                 service: "fixture".into(),

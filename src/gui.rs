@@ -194,6 +194,7 @@ mod provider_form;
 mod request_browser;
 mod request_log_detail;
 mod request_logs;
+mod remote_connection;
 mod request_view;
 mod resource_detail;
 mod resource_gallery;
@@ -637,6 +638,7 @@ fn build_ui(
     let overview_ui = overview::Overview::new(&shell, frame, api.clone(), text);
     let squad_ui = squad::SquadPage::new(&shell, frame, api.clone());
     let assistant_ui = assistant::AssistantUi::new(&frame, &shell, api.clone());
+    let remote_ui = remote_connection::RemotePage::new(&frame, &shell, api.clone(), text);
     let client_pages = crate::desktop::clients::ClientId::VISIBLE
         .into_iter()
         .map(|id| clients::ClientPage::new(&shell, id, frame, api.clone()))
@@ -1899,6 +1901,7 @@ fn build_ui(
             overview_ui.enter(page);
             squad_ui.enter(page);
             assistant_ui.enter(page);
+            remote_ui.enter(page);
             request_browser.enter(page == PageId::Logs);
             resource_ui.enter(page);
             for client in &client_pages {

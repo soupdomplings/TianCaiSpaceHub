@@ -800,6 +800,19 @@ impl DesktopClient {
         content: &str,
         thinking_steps: &[Value],
     ) -> Result<i64> {
+        self.append_message_with_files(task_id, role, content, thinking_steps, &[]).await
+    }
+
+    /// File references are generated from this machine's accepted uploads or
+    /// native task artifacts, never browser-supplied host paths.
+    pub(crate) async fn append_message_with_files(
+        &self,
+        task_id: &str,
+        role: &str,
+        content: &str,
+        thinking_steps: &[Value],
+        files: &[Value],
+    ) -> Result<i64> {
         validate_id(task_id)?;
         ensure!(matches!(role, "user" | "system"), "天工桌面消息角色无效");
         ensure!(content.len() <= 4 * 1024 * 1024, "天工桌面消息超过保存范围");
@@ -811,6 +824,7 @@ impl DesktopClient {
                     "role": role,
                     "content": content,
                     "thinking_steps": thinking_steps,
+                    "files": if files.is_empty() { Value::Null } else { json!(files) },
                 })),
                 MAX_METADATA_BYTES,
             )
@@ -829,9 +843,33 @@ impl DesktopClient {
         content: &str,
         thinking_steps: &[Value],
     ) -> Result<()> {
+        self.update_message_files(task_id, message_id, content, thinking_steps, None).await
+    }
+
+    pub(crate) async fn update_message_with_files(
+        &self,
+        task_id: &str,
+        message_id: i64,
+        content: &str,
+        thinking_steps: &[Value],
+        files: &[Value],
+    ) -> Result<()> {
+        self.update_message_files(task_id, message_id, content, thinking_steps, Some(files)).await
+    }
+
+    async fn update_message_files(
+        &self,
+        task_id: &str,
+        message_id: i64,
+        content: &str,
+        thinking_steps: &[Value],
+        files: Option<&[Value]>,
+    ) -> Result<()> {
         validate_id(task_id)?;
         ensure!(message_id > 0, "天工桌面消息身份无效");
         ensure!(content.len() <= 4 * 1024 * 1024, "天工桌面消息超过保存范围");
+        let mut body = json!({"content":content,"thinking_steps":thinking_steps});
+        if let Some(files) = files { body["files"] = json!(files); }
         let result: WriteStatus = self
             .required_json(
                 Method::PUT,
@@ -842,10 +880,7 @@ impl DesktopClient {
                     "messages",
                     &message_id.to_string(),
                 ],
-                Some(json!({
-                    "content": content,
-                    "thinking_steps": thinking_steps,
-                })),
+                Some(body),
                 MAX_METADATA_BYTES,
             )
             .await?;

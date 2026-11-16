@@ -1,4 +1,5 @@
 fn main() {
+    embed_remote_web();
     println!("cargo:rerun-if-changed=assets/tci-hub-icon.png");
     if std::env::var("CARGO_CFG_WINDOWS").is_ok() {
         println!(
@@ -30,4 +31,46 @@ fn main() {
             .manifest_optional()
             .unwrap();
     }
+}
+
+fn embed_remote_web() {
+    use std::{fmt::Write, path::Path};
+    let root = Path::new("assets/remote-web");
+    println!("cargo:rerun-if-changed={}", root.display());
+    let mut entries = Vec::new();
+    fn collect(root: &Path, directory: &Path, entries: &mut Vec<(String, String)>) {
+        if !directory.exists() {
+            return;
+        }
+        for entry in std::fs::read_dir(directory).expect("read remote web resources") {
+            let path = entry.expect("remote web resource entry").path();
+            if path.is_dir() {
+                collect(root, &path, entries);
+            } else if path.is_file() {
+                entries.push((
+                    path.strip_prefix(root)
+                        .unwrap()
+                        .to_string_lossy()
+                        .replace('\\', "/"),
+                    path.canonicalize().unwrap().to_string_lossy().to_string(),
+                ));
+            }
+        }
+    }
+    collect(root, root, &mut entries);
+    assert!(
+        entries.iter().any(|(name, _)| name == "index.html"),
+        "remote web resources are missing; run npm ci and npm run build in web-remote"
+    );
+    entries.sort();
+    let mut source = String::from("pub(super) static ASSETS: &[(&str, &[u8])] = &[\n");
+    for (name, path) in entries {
+        writeln!(&mut source, "({name:?}, include_bytes!({path:?})),").unwrap();
+    }
+    source.push_str("];");
+    std::fs::write(
+        Path::new(&std::env::var_os("OUT_DIR").unwrap()).join("remote_web_assets.rs"),
+        source,
+    )
+    .expect("embed remote web resources");
 }

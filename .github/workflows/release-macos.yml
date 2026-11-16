@@ -92,6 +92,19 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install Node.js for remote web resources
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web-remote/package-lock.json
+
+      - name: Build remote web resources
+        working-directory: web-remote
+        run: |
+          npm ci
+          npm run build
+
       - name: Install CMake
         run: brew install cmake
 

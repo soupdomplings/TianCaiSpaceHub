@@ -39,6 +39,8 @@ mod utils;
 mod websocket;
 
 pub(crate) use session_api::turn_start_params;
+pub(crate) use session_api::request_for_browser;
+pub(crate) use outbound::send_response_for_stream;
 
 use client_state::*;
 #[cfg(test)]

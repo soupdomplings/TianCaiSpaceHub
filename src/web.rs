@@ -259,6 +259,7 @@ pub fn router(state: SharedState) -> Router {
         .merge(desktop::router())
         .merge(crate::local_assistance::web::router())
         .merge(crate::assistant::router())
+        .merge(crate::remote_network::management_router())
         .merge(workbuddy_builtin::router())
         .merge(tiangong_history::router())
         .merge(crate::desktop::mcp_bridge::router())

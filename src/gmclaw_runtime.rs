@@ -33,6 +33,7 @@ mod credentials;
 mod display;
 mod workspace;
 pub(crate) use workspace::{WorkspaceOptions, enhance_workspace, workspace_options};
+pub(crate) use workspace::gateway_workspace_active;
 #[cfg(windows)]
 mod windows_start;
 
