@@ -6,7 +6,7 @@ Windows 1.1.0 renderer 的 `runFetch` 优先调用冻结的 `electronAPI.chatRun
 
 存在 IPC API 但无法准备配套回调时，协助安装明确返回原因，不把 MCP 配置登记或脚本挂载误报为任务已接入。V8 拒绝修改正在执行的异步函数时，保持原函数并提示等待任务结束后再接入；不强行重载或重发。仅改写可能已发生而读回未确认时尝试恢复原函数体，关闭本次 Debugger 域；被明确拒绝的改写不重复恢复。失败提交撤销本次上下文且不重发，原生停止／设置／提示修改仍使对应上下文失效；后续审批保留原真人事件与请求身份要求。新版受管 MCP 的 HTTP 字段和 CRUD 与既有逻辑兼容，新增 `web-mcp:`／`app_login`／`web_sync` 同步条目不由 Hub 接管。
 
-修改入口为 `src/local_assistance/{host.rs,tiangong-host.js,run-fetch-adapter.js}`，增强加载由 `src/gmclaw_runtime/workspace-adapter.js` 提供。`tiangong-assistance-host.test.cjs` 本批 16/16、`tiangong-assistance-transport.test.cjs` 4/4 通过，后者含 Node inspector 更新预先捕获的合成闭包、冻结 IPC、单次委托、响应／信号透传及旧 fetch 不重复挂钩。实际 1.1.0 业务模块改写后仅解析通过，没有执行安装脚本。新增 Rust 合成通道覆盖安装目录和上下文匹配、无关通知洪流、改写被拒不假报就绪与 Debugger 收尾；执行结果由管理会话统一登记。CDP 源码传输上限沿已有 renderer 适配的 16 MiB，单脚本最大 8 MiB，正常连接不周期读取源码。安装资源另有 16 项静态合同核对，脱敏记录为 `target/v1.0.33-tiangong-20261115/model-mcp-contracts.json`。本批未启动客户端或真实协助；真实自动触发、原生 IPC 工具续轮和 macOS 仍待用户验收。
+修改入口为 `src/local_assistance/{host.rs,tiangong-host.js,run-fetch-adapter.js}`，增强加载由 `src/gmclaw_runtime/workspace-adapter.js` 提供。`tiangong-assistance-host.test.cjs` 本批 16/16、`tiangong-assistance-transport.test.cjs` 4/4 通过，后者含 Node inspector 更新预先捕获的合成闭包、冻结 IPC、单次委托、响应／信号透传及旧 fetch 不重复挂钩。实际 1.1.0 业务模块改写后仅解析通过，没有执行安装脚本。新增 Rust 合成通道覆盖安装目录和上下文匹配、无关通知洪流、改写被拒不假报就绪与 Debugger 收尾；已纳入本批 `local_assistance::` 74/74 回归，Windows GUI 测试目标编译通过，明细见 [V33](../releases/v1.0.33.md)。CDP 源码传输上限沿已有 renderer 适配的 16 MiB，单脚本最大 8 MiB，正常连接不周期读取源码。安装资源另有 16 项静态合同核对，脱敏记录为 `target/v1.0.33-tiangong-20261115/model-mcp-contracts.json`。本批未启动客户端或真实协助；真实自动触发、原生 IPC 工具续轮和 macOS 仍待用户验收。
 
 没有新增用户配置或凭据迁移。停用协助后卸载本页挂钩，保留的原生回调被动透传原请求；没有后台协助时不追加规则。回退到没有 IPC 配套的旧 Hub 后，1.1.0 普通 fetch 挂钩不足以提供完整协助，需使用兼容版本，不重放旧任务或放宽权限。
 

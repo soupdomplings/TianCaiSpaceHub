@@ -8,7 +8,7 @@
 - 历史支持任务／项目 `owner_id`、独立目录和原生运行元数据，跨账号项目只复制项目壳，撤销恢复原绑定；原 session／agent／project、记忆与附件保留，云端智能体缓存／偏好不迁移。
 - 模型区分显示名与真实 ID，保存先核对输出／上下文预算；分享复用原生迁移结果；协助补 IPC 钩子，Dumpling／MCP 基础协议复用。
 - IM／远程固定本次账号，承接模型参数和会话版本，分离子运行与审批，补原生等待／停止接续；错误不自动重发。
-- Cargo／锁文件递增至 1.0.33，统一检查和一份 Windows MSI 身份见[V33](../releases/v1.0.33.md)，依据／回滚见[当前核对](tiangong-work-compatibility-assessment.md)。不启动真实产品或读用户私有资料，实机与 macOS 待验，不触发 Actions、标签或 Release。
+- Cargo／锁文件递增至 1.0.33；266 项不同 Rust、86 项 Node、16 项静态合同、Windows GUI／release 及唯一 MSI `143320` 的版本／升级／5 项载荷核验通过。源码本地提交 `c9dd09a`，推送遇连接重置；包身份见[V33](../releases/v1.0.33.md)，依据／回滚见[当前核对](tiangong-work-compatibility-assessment.md)。不启动真实产品或读用户私有资料，实机与 macOS 待验，未触发 Actions、标签或 Release。
 
 ## V1.0.32 本地测试交付 · 2026-11-15 · 远程连接与浏览器会话
 
