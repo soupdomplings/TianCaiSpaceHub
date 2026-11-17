@@ -1,6 +1,6 @@
 # 二开功能总表
 
-2026-11-17 **TC-014 V1.0.35 诊断测试准备**：[Dumpling MCP](nvwa-mcp.md) 保留本机桥 502 后的具体原因，认证／MCP 遵循 Hub 出站设置，补默认接入／检测阶段记录以定位反复修复及真实失败位置。按用户最新要求递增版本、统一生成一份 Windows MSI；[交付与复现](../releases/v1.0.35.md)。现场根因与 macOS 待验，不触发 Actions／标签／Release，旧包不改名。
+2026-11-17 **TC-014 V1.0.35 诊断测试交付**：[Dumpling MCP](nvwa-mcp.md) 保留本机桥 502 后的具体原因，认证／MCP 遵循 Hub 出站设置，默认记录接入／检测阶段。Windows GUI／release、50 项回归及唯一 MSI `180134` 的版本／升级／5 项载荷核验通过，产品源码本地提交 `6e75ed4`，推送遇网络失败；[交付与复现](../releases/v1.0.35.md)。现场根因与 macOS 待验，不触发 Actions／标签／Release，旧包不改名。
 
 2026-11-17 **TC-025 V1.0.34 内置组网**：基于 EasyTier v2.6.4 核心源码内置并保留可二开入口，移除用户侧下载、安装及组件准备确认；Hub 管理独立网络运行域，沿用已有配对／网络资料，保留 TCP／UDP、AES-GCM、无 TUN 用户态转发和双链访问控制。网络库／完整 GUI、91 项不同定向回归及 Windows 依赖树通过，release／唯一 MSI `095734` 已核验、源码 `f6c4b35` 已推送。包身份及实机待验见[V34](../releases/v1.0.34.md)；维护见[组网](remote-network.md)和[远程连接](remote-connection.md)，不触发 Actions／标签／Release。
 

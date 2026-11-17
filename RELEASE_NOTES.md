@@ -6,6 +6,6 @@ Dumpling-MCP 的“连接并检测”不再只显示本机桥 HTTP 502，改为�
 
 保留已有环境、客户端接入和登录资料，不因检测失败自动删除、重建配置或重发工具调用。检测结束只释放本次临时 MCP 会话，原客户端会话保持。包含 V1.0.34 的内置组网与此前天工 Work 兼容修正。
 
-本批由管理统一进行必要回归、本地 Windows release 构建及一份 MSI 交付。现场连接问题尚未确定根因，安装与复现由用户执行；macOS 本轮未构建或实机验收。不触发 Actions、标签或 Release。
+Windows GUI／release、50 项定向回归及唯一 MSI `20261117-180134` 的版本／旧版升级／5 项载荷核验通过。产品源码本地提交 `6e75ed4`，GitHub 推送遇网络失败。现场连接问题尚未确定根因，安装与复现由用户执行；macOS 本轮未构建或实机验收。不触发 Actions、标签或 Release。
 
 实现与维护见[Dumpling-MCP 专题](docs/customizations/nvwa-mcp.md)，实际检查、包身份和复现步骤见[V1.0.35 交付](docs/releases/v1.0.35.md)。
