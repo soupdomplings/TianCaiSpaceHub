@@ -633,9 +633,18 @@ mod tests {
             logs.join("codexhub-daemon-startup.log"),
             concat!(
                 "daemon failed before chain log\napi_key=sk-secret\n",
+                "INFO codexhub::nvwa: Dumpling MCP client operation ",
+                "event=\"mcp_client_operation\" operation=\"prepare\" client=\"workbuddy\" ",
+                "outcome=\"completed\" ready=true configured=true requires_client_access=false\n",
+                "INFO mcp_detection{detection_id=fixture-detection client=workbuddy}: ",
+                "codexhub::nvwa: Dumpling MCP detection event=\"mcp_detection_phase\" ",
+                "phase=\"initialize\" outcome=\"started\"\n",
                 "WARN codexhub::nvwa: Dumpling MCP connection failed ",
                 "event=\"mcp_bridge_failure\" client=\"workbuddy\" ",
                 "phase=\"initialize\" failure=\"upstream_http\" upstream_status=403\n",
+                "INFO mcp_detection{detection_id=fixture-detection client=workbuddy}: ",
+                "codexhub::nvwa: Dumpling MCP detection session cleanup ",
+                "event=\"mcp_detection_cleanup\" outcome=\"not_needed\"\n",
             ),
         )
         .expect("write daemon startup log");
@@ -716,9 +725,15 @@ mod tests {
             .unwrap();
         assert!(startup_log.contains("daemon failed before chain log"));
         assert!(startup_log.contains("api_key=<redacted>"));
+        assert!(startup_log.contains("mcp_client_operation"));
+        assert!(startup_log.contains("operation=\"prepare\""));
+        assert!(startup_log.contains("ready=true"));
+        assert!(startup_log.contains("detection_id=fixture-detection"));
+        assert!(startup_log.contains("mcp_detection_phase"));
         assert!(startup_log.contains("mcp_bridge_failure"));
         assert!(startup_log.contains("phase=\"initialize\""));
         assert!(startup_log.contains("upstream_status=403"));
+        assert!(startup_log.contains("mcp_detection_cleanup"));
         assert!(!startup_log.contains("sk-secret"));
 
         let _ = std::fs::remove_dir_all(root);

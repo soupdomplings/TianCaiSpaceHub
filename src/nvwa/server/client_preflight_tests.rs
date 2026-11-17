@@ -9,6 +9,7 @@ use crate::nvwa::{
 };
 use std::sync::{Arc, Weak, atomic::AtomicBool};
 use tokio::sync::{Mutex, Semaphore};
+use tracing::instrument::WithSubscriber;
 
 async fn fixture() -> (tempfile::TempDir, NvwaService, NvwaProfile) {
     let directory = tempfile::tempdir().unwrap();
@@ -222,6 +223,103 @@ async fn failing_mcp_phase(
 
 #[tokio::test]
 async fn repeated_detection_502_keeps_client_setup_and_existing_sessions() {
+    let captured = CapturedLog::default();
+    let writer = captured.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::new("codexhub=info"))
+        .with_ansi(false)
+        .without_time()
+        .with_writer(move || writer.clone())
+        .finish();
+    exercise_repeated_detection_502(captured.clone())
+        .with_subscriber(subscriber)
+        .await;
+    let log = captured.text();
+    for operation in ["prepare", "apply", "repair"] {
+        assert!(log.lines().any(|line| {
+            line.contains("event=\"mcp_client_operation\"")
+                && line.contains(&format!("operation=\"{operation}\""))
+                && line.contains("outcome=\"started\"")
+        }));
+    }
+    assert!(log.lines().any(|line| {
+        line.contains("operation=\"prepare\"")
+            && line.contains("outcome=\"completed\"")
+            && line.contains("ready=false")
+            && line.contains("can_apply=true")
+            && line.contains("preview_operation=\"apply\"")
+            && [
+                "configured=",
+                "modified=",
+                "owned=",
+                "requires_client_access=",
+            ]
+            .iter()
+            .all(|field| line.contains(field))
+    }));
+    assert!(log.lines().any(|line| {
+        line.contains("operation=\"repair\"") && line.contains("outcome=\"failed\"")
+    }));
+    let started: Vec<_> = log
+        .lines()
+        .filter(|line| {
+            line.contains("event=\"mcp_detection\"") && line.contains("outcome=\"started\"")
+        })
+        .collect();
+    assert_eq!(started.len(), 8);
+    let mut ids = std::collections::HashSet::new();
+    for line in started {
+        let id = line
+            .split_once("detection_id=")
+            .unwrap()
+            .1
+            .split_whitespace()
+            .next()
+            .unwrap();
+        assert!(uuid::Uuid::parse_str(id).is_ok());
+        assert!(ids.insert(id));
+        assert!(log.lines().any(|line| {
+            line.contains(id)
+                && line.contains("event=\"mcp_detection_phase\"")
+                && line.contains("outcome=\"failed\"")
+                && line.contains("failure=\"upstream_http\"")
+                && line.contains("upstream_status=502")
+        }));
+        assert!(
+            log.lines().any(|line| {
+                line.contains(id) && line.contains("event=\"mcp_detection_cleanup\"")
+            })
+        );
+    }
+    for phase in ["initialize", "initialized", "tools_list"] {
+        assert!(log.lines().any(|line| {
+            line.contains("event=\"mcp_detection_phase\"")
+                && line.contains(&format!("phase=\"{phase}\""))
+        }));
+    }
+}
+
+#[derive(Clone, Default)]
+struct CapturedLog(Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for CapturedLog {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl CapturedLog {
+    fn text(&self) -> String {
+        String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+    }
+}
+
+async fn exercise_repeated_detection_502(captured: CapturedLog) {
     for client in [ClientKind::Codex, ClientKind::Workbuddy] {
         for method in ["initialize", "tools/list"] {
             let upstream_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -243,9 +341,12 @@ async fn repeated_detection_502_keeps_client_setup_and_existing_sessions() {
                     method,
                     requests: requests.clone(),
                 });
-            let upstream_task = tokio::spawn(async move {
-                axum::serve(upstream_listener, upstream).await.unwrap();
-            });
+            let upstream_task = tokio::spawn(
+                async move {
+                    axum::serve(upstream_listener, upstream).await.unwrap();
+                }
+                .with_current_subscriber(),
+            );
             let closed_sessions = Arc::new(Mutex::new(Vec::new()));
             let recorded_closes = closed_sessions.clone();
             let local = router(service.clone()).layer(axum::middleware::from_fn(
@@ -263,9 +364,12 @@ async fn repeated_detection_502_keeps_client_setup_and_existing_sessions() {
                     }
                 },
             ));
-            let bridge_task = tokio::spawn(async move {
-                axum::serve(bridge_listener, local).await.unwrap();
-            });
+            let bridge_task = tokio::spawn(
+                async move {
+                    axum::serve(bridge_listener, local).await.unwrap();
+                }
+                .with_current_subscriber(),
+            );
 
             let path = directory.path().join(if client == ClientKind::Codex {
                 "config.toml"
@@ -312,6 +416,13 @@ async fn repeated_detection_502_keeps_client_setup_and_existing_sessions() {
                 .unwrap();
             let context = adapter_context(&service, client).await.unwrap();
             let target = client_target(&profile, &body).unwrap();
+            let mut stale_repair = body.clone();
+            stale_repair["expectedFingerprint"] = "fixture-stale-fingerprint".into();
+            assert!(
+                client_operation(&service, &profile, "repair", &stale_repair)
+                    .await
+                    .is_err()
+            );
             for _ in 0..2 {
                 let prepared = client_operation(&service, &profile, "prepare", &body)
                     .await
@@ -400,6 +511,27 @@ async fn repeated_detection_502_keeps_client_setup_and_existing_sessions() {
                 ]
             };
             assert_eq!(*requests.lock().await, expected);
+            let log = captured.text();
+            for private in [
+                profile.id.as_str(),
+                profile.name.as_str(),
+                profile.username.as_str(),
+                profile.product_base_url.as_str(),
+                profile.mcp_url.as_str(),
+                service.inner.management.base_url.as_str(),
+                service.inner.management.capability.as_str(),
+                capability.as_str(),
+                existing_session.as_str(),
+                "fixture-upstream-token-never-used-for-http",
+                "fixture-private-upstream-body",
+                "fixture-stale-fingerprint",
+                path.to_str().unwrap(),
+            ] {
+                assert!(
+                    !log.contains(private),
+                    "private fixture value leaked to diagnostics"
+                );
+            }
             bridge_task.abort();
             upstream_task.abort();
         }

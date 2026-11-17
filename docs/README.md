@@ -1,6 +1,6 @@
 # TianCaiSpaceHub 文档总入口
 
-2026-11-17 **未发布 · Dumpling MCP 502 排障修正**：共用本机桥的上游失败现在保留具体分类，NVWA 认证／MCP 遵循 Hub 当前网络设置；旧导出包缺少 MCP 失败证据，现场根因仍待明确错误或服务端日志确认。实现与验证见[Dumpling 专题](customizations/nvwa-mcp.md#2026-11-17连接检测-http-502-排障与网络设置修正未发布)。不升版本、不另产包，V34 MSI 保持原样。
+2026-11-17 **V1.0.35 Dumpling-MCP 诊断测试包准备**：用户明确要求转给现场用户复现取日志，本轮递增版本并统一生成一份 Windows MSI，替代前阶段暂不打包的决定。集成具体失败分类、网络设置修正及默认阶段日志；实现见[Dumpling 专题](customizations/nvwa-mcp.md)，检查、包身份与复现步骤见[V35 交付](releases/v1.0.35.md)。用户现场及 macOS 待验，不触发 Actions、标签或 Release；V34 旧包身份保持。
 
 2026-11-17 **V1.0.34 源码内置组网**：按用户要求将 EasyTier 固定核心源码与用户态网络依赖纳入仓库，由 Hub 同进程启动和停止；移除组件准备／下载／安装 UI，默认关闭，启用后直接创建或加入网络。网络库／完整 GUI、91 项不同定向回归和 Windows 依赖树检查通过，release 及唯一 MSI `095734` 的版本／升级／5 项载荷核验完成，源码 `f6c4b35` 已推送。来源及二开入口见[组网](customizations/remote-network.md)，包身份及双机／macOS 待验范围见[V34](releases/v1.0.34.md)；未触发 Actions／标签／Release。
 

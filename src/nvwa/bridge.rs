@@ -8,6 +8,7 @@ use axum::{
     response::Response,
 };
 use serde_json::{Value, json};
+use tracing::Instrument;
 
 use super::{
     NvwaService,
@@ -960,6 +961,64 @@ pub(crate) async fn detect(
     local: Option<LocalBridge>,
     allow_catalog_limit: bool,
 ) -> Result<Value> {
+    let span = tracing::info_span!(
+        target: "codexhub::nvwa",
+        "mcp_detection",
+        detection_id = %uuid::Uuid::new_v4(),
+        client = local.as_ref().map(|local| local.client.as_str()).unwrap_or("direct"),
+        last_phase = "setup"
+    );
+    async {
+        tracing::info!(
+            target: "codexhub::nvwa",
+            event = "mcp_detection",
+            outcome = "started",
+            "Dumpling MCP detection"
+        );
+        let result = detect_inner(service, profile, local, allow_catalog_limit).await;
+        log_detection_outcome("mcp_detection", "complete", &result);
+        result
+    }
+    .instrument(span)
+    .await
+}
+
+fn log_detection_outcome<T>(event: &'static str, phase: &'static str, result: &Result<T>) {
+    match result {
+        Ok(_) => tracing::info!(
+            target: "codexhub::nvwa",
+            event,
+            phase,
+            // A transport response still has to pass the catalog validators.
+            outcome = if event == "mcp_detection_phase" { "received" } else { "completed" },
+            "Dumpling MCP detection"
+        ),
+        Err(error) => {
+            let failure = error.downcast_ref::<RemoteFailure>();
+            let upstream_status = match failure {
+                Some(RemoteFailure::Http { status }) => Some(*status),
+                Some(RemoteFailure::LoginExpired) => Some(401),
+                _ => None,
+            };
+            tracing::warn!(
+                target: "codexhub::nvwa",
+                event,
+                phase,
+                outcome = "failed",
+                failure = failure.map(RemoteFailure::kind).unwrap_or(if error.is::<ResponseTooLarge>() { "response_size" } else { "local_or_protocol" }),
+                upstream_status,
+                "Dumpling MCP detection"
+            );
+        }
+    }
+}
+
+async fn detect_inner(
+    service: &NvwaService,
+    profile: &NvwaProfile,
+    local: Option<LocalBridge>,
+    allow_catalog_limit: bool,
+) -> Result<Value> {
     let (generation, auth) = service.inner.runtime.auth(&profile.id).await?;
     let client = local.as_ref().map(|local| local.client);
     let mut transport = DetectionTransport::new(local)?;
@@ -1159,6 +1218,41 @@ impl DetectionTransport {
         request: &Value,
         protocol: &str,
     ) -> Result<RemoteResponse> {
+        let phase = request_phase(request["method"].as_str().unwrap_or_default());
+        tracing::Span::current().record("last_phase", phase);
+        tracing::info!(
+            target: "codexhub::nvwa",
+            event = "mcp_detection_phase",
+            phase,
+            outcome = "started",
+            "Dumpling MCP detection"
+        );
+        let result = self
+            .request_inner(service, profile, auth, request, protocol)
+            .await;
+        if matches!(&result, Ok(RemoteResponse::Json(reply)) if reply.get("error").is_some()) {
+            tracing::warn!(
+                target: "codexhub::nvwa",
+                event = "mcp_detection_phase",
+                phase,
+                outcome = "failed",
+                failure = "remote_rpc",
+                "Dumpling MCP detection"
+            );
+        } else {
+            log_detection_outcome("mcp_detection_phase", phase, &result);
+        }
+        result
+    }
+
+    async fn request_inner(
+        &mut self,
+        service: &NvwaService,
+        profile: &NvwaProfile,
+        auth: &AuthResult,
+        request: &Value,
+        protocol: &str,
+    ) -> Result<RemoteResponse> {
         let Some((http, endpoint, credential)) = &self.local else {
             return remote(service, profile, auth, request, Some(protocol)).await;
         };
@@ -1232,17 +1326,41 @@ impl DetectionTransport {
     }
 
     async fn close(&self) {
-        if let (Some((http, endpoint, credential)), Some(session)) = (&self.local, &self.session) {
-            if let Ok(mut authorization) = HeaderValue::from_str(&format!("Bearer {credential}")) {
+        let (Some((http, endpoint, credential)), Some(session)) = (&self.local, &self.session)
+        else {
+            tracing::info!(
+                target: "codexhub::nvwa",
+                event = "mcp_detection_cleanup",
+                outcome = "not_needed",
+                "Dumpling MCP detection session cleanup"
+            );
+            return;
+        };
+        let response = match HeaderValue::from_str(&format!("Bearer {credential}")) {
+            Ok(mut authorization) => {
                 authorization.set_sensitive(true);
-                let _ = http
-                    .delete(endpoint)
+                http.delete(endpoint)
                     .header("authorization", authorization)
                     .header("mcp-session-id", session)
                     .send()
-                    .await;
+                    .await
+                    .ok()
             }
-        }
+            Err(_) => None,
+        };
+        let http_status = response.as_ref().map(|response| response.status().as_u16());
+        let outcome = if http_status == Some(204) {
+            "completed"
+        } else {
+            "failed"
+        };
+        tracing::info!(
+            target: "codexhub::nvwa",
+            event = "mcp_detection_cleanup",
+            outcome,
+            http_status,
+            "Dumpling MCP detection session cleanup"
+        );
     }
 }
 

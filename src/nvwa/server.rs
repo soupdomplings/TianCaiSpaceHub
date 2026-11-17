@@ -961,6 +961,73 @@ async fn client_operation(
     operation: &str,
     body: &Value,
 ) -> Result<Value> {
+    let logged_operation = match operation {
+        "prepare" => "prepare",
+        "apply" => "apply",
+        "repair" => "repair",
+        "remove" => "remove",
+        "restore" => "restore",
+        _ => return client_operation_inner(service, profile, operation, body).await,
+    };
+    let client = match body.get("clientKind").and_then(Value::as_str) {
+        Some("codex") => "codex",
+        Some("workbuddy") => "workbuddy",
+        Some("tiangong") => "tiangong",
+        _ => "unknown",
+    };
+    tracing::info!(
+        target: "codexhub::nvwa",
+        event = "mcp_client_operation",
+        operation = logged_operation,
+        client,
+        outcome = "started",
+        "Dumpling MCP client operation"
+    );
+    let result = client_operation_inner(service, profile, operation, body).await;
+    match &result {
+        Ok(value) => {
+            let status = value.get("status").unwrap_or(&value["preview"]["status"]);
+            let preview_operation = match value["preview"]["operation"].as_str() {
+                Some("apply") => Some("apply"),
+                Some("repair") => Some("repair"),
+                Some("remove") => Some("remove"),
+                Some("restore") => Some("restore"),
+                _ => None,
+            };
+            tracing::info!(
+                target: "codexhub::nvwa",
+                event = "mcp_client_operation",
+                operation = logged_operation,
+                client,
+                outcome = "completed",
+                ready = value["readyForDetection"].as_bool(),
+                can_apply = value["preview"]["canApply"].as_bool(),
+                preview_operation,
+                configured = status["configured"].as_bool(),
+                modified = status["modified"].as_bool(),
+                owned = status["owned"].as_bool(),
+                requires_client_access = status["requiresClientAccess"].as_bool(),
+                "Dumpling MCP client operation"
+            );
+        }
+        Err(_) => tracing::warn!(
+            target: "codexhub::nvwa",
+            event = "mcp_client_operation",
+            operation = logged_operation,
+            client,
+            outcome = "failed",
+            "Dumpling MCP client operation"
+        ),
+    }
+    result
+}
+
+async fn client_operation_inner(
+    service: &NvwaService,
+    profile: &NvwaProfile,
+    operation: &str,
+    body: &Value,
+) -> Result<Value> {
     let target = client_target(profile, body)?;
     let client = target.client;
     let context = adapter_context(service, client).await?;

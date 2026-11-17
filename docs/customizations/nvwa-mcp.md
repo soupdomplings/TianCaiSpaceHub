@@ -1,5 +1,24 @@
 # Dumpling-MCP 接入（NVWA）
 
+## 2026-11-17：V1.0.35 现场诊断测试包
+
+用户后续明确要求提供一份可转给现场用户复现取日志的包，替代下方前阶段暂不升版／不打包的决定。本批基于 `main/941d235` 递增 1.0.35，统一交付一份本地 Windows MSI，包含下方错误分类、Hub 网络设置与重复检测回归。
+
+本轮补默认可用的接入准备／显式修改、检测阶段及临时会话清理记录，经既有 daemon 输出进入连接诊断包，用于判断是否反复进入修复，或失败于 MCP 初始化、通知、工具目录及上游请求。新增记录仅含固定类型、状态及随机关联编号等，无环境名／ID、配置地址／路径、凭据、工具参数或上游正文；不新增全局 debug、重复日志、自动删除／重建配置或请求重发。维护入口为 `src/nvwa/server.rs`、`src/nvwa/bridge.rs` 及既有 `src/diagnostics_export.rs`；不会修改保存格式或用户原有配置。
+
+| 日志事件 | 字段及含义 |
+| --- | --- |
+| `mcp_client_operation` | 固定 `operation=prepare/apply/repair/remove/restore`、`client`、`outcome=started/completed/failed`；完成时记录已有结果中的 `ready/can_apply/preview_operation/configured/modified/owned/requires_client_access`，区分只读核对、需要确认和实际配置修改 |
+| `mcp_detection` | 随机 `detection_id` 仅关联本次检测，带固定客户端类型和 `last_phase`；整体 `completed` 才代表检测通过，失败保留固定 `failure` 与可用的上游 HTTP 状态 |
+| `mcp_detection_phase` | `initialize/initialized/tools_list` 等固定阶段，`started/received/failed` 分别表示发起、收到响应、失败；`received` 仍须经过目录协议校验，HTTP 200 中的 JSON-RPC 错误记为 `remote_rpc`，不将响应正文记入日志 |
+| `mcp_detection_cleanup` | 仅本次临时 MCP 会话的 `not_needed/completed/failed` 与可用本机 `http_status`，不表示删除配置或退出登录 |
+
+`main.rs` 的默认 `codexhub=info` 已覆盖这些事件，GUI 的 daemon stdout／stderr 既有输出进入 `codexhub-daemon-startup.log`；无需改变日志开关。连接诊断仍只取最多 4 份符合条件日志各自末尾 256 KiB，建议复现后立即导出，避免后续活动挤出现场片段。新增记录不创建第二份日志文件，也不跟随调试模式输出原始协议。
+
+本轮 Windows GUI／测试编译、45 项 NVWA 与 5 项诊断导出用例通过，共 50 项。扩展既有重复检测用例，默认 INFO 下核对操作／准备状态、八次检测各自 UUID、阶段／失败／清理记录及秘密排除；原配置、授权和客户端会话保持。导出用例确认新增日志字段保留、秘密继续脱敏。合成网络仅 loopback，未运行真实产品或认证服务；命令、release 与 MSI 状态见交付专题。
+
+从托盘真正退出旧 Hub 后安装本包，在原环境及网络设置下登录并复现一次，尽快从“帮助 → 导出连接诊断…”保存 ZIP；无需先清空环境或反复删除接入。准确步骤、构建／检查与包身份见[V35 交付](../releases/v1.0.35.md)。本轮只生成 Windows 本地测试包，现场问题尚未定因，macOS 未构建或实机验证，不触发 Actions、标签或 Release。下方前阶段检查和 V34 包状态保持原输入归属。
+
 ## 2026-11-17：连接检测 HTTP 502 排障与网络设置修正（未发布）
 
 本轮基于 `main/e32b9f9` 排查另一台 Windows 电脑的 Codex／WorkBuddy 同时显示 `Local MCP bridge check returned HTTP 502`。用户显式指定的 v1.0.31 导出包只读核对后，没有找到 Dumpling／NVWA 请求的失败阶段或上游错误；其中 Codex 远控健康仅证明另一条桌面链路可用，不能证明 MCP 接口正常。本轮不读取其他用户配置或秘密，不把原诊断材料纳入仓库。
