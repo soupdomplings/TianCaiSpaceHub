@@ -1,0 +1,22 @@
+[package]
+name = "easytier-rpc-build"
+description = "Protobuf RPC Service Generator for EasyTier"
+version = "0.1.0"
+edition = "2024"
+homepage = "https://github.com/EasyTier/EasyTier"
+repository = "https://github.com/EasyTier/EasyTier"
+authors = ["kkrainbow"]
+keywords = ["vpn", "p2p", "network", "easytier"]
+categories = ["network-programming", "command-line-utilities"]
+license-file = "LICENSE"
+readme = "README.md"
+rust-version = "1.95"
+
+[dependencies]
+heck = "0.5"
+prost-build = "0.13"
+
+[features]
+default = []
+internal-namespace = []
+

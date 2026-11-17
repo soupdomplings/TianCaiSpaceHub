@@ -340,7 +340,7 @@ async fn restart(state: &SharedState) -> Result<()> {
         }
         ensure!(
             runtime::ready(&root(&state.config_path)),
-            "远程连接组件未准备，请先确认安装"
+            "当前系统暂不支持内置组网"
         );
         ensure!(
             !inner.secrets.network_secret.is_empty(),
@@ -376,7 +376,7 @@ async fn restart(state: &SharedState) -> Result<()> {
 }
 
 async fn refresh(state: &SharedState) {
-    let rpc = {
+    let snapshot = {
         let mut inner = state.remote_network.inner.lock().await;
         inner.invitations.retain(|_, expires| *expires > now_ms());
         inner
@@ -385,15 +385,15 @@ async fn refresh(state: &SharedState) {
         let Some(running) = inner.running.as_mut() else {
             return;
         };
-        if running.child.try_wait().ok().flatten().is_some() {
-            inner.last_error = Some("远程连接组件已退出，请停用后重新启用".into());
+        if !running.is_running() {
+            inner.last_error = Some("内置组网已停止，请停用后重新启用".into());
             inner.discovered.clear();
             inner.network_connected = false;
             return;
         }
-        running.rpc_port
+        runtime::snapshot(running)
     };
-    match runtime::peers(&root(&state.config_path), rpc).await {
+    match snapshot {
         Ok(snapshot) => {
             let mut inner = state.remote_network.inner.lock().await;
             inner.discovered = snapshot.peers;
@@ -560,7 +560,7 @@ fn network_running(inner: &mut Inner) -> bool {
     inner
         .running
         .as_mut()
-        .is_some_and(|running| matches!(running.child.try_wait(), Ok(None)))
+        .is_some_and(|running| running.is_running())
         && inner.transport.is_some()
 }
 
@@ -570,7 +570,7 @@ async fn status(state: &SharedState) -> Result<Value> {
     let ready = runtime::ready(&root(&state.config_path));
     let running = network_running(&mut inner);
     Ok(
-        json!({"enabled":inner.config.enabled,"runtimeReady":ready,"runtimeInstalled":runtime::package_dir(&root(&state.config_path)).is_ok_and(|v|v.join("hub-owner.json").is_file()),"runtimeVersion":runtime::VERSION,"networkName":inner.config.network_name,"deviceName":inner.config.device_name,"deviceId":inner.config.device_id,"relayUrl":inner.config.relay_url,"networkReady":running,"connected":running && inner.network_connected,"devices":device_rows(&inner),"pendingPairings":inner.pairings.values().filter(|v|v.decision==PairDecision::Pending).map(|v|json!({"requestId":v.request.request_id,"deviceName":v.request.device.name,"expiresAt":v.expires_at})).collect::<Vec<_>>(),"pairing":inner.outgoing.is_some(),"browserUrl":inner.transport.as_ref().map(|v|v.browser_base.clone()),"lastError":inner.last_error}),
+        json!({"enabled":inner.config.enabled,"runtimeReady":ready,"runtimeEmbedded":ready,"runtimeInstalled":runtime::legacy_installed(&root(&state.config_path)),"runtimeVersion":runtime::VERSION,"networkName":inner.config.network_name,"deviceName":inner.config.device_name,"deviceId":inner.config.device_id,"relayUrl":inner.config.relay_url,"networkReady":running,"connected":running && inner.network_connected,"devices":device_rows(&inner),"pendingPairings":inner.pairings.values().filter(|v|v.decision==PairDecision::Pending).map(|v|json!({"requestId":v.request.request_id,"deviceName":v.request.device.name,"expiresAt":v.expires_at})).collect::<Vec<_>>(),"pairing":inner.outgoing.is_some(),"browserUrl":inner.transport.as_ref().map(|v|v.browser_base.clone()),"lastError":inner.last_error}),
     )
 }
 
@@ -649,17 +649,11 @@ async fn settings_api(State(state): State<SharedState>, Json(input): Json<Settin
     Ok(Json(status(&state).await?))
 }
 
-#[derive(Deserialize)]
-struct Preparation {
-    confirmed: bool,
-}
-async fn prepare_api(
-    State(state): State<SharedState>,
-    Json(input): Json<Preparation>,
-) -> ApiResult {
+// Backward-compatible endpoint for earlier local callers. Networking is now
+// compiled into Hub, so this never downloads or asks for installation consent.
+async fn prepare_api(State(state): State<SharedState>, Json(_input): Json<Value>) -> ApiResult {
     ensure_loaded(&state).await?;
     let _operation = state.remote_network.operation.lock().await;
-    check(input.confirmed, "仅在用户确认后准备远程连接组件")?;
     check(
         state.remote_network.inner.lock().await.config.enabled,
         "请先启用远程连接",
@@ -676,7 +670,7 @@ async fn uninstall_api(State(state): State<SharedState>) -> ApiResult {
     let _operation = state.remote_network.operation.lock().await;
     check(
         !state.remote_network.inner.lock().await.config.enabled,
-        "请先停用远程连接，再移除 Hub 安装的组件",
+        "请先停用远程连接，再清理旧版 Hub 下载的组件",
     )?;
     stop(&state).await?;
     runtime::uninstall(&root(&state.config_path))?;
@@ -691,7 +685,7 @@ async fn create_api(State(state): State<SharedState>) -> ApiResult {
         check(inner.config.enabled, "请先启用远程连接")?;
         check(
             runtime::ready(&root(&state.config_path)),
-            "远程连接组件未准备，请先确认安装",
+            "当前系统暂不支持内置组网",
         )?;
         let identity_changed = ensure_identity(&mut inner)?;
         let network_changed =
@@ -735,7 +729,7 @@ async fn join_api(State(state): State<SharedState>, Json(input): Json<JoinInput>
         check(inner.config.enabled, "请先启用远程连接")?;
         check(
             runtime::ready(&root(&state.config_path)),
-            "远程连接组件未准备，请先确认安装",
+            "当前系统暂不支持内置组网",
         )?;
         check(
             inner.config.device_id != code.target.id,
@@ -930,7 +924,12 @@ mod tests {
         startup(state.clone()).await.unwrap();
         let value = status(&state).await.unwrap();
         assert_eq!(value["enabled"], false);
-        assert_eq!(value["runtimeReady"], false);
+        assert_eq!(
+            value["runtimeReady"],
+            cfg!(any(windows, target_os = "macos"))
+        );
+        assert_eq!(value["runtimeEmbedded"], value["runtimeReady"]);
+        assert_eq!(value["runtimeInstalled"], false);
         assert_eq!(value["connected"], false);
         assert!(!root(&state.config_path).exists());
         assert!(state.remote_network.inner.lock().await.running.is_none());
@@ -938,15 +937,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cancelled_preparation_and_disabled_preparation_do_no_download_work() {
+    async fn legacy_preparation_cannot_enable_networking_or_create_runtime_files() {
         let (_directory, state) = fixture();
-        let cancelled =
-            prepare_api(State(state.clone()), Json(Preparation { confirmed: false })).await;
-        assert!(cancelled.err().unwrap().0.to_string().contains("确认"));
-        let disabled =
-            prepare_api(State(state.clone()), Json(Preparation { confirmed: true })).await;
+        let cancelled = prepare_api(State(state.clone()), Json(json!({"confirmed":false}))).await;
+        assert!(cancelled.err().unwrap().0.to_string().contains("启用"));
+        let disabled = prepare_api(State(state.clone()), Json(json!({"confirmed":true}))).await;
         assert!(disabled.err().unwrap().0.to_string().contains("启用"));
         assert!(!root(&state.config_path).exists());
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    #[tokio::test]
+    async fn embedded_network_is_ready_without_an_installer_or_confirmation() {
+        let (_directory, state) = fixture();
+        ensure_loaded(&state).await.unwrap();
+        state.remote_network.inner.lock().await.config.enabled = true;
+        let value = prepare_api(State(state.clone()), Json(json!({"confirmed":false})))
+            .await
+            .unwrap()
+            .0;
+        assert_eq!(value["runtimeEmbedded"], true);
+        assert_eq!(value["runtimeReady"], true);
+        assert_eq!(value["runtimeInstalled"], false);
+        assert_eq!(value["networkReady"], false);
+        assert!(!root(&state.config_path).exists());
+        assert!(state.remote_network.inner.lock().await.running.is_none());
     }
 
     #[tokio::test]

@@ -34,6 +34,18 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Prepare Protocol Buffers compiler
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $protocRoot = Join-Path $env:RUNNER_TEMP "protoc-29.3"
+          $protocArchive = Join-Path $env:RUNNER_TEMP "protoc-29.3-win64.zip"
+          Invoke-WebRequest -Uri "https://github.com/protocolbuffers/protobuf/releases/download/v29.3/protoc-29.3-win64.zip" -OutFile $protocArchive
+          Expand-Archive -LiteralPath $protocArchive -DestinationPath $protocRoot
+          "PROTOC=$(Join-Path $protocRoot 'bin\protoc.exe')" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "PROTOC_INCLUDE=$(Join-Path $protocRoot 'include')" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          (Join-Path $protocRoot "bin") | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
       - name: Install .NET SDK
         uses: actions/setup-dotnet@v4
         with:

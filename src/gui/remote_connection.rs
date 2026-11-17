@@ -39,8 +39,6 @@ pub(super) struct RemotePage {
     join_code: TextCtrl,
     devices: ListCtrl,
     requests: ListCtrl,
-    prepare: Button,
-    uninstall: Button,
     create: Button,
     join: Button,
     open: Button,
@@ -57,7 +55,6 @@ pub(super) struct RemotePage {
     read_generation: Arc<AtomicU64>,
     active: Rc<Cell<bool>>,
     loaded: Rc<Cell<bool>>,
-    offer_install: Rc<Cell<bool>>,
     last_read: Rc<Cell<Instant>>,
     last_error: Rc<RefCell<String>>,
     timer: Rc<RefCell<Option<Timer<Panel>>>>,
@@ -128,11 +125,7 @@ impl RemotePage {
         );
         let actions = BoxSizer::builder(Orientation::Horizontal).build();
         let save = button(&settings, "保存设置", ButtonKind::Secondary);
-        let prepare = button(&settings, "准备组网组件", ButtonKind::Secondary);
-        let uninstall = button(&settings, "移除组网组件", ButtonKind::Ghost);
-        for item in [save, prepare, uninstall] {
-            actions.add(&item, 0, SizerFlag::Right, settings.from_dip(10));
-        }
+        actions.add(&save, 0, SizerFlag::Right, settings.from_dip(10));
         fields.add_sizer(&actions, 0, SizerFlag::All, settings.from_dip(10));
         column.add(
             &settings,
@@ -260,8 +253,6 @@ impl RemotePage {
             join_code,
             devices,
             requests,
-            prepare,
-            uninstall,
             create,
             join,
             open,
@@ -278,7 +269,6 @@ impl RemotePage {
             read_generation: Default::default(),
             active: Default::default(),
             loaded: Default::default(),
-            offer_install: Default::default(),
             last_read: Rc::new(Cell::new(Instant::now() - Duration::from_secs(30))),
             last_error: Default::default(),
             timer: Default::default(),
@@ -292,7 +282,6 @@ impl RemotePage {
         let ui = self.clone();
         self.enabled.on_toggled(move |_| {
             let enabled = ui.enabled.is_checked();
-            ui.offer_install.set(enabled);
             ui.post(
                 "settings",
                 json!({"enabled":enabled}),
@@ -308,17 +297,6 @@ impl RemotePage {
                 "保存连接设置",
                 |_| {},
             );
-        });
-        let ui = self.clone();
-        self.prepare.on_click(move |_| ui.confirm_prepare());
-        let ui = self.clone();
-        self.uninstall.on_click(move |_| {
-            if ui.confirm(
-                "移除 Hub 安装的组网组件？已保存的设备和会话不会删除。",
-                "移除组网组件",
-            ) {
-                ui.post("uninstall", json!({}), "移除组网组件", |_| {});
-            }
         });
         let ui = self.clone();
         self.create.on_click(move |_| {
@@ -432,24 +410,6 @@ impl RemotePage {
         }
     }
 
-    fn confirm(&self, message: &str, title: &str) -> bool {
-        MessageDialog::builder(&self.frame, message, title)
-            .with_style(MessageDialogStyle::YesNo | MessageDialogStyle::IconQuestion)
-            .build()
-            .show_modal()
-            == ID_YES
-    }
-
-    fn confirm_prepare(&self) {
-        self.offer_install.set(false);
-        if self.confirm(
-            "准备远程连接需要下载 EasyTier 组网组件，仅供 Hub 使用。是否现在下载？",
-            "准备组网组件",
-        ) {
-            self.post("prepare", json!({"confirmed":true}), "准备组网组件", |_| {});
-        }
-    }
-
     fn post(&self, action: &str, body: Value, title: &str, complete: impl FnOnce(Value) + 'static) {
         self.read_generation.fetch_add(1, Ordering::SeqCst);
         let ui = self.clone();
@@ -461,8 +421,6 @@ impl RemotePage {
             move |result| {
                 if let Ok(value) = result {
                     complete(value);
-                } else {
-                    ui.offer_install.set(false);
                 }
                 ui.fetch();
                 ui.controls();
@@ -514,16 +472,6 @@ impl RemotePage {
                     }
                     *self.state.borrow_mut() = value;
                     self.render();
-                    if self.offer_install.get() && self.active.get() && !self.job.is_running() {
-                        self.offer_install.set(false);
-                        let needs_install = {
-                            let state = self.state.borrow();
-                            state["enabled"] == true && state["runtimeReady"] != true
-                        };
-                        if needs_install {
-                            self.confirm_prepare();
-                        }
-                    }
                 }
                 Err(error) if self.active.get() => self.report_error(&error),
                 Err(_) => {}
@@ -548,21 +496,22 @@ impl RemotePage {
         let state = self.state.borrow();
         let enabled = state["enabled"] == true;
         self.enabled.set_value(enabled);
-        self.state_label.set_label(if !enabled {
-            "未启用 · 组网组件不会运行"
-        } else if state["runtimeReady"] != true {
-            "组网组件尚未准备"
-        } else if !state["networkName"].as_str().is_some_and(|s| !s.is_empty()) {
-            "组网组件已就绪 · 请创建或加入网络"
-        } else if state["connected"] == true {
-            "网络已连接 · 可查看设备状态并打开会话"
-        } else if state["lastError"].as_str().is_some_and(|s| !s.is_empty()) {
-            "连接失败 · 请检查错误提示或更换节点"
-        } else if state["networkReady"] == true {
-            "正在连接网络 · 等待组网节点和自己的设备"
-        } else {
-            "网络尚未启动 · 请检查组件或重新启用"
-        });
+        self.state_label
+            .set_label(if state["runtimeReady"] != true {
+                "内置组网暂不可用 · 请查看错误提示"
+            } else if !enabled {
+                "未启用 · 内置组网已就绪"
+            } else if !state["networkName"].as_str().is_some_and(|s| !s.is_empty()) {
+                "内置组网已就绪 · 请创建或加入网络"
+            } else if state["connected"] == true {
+                "网络已连接 · 可查看设备状态并打开会话"
+            } else if state["lastError"].as_str().is_some_and(|s| !s.is_empty()) {
+                "连接失败 · 请检查错误提示或更换节点"
+            } else if state["networkReady"] == true {
+                "正在连接网络 · 等待组网节点和自己的设备"
+            } else {
+                "网络尚未启动 · 请检查连接设置或重新启用"
+            });
         self.network_label.set_label(
             &state["networkName"]
                 .as_str()
@@ -643,9 +592,6 @@ impl RemotePage {
         let ready = state["runtimeReady"] == true;
         self.enabled.enable(available);
         self.save.enable(available);
-        self.prepare.enable(available && enabled && !ready);
-        self.uninstall
-            .enable(available && !enabled && (ready || state["runtimeInstalled"] == true));
         self.create.enable(available && enabled && ready);
         self.join.enable(available && enabled && ready);
         self.open.enable(available && enabled && ready);

@@ -1,6 +1,6 @@
 [package]
 name = "tiancaispacehub"
-version = "1.0.33"
+version = "1.0.34"
 edition = "2024"
 license = "Apache-2.0"
 build = "build.rs"
@@ -15,6 +15,7 @@ axum-server = { version = "0.7", default-features = false, features = ["tls-rust
 base64 = "0.22"
 cipher = "0.4"
 ecb = "0.1"
+easytier = { path = "vendor/easytier/easytier", default-features = false, features = ["hub-embedded", "smoltcp", "socks5", "aes-gcm"] }
 futures-util = "0.3"
 fs2 = "0.4"
 flate2 = "1"

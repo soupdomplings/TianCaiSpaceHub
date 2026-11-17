@@ -279,8 +279,10 @@ Thread binding model:
 
 The Cargo package is `tiancaispacehub` and the binary is `TianCaiSpaceHub`. The user currently handles functional testing. These commands compile code and create a debug EXE without launching the app or executing tests. Generate Windows/macOS release packages through GitHub Actions.
 
+Starting with V1.0.34, the networking core builds from vendored source and requires Rust 1.95 or later and `protoc`. On Windows, use the official Protocol Buffers v29.3 archive and set `PROTOC` to `bin/protoc.exe` and `PROTOC_INCLUDE` to its `include/` directory. On macOS, use `brew install cmake protobuf`. These are build dependencies; Hub users do not install a separate networking component. See the [vendor notes](vendor/easytier/SOURCE.md) and [networking guide](docs/customizations/remote-network.md) for source and customization details. Limit routine formatting to the Hub package to preserve imported source formatting.
+
 ```powershell
-cargo fmt --all -- --check
+cargo fmt --package tiancaispacehub -- --check
 cargo check --locked --target x86_64-pc-windows-msvc --features gui --tests --bin TianCaiSpaceHub
 cargo build --locked --target x86_64-pc-windows-msvc --features gui --bin TianCaiSpaceHub
 ```

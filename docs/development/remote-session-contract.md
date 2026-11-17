@@ -1,11 +1,11 @@
 # 远程会话首版协作契约
 
-维护日期：2026-11-15。状态：源码集成及 Windows 离线检查完成，尚未实机验收。功能基线 `7c6d3d5`，实现提交 `e44b497`；用户随后要求本地打包，1.0.32 的实际包身份见[交付记录](../releases/v1.0.32.md)，本批不创建正式发布。功能检查范围见[集成验证](../customizations/remote-connection.md#验证记录)。
+维护日期：2026-11-17。远程初版实现为 `e44b497`；初版检查及 V1.0.32 包保留原归属。本轮基于 `dc9f288` 内置组网源码，管理接口兼容变化如下，构建与实机状态见[V34](../releases/v1.0.34.md)，不创建正式发布。会话 API 不变，天工新版原生适配见[V33](../releases/v1.0.33.md)。
 
 ## 分工与边界
 
 - 管理：原生导航和设置页、AppState/main/web 集成、Cargo 依赖、静态资源嵌入、CI 与文档索引。
-- 网络：`src/remote_network/`，EasyTier 2.6.4 准备和生命周期、HTTPS、设备配对与撤销、本地浏览器代理。
+- 网络：`src/remote_network/`，本地 EasyTier 2.6.4 源码库与独立运行域生命周期、HTTPS、设备配对与撤销、本地浏览器代理。
 - 会话：`src/remote_sessions/` 及必要 Codex 事件分流，共用原运行端的会话、事件、附件和审批。
 - 网页：`web-remote/` 源码及 `assets/remote-web/` 构建资源，两套客户端视图及离线检查。
 - 各开发方不独立打包、不提交或发布、不启动真实 Hub/客户端/模型；同文件修改先交接。原有未提交文档变动保留。
@@ -52,8 +52,10 @@
 
 ## 管理 API
 
-网络模块在现有受信本地管理路由增加 `/api/remote-network`：GET `/status`；POST `/settings`（必填 enabled，及可选 deviceName、relayUrl）、`/prepare`（仅显式 confirmed:true）、`/uninstall`、`/create`、`/join`（code）、`/pair/approve`（requestId）、`/pair/reject`（requestId）、`/revoke`（deviceId）、`/open`（deviceId?，返回 url）。状态返回 enabled/runtimeReady/runtimeInstalled/runtimeVersion/networkReady/connected/networkName/deviceName/deviceId/relayUrl/devices/pendingPairings/pairing/browserUrl/lastError；create 另返回 code。
+网络模块在现有受信本地管理路由增加 `/api/remote-network`：GET `/status`；POST `/settings`（必填 enabled，及可选 deviceName、relayUrl）、`/create`、`/join`（code）、`/pair/approve`（requestId）、`/pair/reject`（requestId）、`/revoke`（deviceId）、`/open`（deviceId?，返回 url）。状态返回 enabled/runtimeReady/runtimeEmbedded/runtimeInstalled/runtimeVersion/networkReady/connected/networkName/deviceName/deviceId/relayUrl/devices/pendingPairings/pairing/browserUrl/lastError；create 另返回 code。
 
-`runtimeReady` 是自管安装完整，`runtimeInstalled` 是可识别的 Hub 安装记录，`networkReady` 是组件进程就绪，`connected` 是实际节点连接。设备的 online 和 connectionType 来自运行组件的真实路由，不能从已安装或已配对推断。`browserUrl` 仅为本机基址，必须通过 `/open` 获取带入口票据的地址；票据在浏览器换成 HttpOnly Cookie 后从网址移除。
+`runtimeReady`／`runtimeEmbedded` 表示当前平台具有编译内置能力，不读取运行包或下载记录；`runtimeInstalled` 仅表示旧版 Hub 外置副本存在，不是内置启动条件。`networkReady` 是内置网络运行域及会话服务就绪，`connected` 是实际节点连接。设备的 online 和 connectionType 来自内置核心真实 PeerManager／路由，不能从启用或已配对推断。`browserUrl` 仅为本机基址，必须通过 `/open` 获取带入口票据的地址；票据在浏览器换成 HttpOnly Cookie 后从网址移除。
 
-停用不卸载。真正退出关闭自管组件；远程附件不属于搭档临时目录。已加入网络不等于已获会话权限；目标端确认一次后持久授权，可撤销。
+旧 POST `/prepare` 保留兼容，接收旧 JSON 但不再要求 confirmed:true；仅已启用时返回内置能力和启动状态，不下载或写运行包。旧 POST `/uninstall` 仅停用后可清理所有权匹配的旧版外置副本，内置能力仍可用；新界面不调用这两个入口。
+
+停用或真正退出结束内置网络运行域和自管网页服务，保留网络／配对设置；关闭到托盘保持连接。远程附件不属于搭档临时目录。已加入网络不等于已获会话权限；目标端确认一次后持久授权，可撤销。

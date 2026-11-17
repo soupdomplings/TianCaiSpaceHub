@@ -282,8 +282,10 @@ Thread 绑定模型：
 
 Cargo package 为 `tiancaispacehub`，binary 为 `TianCaiSpaceHub`。当前功能测试由用户负责；以下仅检查编译与生成调试 EXE，不启动应用或执行测试。Windows/macOS 发布安装包统一由 GitHub Actions 生成。
 
+V1.0.34 起，组网核心从仓库内源码编译，开发环境需要 Rust 1.95 及以上和 `protoc`。Windows 可使用官方 Protocol Buffers v29.3，将 `PROTOC` 指向 `bin/protoc.exe`、`PROTOC_INCLUDE` 指向同包的 `include/`；macOS 可用 `brew install cmake protobuf`。这些仅为构建依赖，用户运行 Hub 不需安装组件。来源、裁剪和后续二开入口见 [vendor 说明](vendor/easytier/SOURCE.md)及[组网专题](docs/customizations/remote-network.md)；常规格式检查限于 Hub 自有 package，保留导入源码原有格式。
+
 ```powershell
-cargo fmt --all -- --check
+cargo fmt --package tiancaispacehub -- --check
 cargo check --locked --target x86_64-pc-windows-msvc --features gui --tests --bin TianCaiSpaceHub
 cargo build --locked --target x86_64-pc-windows-msvc --features gui --bin TianCaiSpaceHub
 ```

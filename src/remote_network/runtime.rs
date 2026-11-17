@@ -1,23 +1,26 @@
-//! The unmodified, versioned EasyTier runtime is installed only after consent.
+//! EasyTier runs inside an isolated, Hub-owned Tokio runtime. Configuration and
+//! network secrets stay in memory; no CLI, management RPC or child process runs.
 use std::{
-    io::{Cursor, Read, Write},
+    collections::HashSet,
     net::Ipv4Addr,
     path::{Path, PathBuf},
-    process::Stdio,
+    sync::{Arc, Mutex},
+    thread,
     time::Duration,
 };
 
 use anyhow::{Context, Result, ensure};
+use easytier::{
+    common::config::TomlConfigLoader, instance::instance::Instance, proto::api::instance::Route,
+};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
-use tokio::process::{Child, Command};
+use serde_json::json;
+use tokio::sync::oneshot;
 
 use super::{NetworkConfig, NetworkSecrets, SERVICE_PORT};
 
 pub(super) const VERSION: &str = "2.6.4";
 const OWNER: &str = "tiancai-hub-easytier-v1";
-const MAX_ARCHIVE: usize = 160 * 1024 * 1024;
-const MAX_BINARY: u64 = 192 * 1024 * 1024;
 
 pub(super) fn platform() -> Result<&'static str> {
     match (std::env::consts::OS, std::env::consts::ARCH) {
@@ -29,11 +32,7 @@ pub(super) fn platform() -> Result<&'static str> {
     }
 }
 
-fn native(name: &str) -> String {
-    format!("{name}{}", if cfg!(windows) { ".exe" } else { "" })
-}
-
-pub(super) fn package_dir(root: &Path) -> Result<PathBuf> {
+fn package_dir(root: &Path) -> Result<PathBuf> {
     Ok(root
         .join("runtime")
         .join(format!("easytier-{}-v{VERSION}", platform()?)))
@@ -46,7 +45,13 @@ struct Manifest {
     platform: String,
 }
 
-pub(super) fn ready(root: &Path) -> bool {
+pub(super) fn ready(_root: &Path) -> bool {
+    cfg!(any(windows, target_os = "macos"))
+}
+
+/// A previous Hub version may have downloaded an owned binary package. It is
+/// never loaded by this version, but can still be explicitly removed.
+pub(super) fn legacy_installed(root: &Path) -> bool {
     let Ok(directory) = package_dir(root) else {
         return false;
     };
@@ -59,116 +64,10 @@ pub(super) fn ready(root: &Path) -> bool {
     marker.owner == OWNER
         && marker.version == VERSION
         && platform().is_ok_and(|v| marker.platform == v)
-        && directory.join(native("easytier-core")).is_file()
-        && directory.join(native("easytier-cli")).is_file()
 }
 
 pub(super) async fn prepare(root: &Path) -> Result<()> {
-    if ready(root) {
-        return Ok(());
-    }
-    let directory = package_dir(root)?;
-    ensure!(
-        !directory.exists(),
-        "自管组网目录不完整，请停用后移除 Hub 安装的组件再准备"
-    );
-    let url = format!(
-        "https://github.com/EasyTier/EasyTier/releases/download/v{VERSION}/easytier-{}-v{VERSION}.zip",
-        platform()?
-    );
-    let response = crate::outbound_http::get()
-        .get(&url)
-        .timeout(Duration::from_secs(180))
-        .send()
-        .await
-        .context("无法下载远程连接组件，请检查网络后重试")?
-        .error_for_status()
-        .context("官方组件下载失败")?;
-    ensure!(
-        response
-            .content_length()
-            .is_none_or(|v| v <= MAX_ARCHIVE as u64),
-        "远程连接组件包体积异常"
-    );
-    let mut response = response;
-    let mut bytes = Vec::new();
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .context("远程连接组件下载中断，请重试")?
-    {
-        ensure!(
-            bytes.len() + chunk.len() <= MAX_ARCHIVE,
-            "远程连接组件包体积异常"
-        );
-        bytes.extend_from_slice(&chunk);
-    }
-    let parent = directory.parent().context("组件目录无效")?;
-    std::fs::create_dir_all(parent)?;
-    let staging = tempfile::Builder::new()
-        .prefix(".prepare-")
-        .tempdir_in(parent)?;
-    unpack(&bytes, staging.path())?;
-    std::fs::write(
-        staging.path().join("LICENSE-EasyTier"),
-        include_bytes!("EasyTier-LICENSE"),
-    )?;
-    std::fs::write(
-        staging.path().join("SOURCE.txt"),
-        format!(
-            "EasyTier v{VERSION}\nhttps://github.com/EasyTier/EasyTier/tree/v{VERSION}\nUnmodified official binaries; LGPL-3.0.\n"
-        ),
-    )?;
-    std::fs::write(
-        staging.path().join("hub-owner.json"),
-        serde_json::to_vec_pretty(&Manifest {
-            owner: OWNER.into(),
-            version: VERSION.into(),
-            platform: platform()?.into(),
-        })?,
-    )?;
-    std::fs::rename(staging.path(), &directory).context("无法保存远程连接组件")?;
-    Ok(())
-}
-
-fn unpack(bytes: &[u8], output: &Path) -> Result<()> {
-    let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).context("组件压缩包无法读取")?;
-    let required = [native("easytier-core"), native("easytier-cli")];
-    for name in &required {
-        let mut found = false;
-        for index in 0..archive.len() {
-            let mut entry = archive.by_index(index)?;
-            let Some(path) = entry.enclosed_name() else {
-                anyhow::bail!("组件包包含越界路径");
-            };
-            ensure!(
-                entry.unix_mode().is_none_or(|m| m & 0o170000 != 0o120000),
-                "组件包包含链接"
-            );
-            if path
-                .file_name()
-                .is_none_or(|value| value != std::ffi::OsStr::new(name))
-            {
-                continue;
-            }
-            ensure!(
-                !found && entry.size() <= MAX_BINARY && !entry.is_dir(),
-                "组件包主程序内容异常"
-            );
-            let destination = output.join(name);
-            let mut file = std::fs::File::create(&destination)?;
-            let copied = std::io::copy(&mut (&mut entry).take(MAX_BINARY + 1), &mut file)?;
-            ensure!(copied <= MAX_BINARY, "组件程序体积异常");
-            file.flush()?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(&destination, std::fs::Permissions::from_mode(0o700))?;
-            }
-            found = true;
-        }
-        ensure!(found, "官方组件包缺少 {name}");
-    }
+    ensure!(ready(root), "内置组网目前仅支持 Windows / macOS");
     Ok(())
 }
 
@@ -191,11 +90,34 @@ pub(super) fn uninstall(root: &Path) -> Result<()> {
 }
 
 pub(super) struct Running {
-    pub child: Child,
-    pub tree: crate::local_assistance::process::ProcessTree,
-    pub directory: tempfile::TempDir,
-    pub rpc_port: u16,
     pub socks_port: u16,
+    worker: Option<thread::JoinHandle<()>>,
+    stop: Option<oneshot::Sender<()>>,
+    latest: Arc<Mutex<WorkerState>>,
+}
+
+impl Running {
+    pub(super) fn is_running(&self) -> bool {
+        self.worker.as_ref().is_some_and(|v| !v.is_finished())
+            && self.latest.lock().is_ok_and(|v| v.running)
+    }
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        // Also covers cancellation while launch is awaiting readiness. Normal
+        // shutdown additionally joins the owner thread before reporting stop.
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
+    }
+}
+
+#[derive(Default)]
+struct WorkerState {
+    running: bool,
+    snapshot: PeerSnapshot,
+    error: Option<String>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -205,7 +127,7 @@ struct ActiveOwner {
 }
 
 /// Reclaim only a marked, already-exited Hub instance. Live or unrecognised
-/// directories stay untouched; normal stop removes its TempDir immediately.
+/// directories stay untouched. Embedded runs no longer create these files.
 pub(super) fn recover_inactive(root: &Path) -> Result<()> {
     let active = root.join("active");
     if !active.is_dir() {
@@ -244,15 +166,15 @@ pub(super) fn recover_inactive(root: &Path) -> Result<()> {
 pub(super) fn configuration(
     config: &NetworkConfig,
     secrets: &NetworkSecrets,
-    rpc_port: u16,
     socks_port: u16,
 ) -> Result<String> {
     let ip: Ipv4Addr = config.ipv4.parse().context("虚拟地址无效")?;
     ensure!(ip.octets()[..2] == [10, 203], "虚拟地址超出 Hub 网络范围");
+    let device_id = uuid::Uuid::parse_str(&config.device_id).context("设备身份无效")?;
     let mut document = toml::map::Map::new();
     document.insert(
         "hostname".into(),
-        toml::Value::String(format!("tch-{}", &config.device_id.replace('-', "")[..28])),
+        toml::Value::String(format!("tch-{}", &device_id.simple().to_string()[..28])),
     );
     document.insert(
         "instance_name".into(),
@@ -286,14 +208,12 @@ pub(super) fn configuration(
         "peer".into(),
         toml::Value::try_from(json!([{"uri":config.relay_url}]))?,
     );
-    document.insert("flags".into(), toml::Value::try_from(json!({"no_tun":true,"use_smoltcp":true,"enable_encryption":true,"enable_ipv6":false,"enable_exit_node":false,"relay_network_whitelist":"","enable_relay_foreign_network_kcp":false,"enable_relay_foreign_network_quic":false,"relay_all_peer_rpc":false}))?);
+    document.insert("flags".into(), toml::Value::try_from(json!({"no_tun":true,"use_smoltcp":true,"enable_encryption":true,"encryption_algorithm":"aes-gcm","enable_ipv6":false,"enable_exit_node":false,"relay_network_whitelist":"","enable_relay_foreign_network_kcp":false,"enable_relay_foreign_network_quic":false,"relay_all_peer_rpc":false,"accept_dns":false,"enable_udp_broadcast_relay":false}))?);
     let rule = json!({"name":"hub-remote-https","priority":1000,"action":1,"protocol":1,"ports":[SERVICE_PORT.to_string()],"enabled":true,"stateful":true,"destination_ips":[format!("{ip}/32")]});
     document.insert("acl".into(), toml::Value::try_from(json!({"acl_v1":{"chains":[
         {"name":"hub-inbound","chain_type":1,"enabled":true,"default_action":2,"rules":[rule.clone()]},
         {"name":"hub-forward","chain_type":3,"enabled":true,"default_action":2,"rules":[rule]}
     ]}}))?);
-    // RPC lives in a separate core CLI option and is never admitted by the ACL.
-    let _ = rpc_port;
     Ok(toml::to_string(&toml::Value::Table(document))?)
 }
 
@@ -302,219 +222,272 @@ pub(super) async fn launch(
     config: &NetworkConfig,
     secrets: &NetworkSecrets,
 ) -> Result<Running> {
-    ensure!(ready(root), "远程连接组件未准备，请先确认安装");
-    let rpc_reservation = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+    ensure!(ready(root), "内置组网目前仅支持 Windows / macOS");
     let socks_reservation = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
-    let rpc_port = rpc_reservation.local_addr()?.port();
     let socks_port = socks_reservation.local_addr()?.port();
-    let sessions = root.join("active");
-    std::fs::create_dir_all(&sessions)?;
-    let directory = tempfile::Builder::new()
-        .prefix("hub-")
-        .tempdir_in(sessions)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))?;
-    }
-    let configuration_path = directory.path().join("network.toml");
-    std::fs::write(
-        directory.path().join("hub-owner.json"),
-        serde_json::to_vec(&ActiveOwner {
-            owner: OWNER.into(),
-            pid: None,
-        })?,
-    )?;
-    crate::desktop::transaction::atomic_write(
-        &configuration_path,
-        configuration(config, secrets, rpc_port, socks_port)?.as_bytes(),
-    )?;
-    let program = package_dir(root)?.join(native("easytier-core"));
-    #[cfg(not(target_os = "macos"))]
-    let mut command = Command::new(&program);
-    #[cfg(target_os = "macos")]
-    let mut command = {
-        // Positional arguments avoid shell interpolation of file paths. The
-        // tiny parent watcher also stops the owned component after a Hub crash.
-        const WATCH_PARENT: &str = r#"parent_pid=$1
-shift
-"$@" &
-component_pid=$!
-(
-  while kill -0 "$parent_pid" 2>/dev/null; do sleep 1; done
-  kill "$component_pid" 2>/dev/null
-) &
-watcher_pid=$!
-trap 'kill "$component_pid" "$watcher_pid" 2>/dev/null' EXIT HUP INT TERM
-wait "$component_pid"
-status=$?
-kill "$watcher_pid" 2>/dev/null
-wait "$watcher_pid" 2>/dev/null
-exit "$status"
-"#;
-        let mut command = Command::new("/bin/sh");
-        command
-            .args(["-c", WATCH_PARENT, "hub-network-parent"])
-            .arg(std::process::id().to_string())
-            .arg(&program);
-        command
+    let configuration = configuration(config, secrets, socks_port)?;
+    let latest = Arc::new(Mutex::new(WorkerState::default()));
+    let (stop_tx, stop_rx) = oneshot::channel();
+    let (started_tx, started_rx) = oneshot::channel();
+    let worker_state = latest.clone();
+    let worker = thread::Builder::new()
+        .name("hub-remote-network".into())
+        .spawn(move || {
+            worker_main(
+                configuration,
+                socks_reservation,
+                stop_rx,
+                started_tx,
+                worker_state,
+            )
+        })
+        .context("无法创建内置组网后台")?;
+    let running = Running {
+        socks_port,
+        worker: Some(worker),
+        stop: Some(stop_tx),
+        latest,
     };
-    // An existing standalone EasyTier installation must not inject config or
-    // listeners into the Hub-owned instance through ET_* environment options.
-    for (key, _) in std::env::vars_os() {
-        if key.to_string_lossy().starts_with("ET_") {
-            command.env_remove(key);
-        }
-    }
-    command
-        .arg("-c")
-        .arg(&configuration_path)
-        .arg("--rpc-portal")
-        .arg(format!("127.0.0.1:{rpc_port}"))
-        .arg("--rpc-portal-whitelist")
-        .arg("127.0.0.1/32")
-        .current_dir(directory.path())
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .kill_on_drop(true);
-    #[cfg(windows)]
-    command.creation_flags(0x08000000);
-    #[cfg(target_os = "macos")]
-    command.process_group(0);
-    drop(rpc_reservation);
-    drop(socks_reservation);
-    let mut child = command.spawn().context("无法启动远程连接组件")?;
-    let tree = match crate::local_assistance::process::ProcessTree::attach(&child) {
-        Ok(tree) => tree,
+    let started = match tokio::time::timeout(Duration::from_secs(20), started_rx).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(_)) => Err(anyhow::anyhow!("内置组网启动已退出，请重新启用")),
+        Err(_) => Err(anyhow::anyhow!("内置组网启动超时，请检查节点设置后重试")),
+    };
+    match started {
+        Ok(()) => Ok(running),
         Err(error) => {
-            let _ = child.kill().await;
-            return Err(error.context("无法管理远程连接后台"));
+            stop(running).await?;
+            Err(error)
         }
-    };
-    std::fs::write(
-        directory.path().join("hub-owner.json"),
-        serde_json::to_vec(&ActiveOwner {
-            owner: OWNER.into(),
-            pid: child.id(),
-        })?,
-    )?;
-    for _ in 0..40 {
-        if child.try_wait()?.is_some() {
-            anyhow::bail!("远程连接组件启动后退出，请检查节点设置与端口占用");
-        }
-        if tokio::net::TcpStream::connect((Ipv4Addr::LOCALHOST, rpc_port))
-            .await
-            .is_ok()
-            && tokio::net::TcpStream::connect((Ipv4Addr::LOCALHOST, socks_port))
-                .await
-                .is_ok()
-        {
-            return Ok(Running {
-                child,
-                tree,
-                directory,
-                rpc_port,
-                socks_port,
-            });
-        }
-        tokio::time::sleep(Duration::from_millis(150)).await;
     }
-    let _ = child.kill().await;
-    anyhow::bail!("远程连接组件未能就绪，请检查网络后重试")
 }
 
-pub(super) async fn stop(mut runtime: Running) -> Result<()> {
-    let _ = runtime.child.start_kill();
-    let _ = tokio::time::timeout(Duration::from_secs(3), runtime.child.wait()).await;
-    if let Err(error) = runtime.tree.stop_and_confirm().await {
-        let directory = runtime.directory.keep();
-        return Err(error.context(format!(
-            "远程连接后台退出尚未确认，暂时保留运行记录 {}",
-            directory.display()
+fn worker_main(
+    configuration: String,
+    socks_reservation: std::net::TcpListener,
+    stop: oneshot::Receiver<()>,
+    started: oneshot::Sender<Result<()>>,
+    latest: Arc<Mutex<WorkerState>>,
+) {
+    let mut started = Some(started);
+    let result = match tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .thread_name("hub-network-io")
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => {
+            let result = runtime.block_on(run_instance(
+                configuration,
+                socks_reservation,
+                stop,
+                &mut started,
+                &latest,
+            ));
+            // Upstream owns some detached async tasks. Keeping them in this
+            // runtime makes stopping independent of Hub's main task executor.
+            runtime.shutdown_timeout(Duration::from_secs(3));
+            result
+        }
+        Err(error) => Err(error).context("无法初始化内置组网后台"),
+    };
+    let error = result.err().map(|v| format!("{v:#}"));
+    if let Ok(mut state) = latest.lock() {
+        state.running = false;
+        state.snapshot = PeerSnapshot::default();
+        state.error = error.clone();
+    }
+    if let Some(started) = started {
+        let _ = started.send(Err(anyhow::anyhow!(
+            error.unwrap_or_else(|| "内置组网启动已取消".into())
         )));
     }
-    drop(runtime.directory);
+}
+
+async fn run_instance(
+    configuration: String,
+    socks_reservation: std::net::TcpListener,
+    mut stop: oneshot::Receiver<()>,
+    started: &mut Option<oneshot::Sender<Result<()>>>,
+    latest: &Arc<Mutex<WorkerState>>,
+) -> Result<()> {
+    // The upstream parser attaches the full input to parse errors. Report a
+    // safe message here because the input contains the private network secret.
+    let loader = TomlConfigLoader::new_from_str(&configuration)
+        .map_err(|_| anyhow::anyhow!("内置组网配置无法读取，请重新加入个人网络"))?;
+    drop(configuration);
+    let mut instance = Instance::new(loader);
+    drop(socks_reservation);
+    let result = async {
+        tokio::select! {
+            biased;
+            _ = &mut stop => return Ok(()),
+            result = instance.run() => result.context("内置组网启动失败")?,
+        }
+        {
+            let mut state = latest
+                .lock()
+                .map_err(|_| anyhow::anyhow!("组网状态读取失败"))?;
+            state.running = true;
+        }
+        if started.take().is_some_and(|v| v.send(Ok(())).is_err()) {
+            return Ok(());
+        }
+        let mut interval = tokio::time::interval(Duration::from_secs(1));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                biased;
+                _ = &mut stop => break,
+                _ = interval.tick() => {},
+            }
+            let snapshot = tokio::select! {
+                biased;
+                _ = &mut stop => break,
+                snapshot = read_peers(&instance) => snapshot,
+            };
+            let mut state = latest
+                .lock()
+                .map_err(|_| anyhow::anyhow!("组网状态读取失败"))?;
+            state.snapshot = snapshot;
+        }
+        Ok(())
+    }
+    .await;
+    let _ = tokio::time::timeout(Duration::from_secs(2), instance.clear_resources()).await;
+    drop(instance);
+    result
+}
+
+pub(super) async fn stop(mut running: Running) -> Result<()> {
+    if let Some(stop) = running.stop.take() {
+        let _ = stop.send(());
+    }
+    if let Some(worker) = running.worker.take() {
+        tokio::task::spawn_blocking(move || worker.join())
+            .await
+            .context("等待内置组网退出失败")?
+            .map_err(|_| anyhow::anyhow!("内置组网后台意外退出"))?;
+    }
     Ok(())
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(super) struct DiscoveredPeer {
     pub ipv4: String,
     pub hostname: String,
     pub direct: bool,
 }
 
+#[derive(Clone, Debug, Default)]
 pub(super) struct PeerSnapshot {
     pub peers: Vec<DiscoveredPeer>,
     pub connected: bool,
 }
 
-pub(super) async fn peers(root: &Path, rpc_port: u16) -> Result<PeerSnapshot> {
-    let mut command = Command::new(package_dir(root)?.join(native("easytier-cli")));
-    command
-        .args(["-p", &format!("127.0.0.1:{rpc_port}"), "-o", "json", "peer"])
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .kill_on_drop(true);
-    #[cfg(windows)]
-    command.creation_flags(0x08000000);
-    let output = tokio::time::timeout(Duration::from_secs(4), command.output())
-        .await
-        .context("读取网络节点超时")??;
-    ensure!(output.status.success(), "无法读取组网节点状态");
-    let values: Value =
-        serde_json::from_slice(&output.stdout).context("组网组件返回的节点格式不兼容")?;
-    let connected = values
-        .as_array()
-        .context("组网组件返回的节点格式不兼容")?
-        .iter()
-        .any(|v| {
-            v["cost"]
-                .as_str()
-                .is_some_and(|cost| cost == "p2p" || cost.starts_with("relay("))
-        });
-    Ok(PeerSnapshot {
-        peers: parse_peers(&values)?,
-        connected,
-    })
+pub(super) fn snapshot(running: &Running) -> Result<PeerSnapshot> {
+    let state = running
+        .latest
+        .lock()
+        .map_err(|_| anyhow::anyhow!("组网状态读取失败"))?;
+    if let Some(error) = &state.error {
+        anyhow::bail!("{error}");
+    }
+    ensure!(
+        state.running && running.worker.as_ref().is_some_and(|v| !v.is_finished()),
+        "内置组网后台已停止，请重新启用"
+    );
+    Ok(state.snapshot.clone())
 }
 
-fn parse_peers(values: &Value) -> Result<Vec<DiscoveredPeer>> {
-    let values = values.as_array().context("组网组件返回的节点格式不兼容")?;
-    Ok(values
+async fn read_peers(instance: &Instance) -> PeerSnapshot {
+    let manager = instance.get_peer_manager();
+    let connected = !manager
+        .get_peer_map()
+        .list_peers_with_conn()
+        .await
+        .is_empty()
+        || !manager
+            .get_foreign_network_client()
+            .get_peer_map()
+            .list_peers_with_conn()
+            .await
+            .is_empty();
+    let routes = manager.list_routes().await;
+    let direct = routes
         .iter()
-        .filter_map(|v| {
-            let cost = v["cost"].as_str()?;
-            if cost == "Local" {
-                return None;
-            }
-            let ipv4 = v["ipv4"].as_str()?.parse::<Ipv4Addr>().ok()?;
-            if ipv4.octets()[..2] != [10, 203] {
-                return None;
-            }
-            Some(DiscoveredPeer {
-                ipv4: ipv4.to_string(),
-                hostname: v["hostname"].as_str().unwrap_or("Hub").into(),
-                direct: cost == "p2p",
+        .filter(|v| manager.has_directly_connected_conn(v.peer_id))
+        .map(|v| v.peer_id)
+        .collect();
+    route_snapshot(manager.my_peer_id(), routes, &direct, connected)
+}
+
+fn route_snapshot(
+    local_peer_id: u32,
+    routes: Vec<Route>,
+    direct: &HashSet<u32>,
+    connected: bool,
+) -> PeerSnapshot {
+    let peers = if connected {
+        routes
+            .into_iter()
+            .filter(|v| v.peer_id != local_peer_id && v.cost > 0)
+            .filter_map(|v| {
+                let ipv4: Ipv4Addr = v.ipv4_addr?.address?.into();
+                if ipv4.octets()[..2] != [10, 203] {
+                    return None;
+                }
+                Some(DiscoveredPeer {
+                    ipv4: ipv4.to_string(),
+                    hostname: if v.hostname.is_empty() {
+                        "Hub".into()
+                    } else {
+                        v.hostname
+                    },
+                    direct: direct.contains(&v.peer_id),
+                })
             })
-        })
-        .collect())
+            .collect()
+    } else {
+        Vec::new()
+    };
+    PeerSnapshot { peers, connected }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use easytier::common::config::ConfigLoader;
+
+    #[tokio::test]
+    async fn embedded_readiness_and_legacy_prepare_create_no_package_or_runtime() {
+        let directory = tempfile::tempdir().unwrap();
+        assert_eq!(
+            ready(directory.path()),
+            cfg!(any(windows, target_os = "macos"))
+        );
+        if ready(directory.path()) {
+            prepare(directory.path()).await.unwrap();
+        }
+        assert!(!legacy_installed(directory.path()));
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+    }
+
     #[test]
     fn no_tun_configuration_admits_only_remote_https_in_both_chains() {
         let mut config = NetworkConfig::default();
         config.network_name = "hub-fixture".into();
         let mut secrets = NetworkSecrets::default();
         secrets.network_secret = "test-secret".into();
-        let value: toml::Value = configuration(&config, &secrets, 5555, 5556)
-            .unwrap()
-            .parse()
-            .unwrap();
+        let document = configuration(&config, &secrets, 5556).unwrap();
+        let value: toml::Value = document.parse().unwrap();
+        let loader = TomlConfigLoader::new_from_str(&document).unwrap();
+        assert_eq!(loader.get_id().to_string(), config.device_id);
+        assert!(loader.get_flags().no_tun);
+        assert!(loader.get_flags().use_smoltcp);
+        assert!(loader.get_flags().enable_encryption);
+        assert_eq!(loader.get_flags().encryption_algorithm, "aes-gcm");
+        assert!(loader.get_acl().is_some());
         assert_eq!(value["flags"]["no_tun"].as_bool(), Some(true));
         assert_eq!(value["flags"]["relay_network_whitelist"].as_str(), Some(""));
         for chain in value["acl"]["acl_v1"]["chains"].as_array().unwrap() {
@@ -524,24 +497,91 @@ mod tests {
                 Some(SERVICE_PORT.to_string().as_str())
             );
         }
-        assert!(
-            !configuration(&config, &secrets, 5555, 5556)
-                .unwrap()
-                .contains("3847")
-        );
+        assert!(!document.contains("3847"));
+        assert!(!document.contains("rpc_portal"));
     }
+
+    fn fixture_route(id: u32, ipv4: &str, cost: i32, hostname: &str) -> Route {
+        Route {
+            peer_id: id,
+            ipv4_addr: Some(easytier::proto::common::Ipv4Inet {
+                address: Some(ipv4.parse::<Ipv4Addr>().unwrap().into()),
+                network_length: 16,
+            }),
+            cost,
+            hostname: hostname.into(),
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn discovered_status_does_not_invent_connectivity() {
-        let peers = parse_peers(&json!([
-            {"cost":"Local","ipv4":"10.203.0.1"},
-            {"cost":"p2p","ipv4":"10.203.0.2","hostname":"tch-fixture"},
-            {"cost":"relay(2)","ipv4":"10.203.0.3","hostname":"tch-relayed"},
-            {"cost":"p2p","ipv4":"192.168.0.1","hostname":"other"}
-        ]))
-        .unwrap();
-        assert_eq!(peers.len(), 2);
-        assert!(peers[0].direct);
-        assert!(!peers[1].direct);
+        let routes = vec![
+            fixture_route(1, "10.203.0.1", 1, "local"),
+            fixture_route(2, "10.203.0.2", 1, "tch-fixture"),
+            fixture_route(3, "10.203.0.3", 2, "tch-relayed"),
+            fixture_route(4, "192.168.0.1", 1, "other"),
+            fixture_route(5, "10.203.0.5", 0, "unreachable"),
+            Route {
+                peer_id: 6,
+                cost: 1,
+                ..Default::default()
+            },
+        ];
+        let snapshot = route_snapshot(1, routes.clone(), &HashSet::from([2, 4]), true);
+        assert!(snapshot.connected);
+        assert_eq!(snapshot.peers.len(), 2);
+        assert_eq!(snapshot.peers[0].ipv4, "10.203.0.2");
+        assert_eq!(snapshot.peers[0].hostname, "tch-fixture");
+        assert!(snapshot.peers[0].direct);
+        assert!(!snapshot.peers[1].direct);
+        let disconnected = route_snapshot(1, routes, &HashSet::from([2, 4]), false);
+        assert!(!disconnected.connected);
+        assert!(disconnected.peers.is_empty());
+        let relay_only = route_snapshot(1, Vec::new(), &HashSet::new(), true);
+        assert!(relay_only.connected);
+        assert!(relay_only.peers.is_empty());
+    }
+
+    #[tokio::test]
+    async fn stop_signals_and_joins_owner_without_starting_a_network() {
+        let (stop_tx, stop_rx) = oneshot::channel();
+        let stopped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let worker_stopped = stopped.clone();
+        let worker = thread::spawn(move || {
+            let _ = stop_rx.blocking_recv();
+            worker_stopped.store(true, std::sync::atomic::Ordering::Release);
+        });
+        let running = Running {
+            socks_port: 0,
+            worker: Some(worker),
+            stop: Some(stop_tx),
+            latest: Arc::new(Mutex::new(WorkerState {
+                running: true,
+                ..Default::default()
+            })),
+        };
+        assert!(running.is_running());
+        assert!(!snapshot(&running).unwrap().connected);
+        stop(running).await.unwrap();
+        assert!(stopped.load(std::sync::atomic::Ordering::Acquire));
+    }
+
+    #[test]
+    fn dropping_launch_handle_cancels_the_owned_background() {
+        let (stop_tx, stop_rx) = oneshot::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let worker = thread::spawn(move || {
+            let _ = stop_rx.blocking_recv();
+            let _ = done_tx.send(());
+        });
+        drop(Running {
+            socks_port: 0,
+            worker: Some(worker),
+            stop: Some(stop_tx),
+            latest: Arc::new(Mutex::new(WorkerState::default())),
+        });
+        done_rx.recv_timeout(Duration::from_secs(2)).unwrap();
     }
 
     #[test]
@@ -553,6 +593,19 @@ mod tests {
         std::fs::write(&sentinel, "unowned").unwrap();
         assert!(uninstall(directory.path()).is_err());
         assert!(sentinel.is_file());
+        std::fs::write(
+            package.join("hub-owner.json"),
+            serde_json::to_vec(&Manifest {
+                owner: OWNER.into(),
+                version: VERSION.into(),
+                platform: platform().unwrap().into(),
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(legacy_installed(directory.path()));
+        uninstall(directory.path()).unwrap();
+        assert!(!package.exists());
     }
 
     #[test]

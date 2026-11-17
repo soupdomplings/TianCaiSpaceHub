@@ -1,0 +1,38 @@
+macro_rules! define_global_var {
+    ($name:ident, $type:ty, $init:expr) => {
+        pub static $name: once_cell::sync::Lazy<std::sync::Mutex<$type>> =
+            once_cell::sync::Lazy::new(|| std::sync::Mutex::new($init));
+    };
+}
+
+#[macro_export]
+macro_rules! use_global_var {
+    ($name:ident) => {
+        $crate::common::constants::$name.lock().unwrap().to_owned()
+    };
+}
+
+#[macro_export]
+macro_rules! set_global_var {
+    ($name:ident, $val:expr) => {
+        *$crate::common::constants::$name.lock().unwrap() = $val
+    };
+}
+
+define_global_var!(MANUAL_CONNECTOR_RECONNECT_INTERVAL_MS, u64, 1000);
+
+define_global_var!(OSPF_UPDATE_MY_GLOBAL_FOREIGN_NETWORK_INTERVAL_SEC, u64, 10);
+
+define_global_var!(MAX_DIRECT_CONNS_PER_PEER_IN_FOREIGN_NETWORK, u32, 3);
+
+define_global_var!(DIRECT_CONNECT_TO_PUBLIC_SERVER, bool, true);
+
+// must make it true in future.
+define_global_var!(HMAC_SECRET_DIGEST, bool, false);
+
+pub const UDP_HOLE_PUNCH_CONNECTOR_SERVICE_ID: u32 = 2;
+
+pub const WIN_SERVICE_WORK_DIR_REG_KEY: &str = "SOFTWARE\\EasyTier\\Service\\WorkDir";
+
+// Keep the upstream identity stable inside the Hub repository.
+pub const EASYTIER_VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "-hub-8428a89d");
