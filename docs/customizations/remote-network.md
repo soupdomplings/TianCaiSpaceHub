@@ -90,4 +90,4 @@ EasyTier 优先尝试设备直连，失败时使用可达节点中继。`PeerMan
 
 当时合成测试 filter 为 `remote_network::`，覆盖默认关闭不落运行文件、取消准备不下载、状态不泄漏凭据、证书丢失和地址冲突重新配对、一次确认／持久保存／撤销通知、ACL 双链、真实 CLI 状态样例、拒绝移除外部目录、异常残留回收、独立 Router 无管理接口、浏览器 Cookie、跨站拒绝、产物 CSP 及无需新事件即可撤销等待流。Windows 的持久凭据用例标注 `cfg(windows)`；macOS 钥匙串和运行端生命周期尚未实测。
 
-本次源码内置改造没有启动真实 EasyTier、加入个人网络或运行真实 Hub／客户端／模型。历史普通 TCP 节点可达性检查不等于本轮组网或中继验证通过。Windows↔Windows、Windows↔macOS、macOS↔macOS、节点故障恢复、端口隔离实机验证，以及桌面—网页—桌面原会话续聊，均待用户按统一测试版本验收。
+本轮 Windows release 与唯一 MSI `20261117-095734` 已完成版本／升级和 5 项载荷核验，源码 `f6c4b35` 已推送；包身份见[V34](../releases/v1.0.34.md)。没有启动真实 EasyTier、加入个人网络或运行真实 Hub／客户端／模型。历史普通 TCP 节点可达性检查不等于本轮组网或中继验证通过。Windows↔Windows、Windows↔macOS、macOS↔macOS、节点故障恢复、端口隔离实机验证，以及桌面—网页—桌面原会话续聊，均待用户按统一测试版本验收。

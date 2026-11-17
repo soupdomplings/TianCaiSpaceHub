@@ -1,6 +1,6 @@
 # TianCaiSpaceHub 文档总入口
 
-2026-11-17 **V1.0.34 源码内置组网**：按用户要求将 EasyTier 固定核心源码与用户态网络依赖纳入仓库，由 Hub 同进程启动和停止；移除组件准备／下载／安装 UI，默认关闭，启用后直接创建或加入网络。网络库／完整 GUI、91 项不同定向回归和 Windows 依赖树检查通过。来源及二开入口见[组网](customizations/remote-network.md)，统一构建、唯一包及实机待验状态见[V34](releases/v1.0.34.md)；未触发 Actions／标签／Release。
+2026-11-17 **V1.0.34 源码内置组网**：按用户要求将 EasyTier 固定核心源码与用户态网络依赖纳入仓库，由 Hub 同进程启动和停止；移除组件准备／下载／安装 UI，默认关闭，启用后直接创建或加入网络。网络库／完整 GUI、91 项不同定向回归和 Windows 依赖树检查通过，release 及唯一 MSI `095734` 的版本／升级／5 项载荷核验完成，源码 `f6c4b35` 已推送。来源及二开入口见[组网](customizations/remote-network.md)，包身份及双机／macOS 待验范围见[V34](releases/v1.0.34.md)；未触发 Actions／标签／Release。
 
 2026-11-16 **V1.0.33 天工 Work 1.1.0 兼容测试**：按新版实际资源适配增强启动、历史归属、模型与分享、协助 IPC、IM 及远程原会话。266 项不同 Rust、86 项 Node、16 项静态合同、Windows GUI／release 和唯一 MSI `143320` 核验通过。[兼容依据与回滚](customizations/tiangong-work-compatibility-assessment.md)，[包身份及验收](releases/v1.0.33.md)；源码本地提交 `c9dd09a`，GitHub 推送连接重置。Windows 实机由用户统一测试，macOS 待验，未触发 Actions／标签／Release。
 

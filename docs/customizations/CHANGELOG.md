@@ -6,7 +6,7 @@
 
 - 固定 EasyTier v2.6.4 核心及配套用户态依赖进入本地 vendor，保留原来源、版权、许可和修改记录；网络在 Hub 内独立运行域启动／停止，不依赖外部程序或组件管理 RPC。
 - 远程连接保持默认关闭；启用后可直接创建／加入网络，界面移除准备／安装确认／移除组件按钮。旧网络与设备授权保留，旧管理接口兼容但不会下载或补装；移除仅处理旧版 Hub 自己下载的副本。
-- Cargo 递增 1.0.34，构建准备增加仅开发端使用的 protoc；网络库／完整 GUI、91 项不同定向回归和 Windows 依赖树检查通过。实现、检查、统一 Windows 本地测试包与实机状态分别登记在[V34](../releases/v1.0.34.md)，维护见[组网](remote-network.md)与[远程连接](remote-connection.md)。不启动实际产品／网络或触发 Actions、标签、Release。
+- Cargo 递增 1.0.34，构建准备增加仅开发端使用的 protoc；网络库／完整 GUI、91 项不同定向回归和 Windows 依赖树检查通过。release、唯一 MSI `095734` 版本／升级／5 项载荷核验完成，源码 `f6c4b35` 已推送。实现、包身份及双机／macOS 待验状态见[V34](../releases/v1.0.34.md)，维护见[组网](remote-network.md)与[远程连接](remote-connection.md)。不启动实际产品／网络或触发 Actions、标签、Release。
 
 ## V1.0.33 本地测试适配 · 2026-11-16 · 天工 Work 1.1.0
 

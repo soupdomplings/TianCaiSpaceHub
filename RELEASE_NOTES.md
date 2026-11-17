@@ -6,6 +6,6 @@ TianCaiSpaceHub V1.0.34：组网源码内置测试版（2026-11-17）
 
 源码、固定依赖、来源、许可及构建说明纳入仓库，便于后续二开；构建工具只在开发／打包时使用，用户无需安装。保留 V1.0.33 天工 Work 1.1.0 兼容修复。
 
-Windows 本地测试包由管理统一生成；直连、中继、双机续聊和 macOS 按实际记录分别验收。本批不触发 Actions、标签或 Release。
+Windows release、91 项不同定向离线回归及唯一 MSI `20261117-095734` 的版本／升级／5 项载荷核验通过，源码已推送 `main / f6c4b35`。直连、中继、双机续聊和 macOS 待用户验收。本批不触发 Actions、标签或 Release。
 
 实现与维护见[组网专题](docs/customizations/remote-network.md)，实际检查和唯一包身份见[V1.0.34 交付](docs/releases/v1.0.34.md)。

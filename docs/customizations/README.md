@@ -1,6 +1,6 @@
 # 二开功能总表
 
-2026-11-17 **TC-025 V1.0.34 内置组网**：基于 EasyTier v2.6.4 核心源码内置并保留可二开入口，移除用户侧下载、安装及组件准备确认；Hub 管理独立网络运行域，沿用已有配对／网络资料，保留 TCP／UDP、AES-GCM、无 TUN 用户态转发和双链访问控制。网络库／完整 GUI、91 项不同定向回归及 Windows 依赖树通过，构建及用户验收分别登记在[V34](../releases/v1.0.34.md)；维护见[组网](remote-network.md)和[远程连接](remote-connection.md)，不触发 Actions／标签／Release。
+2026-11-17 **TC-025 V1.0.34 内置组网**：基于 EasyTier v2.6.4 核心源码内置并保留可二开入口，移除用户侧下载、安装及组件准备确认；Hub 管理独立网络运行域，沿用已有配对／网络资料，保留 TCP／UDP、AES-GCM、无 TUN 用户态转发和双链访问控制。网络库／完整 GUI、91 项不同定向回归及 Windows 依赖树通过，release／唯一 MSI `095734` 已核验、源码 `f6c4b35` 已推送。包身份及实机待验见[V34](../releases/v1.0.34.md)；维护见[组网](remote-network.md)和[远程连接](remote-connection.md)，不触发 Actions／标签／Release。
 
 2026-11-16 **V1.0.33 天工 Work 1.1.0 适配（TC-011/012/022/024/025）**：根据新版实际资源和官方清单，补本地 AI Gateway 主进程／renderer 账号、任务／项目归属迁移与撤销、独立目录、模型显示／预算、协助 IPC、会话版本与子运行隔离。安装布局、分享和 MCP 原接口继续复用；云端智能体仍按真实账号使用。266 项不同 Rust、86 项 Node、16 项静态合同、Windows GUI／release 与唯一 MSI `143320` 核验通过，源码本地提交 `c9dd09a`，推送连接重置。见[当前核对](tiangong-work-compatibility-assessment.md)和[V33 交付](../releases/v1.0.33.md)；Windows 实机及 macOS 待验，未触发 Actions／标签／Release。
 
