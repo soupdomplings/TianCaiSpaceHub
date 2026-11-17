@@ -1,4 +1,4 @@
-//! Isolated management-command tests: no listener, NVWA HTTP or real app state.
+//! Isolated management/loopback tests using temporary client files and synthetic credentials.
 use super::*;
 use crate::nvwa::{
     ManagementInfo, ServiceInner,
@@ -187,5 +187,221 @@ async fn prepare_only_reads_and_missing_grants_open_confirmed_repair_then_become
             prepared["preview"]["status"]["desiredServerName"],
             "Renamed196"
         );
+    }
+}
+
+#[derive(Clone)]
+struct FailingMcpPhase {
+    method: &'static str,
+    requests: Arc<Mutex<Vec<String>>>,
+}
+
+async fn failing_mcp_phase(
+    State(fixture): State<FailingMcpPhase>,
+    Json(request): Json<Value>,
+) -> Response {
+    let method = request["method"].as_str().unwrap();
+    fixture.requests.lock().await.push(method.to_owned());
+    if method == fixture.method {
+        return (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({"error":"fixture-private-upstream-body"})),
+        )
+            .into_response();
+    }
+    match method {
+        "initialize" => Json(json!({"jsonrpc":"2.0","id":request["id"],"result":{
+            "protocolVersion":bridge::PROTOCOLS[0],"capabilities":{"tools":{}},
+            "serverInfo":{"name":"fixture-mcp","version":"1"}
+        }}))
+        .into_response(),
+        "notifications/initialized" => StatusCode::ACCEPTED.into_response(),
+        _ => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+#[tokio::test]
+async fn repeated_detection_502_keeps_client_setup_and_existing_sessions() {
+    for client in [ClientKind::Codex, ClientKind::Workbuddy] {
+        for method in ["initialize", "tools/list"] {
+            let upstream_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let bridge_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let (directory, mut service, mut profile) = fixture().await;
+            profile.mcp_url = format!("http://{}/mcp", upstream_listener.local_addr().unwrap());
+            let mut config = service.inner.store.load().unwrap();
+            config.profiles[0] = profile.clone();
+            service.inner.store.save(&config, &config.revision).unwrap();
+            Arc::get_mut(&mut service.inner)
+                .unwrap()
+                .management
+                .base_url = format!("http://{}", bridge_listener.local_addr().unwrap());
+
+            let requests = Arc::new(Mutex::new(Vec::new()));
+            let upstream = Router::new()
+                .route("/mcp", post(failing_mcp_phase))
+                .with_state(FailingMcpPhase {
+                    method,
+                    requests: requests.clone(),
+                });
+            let upstream_task = tokio::spawn(async move {
+                axum::serve(upstream_listener, upstream).await.unwrap();
+            });
+            let closed_sessions = Arc::new(Mutex::new(Vec::new()));
+            let recorded_closes = closed_sessions.clone();
+            let local = router(service.clone()).layer(axum::middleware::from_fn(
+                move |request: axum::extract::Request, next: axum::middleware::Next| {
+                    let closed = recorded_closes.clone();
+                    async move {
+                        if request.method() == axum::http::Method::DELETE {
+                            let session = request.headers()["mcp-session-id"]
+                                .to_str()
+                                .unwrap()
+                                .to_owned();
+                            closed.lock().await.push(session);
+                        }
+                        next.run(request).await
+                    }
+                },
+            ));
+            let bridge_task = tokio::spawn(async move {
+                axum::serve(bridge_listener, local).await.unwrap();
+            });
+
+            let path = directory.path().join(if client == ClientKind::Codex {
+                "config.toml"
+            } else {
+                "mcp.json"
+            });
+            let mut body =
+                json!({"profileId":profile.id,"clientKind":client.as_str(),"overridePath":path});
+            let preview = client_operation(&service, &profile, "prepare", &body)
+                .await
+                .unwrap();
+            body["expectedFingerprint"] = preview["preview"]["status"]["targetFingerprint"].clone();
+            client_operation(&service, &profile, "apply", &body)
+                .await
+                .unwrap();
+            let baseline = client_operation(&service, &profile, "prepare", &body)
+                .await
+                .unwrap();
+            assert_eq!(baseline["readyForDetection"], true);
+            let config_before = std::fs::read(&path).unwrap();
+            let ledger_path = service.inner.store.root().join("managed.json");
+            let ledger_before = std::fs::read(&ledger_path).unwrap();
+            let snapshot_key = crate::nvwa::session_key(&profile.id);
+            let persisted_before = service.inner.secrets.get(&snapshot_key).unwrap().unwrap();
+            let runtime_before = service.inner.runtime.protected_snapshot(&profile.id).await;
+            let capability = service
+                .inner
+                .runtime
+                .existing_capability(&profile.id, client)
+                .await
+                .unwrap();
+            let (generation, _) = service.inner.runtime.auth(&profile.id).await.unwrap();
+            let existing_session = service
+                .inner
+                .runtime
+                .create_session(
+                    &profile.id,
+                    client,
+                    &capability,
+                    &generation,
+                    bridge::PROTOCOLS[0],
+                )
+                .await
+                .unwrap();
+            let context = adapter_context(&service, client).await.unwrap();
+            let target = client_target(&profile, &body).unwrap();
+            for _ in 0..2 {
+                let prepared = client_operation(&service, &profile, "prepare", &body)
+                    .await
+                    .unwrap();
+                assert_eq!(prepared["readyForDetection"], true);
+                let local = validated_local_bridge(&service, &profile, &context, &target)
+                    .await
+                    .unwrap();
+                assert!(local.is_some());
+                let error = bridge::detect(&service, &profile, local, false)
+                    .await
+                    .unwrap_err();
+                assert!(error.to_string().contains("HTTP 502"), "{error}");
+                assert!(!error.to_string().contains("fixture-private-upstream-body"));
+                let after = client_operation(&service, &profile, "prepare", &body)
+                    .await
+                    .unwrap();
+                assert_eq!(after["readyForDetection"], true);
+                assert_eq!(
+                    after["status"]["backupRef"],
+                    baseline["status"]["backupRef"]
+                );
+                assert_eq!(std::fs::read(&path).unwrap(), config_before);
+                assert_eq!(std::fs::read(&ledger_path).unwrap(), ledger_before);
+                assert_eq!(
+                    service.inner.secrets.get(&snapshot_key).unwrap().unwrap(),
+                    persisted_before
+                );
+                assert_eq!(
+                    service.inner.runtime.protected_snapshot(&profile.id).await,
+                    runtime_before
+                );
+                assert_eq!(
+                    service
+                        .inner
+                        .runtime
+                        .existing_capability(&profile.id, client)
+                        .await
+                        .as_deref(),
+                    Some(capability.as_str())
+                );
+                service
+                    .inner
+                    .runtime
+                    .admit(
+                        &profile.id,
+                        client,
+                        &capability,
+                        Some(&existing_session),
+                        "tools/list",
+                        None,
+                    )
+                    .await
+                    .unwrap();
+            }
+            let closed = closed_sessions.lock().await.clone();
+            assert_eq!(closed.len(), if method == "initialize" { 0 } else { 2 });
+            for session in closed {
+                assert_ne!(session, existing_session);
+                assert!(
+                    service
+                        .inner
+                        .runtime
+                        .admit(
+                            &profile.id,
+                            client,
+                            &capability,
+                            Some(&session),
+                            "tools/list",
+                            None
+                        )
+                        .await
+                        .is_err()
+                );
+            }
+            let expected = if method == "initialize" {
+                vec!["initialize", "initialize"]
+            } else {
+                vec![
+                    "initialize",
+                    "notifications/initialized",
+                    "tools/list",
+                    "initialize",
+                    "notifications/initialized",
+                    "tools/list",
+                ]
+            };
+            assert_eq!(*requests.lock().await, expected);
+            bridge_task.abort();
+            upstream_task.abort();
+        }
     }
 }

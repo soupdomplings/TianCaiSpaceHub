@@ -16,9 +16,15 @@
 
 用户后续确认：出问题的用户能在 Dumpling-MCP 页面正常登录，仅“连接并检测”失败。登录和身份读取成功仍不能证明 MCP 地址可达、接口权限或协议兼容；检测依次请求初始化、初始化通知及工具目录，现有 502 无法确定具体失败阶段。现场应先核对 MCP 地址和路径是否与正常电脑一致；未填写自定义 MCP 地址时，Hub 默认使用产品基址下的 `/mcp`，不是产品登录页面。导出中 `outboundProxyMode=system` 配合 `proxy=<none>` 只说明没有 Hub 自定义代理地址，不能据此排除 Windows 系统代理。若服务地址在当前网络可直接访问，可让用户临时关闭系统代理后从托盘真正退出并重开旧版 Hub，再检测一次作为代理对照；需要公司网络／VPN 才能访问时保留必要连接。仍失败则需要本轮修正后的明确错误或同一时段服务端 MCP 日志，不能把正常登录当作 MCP 接口和权限已验证。
 
+用户另怀疑仍在重复清除／创建配置，随后确认暂不清楚是否反复出现接入或修复确认，只是排障方向。核对 `v1.0.31` 至 `e7a0a62`，GUI、接入／修复适配和授权生命周期没有变化：`client/prepare` 只读核对已保存配置和既有本机授权，正常时直接进入检测；需要变更时先显示一次确认，检测失败后 GUI 返回错误，不自动调用 remove、restore、apply 或 repair。已有 capability 在普通检测及同身份续认证中保留，真正撤销发生在显式移除／恢复、退出登录或身份／认证范围变化等路径。
+
+检测结束时 `DetectionTransport::close` 的 DELETE 只释放本次检测建立的临时 MCP 协议会话和请求映射，不删除客户端配置、登录或本机接入授权，也不转发到上游删除业务资料。桥返回 502 的路径已进入 MCP 请求处理；这与配置不匹配时先进入修复确认属于不同阶段。以上源码核对不能排除现场有额外操作或版本差异，不据此认定现场根因，也不为未证实的怀疑改写接入流程。
+
 维护入口：`src/nvwa/bridge.rs` 的固定错误分类、桥响应和检测解码；`src/nvwa/http.rs` 的动态网络快照；`auth.rs` 的认证构造；`mod.rs` 的共享客户端；`src/diagnostics_export.rs` 的既有脱敏导出。没有持久格式或凭据迁移，回退仅恢复旧版网络选择和错误展示行为，已保存环境、受管配置、登录和客户端授权不主动删除。本轮不提升版本、不新增安装包、不触发 Actions、标签或 Release，统一交付时再纳入新版本；V1.0.34 既有 MSI 不包含本节修正。
 
 验证：Windows `cargo check --locked --offline --features gui --tests --bin TianCaiSpaceHub` 通过；`cargo test --locked --offline --bin TianCaiSpaceHub nvwa:: -- --test-threads=1` 的 44 项及 `diagnostics_export::tests::` 的 5 项通过，共 49 项。新增用例覆盖桥错误穿过本机 502、通知空编号、容量分类隔离、工具结果未知且不重放、两类连接池随网络设置更新、重定向不转发凭据、设置变化期间在途请求只执行一次，以及诊断保留分类并继续脱敏。网络用例仅使用合成本机 loopback 服务，没有真实认证、MCP 或模型调用；Windows 用户现场与 macOS 仍待验收。定向格式、增量敏感形状、差异空白及 5 份相关文档的 1,152 处本地链接检查通过，记录在已忽略的 `target/nvwa-bridge-20261117/`；没有重新构建或改写已交付 MSI。
+
+针对重复清除／创建的补充验证：基于 `main/e7a0a62`，只新增 `src/nvwa/server/client_preflight_tests.rs` 中的 `repeated_detection_502_keeps_client_setup_and_existing_sessions`，未改产品接入逻辑。Windows `cargo test --locked --offline --bin TianCaiSpaceHub nvwa::server::client_preflight_tests::repeated_detection_502_keeps_client_setup_and_existing_sessions -- --test-threads=1` 的 1 项回归通过：Codex／WorkBuddy × 初始化／工具列表返回 502 的四种场景，各连续检测两次，共八次失败检测。通过真实本机 bridge router 配合临时文件、合成身份和 loopback 模拟服务，确认检测前后仍直接就绪，配置字节、受管记录、backupRef、capability、运行时及持久授权快照保持；原客户端 MCP 会话继续有效，检测建立的临时会话独立释放，上游请求没有自动重发。日志为同一忽略目录的 `repeated-detection-tests.log`；定向格式、增量敏感及差异空白检查通过。上述 49 项和 GUI 结果沿用原输入，本次不重复运行；没有运行真实 Hub／客户端／认证服务或重新打包，现场根因仍待修正版明确错误或服务端日志确认。
 
 ## 2026-11-16：天工 Work 1.1.0 接入兼容核对
 
