@@ -1,5 +1,25 @@
 # Dumpling-MCP 接入（NVWA）
 
+## 2026-11-17：连接检测 HTTP 502 排障与网络设置修正（未发布）
+
+本轮基于 `main/e32b9f9` 排查另一台 Windows 电脑的 Codex／WorkBuddy 同时显示 `Local MCP bridge check returned HTTP 502`。用户显式指定的 v1.0.31 导出包只读核对后，没有找到 Dumpling／NVWA 请求的失败阶段或上游错误；其中 Codex 远控健康仅证明另一条桌面链路可用，不能证明 MCP 接口正常。本轮不读取其他用户配置或秘密，不把原诊断材料纳入仓库。
+
+该 502 是本机桥的外层状态。Hub 到远端 MCP 的连接失败、超时、上游非成功状态，以及无状态 JSON／初始化／请求编号等协议不兼容，原先都会转换成 502；客户端检测虽然读到了 JSON-RPC 错误，却只显示状态码。两个客户端都报错，应先排查共用的 Hub → 远端 MCP 链路，而不是分别重装客户端。现有证据不足以确定现场究竟属于代理、网络、权限、服务端还是协议问题。
+
+本轮源码已作以下修正：
+
+- 本机检测通过原请求编号关联桥返回的 `error.data.bridgeFailure` 分类，不再丢弃具体原因。初始化通知的空编号同样关联；容量限制仍仅按既有 `-32010` 精确响应识别，不能把任意 502 当成目录过大。
+- 界面区分登录过期、连接失败、超时、上游 HTTP、远端会话、SSE／非 JSON、无效 RPC、编号和初始化不兼容。HTTP 403 提示检查 MCP 权限／访问规则，404 核对路径，407 核对代理认证，5xx 检查远端服务／网关。外层 HTTP 502 不再作为唯一原因。
+- 诊断日志只记录 `event=mcp_bridge_failure`、固定 `phase`、客户端类型、分类和可选上游状态；不记录环境名称／地址、请求参数、响应正文、头、令牌、票据或工具结果。导出仍沿现有连接日志入口，不读取认证文件。
+- 新 `src/nvwa/http.rs` 让认证与 MCP 请求均使用 Hub 当前内存中的“连接与网络”设置。系统代理、直接连接、自定义代理均遵循既有 `outbound_http::apply_async_proxy`；设置变化后下一次请求换连接池，无需重建登录或本机接入，在途请求按原客户端自然结束。旧版独立 builder 未使用 Hub 这项选择，因此旧包仅在 Hub 切换“直接连接”不能作为有效的排障对照。
+- 保留认证连接／总超时 10／30 秒，MCP 连接／读取／总超时 20／300／300 秒，均不跟随重定向；本机管理／检测仍固定绕过代理。无网络失败后自动直连回退，无消息／工具自动重试，不重建登录代次。工具失败的结果未知和禁止重放语义、真实 401 失效处理保持。
+
+现场可先核对 MCP 地址和路径是否与正常电脑一致，以及登录是否正常。导出中 `outboundProxyMode=system` 配合 `proxy=<none>` 只说明没有 Hub 自定义代理地址，不能据此排除 Windows 系统代理。若服务地址在当前网络可直接访问，可让用户临时关闭系统代理后从托盘真正退出并重开旧版 Hub，再检测一次作为代理对照；需要公司网络／VPN 才能访问时保留必要连接。仍失败则需要本轮修正后的明确错误或同一时段服务端 MCP 日志，不能仅凭浏览器可登录产品页面推断 `/mcp` 接口和权限均正常。
+
+维护入口：`src/nvwa/bridge.rs` 的固定错误分类、桥响应和检测解码；`src/nvwa/http.rs` 的动态网络快照；`auth.rs` 的认证构造；`mod.rs` 的共享客户端；`src/diagnostics_export.rs` 的既有脱敏导出。没有持久格式或凭据迁移，回退仅恢复旧版网络选择和错误展示行为，已保存环境、受管配置、登录和客户端授权不主动删除。本轮不提升版本、不新增安装包、不触发 Actions、标签或 Release，统一交付时再纳入新版本；V1.0.34 既有 MSI 不包含本节修正。
+
+验证：Windows `cargo check --locked --offline --features gui --tests --bin TianCaiSpaceHub` 通过；`cargo test --locked --offline --bin TianCaiSpaceHub nvwa:: -- --test-threads=1` 的 44 项及 `diagnostics_export::tests::` 的 5 项通过，共 49 项。新增用例覆盖桥错误穿过本机 502、通知空编号、容量分类隔离、工具结果未知且不重放、两类连接池随网络设置更新、重定向不转发凭据、设置变化期间在途请求只执行一次，以及诊断保留分类并继续脱敏。网络用例仅使用合成本机 loopback 服务，没有真实认证、MCP 或模型调用；Windows 用户现场与 macOS 仍待验收。定向格式、增量敏感形状、差异空白及 5 份相关文档的 1,152 处本地链接检查通过，记录在已忽略的 `target/nvwa-bridge-20261117/`；没有重新构建或改写已交付 MSI。
+
 ## 2026-11-16：天工 Work 1.1.0 接入兼容核对
 
 本批只读核对 Windows 1.1.0 安装程序资源。原生 `/data/mcp/connections` 的 GET／POST／PUT／DELETE 及 HTTP 所用 `connect_type=1`、`header_config`、`config_param`、`tools_json`、`status`、`is_connected` 字段仍兼容，现有 Dumpling-MCP 定向 writer 不因版本号改写协议。新版原生区分 `web-mcp:` 与 `authMode=app_login/web_sync` 的官方同步条目；Hub 继续只处理自己登记的独立 HTTP 条目，不接管这些账号同步连接。

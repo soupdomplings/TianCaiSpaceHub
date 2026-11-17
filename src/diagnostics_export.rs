@@ -631,7 +631,12 @@ mod tests {
         .expect("write chain log");
         std::fs::write(
             logs.join("codexhub-daemon-startup.log"),
-            "daemon failed before chain log\napi_key=sk-secret\n",
+            concat!(
+                "daemon failed before chain log\napi_key=sk-secret\n",
+                "WARN codexhub::nvwa: Dumpling MCP connection failed ",
+                "event=\"mcp_bridge_failure\" client=\"workbuddy\" ",
+                "phase=\"initialize\" failure=\"upstream_http\" upstream_status=403\n",
+            ),
         )
         .expect("write daemon startup log");
         std::fs::write(
@@ -711,6 +716,9 @@ mod tests {
             .unwrap();
         assert!(startup_log.contains("daemon failed before chain log"));
         assert!(startup_log.contains("api_key=<redacted>"));
+        assert!(startup_log.contains("mcp_bridge_failure"));
+        assert!(startup_log.contains("phase=\"initialize\""));
+        assert!(startup_log.contains("upstream_status=403"));
         assert!(!startup_log.contains("sk-secret"));
 
         let _ = std::fs::remove_dir_all(root);

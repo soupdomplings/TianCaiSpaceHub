@@ -1,4 +1,7 @@
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::{
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use anyhow::{Result, bail, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -8,7 +11,7 @@ use libsm::{
 };
 use rand::rngs::OsRng;
 use reqwest::{
-    Client, RequestBuilder,
+    RequestBuilder,
     header::{HeaderName, HeaderValue},
 };
 use rsa::{
@@ -21,6 +24,7 @@ use url::Url;
 
 use super::{
     config::{endpoint, validate_profile, validate_url},
+    http::NvwaHttpClients,
     types::{
         AuthMode, AuthOutcome, AuthResult, AuthToken, NvwaProfile, PasswordLoginInput,
         SignatureAlgorithm, TokenExpiryPolicy, VerifiedIdentity,
@@ -91,18 +95,12 @@ impl RequestStage {
 
 #[derive(Clone)]
 pub struct AuthClient {
-    client: Client,
+    http: Arc<NvwaHttpClients>,
 }
 
 impl AuthClient {
-    pub fn new() -> Result<Self> {
-        let client = Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(30))
-            .build()
-            .map_err(|_| anyhow::anyhow!("无法初始化 NVWA 认证网络客户端"))?;
-        Ok(Self { client })
+    pub(crate) fn new(http: Arc<NvwaHttpClients>) -> Self {
+        Self { http }
     }
 
     pub async fn password_login(
@@ -122,7 +120,7 @@ impl AuthClient {
         );
         let key_payload = self
             .request_json(
-                self.client.get(endpoint(
+                self.http.auth().await?.get(endpoint(
                     &profile.product_base_url,
                     "anon/framework/api/encrypt/key",
                 )?),
@@ -177,7 +175,9 @@ impl AuthClient {
         }
         let payload = self
             .request_json(
-                self.client
+                self.http
+                    .auth()
+                    .await?
                     .post(endpoint(&profile.product_base_url, "nvwa/login")?)
                     .json(&body),
                 RequestStage::PasswordLogin,
@@ -305,7 +305,9 @@ impl AuthClient {
         let auth = sensitive_header(&STANDARD.encode(format!("{signed_identity}:{digest}")))?;
         let payload = self
             .request_json(
-                self.client
+                self.http
+                    .auth()
+                    .await?
                     .get(endpoint(
                         certification_base(profile),
                         "nvwa-certification/v1/ticket/apply",
@@ -412,7 +414,9 @@ impl AuthClient {
         );
         let payload = self
             .request_json(
-                self.client
+                self.http
+                    .auth()
+                    .await?
                     .post(endpoint(
                         &profile.product_base_url,
                         "anon/nvwa-nros/v1/msg/send",
@@ -429,7 +433,9 @@ impl AuthClient {
             return Ok(());
         };
         let request = with_token(
-            self.client
+            self.http
+                .auth()
+                .await?
                 .get(endpoint(&profile.product_base_url, "nvwa/logout")?),
             token,
         )?;
@@ -459,7 +465,9 @@ impl AuthClient {
         let basic = sensitive_header(&STANDARD.encode(format!("{}:{secret}", profile.client_id)))?;
         let payload = self
             .request_json(
-                self.client
+                self.http
+                    .auth()
+                    .await?
                     .post(url)
                     .header("authorization-client-basic", basic),
                 RequestStage::TicketExchange,
@@ -498,7 +506,9 @@ impl AuthClient {
         stage: RequestStage,
     ) -> Result<VerifiedIdentity> {
         let request = with_token(
-            self.client
+            self.http
+                .auth()
+                .await?
                 .get(endpoint(&profile.product_base_url, "nvwa/getLoginContext")?),
             token,
         )?;

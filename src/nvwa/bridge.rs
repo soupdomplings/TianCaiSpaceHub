@@ -77,9 +77,120 @@ mod catalog_limit_tests {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
-#[error("NVWA authorization expired")]
-struct RemoteAuthorizationExpired;
+// Only fixed diagnostics cross the local bridge. Never forward an upstream
+// response body or reqwest's URL-bearing error text into the UI or logs.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize, thiserror::Error)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum RemoteFailure {
+    #[error("Dumpling MCP 登录已过期，请重新登录当前环境后再连接")]
+    LoginExpired,
+    #[error("连接 Dumpling MCP 超时，请检查服务地址、网络和代理")]
+    Timeout,
+    #[error("无法连接 Dumpling MCP，请检查服务地址、DNS、证书和代理")]
+    Connect,
+    #[error("Dumpling MCP 网络请求失败，请检查网络和代理")]
+    Network,
+    #[error("无法准备 Dumpling MCP 网络连接，请检查 Hub 的连接与网络设置")]
+    NetworkSettings,
+    #[error("Dumpling MCP 响应中断，结果尚未确认；未自动重试")]
+    Interrupted,
+    #[error("Dumpling MCP 服务返回 HTTP {status}：{}", upstream_http_hint(*status))]
+    Http { status: u16 },
+    #[error("Dumpling MCP 返回了远端会话，当前接入要求服务端使用无状态 JSON 模式")]
+    RemoteSession,
+    #[error("Dumpling MCP 返回格式不兼容，当前接入要求 application/json，暂不支持 SSE")]
+    ContentType,
+    #[error("Dumpling MCP 响应不是有效 JSON，请检查 MCP 地址是否指向实际服务接口")]
+    InvalidJson,
+    #[error("Dumpling MCP 响应不符合 JSON-RPC 协议，请检查服务端 MCP 接口")]
+    InvalidRpc,
+    #[error("Dumpling MCP 响应的请求编号不一致，请检查服务端或反向代理")]
+    ResponseId,
+    #[error("Dumpling MCP 初始化响应不兼容，请检查服务端协议版本和工具能力")]
+    Initialize,
+    #[error("Dumpling MCP 返回了非预期响应，请检查服务端 MCP 接口")]
+    Unexpected,
+    #[error("Dumpling MCP 请求未能取得确定结果；未自动重试")]
+    Unconfirmed,
+}
+
+fn upstream_http_hint(status: u16) -> &'static str {
+    match status {
+        301..=308 => "接口发生重定向，请填写最终 MCP 地址",
+        401 => "当前登录凭据未被接受，请重新登录",
+        403 => "访问被拒绝，请检查账号的 MCP 权限及网关访问规则",
+        404 => "未找到 MCP 接口，请核对服务地址和 MCP 路径",
+        407 => "代理要求认证，请检查代理设置",
+        429 => "请求受到限流，请稍后重试",
+        500..=599 => "上游服务或网关异常，请检查服务端状态和代理",
+        _ => "请检查服务地址、接口状态及网关访问规则",
+    }
+}
+
+impl RemoteFailure {
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::LoginExpired => "login_expired",
+            Self::Timeout => "timeout",
+            Self::Connect => "connect",
+            Self::Network => "network",
+            Self::NetworkSettings => "network_settings",
+            Self::Interrupted => "interrupted",
+            Self::Http { .. } => "upstream_http",
+            Self::RemoteSession => "remote_session",
+            Self::ContentType => "content_type",
+            Self::InvalidJson => "invalid_json",
+            Self::InvalidRpc => "invalid_rpc",
+            Self::ResponseId => "response_id",
+            Self::Initialize => "initialize",
+            Self::Unexpected => "unexpected",
+            Self::Unconfirmed => "unconfirmed",
+        }
+    }
+}
+
+fn request_phase(method: &str) -> &'static str {
+    match method {
+        "initialize" => "initialize",
+        "notifications/initialized" => "initialized",
+        "tools/list" => "tools_list",
+        "tools/call" => "tools_call",
+        _ => "request",
+    }
+}
+
+fn remote_failure_response(
+    id: Option<Value>,
+    failure: &RemoteFailure,
+    method: &str,
+    client: ClientKind,
+) -> Response {
+    let upstream_status = match failure {
+        RemoteFailure::Http { status } => Some(*status),
+        RemoteFailure::LoginExpired => Some(401),
+        _ => None,
+    };
+    tracing::warn!(
+        target: "codexhub::nvwa",
+        event = "mcp_bridge_failure",
+        client = client.as_str(),
+        phase = request_phase(method),
+        failure = failure.kind(),
+        upstream_status,
+        "Dumpling MCP connection failed"
+    );
+    let mut data = json!({"bridgeFailure": failure});
+    if method == "tools/call" {
+        data["outcomeUnknown"] = true.into();
+        data["retryable"] = false.into();
+    }
+    response(
+        StatusCode::BAD_GATEWAY,
+        json!({"jsonrpc":"2.0","id":id.unwrap_or(Value::Null),"error":{
+            "code":-32603,"message":failure.to_string(),"data":data
+        }}),
+    )
+}
 
 async fn record_remote_auth_rejection(
     service: &NvwaService,
@@ -88,7 +199,10 @@ async fn record_remote_auth_rejection(
     auth: &AuthResult,
     error: &anyhow::Error,
 ) {
-    if !error.is::<RemoteAuthorizationExpired>() {
+    if !matches!(
+        error.downcast_ref::<RemoteFailure>(),
+        Some(RemoteFailure::LoginExpired)
+    ) {
         return;
     }
     // A late rejection must only expire the token used by this request, never
@@ -522,12 +636,11 @@ pub(crate) async fn post(
     let (lease, result) = match task.await {
         Ok(result) => result,
         Err(_) => {
-            return rpc_error(
-                StatusCode::BAD_GATEWAY,
+            return remote_failure_response(
                 original_id,
-                -32603,
-                "NVWA request ended without a confirmed result",
-                method == "tools/call",
+                &RemoteFailure::Unconfirmed,
+                &method,
+                client,
             );
         }
     };
@@ -553,12 +666,11 @@ pub(crate) async fn post(
             .unwrap(),
         Ok(RemoteResponse::Json(mut reply)) if original_id.is_some() => {
             if reply.get("id").and_then(Value::as_str) != lease.upstream_id.as_deref() {
-                return rpc_error(
-                    StatusCode::BAD_GATEWAY,
+                return remote_failure_response(
                     original_id,
-                    -32603,
-                    "Upstream response ID mismatch",
-                    method == "tools/call",
+                    &RemoteFailure::ResponseId,
+                    &method,
+                    client,
                 );
             }
             reply["id"] = lease.original_id.clone().unwrap_or(Value::Null);
@@ -566,12 +678,11 @@ pub(crate) async fn post(
                 let negotiated = match validate_initialize(&reply) {
                     Ok(version) => version,
                     Err(_) => {
-                        return rpc_error(
-                            StatusCode::BAD_GATEWAY,
+                        return remote_failure_response(
                             original_id,
-                            -32603,
-                            "Invalid upstream initialize response",
-                            false,
+                            &RemoteFailure::Initialize,
+                            &method,
+                            client,
                         );
                     }
                 };
@@ -611,13 +722,7 @@ pub(crate) async fn post(
             }
             response(StatusCode::OK, reply)
         }
-        Ok(_) => rpc_error(
-            StatusCode::BAD_GATEWAY,
-            original_id,
-            -32603,
-            "Unexpected upstream response",
-            method == "tools/call",
-        ),
+        Ok(_) => remote_failure_response(original_id, &RemoteFailure::Unexpected, &method, client),
         Err(error) => {
             record_remote_auth_rejection(
                 &service,
@@ -627,6 +732,9 @@ pub(crate) async fn post(
                 &error,
             )
             .await;
+            if let Some(failure) = error.downcast_ref::<RemoteFailure>() {
+                return remote_failure_response(original_id, failure, &method, client);
+            }
             rpc_error(
                 StatusCode::BAD_GATEWAY,
                 original_id,
@@ -725,9 +833,11 @@ pub(crate) async fn remote(
     let mut token = HeaderValue::from_str(&auth.mcp_token.value)
         .map_err(|_| anyhow::anyhow!("NVWA token format invalid"))?;
     token.set_sensitive(true);
-    let mut builder = service
-        .inner
-        .http
+    let http = service
+        .http_client()
+        .await
+        .map_err(|_| RemoteFailure::NetworkSettings)?;
+    let mut builder = http
         .post(resolve_mcp_url(profile)?)
         .header("accept", "application/json, text/event-stream")
         .header("content-type", "application/json")
@@ -736,54 +846,68 @@ pub(crate) async fn remote(
     if let Some(version) = protocol {
         builder = builder.header("mcp-protocol-version", version);
     }
-    let mut response = builder.send().await.map_err(|_| {
-        anyhow::anyhow!("NVWA request interrupted; result unconfirmed; no retry was made")
+    let mut response = builder.send().await.map_err(|error| {
+        if error.is_timeout() {
+            RemoteFailure::Timeout
+        } else if error.is_connect() {
+            RemoteFailure::Connect
+        } else {
+            RemoteFailure::Network
+        }
     })?;
     if response.status() == StatusCode::UNAUTHORIZED {
-        return Err(RemoteAuthorizationExpired.into());
+        return Err(RemoteFailure::LoginExpired.into());
     }
-    ensure!(
-        !response.headers().contains_key("mcp-session-id"),
-        "NVWA remote sessions unsupported; this bridge requires stateless JSON"
-    );
-    if response.status() == StatusCode::ACCEPTED && request.get("id").is_none() {
+    if response.status() == StatusCode::ACCEPTED
+        && request.get("id").is_none()
+        && !response.headers().contains_key("mcp-session-id")
+    {
         return Ok(RemoteResponse::Accepted);
     }
-    ensure!(
-        response.status() == StatusCode::OK,
-        "NVWA returned HTTP {}; no retry was made",
-        response.status().as_u16()
-    );
-    ensure!(
-        response
-            .headers()
-            .get("content-type")
-            .and_then(|v| v.to_str().ok())
-            .is_some_and(|v| v
-                .split(';')
+    if !matches!(response.status(), StatusCode::OK | StatusCode::ACCEPTED) {
+        return Err(RemoteFailure::Http {
+            status: response.status().as_u16(),
+        }
+        .into());
+    }
+    if response.headers().contains_key("mcp-session-id") {
+        return Err(RemoteFailure::RemoteSession.into());
+    }
+    if response.status() != StatusCode::OK {
+        return Err(RemoteFailure::Unexpected.into());
+    }
+    if !response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| {
+            v.split(';')
                 .next()
                 .unwrap_or("")
                 .trim()
-                .eq_ignore_ascii_case("application/json")),
-        "NVWA response transport unsupported; this bridge requires stateless JSON"
-    );
+                .eq_ignore_ascii_case("application/json")
+        })
+    {
+        return Err(RemoteFailure::ContentType.into());
+    }
     let mut bytes = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(|_| {
-        anyhow::anyhow!("NVWA response interrupted; result unconfirmed; no retry was made")
-    })? {
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| RemoteFailure::Interrupted)?
+    {
         if bytes.len().saturating_add(chunk.len()) > MAX_REMOTE_BYTES {
             return Err(ResponseTooLarge.into());
         }
         bytes.extend_from_slice(&chunk);
     }
-    let reply: Value = serde_json::from_slice(&bytes)
-        .map_err(|_| anyhow::anyhow!("NVWA returned invalid JSON; result unconfirmed"))?;
-    ensure!(
-        reply.is_object()
-            && reply.get("jsonrpc").and_then(Value::as_str) == Some("2.0")
-            && (reply.get("result").is_some() ^ reply.get("error").is_some()),
-        "NVWA returned invalid JSON-RPC response"
-    );
+    let reply: Value = serde_json::from_slice(&bytes).map_err(|_| RemoteFailure::InvalidJson)?;
+    if !(reply.is_object()
+        && reply.get("jsonrpc").and_then(Value::as_str) == Some("2.0")
+        && (reply.get("result").is_some() ^ reply.get("error").is_some()))
+    {
+        return Err(RemoteFailure::InvalidRpc.into());
+    }
     Ok(RemoteResponse::Json(reply))
 }
 
@@ -873,6 +997,138 @@ pub(crate) async fn detect(
 struct DetectionTransport {
     local: Option<(reqwest::Client, String, String)>,
     session: Option<String>,
+}
+
+fn detection_reply(status: StatusCode, request: &Value, reply: Value) -> Result<RemoteResponse> {
+    if is_size_limit_response(status, request, &reply) {
+        return Err(ResponseTooLarge.into());
+    }
+    if status != StatusCode::OK {
+        // Read only the bridge's typed metadata, not arbitrary error text from
+        // the upstream service. It is tied to this exact detection request.
+        if reply["jsonrpc"] == "2.0"
+            && reply.get("id") == Some(request.get("id").unwrap_or(&Value::Null))
+            && reply.get("result").is_none()
+            && let Some(failure) = reply
+                .pointer("/error/data/bridgeFailure")
+                .and_then(|value| serde_json::from_value::<RemoteFailure>(value.clone()).ok())
+        {
+            return Err(failure.into());
+        }
+        bail!(
+            "Dumpling MCP 连接检测失败（本机桥 HTTP {}），请导出本次连接诊断",
+            status.as_u16()
+        );
+    }
+    ensure!(
+        reply.get("jsonrpc").and_then(Value::as_str) == Some("2.0")
+            && (reply.get("result").is_some() ^ reply.get("error").is_some()),
+        "本机 MCP 桥返回了无效协议响应"
+    );
+    Ok(RemoteResponse::Json(reply))
+}
+
+#[cfg(test)]
+mod failure_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn bridge_failure_preserves_upstream_cause_without_echoing_remote_text() {
+        let request = json!({"jsonrpc":"2.0","id":"fixture-detect","method":"initialize"});
+        for failure in [
+            RemoteFailure::LoginExpired,
+            RemoteFailure::Connect,
+            RemoteFailure::Timeout,
+            RemoteFailure::Http { status: 403 },
+            RemoteFailure::Http { status: 502 },
+            RemoteFailure::ContentType,
+            RemoteFailure::RemoteSession,
+            RemoteFailure::ResponseId,
+        ] {
+            let response = remote_failure_response(
+                request.get("id").cloned(),
+                &failure,
+                "initialize",
+                ClientKind::Codex,
+            );
+            let status = response.status();
+            let body = axum::body::to_bytes(response.into_body(), 8192)
+                .await
+                .unwrap();
+            let mut reply: Value = serde_json::from_slice(&body).unwrap();
+            reply["error"]["message"] = "fixture-private-response".into();
+            let error = detection_reply(status, &request, reply).err().unwrap();
+            assert_eq!(error.downcast_ref::<RemoteFailure>(), Some(&failure));
+            assert_eq!(error.to_string(), failure.to_string());
+            assert!(!error.to_string().contains("fixture-private-response"));
+        }
+        let notification = json!({"jsonrpc":"2.0","method":"notifications/initialized"});
+        let response = remote_failure_response(
+            None,
+            &RemoteFailure::Http { status: 403 },
+            "notifications/initialized",
+            ClientKind::Workbuddy,
+        );
+        let body = axum::body::to_bytes(response.into_body(), 8192)
+            .await
+            .unwrap();
+        let reply = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            detection_reply(StatusCode::BAD_GATEWAY, &notification, reply)
+                .err()
+                .unwrap()
+                .downcast_ref::<RemoteFailure>(),
+            Some(&RemoteFailure::Http { status: 403 })
+        );
+    }
+
+    #[test]
+    fn unrelated_bridge_errors_cannot_impersonate_a_detection_or_a_catalog_limit() {
+        let request = json!({"jsonrpc":"2.0","id":"fixture-detect","method":"tools/list"});
+        let reply = json!({"jsonrpc":"2.0","id":"other-request","error":{
+            "code":-32603,"message":"fixture-private-response","data":{
+                "bridgeFailure":{"kind":"http","status":403}
+            }
+        }});
+        let error = detection_reply(StatusCode::BAD_GATEWAY, &request, reply)
+            .err()
+            .unwrap();
+        assert!(error.downcast_ref::<RemoteFailure>().is_none());
+        assert!(!error.is::<ResponseTooLarge>());
+        assert!(!error.to_string().contains("fixture-private-response"));
+
+        let limited = json!({"jsonrpc":"2.0","id":"fixture-detect","error":{
+            "code":RESPONSE_SIZE_ERROR_CODE,"message":"fixture-private-response"
+        }});
+        assert!(
+            detection_reply(StatusCode::BAD_GATEWAY, &request, limited)
+                .err()
+                .unwrap()
+                .is::<ResponseTooLarge>()
+        );
+    }
+
+    #[tokio::test]
+    async fn tool_failure_keeps_unconfirmed_result_and_no_retry_semantics() {
+        let response = remote_failure_response(
+            Some(json!(7)),
+            &RemoteFailure::Interrupted,
+            "tools/call",
+            ClientKind::Workbuddy,
+        );
+        let body = axum::body::to_bytes(response.into_body(), 8192)
+            .await
+            .unwrap();
+        let reply: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(reply["id"], 7);
+        assert_eq!(reply["error"]["data"]["outcomeUnknown"], true);
+        assert_eq!(reply["error"]["data"]["retryable"], false);
+        assert_eq!(
+            reply["error"]["data"]["bridgeFailure"]["kind"],
+            "interrupted"
+        );
+        assert_eq!(request_phase("fixture-private-method"), "request");
+    }
 }
 
 impl DetectionTransport {
@@ -972,20 +1228,7 @@ impl DetectionTransport {
         }
         let reply: Value = serde_json::from_slice(&bytes)
             .map_err(|_| anyhow::anyhow!("Local MCP response invalid JSON"))?;
-        if is_size_limit_response(status, request, &reply) {
-            return Err(ResponseTooLarge.into());
-        }
-        ensure!(
-            status == StatusCode::OK,
-            "Local MCP bridge check returned HTTP {}",
-            status.as_u16()
-        );
-        ensure!(
-            reply.get("jsonrpc").and_then(Value::as_str) == Some("2.0")
-                && (reply.get("result").is_some() ^ reply.get("error").is_some()),
-            "Local MCP response malformed"
-        );
-        Ok(RemoteResponse::Json(reply))
+        detection_reply(status, request, reply)
     }
 
     async fn close(&self) {

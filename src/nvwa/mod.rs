@@ -3,6 +3,7 @@ pub mod auth;
 mod bridge;
 pub mod config;
 pub(crate) mod discovery;
+mod http;
 mod runtime;
 pub mod secrets;
 mod server;
@@ -15,7 +16,6 @@ use std::{
         Arc, Weak,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
 };
 
 use anyhow::{Result, ensure};
@@ -51,7 +51,7 @@ pub(crate) struct ServiceInner {
     pub store: ConfigStore,
     pub secrets: SecretStore,
     pub auth: auth::AuthClient,
-    pub http: reqwest::Client,
+    pub http: Arc<http::NvwaHttpClients>,
     pub runtime: Runtime,
     pub config_path: PathBuf,
     pub hub_state: Weak<AppState>,
@@ -97,13 +97,7 @@ impl NvwaService {
                 }
             }
         }
-        let http = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .connect_timeout(Duration::from_secs(20))
-            .read_timeout(Duration::from_secs(300))
-            .timeout(Duration::from_secs(300))
-            .build()
-            .map_err(|_| anyhow::anyhow!("Cannot prepare NVWA MCP connection"))?;
+        let http = Arc::new(http::NvwaHttpClients::new(Arc::downgrade(&hub_state)));
         let management = ManagementInfo {
             base_url: format!("http://127.0.0.1:{}", config.bridge_port),
             capability: runtime::random_capability(),
@@ -113,7 +107,7 @@ impl NvwaService {
             inner: Arc::new(ServiceInner {
                 store,
                 secrets,
-                auth: auth::AuthClient::new()?,
+                auth: auth::AuthClient::new(http.clone()),
                 http,
                 runtime: Runtime::restore(records),
                 config_path: config_path.to_path_buf(),
@@ -130,6 +124,10 @@ impl NvwaService {
                 inflight: Arc::new(Semaphore::new(256)),
             }),
         })
+    }
+
+    pub(crate) async fn http_client(&self) -> Result<reqwest::Client> {
+        self.inner.http.mcp().await
     }
 
     pub fn load_management_info(config_path: &Path) -> Result<Option<ManagementInfo>> {

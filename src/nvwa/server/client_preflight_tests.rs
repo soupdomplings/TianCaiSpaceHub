@@ -49,12 +49,13 @@ async fn fixture() -> (tempfile::TempDir, NvwaService, NvwaProfile) {
         )
         .await
         .unwrap();
+    let http = Arc::new(crate::nvwa::http::NvwaHttpClients::for_test());
     let service = NvwaService {
         inner: Arc::new(ServiceInner {
             store,
             secrets,
-            auth: crate::nvwa::auth::AuthClient::new().unwrap(),
-            http: reqwest::Client::new(),
+            auth: crate::nvwa::auth::AuthClient::new(http.clone()),
+            http,
             runtime,
             config_path,
             hub_state: Weak::new(),
