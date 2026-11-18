@@ -7,7 +7,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, ensure};
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::{Connection, OpenFlags, Transaction};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,11 +65,14 @@ fn settings(home: &Path, env_dir: Option<PathBuf>) -> Result<(PathBuf, Option<St
 }
 
 pub(crate) fn sqlite_dir(codex_home: &Path) -> Result<PathBuf> {
+    database_settings(codex_home).map(|(dir, _)| dir)
+}
+
+pub(crate) fn database_settings(codex_home: &Path) -> Result<(PathBuf, Option<String>)> {
     settings(
         codex_home,
         std::env::var_os("CODEX_SQLITE_HOME").map(Into::into),
     )
-    .map(|(dir, _)| dir)
 }
 
 pub(crate) fn inspect(codex_home: &Path) -> ProjectStatus {
@@ -91,6 +94,16 @@ fn inspect_in(home: &Path, env_dir: Option<PathBuf>) -> Result<ProjectStatus> {
         }
         return Ok(ProjectStatus::unknown(ProjectState::MissingDatabase));
     }
+    with_database(&dir, |tx| current_status(tx, provider.as_deref()))
+}
+
+/// Share one read-only SQLite snapshot among all queries in a diagnostic.
+/// Opening an absent database or creating WAL sidecars is never permitted.
+pub(crate) fn with_database<T>(
+    dir: &Path,
+    inspect: impl FnOnce(&Transaction<'_>) -> Result<T>,
+) -> Result<T> {
+    let path = dir.join("state_5.sqlite");
     let wal = dir.join("state_5.sqlite-wal");
     let shm = dir.join("state_5.sqlite-shm");
     let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
@@ -114,6 +127,14 @@ fn inspect_in(home: &Path, env_dir: Option<PathBuf>) -> Result<ProjectStatus> {
         Connection::open_with_flags(&path, flags)?
     };
     let tx = db.transaction()?;
+    let result = inspect(&tx)?;
+    if checkpoint_only {
+        ensure!(!wal.try_exists()?, "database changed during inspection");
+    }
+    Ok(result)
+}
+
+fn current_status(tx: &Transaction<'_>, provider: Option<&str>) -> Result<ProjectStatus> {
     let has_schema: bool = tx.query_row(
         "SELECT EXISTS(SELECT 1 FROM pragma_table_info('projects') WHERE name='id')
             AND (SELECT count(*) FROM pragma_table_info('threads') WHERE name IN ('archived','project_id'))=2",
@@ -126,7 +147,7 @@ fn inspect_in(home: &Path, env_dir: Option<PathBuf>) -> Result<ProjectStatus> {
             [],
             |r| r.get(0),
         )?;
-        let (grouped, other) = match provider.as_deref().filter(|_| has_provider) {
+        let (grouped, other) = match provider.filter(|_| has_provider) {
             Some(id) => tx.query_row(
                 "SELECT count(*), count(CASE WHEN t.model_provider<>'' AND t.model_provider<>?1 THEN 1 END)
                  FROM threads t JOIN projects p ON p.id=t.project_id WHERE t.archived=0",
@@ -146,9 +167,6 @@ fn inspect_in(home: &Path, env_dir: Option<PathBuf>) -> Result<ProjectStatus> {
     } else {
         ProjectStatus::unknown(ProjectState::UnsupportedSchema)
     };
-    if checkpoint_only {
-        ensure!(!wal.try_exists()?, "database changed during inspection");
-    }
     Ok(result)
 }
 

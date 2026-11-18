@@ -146,6 +146,7 @@ pub(super) async fn configure_codex_app(
                     "backendUrl": report.backend_url,
                     "guiApiBase": gui_api_base,
                     "projectHistory": report.project_history,
+                    "projectSidebar": report.project_sidebar,
                     "remoteControlSwitch": remote_control_switch,
                 })),
             )

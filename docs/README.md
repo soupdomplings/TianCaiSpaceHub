@@ -1,5 +1,7 @@
 # TianCaiSpaceHub 文档总入口
 
+2026-11-19 · [V1.0.39 Windows 测试与交付](releases/v1.0.39.md)：删除 Codex 配置后，恢复项目卡片并按精确项目根目录补回未归属会话。
+
 2026-11-18 · [V1.0.38 Windows 测试与交付](releases/v1.0.38.md)：从 CC Switch 切回 Hub 后的模型菜单修复、ChatGPT 从渠道选模型，以及 WorkBuddy 请求日志的模型名称。
 
 2026-11-18 · [V1.0.37 Windows 测试与交付](releases/v1.0.37.md)：仅删除 Codex 配置后的原项目、分组会话与已有历史位置恢复。
@@ -229,7 +231,7 @@
 | [OpenAI Chat Completions](openai-chat-completions.md) | 通用兼容渠道与按渠道关闭推理；已实现 |
 | [动态模型](dynamic-codex-models.zh-CN.md) | 手填、远端获取、路由补齐和能力继承；v5 普通/ChatGPT 厂商空列表保存先自动获取，成功继续保存、失败留窗，客户端未配置模型中文指引；本轮状态见 v5 交付，实机待用户验收 |
 | [Codex 启动修复](customizations/codex-startup-repair.md) | TC-007：v7 程序路径与状态库独立检查/修复；可重新绑定当前内置程序，原路径/已知冲突分别备份恢复，Hub 保持运行；实机待用户验收 |
-| [Codex 历史恢复](customizations/codex-history-recovery.md) | TC-006/TC-007；v9 按需等待执行配置、取消与请求合并、部分历史失败后实际分页重试；持续 EBADF 根因未修复，Windows 包及用户验收见 v9 交付 |
+| [Codex 历史恢复](customizations/codex-history-recovery.md) | TC-006/TC-007；V1.0.39 在删除配置后恢复项目卡片，并按精确项目根目录补回未归属会话，用户已手动重建清单也适用；v9 的执行配置等待、取消与分页重试保持，Windows 包及用户验收见 V1.0.39 |
 | [检查与修复中心](customizations/codex-repair-center.md) | TC-006/TC-007：v6 分类窗口、定向修复、插件隔离正式注册、备份联合恢复和可选页面适配；Windows/Mac 原生流程独立，实机待用户验收 |
 | [Codex 修复接入评估](customizations/codex-repair-integration-assessment.md) | 开发前的来源、取舍和限制；当前实现以修复中心专题为准 |
 | [网页导入](hub-external-import.md) | Windows/macOS 系统接入已随 v0.4.30-2 成功构建打包并预发布；本版实机导入待用户验收 |

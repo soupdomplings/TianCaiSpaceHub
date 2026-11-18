@@ -1,7 +1,15 @@
 mod cc_switch;
 mod history_location;
+mod project_membership;
+mod sidebar_projects;
 pub(crate) use cc_switch::active_hub_has_cc_switch_catalog;
 pub(crate) use history_location::repair_history_location;
+pub(crate) use project_membership::{
+    LocalProjectCandidate, ThreadAssignment, local_project_candidates,
+    local_project_candidates_for_ids, local_project_owner, repair_thread_memberships,
+    undo_thread_memberships,
+};
+pub(crate) use sidebar_projects::{SidebarAction, sidebar_projects};
 
 #[cfg(target_os = "macos")]
 use std::process::Command;
@@ -127,6 +135,7 @@ pub struct ConfigureCodexAppReport {
     pub codex_home: PathBuf,
     pub config_path: PathBuf,
     pub project_history: Option<crate::codex_project_status::ProjectStatus>,
+    pub project_sidebar: Option<sidebar_projects::SidebarReport>,
     pub auth_path: PathBuf,
     pub backend_url: String,
     pub remote_control_switch: CodexAppRemoteControlSwitchStatus,
@@ -349,8 +358,23 @@ pub fn configure_codex_app(options: ConfigureCodexAppOptions) -> Result<Configur
     #[cfg(not(test))]
     chain_log::write_line("[codex_app_config] event=gui_environment_configure_done");
 
+    let project_sidebar = if rebuilding {
+        match sidebar_projects(&codex_home, SidebarAction::Repair) {
+            Ok(report) => Some(report),
+            Err(error) => {
+                chain_log::write_line(format!(
+                    "[codex_app_config] event=project_sidebar_repair_skipped error={error}"
+                ));
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     Ok(ConfigureCodexAppReport {
         project_history: rebuilding.then(|| crate::codex_project_status::inspect(&codex_home)),
+        project_sidebar,
         codex_home,
         config_path,
         auth_path,
