@@ -7,7 +7,25 @@ use sha2::{Digest, Sha256};
 use super::config::{AiGatewayConfig, ProviderConfig, ProviderType};
 
 static BASE_MODEL_CATALOG: Lazy<Value> = Lazy::new(|| {
-    serde_json::from_str(include_str!("models.json")).expect("embedded AI Gateway model catalog")
+    let mut catalog: Value = serde_json::from_str(include_str!("models.json"))
+        .expect("embedded AI Gateway model catalog");
+    let models = catalog["models"].as_array_mut().expect("embedded models");
+    for i in 0..models.len() {
+        let Some(template) = models[i].get("hub_template").and_then(Value::as_str) else {
+            continue;
+        };
+        let mut descriptor = models
+            .iter()
+            .find(|model| model_slug(model) == Some(template))
+            .expect("embedded model template")
+            .clone();
+        let mut overrides = std::mem::take(&mut models[i]);
+        let fields = overrides.as_object_mut().unwrap();
+        fields.remove("hub_template");
+        descriptor.as_object_mut().unwrap().append(fields);
+        models[i] = descriptor;
+    }
+    catalog
 });
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -168,17 +186,21 @@ fn dynamic_model_ids(config: &AiGatewayConfig) -> Vec<String> {
 }
 
 fn model_for_id(config: &AiGatewayConfig, id: &str) -> Option<Value> {
-    if let Some(model) = catalog_models()
-        .iter()
-        .find(|model| model_slug(model) == Some(id))
-    {
-        return is_catalog_model_visible(model).then(|| model.clone());
-    }
-
     let profile = config
         .codex_model_profiles
         .iter()
         .find(|profile| profile.id.eq_ignore_ascii_case(id));
+    let builtin = catalog_models()
+        .iter()
+        .find(|model| model_slug(model) == Some(id));
+    if let Some(model) = builtin {
+        if !is_catalog_model_visible(model) {
+            return None;
+        }
+        if profile.is_none() {
+            return Some(model.clone());
+        }
+    }
     let provider = config
         .providers
         .iter()
@@ -211,6 +233,7 @@ fn model_for_id(config: &AiGatewayConfig, id: &str) -> Option<Value> {
                 })
         });
     let inherited = explicit_template
+        .or(builtin)
         .or_else(|| family_template(catalog_models(), id))
         .or_else(|| {
             provider
@@ -237,12 +260,19 @@ fn model_for_id(config: &AiGatewayConfig, id: &str) -> Option<Value> {
             profile
                 .map(|profile| profile.display_name.trim())
                 .filter(|name| !name.is_empty())
+                .or_else(|| builtin.and_then(|model| model["display_name"].as_str()))
                 .unwrap_or(id)
         ),
     );
     object.insert(
         "description".to_string(),
-        json!("Dynamic model discovered from a configured provider or entered manually."),
+        json!(
+            builtin
+                .and_then(|model| model["description"].as_str())
+                .unwrap_or(
+                    "Dynamic model discovered from a configured provider or entered manually."
+                )
+        ),
     );
     object.insert("supported_in_api".to_string(), Value::Bool(true));
     object.insert("visibility".to_string(), json!("list"));
@@ -638,8 +668,7 @@ mod tests {
         assert_eq!(model["visibility"], "list");
         assert_eq!(model["use_responses_lite"], true);
         assert_eq!(model["context_window"], 272000);
-        assert_eq!(model["max_context_window"], 872000);
-        assert_inherits_all_capabilities(model, "gpt-6.1-sol");
+        assert_inherits_all_capabilities(model, "gpt-6.2-astra");
     }
 
     fn assert_inherits_all_capabilities(model: &Value, source: &str) {
@@ -665,8 +694,9 @@ mod tests {
     #[test]
     fn model_families_inherit_complete_advanced_capabilities() {
         for (id, donor) in [
-            ("GPT-6-NEXT", "gpt-6.1-sol"),
-            ("vendor/gpt-6-next", "gpt-6.1-sol"),
+            ("GPT-6-NEXT", "gpt-6.2-astra"),
+            ("vendor/gpt-6-next", "gpt-6.2-astra"),
+            ("vendor/gpt-6.2-sol-preview", "gpt-6.2-sol"),
             ("GPT-6-LUNA", "gpt-6-luna"),
             ("vendor/gpt-6-luna", "gpt-6-luna"),
             ("gpt-5-new", "gpt-5.6-sol"),
@@ -729,7 +759,7 @@ mod tests {
         let before = configured_models_etag(&config);
         let response = configured_models_response(&config);
         assert_eq!(response["models"][0]["context_window"], 64000);
-        assert_eq!(response["models"][0]["max_context_window"], 872000);
+        assert_eq!(response["models"][0]["max_context_window"], 1_000_000);
         assert_eq!(
             response["models"][0]["supported_reasoning_levels"],
             json!([])
@@ -1038,6 +1068,42 @@ mod tests {
     }
 
     #[test]
+    fn gpt_6_2_models_are_opt_in_and_keep_saved_profile_overrides() {
+        assert_eq!(
+            configured_models_response(&config(&[]))["models"],
+            json!([])
+        );
+        let mut config = config(&["gpt-6.2-sol", "gpt-6.2-astra"]);
+        let response = configured_models_response(&config);
+        let models = response["models"].as_array().unwrap();
+        assert_eq!(models.len(), 2);
+        for (model, (slug, name, window)) in models.iter().zip([
+            ("gpt-6.2-sol", "GPT-6.2-Sol", 500_000),
+            ("gpt-6.2-astra", "GPT-6.2-Astra", 272_000),
+        ]) {
+            assert_eq!(model["slug"], slug);
+            assert_eq!(model["display_name"], name);
+            assert_eq!(model["context_window"], window);
+            assert_eq!(model["max_context_window"], 1_000_000);
+            assert!(is_catalog_model_visible(model));
+            assert!(model["model_messages"].is_object());
+            assert!(model["availability_nux"].is_null());
+            assert!(model.get("hub_template").is_none());
+        }
+        config
+            .codex_model_profiles
+            .push(super::super::config::CodexModelProfile {
+                id: "gpt-6.2-sol".into(),
+                display_name: "My Sol".into(),
+                context_window: Some(64_000),
+                ..Default::default()
+            });
+        let response = configured_models_response(&config);
+        assert_eq!(response["models"][0]["display_name"], "My Sol");
+        assert_eq!(response["models"][0]["context_window"], 64_000);
+    }
+
+    #[test]
     fn gpt_6_1_sol_preserves_official_capabilities_in_configured_response() {
         let catalog_model = catalog_models()
             .iter()
@@ -1108,6 +1174,8 @@ mod tests {
             "gpt-5.6-luna",
             "grok-4.6",
             "gpt-5.5",
+            "gpt-6.2-astra",
+            "gpt-6.2-sol",
             "gpt-6-astra",
             "gpt-6.1-sol",
             "gpt-6-sol",
