@@ -37,7 +37,7 @@ struct Acceptance {
     codex_target_id: Option<String>,
     fixture_client: ClientId,
     workbuddy_entry: Option<String>,
-    codex_copy: Option<String>,
+    codex_model: Option<String>,
     key_name: Option<String>,
     created_key: Option<u64>,
     key_create_requested: bool,
@@ -223,7 +223,7 @@ impl Acceptance {
                                 .into_iter().flatten().filter_map(|v|v.as_str().map(str::to_owned)).collect();
                         } else if name == "hub_configure_client" {
                             if value["client"]=="workbuddy" { self.workbuddy_entry=value["entryId"].as_str().map(str::to_owned); }
-                            if value["client"]=="codex" { self.codex_copy=value["model"].as_str().map(str::to_owned); }
+                            if value["client"]=="codex" { self.codex_model=value["model"].as_str().map(str::to_owned); }
                         }
                     }
                     // Only record success/shape, never the private raw model or tool transport.
@@ -548,12 +548,13 @@ impl Acceptance {
             native.model.upstream_default_reasoning_effort == "max",
             "WorkBuddy默认强度未保存"
         );
-        self.turn("Codex真实独立副本回读", "继续使用验收来源中精确存在的gpt-6-a-preset别名，把它配置到临时ChatGPT/Codex默认目标，保存后用返回的独立model回读，确认using、channel及upstreamModel。不改来源目录或原有条目，不启动客户端。",false,false).await?;
-        let alias = self
-            .codex_copy
+        let providers_before = serde_json::to_value(&self.config()?.ai_gateway.providers)?;
+        self.turn("Codex模型列表和路由回读", "继续用验收来源中的gpt-6-a-preset，把这个 ID 加到临时ChatGPT/Codex默认目标。回读模型列表并确认匹配渠道，不改厂商或原有条目，不启动客户端。",false,false).await?;
+        let id = self
+            .codex_model
             .as_deref()
-            .context("未真正调用Codex配置工具并取得独立别名")?;
-        ensure!(alias != "gpt-6-a-preset", "Codex必须返回独立副本身份");
+            .context("未取得保存的 Codex 模型 ID")?;
+        ensure!(id == "gpt-6-a-preset", "Codex 应保留渠道公开的模型 ID");
         let view = test_tool_scope(
             &self.state,
             tools::call(
@@ -567,17 +568,20 @@ impl Acceptance {
             .as_array()
             .context("Codex回读缺少模型列表")?
             .iter()
-            .find(|m| m["model"] == alias)
-            .context("独立别名未出现在Codex回读")?;
+            .find(|m| m["model"] == id)
+            .context("模型 ID 未出现在 Codex 列表")?;
         ensure!(
             saved["using"] == true
                 && saved["upstreamModel"] == "gpt-6-astra"
-                && saved["channel"]
-                    .as_str()
-                    .is_some_and(|name| name.starts_with("Codex · ")),
-            "Codex副本实际来源或使用状态不符"
+                && saved["channel"] == SOURCE
+                && saved["routing"] == "automatic",
+            "Codex 匹配渠道或使用状态不符"
         );
         let config = self.config()?;
+        ensure!(
+            serde_json::to_value(&config.ai_gateway.providers)? == providers_before,
+            "配置 Codex 不应复制或修改渠道"
+        );
         let source = config
             .ai_gateway
             .providers
@@ -627,8 +631,8 @@ async fn real_squad_key_selection_and_creation_flow_saves_the_specified_client_m
 
 #[tokio::test]
 #[ignore = "Explicit real administrator-model acceptance; subprocess isolates all native client homes"]
-async fn real_workbuddy_gpt_selection_and_codex_copy_use_existing_sources() -> Result<()> {
-    const NAME: &str = "real_workbuddy_gpt_selection_and_codex_copy_use_existing_sources";
+async fn real_workbuddy_gpt_selection_and_codex_list_use_existing_sources() -> Result<()> {
+    const NAME: &str = "real_workbuddy_gpt_selection_and_codex_list_use_existing_sources";
     if std::env::var("TIANCAI_ASSISTANT_NATIVE_ACCEPTANCE").as_deref() != Ok(NAME) {
         let report = PathBuf::from(
             std::env::var_os("TIANCAI_ASSISTANT_ACCEPTANCE_REPORT_DIR")
@@ -839,7 +843,7 @@ async fn run_acceptance(scenario: Scenario) -> Result<()> {
         codex_target_id,
         fixture_client,
         workbuddy_entry: None,
-        codex_copy: None,
+        codex_model: None,
         key_name: key_pipeline.then(|| format!("Hub搭档验收-{}", uuid::Uuid::new_v4())),
         created_key: None,
         key_create_requested: false,

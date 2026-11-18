@@ -633,10 +633,10 @@ impl GuiText {
     pub(super) fn codex_visible_models_help(self) -> &'static str {
         match self.locale {
             GuiLocale::ZhCn => {
-                "选择 Codex 里要显示的模型。这里勾选只决定 Codex 能看到哪些模型名称。"
+                "选择要在 Codex 显示的模型。使用时，Hub 按模型 ID 或别名自动匹配已启用的渠道。"
             }
             GuiLocale::EnUs => {
-                "Choose which models are shown in Codex. This only controls the model names Codex can see."
+                "Choose which models appear in Codex. When you use a model, Hub matches its ID or alias to an enabled channel."
             }
         }
     }
@@ -655,10 +655,10 @@ impl GuiText {
     pub(super) fn codex_visible_models_warning(self) -> &'static str {
         match self.locale {
             GuiLocale::ZhCn => {
-                "注意：如果 Codex 提示所选模型不在“大模型接入”的相关模型列表中，请新增大模型厂商或检查对应厂商的模型列表；也可以设置模型映射，例如把 Codex 里的 gpt-5.4-mini 映射到实际可用的 deepseek-v4-flash。"
+                "如果找不到可用渠道，请在「模型与渠道」中检查渠道是否启用，以及模型 ID 或别名是否匹配。"
             }
             GuiLocale::EnUs => {
-                "Note: If Codex reports that the selected model is absent from the relevant AI Gateway provider list, add a provider or check its models. You can also map a Codex model name such as gpt-5.4-mini to an available upstream model such as deepseek-v4-flash."
+                "If no channel matches, open Models & Channels and check that a channel is enabled and its model ID or alias matches."
             }
         }
     }
@@ -666,18 +666,11 @@ impl GuiText {
     pub(super) fn codex_custom_models_help(self) -> &'static str {
         match self.locale {
             GuiLocale::ZhCn => {
-                "每行一个模型 ID，可手动增删。同步渠道模型读取已保存列表；选择渠道后可直接获取远端模型。保存时，尚无可用路由的模型会加入所选渠道，已有模型映射保持不变。新模型继承同前缀最高版本内置模型的能力及高级参数，手动配置优先。"
+                "每行一个模型 ID。保存只更新客户端列表；使用前，请确保「模型与渠道」中有匹配的模型 ID 或别名。"
             }
             GuiLocale::EnUs => {
-                "Enter one model ID per line. Sync reads saved channels; choose a channel to fetch remote models. Saving adds unrouted models to the selected channel and preserves existing mappings. New models inherit capabilities and advanced settings from the latest built-in model with the closest prefix. Manual settings take precedence."
+                "Enter one model ID per line. Saving updates only the client list. An enabled channel in Models & Channels must match the model ID or alias before you can use it."
             }
-        }
-    }
-
-    pub(super) fn codex_model_no_provider(self) -> &'static str {
-        match self.locale {
-            GuiLocale::ZhCn => "选择渠道（获取远端模型 / 绑定尚无路由的模型）",
-            GuiLocale::EnUs => "Select provider (fetch models / route new models)",
         }
     }
 
@@ -908,7 +901,24 @@ impl GuiText {
         }
     }
 
-    pub(super) fn codex_models_saved(self) -> &'static str {
+    pub(super) fn codex_models_saved(self, unmatched: &[String]) -> String {
+        if let Some(first) = unmatched.first() {
+            let count = unmatched.len();
+            return match (self.locale, count) {
+                (GuiLocale::ZhCn, 1) => {
+                    format!("列表已保存。{first} 暂无可用渠道，请到「模型与渠道」配置。")
+                }
+                (GuiLocale::ZhCn, _) => format!(
+                    "列表已保存。{first} 等 {count} 个模型暂无可用渠道，请到「模型与渠道」配置。"
+                ),
+                (GuiLocale::EnUs, 1) => format!(
+                    "List saved. No enabled channel matches {first}. Check Models & Channels."
+                ),
+                (GuiLocale::EnUs, _) => format!(
+                    "List saved. {count} models, including {first}, have no matching channel. Check Models & Channels."
+                ),
+            };
+        }
         match self.locale {
             GuiLocale::ZhCn => {
                 "Codex 可见模型列表已保存。\nCodex 端模型列表有缓存，通常会在 5 分钟内更新。"
@@ -916,7 +926,7 @@ impl GuiText {
             GuiLocale::EnUs => {
                 "Codex visible model list saved.\nCodex caches the model picker list and usually updates it within 5 minutes."
             }
-        }
+        }.into()
     }
 
     pub(super) fn codex_enhanced_launch(self) -> &'static str {

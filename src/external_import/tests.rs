@@ -231,6 +231,51 @@ fn changes_to_target_during_preview_are_rejected() {
 }
 
 #[test]
+fn reimport_adds_another_model_without_breaking_existing_routes() {
+    let mut config = AppConfig::default();
+    let mut req = request();
+    req.enabled = true;
+    req.visible_models = true;
+    req.models = vec!["model-a".into()];
+    req.draft.provider.model_aliases = [("first".into(), "model-a".into())].into();
+    merge_import(&mut config, &req).unwrap();
+
+    let update = |channel: &ProviderConfig| {
+        Some(UpdateTarget {
+            name: channel.name.clone(),
+            fingerprint: provider_fingerprint(channel),
+        })
+    };
+    req.update = update(&config.ai_gateway.providers[0]);
+    req.models = vec!["model-b".into()];
+    req.draft.provider.model_aliases = [
+        ("first".into(), "model-b".into()),
+        ("second".into(), "model-b".into()),
+    ]
+    .into();
+    merge_import(&mut config, &req).unwrap();
+    assert_eq!(config.ai_gateway.providers.len(), 1);
+    let channel = &config.ai_gateway.providers[0];
+    assert_eq!(channel.models, ["model-a", "model-b"]);
+    assert_eq!(channel.resolve_upstream_model("first"), Some("model-a"));
+    assert_eq!(channel.resolve_upstream_model("second"), Some("model-b"));
+    assert_eq!(
+        config.ai_gateway.codex_visible_models,
+        ["model-a", "model-b"]
+    );
+
+    req.update = update(channel);
+    req.draft.provider.base_url = "https://other.example/v1".into();
+    req.replace_aliases = true;
+    merge_import(&mut config, &req).unwrap();
+    assert!(config.ai_gateway.select_provider("model-a").is_none());
+    assert_eq!(
+        config.ai_gateway.providers[0].resolve_upstream_model("first"),
+        Some("model-b")
+    );
+}
+
+#[test]
 fn empty_models_cannot_be_enabled_or_exposed() {
     let mut req = request();
     req.models.clear();
@@ -251,11 +296,11 @@ fn selected_visible_models_append_without_removing_existing() {
     req.models = vec!["model-a".into()];
     req.visible_models = true;
     let mut config = AppConfig::default();
-    config.ai_gateway.codex_visible_models = vec!["existing".into(), "model-a".into()];
+    config.ai_gateway.codex_visible_models = vec!["existing".into(), "Model-A".into()];
     merge_import(&mut config, &req).unwrap();
     assert_eq!(
         config.ai_gateway.codex_visible_models,
-        ["existing", "model-a"]
+        ["existing", "Model-A"]
     );
 }
 

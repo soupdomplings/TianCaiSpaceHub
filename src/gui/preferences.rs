@@ -179,7 +179,7 @@ pub(super) fn create(
     for (title, description, target) in [
         (
             "接入模型",
-            "先添加渠道，再到客户端选择模型。复用模型会创建独立副本，各端可分别调整。",
+            "在“模型与渠道”添加渠道和模型。ChatGPT / Codex 只需选择模型，Hub 会匹配提供该模型的渠道。",
             PageId::Sources,
         ),
         (

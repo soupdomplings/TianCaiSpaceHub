@@ -451,6 +451,29 @@ impl ProviderConfig {
             || self.name.starts_with(crate::desktop::models::PREFIX)
     }
 
+    /// Old copies still serve their published alias. Recognize the generated
+    /// name and matching alias together, since channel names are user-editable.
+    pub(crate) fn is_codex_model_copy(&self) -> bool {
+        let Some((model, tag)) = self
+            .name
+            .strip_prefix("Codex · ")
+            .and_then(|s| s.rsplit_once(" · "))
+        else {
+            return false;
+        };
+        tag.len() == 6
+            && tag.bytes().all(|b| b.is_ascii_hexdigit())
+            && self.model_aliases.contains_key(&format!("{model}-{tag}"))
+    }
+
+    pub(crate) fn is_client_model_source(&self) -> bool {
+        !self.is_client_reserved()
+            && self.desktop_binding.is_none()
+            && self.tiangong_builtin.is_none()
+            && self.workbuddy_builtin.is_none()
+            && !self.is_codex_model_copy()
+    }
+
     pub fn effective_weight(&self) -> u32 {
         self.weight.max(1)
     }

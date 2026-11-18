@@ -1361,7 +1361,7 @@ pub(super) fn review_inline_draft(frame: &Frame, shell: &Shell, id: ClientId) {
             assert_eq!(ui.selected().unwrap()["draft"], true);
             assert!(ui.model_host.is_shown());
             assert!(!ui.model_view.workspace.fields.page.is_shown());
-            picker.show_discovered(1, &["discovered-model".into()]);
+            picker.show_discovered(0, &["discovered-model".into()]);
             assert_eq!(picker.selected_models(), vec!["gpt-6"]);
             picker.select_models(&["discovered-model".into()]);
             ui.render();

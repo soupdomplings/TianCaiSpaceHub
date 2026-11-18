@@ -258,13 +258,13 @@ pub(crate) fn definitions() -> Vec<Value> {
     let mut definitions = vec![
         spec(
             "hub_read_configuration",
-            "读取 Hub 渠道、客户端目标、独立模型身份及有效参数。指定 client 可读取该端当前配置；client.readStatus=error仅表示原生配置读取失败，已返回的Hub渠道和目标仍有效，不能当作未安装或空配置。修改前读取、保存后回读核对。凭据只返回引用和掩码。",
+            "读取 Hub 渠道、客户端目标及实际模型。Codex 模型列表显示客户端 ID 和当前匹配渠道；其他客户端读取配置条目。client.readStatus=error仅表示原生配置读取失败，已返回的Hub渠道和目标仍有效。凭据只返回引用和掩码。",
             json!({"client":{"type":"string","enum":["codex","workbuddy","tiangong","vscode","zcode","deepseek-harness","webstorm"]}}),
             &[],
         ),
         spec(
             "hub_resolve_model",
-            "为配置客户端解析已启用普通渠道中真实存在的模型/别名。先精确匹配，再查前缀；canConfigure=false时按candidates询问必要选择或说明不存在，不能向来源塞入用户输入猜测的模型ID。选定后用返回的channel和精确model调用hub_configure_client。",
+            "在已启用来源中核对真实模型或别名，先精确匹配，再查前缀。Codex 同一 ID 由 Hub 自动匹配渠道，不必选择厂商；多个不同 ID 才需选择。用选定的精确 model 配置，其他客户端另需 channel。没有匹配时不要猜测或扩充来源。",
             json!({"model":{"type":"string"},"client":{"type":"string","enum":["codex","workbuddy","tiangong","vscode","zcode","deepseek-harness","webstorm"]}}),
             &["model"],
         ),
@@ -288,9 +288,9 @@ pub(crate) fn definitions() -> Vec<Value> {
         ),
         spec(
             "hub_configure_client",
-            "把指定渠道模型复制到读取结果的 targetId，创建独立客户端配置。返回 model/entryId/id 是后续操作的实际身份；保存后指定client回读。不会启动客户端或测试模型。",
+            "按 targetId 配置真实模型。Codex 只把精确 model 加入列表，channel 可省略，Hub 在请求时自动匹配；其他客户端必须指定 channel，创建独立条目。返回 model/entryId/id 供回读。不会启动客户端或测试模型。",
             json!({"targetId":{"type":"string"},"channel":{"type":"string"},"model":{"type":"string"},"label":{"type":"string"}}),
-            &["targetId", "channel", "model"],
+            &["targetId", "model"],
         ),
         spec(
             "hub_set_model_parameters",
@@ -388,11 +388,7 @@ fn text<'a>(args: &'a Value, key: &str) -> Result<&'a str> {
 }
 fn ordinary(provider: &ProviderConfig) -> Result<()> {
     ensure!(
-        provider.desktop_binding.is_none()
-            && !provider.is_client_reserved()
-            && !provider.name.starts_with("Codex · ")
-            && provider.tiangong_builtin.is_none()
-            && provider.workbuddy_builtin.is_none()
+        provider.is_client_model_source()
             && provider.chatgpt_auth_id.is_none()
             && provider.provider_type != crate::ai_gateway::config::ProviderType::ChatGptResponses,
         "请在对应客户端页管理此专用或登录渠道"
@@ -540,20 +536,31 @@ fn codex_model_editable(model: &str) -> bool {
         .iter()
         .any(|known| known.slug == model)
 }
+fn codex_route(provider: &ProviderConfig, upstream: &str) -> Value {
+    json!({"providerRoute":provider_route_id(provider),"channel":provider.name,"upstreamModel":upstream})
+}
+fn codex_routes(config: &AppConfig, id: &str) -> Vec<Value> {
+    config
+        .ai_gateway
+        .providers
+        .iter()
+        .filter(|p| p.enabled && !p.is_client_reserved())
+        .filter_map(|p| {
+            p.resolve_upstream_model(id)
+                .map(|upstream| codex_route(p, upstream))
+        })
+        .collect()
+}
 fn codex_models_view(config: &AppConfig) -> Value {
     let catalog = crate::ai_gateway::catalog::configured_models_response(&config.ai_gateway);
     let entries = catalog["models"].as_array().into_iter().flatten().map(|model| {
         let id = model["slug"].as_str().unwrap_or_default();
         let fields = if codex_model_editable(id) { parameter_fields(ClientId::Codex, "") } else { vec![] };
-        let routes = config.ai_gateway.providers.iter()
-            .filter(|p|p.enabled && !p.is_client_reserved())
-            .filter_map(|p|p.resolve_upstream_model(id).map(|upstream|json!({
-                "providerRoute":provider_route_id(p),"channel":p.name,"upstreamModel":upstream})))
-            .collect::<Vec<_>>();
+        let routes = codex_routes(config, id);
         let selected = config.ai_gateway.codex_visible_models.iter().any(|visible|visible==id);
         let route = (routes.len()==1).then(||&routes[0]);
         json!({"model":id,"label":model["display_name"],
-            "using":selected && !routes.is_empty(),"enabled":!routes.is_empty(),
+            "configured":selected,"using":selected && !routes.is_empty(),"enabled":!routes.is_empty(),"routing":"automatic",
             "providerRoute":route.map(|r|&r["providerRoute"]),"channel":route.map(|r|&r["channel"]),
             "upstreamModel":route.map(|r|&r["upstreamModel"]),"routes":routes,
             "parameters":{"contextWindow":model["context_window"],"maxContextWindow":model["max_context_window"],
@@ -561,7 +568,7 @@ fn codex_models_view(config: &AppConfig) -> Value {
                 "supportsReasoning":model["supports_reasoning_summaries"]},
             "reasoningEfforts":model["supported_reasoning_levels"],
             "supportedParameters":fields,
-            "parameterNote":if fields.is_empty(){"内置精确模型沿固定目录；如需独立能力覆盖，请使用动态别名"}else{"动态模型能力参数；不修改会话思考强度或Fast/Ultra开关"}})
+            "parameterNote":if fields.is_empty(){"此 ID 沿用客户端标准能力"}else{"模型能力参数；不修改会话思考强度或Fast/Ultra开关"}})
     }).collect::<Vec<_>>();
     entries.into()
 }
@@ -569,18 +576,20 @@ fn real_model_id(id: &str) -> bool {
     !id.trim().is_empty() && !id.contains(['*', '?'])
 }
 async fn resolve_model(state: &SharedState, args: &Value) -> Result<Value> {
-    if let Some(client) = args["client"].as_str() {
-        models::client(client)?;
-    }
+    let codex = args["client"].as_str().map(models::client).transpose()? == Some(ClientId::Codex);
     let requested = text(args, "model")?.trim();
+    let prefix = requested.to_ascii_lowercase();
     let config = configuration(state).await?;
     let mut candidates = Vec::new();
-    for provider in config
-        .ai_gateway
-        .providers
-        .iter()
-        .filter(|p| p.enabled && ordinary(p).is_ok())
-    {
+    let mut codex_candidates = std::collections::BTreeMap::<String, (&str, Vec<Value>)>::new();
+    for provider in config.ai_gateway.providers.iter().filter(|p| {
+        p.enabled
+            && if codex {
+                p.is_client_model_source()
+            } else {
+                ordinary(p).is_ok()
+            }
+    }) {
         let mut names = provider
             .models
             .iter()
@@ -598,14 +607,28 @@ async fn resolve_model(state: &SharedState, args: &Value) -> Result<Value> {
             if !real_model_id(model) {
                 continue;
             }
-            if model
-                .to_ascii_lowercase()
-                .starts_with(&requested.to_ascii_lowercase())
-            {
+            let key = model.to_ascii_lowercase();
+            if !key.starts_with(&prefix) {
+                continue;
+            }
+            if codex {
+                let entry = codex_candidates
+                    .entry(key)
+                    .or_insert_with(|| (model, Vec::new()));
+                let route = codex_route(provider, upstream);
+                if !entry.1.contains(&route) {
+                    entry.1.push(route);
+                }
+            } else {
                 candidates.push(json!({"channel":provider.name,"model":model,"upstreamModel":upstream,"providerType":provider.provider_type}));
             }
         }
     }
+    candidates.extend(codex_candidates.into_values().map(|(model, routes)| {
+        let single = (routes.len() == 1).then(|| &routes[0]);
+        json!({"model":model,"routing":"automatic","routes":routes,
+            "channel":single.map(|r|&r["channel"]),"upstreamModel":single.map(|r|&r["upstreamModel"])})
+    }));
     let exact = candidates
         .iter()
         .filter(|c| {
@@ -936,12 +959,8 @@ async fn add_model(state: &SharedState, args: &Value) -> Result<Value> {
 }
 async fn configure_client(state: &SharedState, args: &Value) -> Result<Value> {
     let config = configuration(state).await?;
-    let provider = channel(&config, text(args, "channel")?)?;
-    let model = text(args, "model")?;
-    ensure!(
-        provider.enabled && real_model_id(model) && provider.matches_model(model),
-        "渠道未启用或没有此模型"
-    );
+    let model = text(args, "model")?.trim();
+    ensure!(real_model_id(model), "请输入准确的模型 ID");
     let library = Library::new(&state.config_path)?;
     let target = library
         .targets(&library.load()?)?
@@ -952,6 +971,25 @@ async fn configure_client(state: &SharedState, args: &Value) -> Result<Value> {
         !target.models_inherited,
         "此目标继承主配置，请选择该客户端的主配置目标"
     );
+    let provider = if target.client == ClientId::Codex && args["channel"].as_str().is_none() {
+        config
+            .ai_gateway
+            .providers
+            .iter()
+            .find(|p| p.enabled && p.is_client_model_source() && p.matches_model(model))
+            .context("没有已启用的厂商提供此模型，请核对准确 ID")?
+    } else {
+        let provider = channel(&config, text(args, "channel")?)?;
+        ensure!(
+            provider.enabled && provider.matches_model(model),
+            "渠道未启用或没有此模型"
+        );
+        ensure!(
+            target.client != ClientId::Codex || provider.is_client_model_source(),
+            "此来源由专用接入管理，请选择实际厂商模型"
+        );
+        provider
+    };
     let base = json!({"targetId":target.id,"sourceRoute":provider_route_id(provider),"model":model,"revision":config.revision,
         "client":target.client,"using":true,"label":args["label"].as_str().unwrap_or(model)});
     // Legacy writers preserve their own backup/revision rules; ordinary targets
@@ -970,34 +1008,33 @@ async fn configure_client(state: &SharedState, args: &Value) -> Result<Value> {
     )
     .await?;
     let latest = configuration(state).await?;
+    if target.client == ClientId::Codex {
+        let id = result["status"]["model"]
+            .as_str()
+            .context("保存结果未返回 Codex 模型 ID，请读取实际模型列表核对")?;
+        ensure!(
+            id.eq_ignore_ascii_case(model)
+                && latest
+                    .ai_gateway
+                    .codex_visible_models
+                    .iter()
+                    .any(|m| m == id),
+            "Codex 模型列表未确认保存此 ID，请核对"
+        );
+        let routes = codex_routes(&latest, id);
+        let single = (routes.len() == 1).then(|| &routes[0]);
+        return Ok(
+            json!({"saved":true,"added":result["status"]["added"],"using":!routes.is_empty(),
+            "targetId":target.id,"client":target.client,"model":id,"sourceModel":model,"routing":"automatic",
+            "channel":single.map(|r|&r["channel"]),"upstreamModel":single.map(|r|&r["upstreamModel"]),
+            "providerRoute":single.map(|r|&r["providerRoute"]),"routes":routes,
+            "message":"已在 Codex 列表中确认模型 ID；请求时由 Hub 匹配已启用渠道，尚未调用模型"}),
+        );
+    }
     let source_upstream = provider
         .resolve_upstream_model(model)
         .context("来源模型已变化")?;
     let (configured_model, entry_id, provider_route) = match target.client {
-        ClientId::Codex => {
-            let alias = result["status"]["model"]
-                .as_str()
-                .context("保存结果未返回 Codex 模型身份，请读取实际模型列表核对；不自动重试")?;
-            let copy = latest
-                .ai_gateway
-                .providers
-                .iter()
-                .find(|p| {
-                    p.enabled
-                        && p.name.starts_with("Codex · ")
-                        && p.resolve_upstream_model(alias) == Some(source_upstream)
-                })
-                .context("Codex 副本回读未确认，请读取实际模型列表核对；不自动重试")?;
-            ensure!(
-                latest
-                    .ai_gateway
-                    .codex_visible_models
-                    .iter()
-                    .any(|id| id == alias),
-                "Codex 副本未在可见模型中确认，请读取实际模型列表核对；不自动重试"
-            );
-            (alias.to_string(), Value::Null, provider_route_id(copy))
-        }
         ClientId::WorkBuddy | ClientId::Tiangong => {
             let entry = result["status"]["selectedEntryId"]
                 .as_str()
@@ -1105,7 +1142,7 @@ async fn set_parameters(state: &SharedState, args: &Value) -> Result<Value> {
         );
         ensure!(
             codex_model_editable(model),
-            "此 Codex 内置模型使用固定能力目录，不能直接覆盖；可按用户要求创建独立动态别名后调整"
+            "此模型 ID 使用客户端标准能力，不支持在此覆盖"
         );
         let old = config
             .ai_gateway
@@ -1490,17 +1527,23 @@ async fn resolve_deletion(
             ensure!(item.entry_id.is_none(), "此客户端请使用模型名称或 id");
             let model = item.model.as_deref().context("缺少模型名称")?;
             if client == ClientId::Codex {
+                let has_exact_id = config
+                    .ai_gateway
+                    .codex_visible_models
+                    .iter()
+                    .any(|id| model_named(id, model));
                 return Ok(config
                     .ai_gateway
                     .codex_visible_models
                     .iter()
                     .filter(|visible| {
                         model_named(visible, model)
-                            || config.ai_gateway.providers.iter().any(|p| {
-                                p.name.starts_with("Codex · ")
-                                    && p.resolve_upstream_model(visible)
-                                        .is_some_and(|name| model_named(name, model))
-                            })
+                            || (!has_exact_id
+                                && config.ai_gateway.providers.iter().any(|p| {
+                                    p.is_codex_model_copy()
+                                        && p.resolve_upstream_model(visible)
+                                            .is_some_and(|name| model_named(name, model))
+                                }))
                     })
                     .map(|visible| ResolvedDelete {
                         label: format!("{}：{}", client.name(), visible),
@@ -1621,7 +1664,7 @@ async fn delete_one(state: &SharedState, item: &ResolvedDelete) -> Result<Value>
     match &item.target {
         DeleteTarget::Channel(name) => {
             let provider = channel(&config, name)?;
-            if provider.name.starts_with("Codex · ") {
+            if provider.is_codex_model_copy() {
                 let aliases = provider.model_aliases.keys().cloned().collect::<Vec<_>>();
                 remove_codex_models(&mut config, &aliases);
             }
@@ -1633,7 +1676,7 @@ async fn delete_one(state: &SharedState, item: &ResolvedDelete) -> Result<Value>
             model,
         } => {
             let provider = channel(&config, name)?;
-            let codex = provider.name.starts_with("Codex · ");
+            let codex = provider.is_codex_model_copy();
             let aliases = provider
                 .model_aliases
                 .iter()
@@ -1667,20 +1710,10 @@ async fn delete_one(state: &SharedState, item: &ResolvedDelete) -> Result<Value>
             .await
         }
         DeleteTarget::CodexModel { model } => {
-            remove_codex_models(&mut config, std::slice::from_ref(model));
-            for provider in config
+            config
                 .ai_gateway
-                .providers
-                .iter_mut()
-                .filter(|p| p.name.starts_with("Codex · "))
-            {
-                provider.model_aliases.remove(model);
-            }
-            config.ai_gateway.providers.retain(|p| {
-                !p.name.starts_with("Codex · ")
-                    || !p.models.is_empty()
-                    || !p.model_aliases.is_empty()
-            });
+                .codex_visible_models
+                .retain(|id| id != model);
             save(state, config).await
         }
         DeleteTarget::Native {
@@ -1826,8 +1859,8 @@ pub(crate) async fn call(state: &SharedState, name: &str, args: Value) -> Result
             "workGuide":WORK_GUIDE,
             "builtinShareAllowed":super::builtin_sharing_allowed(state).await,
             "localActions":{"tiangongBuiltinShare":"仅当前本机性格为软萌猫娘时，用户明确说‘打开天工 Work 内置模型分享’可由本机打开专用面板；默认隐藏。这里只打开界面，原生接入、登录及分享必须在现成表单中由用户选择。不能用hub_open_page或其他配置工具自动开启这个入口。","workbuddyBuiltinShare":"仅当前本机性格为软萌猫娘时，用户明确要求使用WorkBuddy登录内置模型可用hub_open_page({page:workbuddy-builtin-share})只打开分享面板，并将入口保留在WorkBuddy接入设置，重启Hub后恢复。取消勾选只隐藏入口，已有分享、授权和已配置模型继续保留；下次对话再次明确要求打开才重新揭示。入口可见不代表分享已启用，启用和停用通过独立操作管理；启用时由用户明确授权导入当前会话所需的最小授权，再选择模型和目标客户端。面板确认授权就绪后，可真正退出WorkBuddy，授权有效时由Hub独立调用；失效时需重新登录授权。授权由系统凭据库保护，不进入普通配置、工具输出或目标客户端，不读取主解密密钥。费用和额度沿WorkBuddy账户，不是搭档管理员费用。已有任务需要用户先正常退出再启用。干练搭档和温柔女友不能触发两项分享入口或启停；完全访问不覆盖此规则，切换不自动停用现有分享。"},
-            "hub":"天才空间 Hub 统一连接模型渠道与多个桌面客户端；客户端模型配置为独立副本，修改来源不会自动同步副本。",
-            "navigation":{"models":"左侧模型与渠道；各客户端的模型页管理独立副本","squad":"天才小分队：登录、账户、密钥、使用记录、充值和订阅；按账户权限显示组织功能","tiangongAssistance":"天工 Work → 接入设置 → 本机协助","dumpling":"左侧 Dumpling-MCP 独立入口"},
+            "hub":"ChatGPT/Codex 保存客户端模型 ID，Hub 按请求自动匹配提供该 ID 或别名的已启用渠道。其他客户端仍使用各自的独立配置。",
+            "navigation":{"models":"左侧模型与渠道管理厂商；各客户端的模型页管理模型列表","squad":"天才小分队：登录、账户、密钥、使用记录、充值和订阅；按账户权限显示组织功能","tiangongAssistance":"天工 Work → 接入设置 → 本机协助","dumpling":"左侧 Dumpling-MCP 独立入口"},
             "billing":"天才搭档模型由小分队管理员指定并承担费用；天工协助沿用其原模型来源。",
             "temporary":"收起保留对话；停止中断执行；清空删除临时内容；真正退出 Hub 结束后台并清理，已保存配置和主动另存成果保留。",
             "boundary":"按现有工具完成用户明确交办的操作；普通模式删除集中确认一次，完全访问按明确指令执行，模型有歧义时先询问。提供下载链接、打开页面、保存配置分别按实际结果说明，不把指引或排队当作已完成。具体操作暂未接入工具时，说明一个可行步骤或合适入口即可。用户模型API的后续费用沿站点原规则。"})
@@ -1984,7 +2017,7 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(error.to_string().contains("固定能力目录"));
+        assert!(error.to_string().contains("不支持在此覆盖"));
         assert_eq!(std::fs::read(&state.config_path).unwrap(), before);
         let view = call(&state, "hub_read_configuration", json!({"client":"codex"}))
             .await
@@ -2058,8 +2091,7 @@ mod tests {
         );
     }
     #[tokio::test]
-    async fn model_selection_rejects_unknown_ids_reports_prefix_choices_and_keeps_codex_copy_identity()
-     {
+    async fn model_selection_rejects_unknown_ids_reports_prefix_choices_and_keeps_codex_model_id() {
         let (_temp, state) = fixture();
         let mut config = AppConfig::load_or_default(&state.config_path).unwrap();
         let source = &mut config.ai_gateway.providers[0];
@@ -2135,7 +2167,7 @@ mod tests {
             .unwrap();
         let saved=call(&state,"hub_configure_client",json!({"targetId":target["targetId"],"channel":selected["selection"]["channel"],"model":selected["selection"]["model"]})).await.unwrap();
         let alias = saved["model"].as_str().unwrap();
-        assert_ne!(alias, "gpt-6-a-preset");
+        assert_eq!(alias, "gpt-6-a-preset");
         let view = call(&state, "hub_read_configuration", json!({"client":"codex"}))
             .await
             .unwrap();
@@ -2148,7 +2180,8 @@ mod tests {
         assert_eq!(copy["using"], true);
         assert_eq!(copy["enabled"], true);
         assert_eq!(copy["upstreamModel"], "gpt-6-astra");
-        assert!(copy["channel"].as_str().unwrap().starts_with("Codex · "));
+        assert_eq!(copy["channel"], "fixture-channel");
+        assert_eq!(copy["routing"], "automatic");
         assert!(copy["providerRoute"].is_string());
         let config = AppConfig::load_or_default(&state.config_path).unwrap();
         assert_eq!(
@@ -2844,8 +2877,34 @@ mod tests {
         assert!(serde_json::from_value::<NavigationAck>(json!({"id":"missing-result"})).is_err());
     }
     #[tokio::test]
-    async fn client_configuration_returns_the_actual_independent_codex_alias_without_secrets() {
+    async fn same_codex_model_from_multiple_channels_needs_no_choice_or_duplicate() {
         let (_temp, state) = fixture();
+        let mut config = AppConfig::load_or_default(&state.config_path).unwrap();
+        let other = &mut config.ai_gateway.providers[1];
+        other
+            .model_aliases
+            .insert("OLD-MODEL".into(), "other-upstream".into());
+        config.save(&state.config_path).unwrap();
+        let before = serde_json::to_value(&config.ai_gateway.providers).unwrap();
+        let selected = call(
+            &state,
+            "hub_resolve_model",
+            json!({"client":"codex","model":"old-m"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(selected["canConfigure"], true);
+        assert_eq!(selected["match"], "prefix");
+        assert_eq!(selected["selection"]["routes"].as_array().unwrap().len(), 2);
+        assert!(selected["selection"]["channel"].is_null());
+        let other_client = call(
+            &state,
+            "hub_resolve_model",
+            json!({"client":"workbuddy","model":"old-model"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(other_client["match"], "ambiguous");
         let view = call(&state, "hub_read_configuration", json!({}))
             .await
             .unwrap();
@@ -2859,18 +2918,21 @@ mod tests {
             &state,
             "hub_configure_client",
             json!({"targetId":target["id"],
-            "channel":"fixture-channel","model":"old-model"}),
+            "model":"OLD-MODEL"}),
         )
         .await
         .unwrap();
         let alias = result["model"].as_str().unwrap();
-        assert_ne!(alias, "old-model");
+        assert_eq!(alias, "old-model");
+        assert_eq!(result["added"], false);
+        assert_eq!(result["routing"], "automatic");
+        assert!(result["channel"].is_null());
+        assert_eq!(result["routes"], selected["selection"]["routes"]);
         let config = AppConfig::load_or_default(&state.config_path).unwrap();
-        assert!(
-            config
-                .ai_gateway
-                .codex_visible_models
-                .contains(&alias.to_string())
+        assert_eq!(config.ai_gateway.codex_visible_models, ["old-model"]);
+        assert_eq!(
+            serde_json::to_value(&config.ai_gateway.providers).unwrap(),
+            before
         );
         assert!(
             !result
@@ -3150,10 +3212,8 @@ mod tests {
         assert!(channel(&config, "fixture-channel").is_ok());
     }
     #[tokio::test]
-    async fn client_and_dedicated_codex_deletion_remove_the_owned_copy_without_source_changes() {
-        if isolated_native_test(
-            "client_and_dedicated_codex_deletion_remove_the_owned_copy_without_source_changes",
-        ) {
+    async fn zcode_deletion_by_channel_or_model_removes_only_the_client_copy() {
+        if isolated_native_test("zcode_deletion_by_channel_or_model_removes_only_the_client_copy") {
             return;
         }
         let (_temp, state) = fixture();
@@ -3161,12 +3221,8 @@ mod tests {
         let view = call(&state, "hub_read_configuration", json!({}))
             .await
             .unwrap();
-        for (client, by_channel) in [
-            ("zcode", true),
-            ("zcode", false),
-            ("codex", true),
-            ("codex", false),
-        ] {
+        for by_channel in [true, false] {
+            let client = "zcode";
             let target = view["targets"]
                 .as_array()
                 .unwrap()
@@ -3181,30 +3237,16 @@ mod tests {
             )
             .await
             .unwrap();
-            let mut config = AppConfig::load_or_default(&state.config_path).unwrap();
-            if client == "codex" {
-                config.ai_gateway.codex_model_profiles.push(
-                    crate::ai_gateway::config::CodexModelProfile {
-                        id: copy["model"].as_str().unwrap().to_string(),
-                        ..Default::default()
-                    },
-                );
-                config.save(&state.config_path).unwrap();
-            }
+            let config = AppConfig::load_or_default(&state.config_path).unwrap();
             let provider = config
                 .ai_gateway
                 .providers
                 .iter()
                 .find(|provider| {
-                    if client == "codex" {
-                        provider.name.starts_with("Codex · ")
-                            && provider.matches_model(copy["model"].as_str().unwrap())
-                    } else {
-                        provider
-                            .desktop_binding
-                            .as_ref()
-                            .is_some_and(|binding| Some(binding.id.as_str()) == copy["id"].as_str())
-                    }
+                    provider
+                        .desktop_binding
+                        .as_ref()
+                        .is_some_and(|binding| Some(binding.id.as_str()) == copy["id"].as_str())
                 })
                 .unwrap();
             let name = provider.name.clone();
@@ -3223,28 +3265,86 @@ mod tests {
             let config = AppConfig::load_or_default(&state.config_path).unwrap();
             assert!(channel(&config, &name).is_err());
             assert!(channel(&config, "fixture-channel").is_ok());
-            if client == "codex" {
+        }
+    }
+    #[tokio::test]
+    async fn removing_codex_model_preserves_sources_profiles_and_legacy_aliases() {
+        let (_temp, state) = fixture();
+        state.assistant.inner.lock().await.full_access = true;
+        let mut config = AppConfig::load_or_default(&state.config_path).unwrap();
+        let legacy = "old-model-abcdef";
+        let name = "Codex · old-model · abcdef";
+        let mut copy = config.ai_gateway.providers[0].clone();
+        copy.name = name.into();
+        copy.models.clear();
+        copy.model_aliases.insert(legacy.into(), "old-model".into());
+        config.ai_gateway.providers.push(copy);
+        config.ai_gateway.codex_visible_models.push(legacy.into());
+        config
+            .ai_gateway
+            .codex_model_profiles
+            .push(crate::ai_gateway::config::CodexModelProfile {
+                id: legacy.into(),
+                ..Default::default()
+            });
+        config.save(&state.config_path).unwrap();
+        let providers = serde_json::to_value(&config.ai_gateway.providers).unwrap();
+        for id in ["old-model", legacy] {
+            let reply = call(
+                &state,
+                "hub_delete_configurations",
+                json!({"items":[{"kind":"client_model","client":"codex","model":id}]}),
+            )
+            .await
+            .unwrap();
+            assert_eq!(reply["results"][0]["deleted"], true);
+            let latest = AppConfig::load_or_default(&state.config_path).unwrap();
+            assert!(
+                !latest
+                    .ai_gateway
+                    .codex_visible_models
+                    .iter()
+                    .any(|v| v == id)
+            );
+            if id == "old-model" {
                 assert!(
-                    config
+                    latest
                         .ai_gateway
-                        .codex_model_profiles
+                        .codex_visible_models
                         .iter()
-                        .all(|profile| Some(profile.id.as_str()) != copy["model"].as_str())
-                );
-                assert!(
-                    !config
-                        .ai_gateway
-                        .codex_visible_models
-                        .contains(&copy["model"].as_str().unwrap().to_string())
-                );
-                assert!(
-                    config
-                        .ai_gateway
-                        .codex_visible_models
-                        .contains(&"old-model".to_string())
+                        .any(|v| v == legacy)
                 );
             }
+            assert_eq!(
+                serde_json::to_value(&latest.ai_gateway.providers).unwrap(),
+                providers
+            );
+            assert!(
+                latest
+                    .ai_gateway
+                    .codex_model_profiles
+                    .iter()
+                    .any(|p| p.id == legacy)
+            );
         }
+        let reply = call(
+            &state,
+            "hub_delete_configurations",
+            json!({"items":[{"kind":"channel","channel":name}]}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(reply["results"][0]["deleted"], true);
+        let latest = AppConfig::load_or_default(&state.config_path).unwrap();
+        assert!(channel(&latest, name).is_err());
+        assert!(channel(&latest, "fixture-channel").is_ok());
+        assert!(
+            latest
+                .ai_gateway
+                .codex_model_profiles
+                .iter()
+                .all(|p| p.id != legacy)
+        );
     }
     #[tokio::test]
     async fn approved_deletion_from_a_replaced_account_does_not_write_configuration() {

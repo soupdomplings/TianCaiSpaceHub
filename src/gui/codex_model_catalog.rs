@@ -1,40 +1,21 @@
-//! Pure channel grouping for the existing Codex visible-model contract.
-use crate::ai_gateway::{catalog::visible_catalog_model_options, config::AiGatewayConfig};
-use std::collections::BTreeSet;
+//! Source channels supply candidates; the client's saved list is independent.
+use crate::ai_gateway::config::AiGatewayConfig;
+use std::collections::BTreeMap;
 
-pub(super) fn channel_groups(config: &AiGatewayConfig) -> Vec<Vec<String>> {
-    let providers = config
+pub(super) fn channel_groups(config: &AiGatewayConfig) -> (Vec<String>, Vec<Vec<String>>) {
+    config
         .providers
         .iter()
-        .filter(|p| p.enabled && !p.is_client_reserved())
-        .collect::<Vec<_>>();
-    let routed = providers
-        .iter()
-        .flat_map(|p| p.models.iter().chain(p.model_aliases.keys()))
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    let mut built = visible_catalog_model_options()
-        .into_iter()
-        .map(|m| m.slug)
-        .collect::<BTreeSet<_>>();
-    built.extend(
-        config
-            .codex_visible_models
-            .iter()
-            .filter(|m| !routed.contains(*m))
-            .cloned(),
-    );
-    std::iter::once(built.into_iter().collect())
-        .chain(providers.into_iter().map(|p| {
-            p.models
-                .iter()
-                .chain(p.model_aliases.keys())
-                .cloned()
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect()
-        }))
-        .collect()
+        .filter(|p| p.enabled && p.is_client_model_source())
+        .map(|p| {
+            let mut by_id = BTreeMap::new();
+            for id in p.models.iter().chain(p.model_aliases.keys()) {
+                by_id.entry(id.to_ascii_lowercase()).or_insert(id);
+            }
+            let models = by_id.into_values().cloned().collect();
+            (p.name.clone(), models)
+        })
+        .unzip()
 }
 
 #[cfg(test)]
@@ -42,12 +23,12 @@ mod tests {
     use super::*;
     use crate::ai_gateway::config::ProviderConfig;
     #[test]
-    fn groups_keep_aliases_custom_selections_and_reserved_scope() {
+    fn candidates_only_come_from_enabled_source_channels_and_include_aliases() {
         let mut config = AiGatewayConfig::default();
         let mut p = ProviderConfig::default();
-        p.name = "synthetic".into();
+        p.name = "Codex · synthetic · abc123".into(); // A user-chosen name, not a copy.
         p.enabled = true;
-        p.models = vec!["a".into(), "b".into()];
+        p.models = vec!["a".into(), "b".into(), "A".into()];
         p.model_aliases.insert("alias".into(), "a".into());
         config.providers.push(p);
         let mut reserved = ProviderConfig::default();
@@ -60,16 +41,16 @@ mod tests {
         disabled.enabled = false;
         disabled.models = vec!["disabled-only".into()];
         config.providers.push(disabled);
+        config.providers.push(ProviderConfig {
+            enabled: true,
+            name: "Codex · old-model · abc123".into(),
+            models: vec!["old-model".into()],
+            model_aliases: [("old-model-abc123".into(), "old-model".into())].into(),
+            ..Default::default()
+        });
         config.codex_visible_models = vec!["custom-old".into()];
-        let groups = channel_groups(&config);
-        assert!(groups[0].contains(&"custom-old".into()));
-        assert_eq!(groups[1], vec!["a", "alias", "b"]);
-        assert_eq!(groups.len(), 2);
-        assert!(
-            !groups
-                .iter()
-                .flatten()
-                .any(|s| matches!(s.as_str(), "client-only" | "disabled-only"))
-        );
+        let (names, groups) = channel_groups(&config);
+        assert_eq!(names, ["Codex · synthetic · abc123"]);
+        assert_eq!(groups, [vec!["a", "alias", "b"]]);
     }
 }

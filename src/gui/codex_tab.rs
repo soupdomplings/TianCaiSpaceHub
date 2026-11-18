@@ -31,12 +31,6 @@ type CodexHubReady = Rc<Cell<bool>>;
 type CodexServiceEnabled = Rc<Cell<bool>>;
 
 #[derive(Clone)]
-struct DiscoveredModels {
-    models: Vec<String>,
-    source_fingerprint: String,
-}
-
-#[derive(Clone)]
 pub(super) struct CodexTab {
     pub(super) page: Panel,
     text: GuiText,
@@ -55,7 +49,7 @@ pub(super) struct CodexTab {
     model_provider_names: Rc<RefCell<Vec<String>>>,
     custom_models_input: TextCtrl,
     models_updated: Panel,
-    discovered_models: Rc<RefCell<std::collections::BTreeMap<String, DiscoveredModels>>>,
+    discovered_models: Rc<RefCell<std::collections::BTreeMap<String, Vec<String>>>>,
     base_models: Rc<RefCell<Option<Vec<String>>>>,
     latest_models: Rc<RefCell<Option<Vec<String>>>>,
     list_saved: Rc<RefCell<Option<Rc<dyn Fn()>>>>,
@@ -277,7 +271,7 @@ pub(super) fn create_with_settings(
         .with_style(TextCtrlStyle::MultiLine | TextCtrlStyle::Default)
         .build();
     custom_models_input.set_min_size(super::visual::dip_size(&custom_models_input, 0, 64));
-    custom_models_input.set_tooltip("手动模型 ID，每行一个；保存时使用所选渠道，不影响其他客户端");
+    custom_models_input.set_tooltip(text.codex_custom_models_help());
     custom_models_input.hide();
     models_section.add(
         &custom_models_input,
@@ -436,7 +430,7 @@ pub(super) fn bind_model_list(tab: &CodexTab, page: &super::clients::ClientPage)
         manual.change_value(
             &merge_model_ids(&manual.get_value(), &[])
                 .into_iter()
-                .filter(|m| m != model)
+                .filter(|m| !m.eq_ignore_ascii_case(model))
                 .collect::<Vec<_>>()
                 .join("\n"),
         );
@@ -504,14 +498,18 @@ pub(super) fn bind_actions(
 pub(super) fn set_actions_enabled(tab: &CodexTab, enabled: bool) {
     tab.service_enabled.set(enabled);
     tab.save_models_button.enable(enabled);
-    tab.sync_models_button.enable(enabled);
-    tab.fetch_models_button.enable(enabled);
-    tab.model_provider.enable(enabled);
     tab.custom_models_input.enable(enabled);
-    tab.model_picker.enable(enabled);
+    set_candidate_actions_enabled(tab, enabled);
     refresh_config_buttons(tab, enabled);
     tab.session_history_button
         .enable(enabled && tab.remote_ready.get());
+}
+
+fn set_candidate_actions_enabled(tab: &CodexTab, enabled: bool) {
+    let has_channel = !tab.model_provider_names.borrow().is_empty();
+    tab.sync_models_button.enable(enabled && has_channel);
+    tab.fetch_models_button.enable(enabled && has_channel);
+    tab.model_picker.enable(enabled);
 }
 
 pub(super) fn refresh_configured(tab: &CodexTab, configured: bool, config_up_to_date: bool) {
@@ -539,34 +537,32 @@ pub(super) fn refresh_remote_ready(tab: &CodexTab, remote_ready: bool) {
 
 pub(super) fn initialize_visible_model_checks(tab: &CodexTab, gateway_config: &AiGatewayConfig) {
     *tab.latest_models.borrow_mut() = Some(gateway_config.codex_visible_models.clone());
-    let names: Vec<String> = gateway_config
-        .providers
-        .iter()
-        .filter(|provider| provider.enabled && !provider.is_client_reserved())
-        .map(|provider| provider.name.clone())
-        .collect();
+    let (names, mut groups) = super::codex_model_catalog::channel_groups(gateway_config);
     if *tab.model_provider_names.borrow() != names {
         let previous = selected_model_provider(tab);
         tab.model_provider.clear();
-        tab.model_provider.append("内置与其他模型");
         for name in &names {
             tab.model_provider.append(name);
         }
-        let index = previous
-            .and_then(|name| names.iter().position(|item| item == &name))
-            .map(|index| index + 1)
-            .unwrap_or(0);
-        tab.model_provider.set_selection(index as u32);
+        if !names.is_empty() {
+            let index = previous
+                .and_then(|name| names.iter().position(|item| item == &name))
+                .unwrap_or(0);
+            tab.model_provider.set_selection(index as u32);
+        }
+        tab.discovered_models
+            .borrow_mut()
+            .retain(|name, _| names.contains(name));
         *tab.model_provider_names.borrow_mut() = names;
+        set_candidate_actions_enabled(tab, tab.service_enabled.get());
     }
-    let mut groups = super::codex_model_catalog::channel_groups(gateway_config);
     for (index, name) in tab.model_provider_names.borrow().iter().enumerate() {
         if let (Some(group), Some(found)) = (
-            groups.get_mut(index + 1),
+            groups.get_mut(index),
             tab.discovered_models.borrow().get(name),
         ) {
-            for model in &found.models {
-                if !group.contains(model) {
+            for model in found {
+                if !group.iter().any(|m| m.eq_ignore_ascii_case(model)) {
                     group.push(model.clone());
                 }
             }
@@ -625,9 +621,7 @@ pub(super) fn apply_pending_action(
     let service_enabled = tab.service_enabled.get();
     refresh_config_buttons(tab, service_enabled);
     tab.save_models_button.enable(service_enabled);
-    tab.sync_models_button.enable(service_enabled);
-    tab.fetch_models_button.enable(service_enabled);
-    tab.model_provider.enable(service_enabled);
+    set_candidate_actions_enabled(tab, service_enabled);
 
     match result {
         CodexActionResult::WebSocket(result) => {
@@ -664,14 +658,14 @@ pub(super) fn apply_pending_action(
             show_error(frame, &err);
             force_dashboard_refresh(api, refresh);
         }
-        CodexActionResult::SaveModels(Ok(())) => {
+        CodexActionResult::SaveModels(Ok(unmatched)) => {
             tab.models_initialized.set(false);
             tab.discovered_models.borrow_mut().clear();
             tab.custom_models_input.change_value("");
             if let Some(saved) = tab.list_saved.borrow().clone() {
                 saved();
             }
-            show_info(frame, text.codex_models_saved());
+            show_info(frame, &text.codex_models_saved(&unmatched));
             force_dashboard_refresh(api, refresh);
         }
         CodexActionResult::SaveModels(Err(err)) => {
@@ -692,17 +686,15 @@ pub(super) fn apply_pending_action(
                 .iter()
                 .position(|name| name == &provider)
             {
-                tab.discovered_models
-                    .borrow_mut()
-                    .insert(provider, found.clone());
-                tab.model_picker.show_discovered(index + 1, &found.models);
+                tab.model_picker.show_discovered(index, &found);
                 show_info(
                     frame,
                     &format!(
-                        "已获取 {} 个可选模型。勾选后保存模型列表即可使用。",
-                        found.models.len()
+                        "已获取 {} 个候选模型。调用时按已启用渠道的模型 ID 或别名匹配。",
+                        found.len()
                     ),
                 );
+                tab.discovered_models.borrow_mut().insert(provider, found);
             } else {
                 show_error(frame, "所选渠道已变化，请重新读取模型列表");
             }
@@ -770,9 +762,9 @@ pub(super) enum CodexActionResult {
     WebSocket(Result<bool, String>),
     Inject(Result<serde_json::Value, String>),
     Clear(Result<serde_json::Value, String>),
-    SaveModels(Result<(), String>),
+    SaveModels(Result<Vec<String>, String>),
     SyncModels(Result<Vec<String>, String>),
-    FetchModels(String, Result<DiscoveredModels, String>),
+    FetchModels(String, Result<Vec<String>, String>),
     EnhancedLaunch(Result<serde_json::Value, String>),
 }
 
@@ -809,7 +801,7 @@ fn bind_sync_models_action(
                     .ai_gateway
                     .providers
                     .into_iter()
-                    .filter(|provider| provider.enabled && !provider.is_client_reserved())
+                    .filter(|provider| provider.enabled && provider.is_client_model_source())
                 {
                     models.extend(provider.models);
                     models.extend(provider.model_aliases.into_keys());
@@ -1128,22 +1120,12 @@ fn bind_save_models_action(
             .set_label(tab.text.saving_codex_models());
         tab.save_models_button.enable(false);
         let selected_models = selected_visible_models(&tab);
-        let provider_name = selected_model_provider(&tab);
-        let manual_models = merge_model_ids(&tab.custom_models_input.get_value(), &[]);
         let expected_models = tab.base_models.borrow().clone();
-        let discovered = tab.discovered_models.borrow().clone();
         let thread_api = api.clone();
         let gui_tx = gui_tx.clone();
         let in_flight = in_flight.clone();
         thread::spawn(move || {
-            let outcome = save_visible_models(
-                &thread_api,
-                selected_models,
-                manual_models,
-                provider_name,
-                expected_models,
-                discovered,
-            );
+            let outcome = save_visible_models(&thread_api, selected_models, expected_models);
             in_flight.store(false, Ordering::SeqCst);
             let _ = gui_tx.send(super::GuiMessage::CodexAction(
                 CodexActionResult::SaveModels(outcome),
@@ -1227,7 +1209,10 @@ fn selected_visible_models(tab: &CodexTab) -> Vec<String> {
         .map(str::trim)
         .filter(|model| !model.is_empty())
     {
-        if !selected.iter().any(|known| known == model) {
+        if !selected
+            .iter()
+            .any(|known| known.eq_ignore_ascii_case(model))
+        {
             selected.push(model.to_string());
         }
     }
@@ -1237,96 +1222,39 @@ fn selected_visible_models(tab: &CodexTab) -> Vec<String> {
 fn save_visible_models(
     api: &ApiClient,
     models: Vec<String>,
-    manual_models: Vec<String>,
-    provider_name: Option<String>,
     expected_models: Option<Vec<String>>,
-    discovered: std::collections::BTreeMap<String, DiscoveredModels>,
-) -> Result<(), String> {
+) -> Result<Vec<String>, String> {
     let mut config = api.get_app_config()?;
-    prepare_visible_models(
-        &mut config.ai_gateway,
-        models,
-        manual_models,
-        provider_name,
-        expected_models,
-        discovered,
-    )?;
-    api.save_app_config(&config)?;
-    let _ = api.refresh_codex_app_models();
-    Ok(())
+    if prepare_visible_models(&mut config.ai_gateway, models, expected_models)? {
+        api.save_app_config(&config)?;
+        let _ = api.refresh_codex_app_models();
+    }
+    Ok(config
+        .ai_gateway
+        .codex_visible_models
+        .iter()
+        .filter(|id| config.ai_gateway.select_provider(id).is_none())
+        .cloned()
+        .collect())
 }
 fn prepare_visible_models(
     config: &mut AiGatewayConfig,
-    models: Vec<String>,
-    manual_models: Vec<String>,
-    provider_name: Option<String>,
+    mut models: Vec<String>,
     expected_models: Option<Vec<String>>,
-    discovered: std::collections::BTreeMap<String, DiscoveredModels>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     if expected_models.as_ref() != Some(&config.codex_visible_models) {
         return Err("模型列表已在其他位置更新，请重新读取后核对；未覆盖原列表".into());
     }
-    for (provider, found) in discovered {
-        let chosen = found
-            .models
-            .into_iter()
-            .filter(|m| models.contains(m))
-            .collect::<Vec<_>>();
-        if !chosen.is_empty() {
-            let current = config
-                .providers
-                .iter()
-                .find(|p| p.enabled && !p.is_client_reserved() && p.name == provider)
-                .ok_or("获取模型的渠道已变化，请重新获取后保存")?;
-            if crate::desktop::models::fingerprint(current).map_err(|e| e.to_string())?
-                != found.source_fingerprint
-            {
-                return Err("获取模型后渠道配置已变化，请重新获取后保存；未覆盖原配置".into());
-            }
-        }
-        bind_unrouted_models(config, &chosen, Some(&provider))?;
-    }
-    bind_unrouted_models(config, &manual_models, provider_name.as_deref())?;
+    let mut seen = std::collections::HashSet::new();
+    models.retain(|id| seen.insert(id.to_ascii_lowercase()));
+    let changed = config.codex_visible_models != models;
     config.codex_visible_models = models;
-    Ok(())
+    Ok(changed)
 }
 
 fn selected_model_provider(tab: &CodexTab) -> Option<String> {
     let index = tab.model_provider.get_selection()? as usize;
-    index
-        .checked_sub(1)
-        .and_then(|index| tab.model_provider_names.borrow().get(index).cloned())
-}
-
-fn bind_unrouted_models(
-    config: &mut AiGatewayConfig,
-    models: &[String],
-    provider_name: Option<&str>,
-) -> Result<(), String> {
-    let missing: Vec<String> = models
-        .iter()
-        .filter(|model| {
-            !config.providers.iter().any(|provider| {
-                provider.enabled && !provider.is_client_reserved() && provider.matches_model(model)
-            })
-        })
-        .cloned()
-        .collect();
-    if missing.is_empty() {
-        return Ok(());
-    }
-    let Some(provider) = config.providers.iter_mut().find(|provider| {
-        provider.enabled
-            && !provider.is_client_reserved()
-            && Some(provider.name.as_str()) == provider_name
-    }) else {
-        return Err(format!(
-            "请选择一个已启用的渠道，为以下模型建立路由 / Select a provider for: {}",
-            missing.join(", ")
-        ));
-    };
-    provider.models.extend(missing);
-    Ok(())
+    tab.model_provider_names.borrow().get(index).cloned()
 }
 
 fn bind_fetch_models_action(
@@ -1373,7 +1301,7 @@ fn bind_fetch_models_action(
                     .iter()
                     .find(|provider| {
                         provider.enabled
-                            && !provider.is_client_reserved()
+                            && provider.is_client_model_source()
                             && provider.name == provider_name
                     })
                     .ok_or_else(|| "Selected provider is unavailable".to_string())?;
@@ -1383,16 +1311,11 @@ fn bind_fetch_models_action(
                     let id = provider.chatgpt_auth_id.as_deref().ok_or_else(|| {
                         "Sign in to the selected ChatGPT channel first".to_string()
                     })?;
-                    let models = api.post_json_with_timeout::<_, Vec<String>>(
+                    return api.post_json_with_timeout::<_, Vec<String>>(
                         "/api/chatgpt/account/models",
                         &serde_json::json!({"id": id}),
                         std::time::Duration::from_secs(75),
-                    )?;
-                    return Ok(DiscoveredModels {
-                        models,
-                        source_fingerprint: crate::desktop::models::fingerprint(provider)
-                            .map_err(|e| e.to_string())?,
-                    });
+                    );
                 }
                 let (models, corrected_base) = super::fetch_remote_models(
                     &provider.base_url,
@@ -1402,18 +1325,10 @@ fn bind_fetch_models_action(
                     super::GUI_MODEL_LIST_FETCH_TIMEOUT_SECS,
                 )?;
                 super::ai_gateway::save_confirmed_provider_url(&api, provider, &corrected_base)?;
-                let mut fetched_source = provider.clone();
-                if corrected_base != provider.base_url {
-                    fetched_source.confirm_base_url(&corrected_base);
-                }
-                Ok(DiscoveredModels {
-                    source_fingerprint: crate::desktop::models::fingerprint(&fetched_source)
-                        .map_err(|e| e.to_string())?,
-                    models: super::filter_fetched_models_for_provider(
-                        &provider.provider_type,
-                        models,
-                    ),
-                })
+                Ok(super::filter_fetched_models_for_provider(
+                    &provider.provider_type,
+                    models,
+                ))
             })();
             in_flight.store(false, Ordering::SeqCst);
             let _ = gui_tx.send(super::GuiMessage::CodexAction(
@@ -1430,113 +1345,48 @@ mod dynamic_model_tests {
     use crate::ai_gateway::config::ProviderConfig;
 
     #[test]
-    fn saving_codex_list_persists_removals_adds_only_selected_discovery_and_preserves_other_routes()
-    {
-        let mut config = AiGatewayConfig::default();
-        config.codex_visible_models = vec!["old".into(), "keep".into()];
-        config.providers = vec![
-            ProviderConfig {
-                name: "source".into(),
-                enabled: true,
-                models: vec!["keep".into()],
-                ..Default::default()
-            },
-            ProviderConfig {
-                name: crate::ai_gateway::config::workbuddy_provider_name("test").unwrap(),
-                models: vec!["old".into()],
-                ..Default::default()
-            },
-        ];
-        let reserved = serde_json::to_value(&config.providers[1]).unwrap();
-        let base = config.codex_visible_models.clone();
-        let found = DiscoveredModels {
-            models: vec!["new".into(), "not-selected".into()],
-            source_fingerprint: crate::desktop::models::fingerprint(&config.providers[0]).unwrap(),
-        };
-        prepare_visible_models(
-            &mut config,
-            vec!["keep".into(), "new".into()],
-            vec![],
-            Some("source".into()),
-            Some(base.clone()),
-            std::collections::BTreeMap::from([("source".into(), found)]),
-        )
-        .unwrap();
-        assert_eq!(config.codex_visible_models, vec!["keep", "new"]);
-        assert_eq!(config.providers[0].models, vec!["keep", "new"]);
-        assert_eq!(
-            serde_json::to_value(&config.providers[1]).unwrap(),
-            reserved
-        );
-        let before = serde_json::to_value(&config).unwrap();
-        assert!(
-            prepare_visible_models(
-                &mut config,
-                vec![],
-                vec![],
-                None,
-                Some(base),
-                Default::default()
-            )
-            .is_err()
-        );
-        assert_eq!(serde_json::to_value(&config).unwrap(), before);
-        let expected = config.codex_visible_models.clone();
-        prepare_visible_models(
-            &mut config,
-            vec![],
-            vec![],
-            None,
-            Some(expected),
-            Default::default(),
-        )
-        .unwrap();
-        assert!(config.codex_visible_models.is_empty());
-    }
-
-    #[test]
-    fn discovery_cannot_bind_to_a_replaced_source_and_an_empty_list_stays_empty() {
-        let mut config = AiGatewayConfig::default();
-        config.providers = vec![ProviderConfig {
-            name: "channel".into(),
-            models: vec!["old".into()],
+    fn saving_visible_ids_never_creates_or_changes_a_channel() {
+        let mut config = AiGatewayConfig {
+            codex_visible_models: vec!["orphan".into()],
+            providers: vec![
+                ProviderConfig {
+                    name: "source".into(),
+                    enabled: true,
+                    models: vec!["upstream".into()],
+                    model_aliases: [("client-id".into(), "upstream".into())].into(),
+                    ..Default::default()
+                },
+                ProviderConfig {
+                    name: crate::ai_gateway::config::workbuddy_provider_name("sample").unwrap(),
+                    models: vec!["client-only".into()],
+                    ..Default::default()
+                },
+            ],
             ..Default::default()
-        }];
-        let discovered = DiscoveredModels {
-            models: vec!["new".into()],
-            source_fingerprint: crate::desktop::models::fingerprint(&config.providers[0]).unwrap(),
         };
-        config.providers[0].base_url = "https://replacement.invalid/v1".into();
-        let before = serde_json::to_value(&config).unwrap();
+        let before = serde_json::to_value(&config.providers).unwrap();
         let base = config.codex_visible_models.clone();
-        assert!(
-            prepare_visible_models(
-                &mut config,
-                vec!["new".into()],
-                vec![],
-                Some("channel".into()),
-                Some(base),
-                std::collections::BTreeMap::from([("channel".into(), discovered)])
-            )
-            .is_err()
-        );
-        assert_eq!(serde_json::to_value(&config).unwrap(), before);
-        let base = config.codex_visible_models.clone();
-        prepare_visible_models(
-            &mut config,
-            vec![],
-            vec![],
-            None,
-            Some(base),
-            Default::default(),
-        )
-        .unwrap();
+        let picked = vec!["client-id".into(), "not-configured".into()];
+        assert!(prepare_visible_models(&mut config, picked.clone(), Some(base.clone())).unwrap());
+        let mut same = picked.clone();
+        same.push("CLIENT-id".into());
+        assert!(!prepare_visible_models(&mut config, same, Some(picked.clone())).unwrap());
+        assert_eq!(config.codex_visible_models, picked);
+        assert_eq!(serde_json::to_value(&config.providers).unwrap(), before);
+        assert_eq!(config.select_provider("client-id").unwrap().name, "source");
+        assert!(config.select_provider("not-configured").is_none());
+
+        assert!(prepare_visible_models(&mut config, vec![], Some(base)).is_err());
+        assert_eq!(config.codex_visible_models, picked);
+        prepare_visible_models(&mut config, vec![], Some(picked)).unwrap();
+        assert!(config.codex_visible_models.is_empty());
         assert!(
             crate::ai_gateway::catalog::configured_models_response(&config)["models"]
                 .as_array()
                 .unwrap()
                 .is_empty()
         );
+        assert_eq!(serde_json::to_value(&config.providers).unwrap(), before);
     }
 
     #[test]
@@ -1548,55 +1398,6 @@ mod dynamic_model_tests {
             ),
             ["custom-one", "GPT-new", "custom-two", "vendor/new"]
         );
-    }
-
-    #[test]
-    fn manual_models_gain_routes_without_changing_existing_aliases() {
-        let mut config = AiGatewayConfig::default();
-        config.providers.push(ProviderConfig {
-            name: "selected".into(),
-            ..Default::default()
-        });
-        config.providers.push(ProviderConfig {
-            name: "other".into(),
-            model_aliases: [("existing".into(), "actual-upstream".into())].into(),
-            ..Default::default()
-        });
-        bind_unrouted_models(
-            &mut config,
-            &["existing".into(), "new-model".into()],
-            Some("selected"),
-        )
-        .unwrap();
-        assert_eq!(config.providers[0].models, ["new-model"]);
-        assert_eq!(
-            config.providers[1].resolve_upstream_model("existing"),
-            Some("actual-upstream")
-        );
-        assert_eq!(
-            config.select_provider("new-model").unwrap().name,
-            "selected"
-        );
-        bind_unrouted_models(&mut config, &["NEW-MODEL".into()], Some("selected")).unwrap();
-        assert_eq!(config.providers[0].models, ["new-model"]);
-    }
-
-    #[test]
-    fn unrouted_model_requires_enabled_non_workbuddy_provider() {
-        let mut config = AiGatewayConfig::default();
-        config.providers.push(ProviderConfig {
-            name: "workbuddy".into(),
-            ..Default::default()
-        });
-        config.providers.push(ProviderConfig {
-            name: "disabled".into(),
-            enabled: false,
-            ..Default::default()
-        });
-        for name in [None, Some("workbuddy"), Some("disabled")] {
-            assert!(bind_unrouted_models(&mut config, &["new-model".into()], name).is_err());
-        }
-        assert!(config.providers.iter().all(|p| p.models.is_empty()));
     }
 }
 

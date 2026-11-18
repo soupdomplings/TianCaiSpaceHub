@@ -254,10 +254,10 @@ pub(super) async fn share_builtin_source(
                 break;
             }
         } else if matches!(target.client, ClientId::Codex | ClientId::WorkBuddy | ClientId::Tiangong) {
-            copy_legacy(
-                State(state.clone()),
+            save_client_model(
+                state.clone(),
                 headers.clone(),
-                Json(CopyLegacy {
+                CopyLegacy {
                     client: target.client,
                     source_route: route.clone(),
                     model: model.clone(),
@@ -265,7 +265,8 @@ pub(super) async fn share_builtin_source(
                     target_id: Some(id.clone()),
                     workbuddy: None,
                     tiangong: None,
-                }),
+                },
+                true,
             )
             .await
         } else {
@@ -387,8 +388,6 @@ async fn list(State(state): State<SharedState>) -> Response {
     response(
         tokio::task::spawn_blocking(move || -> Result<Value> {
             let mut view = models::public(&config.ai_gateway);
-            view["codexVisibleModels"] =
-                serde_json::to_value(&config.ai_gateway.codex_visible_models)?;
             view["revision"] = config.revision.clone().into();
             let lib = Library::new(&path)?;
             let targets = lib.targets(&lib.load()?)?;
@@ -773,6 +772,15 @@ async fn copy_legacy(
     headers: HeaderMap,
     Json(request): Json<CopyLegacy>,
 ) -> Response {
+    save_client_model(state, headers, request, false).await
+}
+
+async fn save_client_model(
+    state: SharedState,
+    headers: HeaderMap,
+    request: CopyLegacy,
+    sharing_host_model: bool,
+) -> Response {
     if let Err(e) = trusted(&headers) {
         return response::<Value>(Err(e));
     }
@@ -802,15 +810,31 @@ async fn copy_legacy(
                     let editor = match request.tiangong { Some(editor) => editor, None => crate::gmclaw_config::GmClawSaveRequest{source_provider:source.name.clone(),model:request.model,revision:crate::gmclaw_config::load_selected(&config,None)?.revision,..Default::default()} };
                     serde_json::to_value(crate::gmclaw_config::save_copy(&editor,&source,&mut config,&path)?)?
                 },
-                ClientId::Codex=>{
-                    // Codex's ordinary model catalog is retained. A copy has a
-                    // unique visible alias so an existing same-name route is not borrowed.
+                ClientId::Codex if sharing_host_model=>{
+                    // Explicit native host sharing keeps its account-specific identity.
+                    ensure!(source.tiangong_builtin.is_some() || source.workbuddy_builtin.is_some(), "未找到要分享的宿主模型");
                     let upstream=source.resolve_upstream_model(&request.model).context("模型已变化")?.to_string();
                     let id=uuid::Uuid::new_v4().simple().to_string();let alias=format!("{}-{}",request.model,&id[..6]);
                     let mut provider=source;provider.name=format!("Codex · {} · {}",request.model,&id[..6]);provider.desktop_binding=None;provider.import_source=None;provider.gmclaw_parameters=None;
                     provider.models=vec![];provider.model_aliases.clear();provider.model_aliases.insert(alias.clone(),upstream);
                     config.ai_gateway.providers.push(provider);config.ai_gateway.codex_visible_models.push(alias.clone());config.ai_gateway.enabled=true;config.save(&path)?;
                     json!({"model":alias,"message":"已加入 Codex 模型；首次使用请完成接入设置，已有会话请重新选择模型"})
+                },
+                ClientId::Codex=>{
+                    ensure!(source.is_client_model_source(), "请选择模型与渠道中的普通渠道");
+                    let visible = &mut config.ai_gateway.codex_visible_models;
+                    let (model, added) = match visible.iter().find(|m| m.eq_ignore_ascii_case(&request.model)) {
+                        Some(existing) => (existing.clone(), false),
+                        None => {
+                            visible.push(request.model.clone());
+                            (request.model, true)
+                        }
+                    };
+                    if added || !config.ai_gateway.enabled {
+                        config.ai_gateway.enabled = true;
+                        config.save(&path)?;
+                    }
+                    json!({"model":model,"added":added,"message":if added {"已加入 ChatGPT/Codex 的模型列表"} else {"模型已在 ChatGPT/Codex 的列表中"}})
                 },
                 _=>anyhow::bail!("请选择此客户端的原生目标"),
             };Ok(status)
@@ -824,13 +848,85 @@ async fn copy_legacy(
             }
             response(result.map(|status|json!({"status":status,"view":models::public(&current.ai_gateway),"revision":current.revision})))
         }
-        Err(_) => response::<Value>(Err(anyhow::anyhow!("复制中断，请重新读取；不会重复执行"))),
+        Err(_) => response::<Value>(Err(anyhow::anyhow!("保存中断，请重新读取；不会重复执行"))),
     }
 }
 
 #[cfg(test)]
 mod copy_contract_tests {
     use super::*;
+    async fn save_codex_from(
+        state: &SharedState, source: &ProviderConfig, model: &str,
+    ) -> (axum::http::StatusCode, Value) {
+        let revision = state.config.lock().await.revision.clone().unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert("x-tiancai-desktop", "1".parse().unwrap());
+        let response = copy_legacy(
+            State(state.clone()), headers,
+            Json(CopyLegacy {
+                client: crate::desktop::clients::ClientId::Codex,
+                model: model.into(), source_route: provider_route_id(source), revision,
+                target_id: None, workbuddy: None, tiangong: None,
+            }),
+        ).await;
+        let code = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        (code, serde_json::from_slice(&bytes).unwrap())
+    }
+
+    #[tokio::test]
+    async fn codex_saves_one_visible_id_and_routes_it_using_ordinary_channels() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("hub.toml");
+        let source = ProviderConfig {
+            name: "channel-one".into(), weight: 1, enabled: true,
+            model_aliases: [("Model-A".into(), "upstream-a".into())].into(),
+            ..Default::default()
+        };
+        let other = ProviderConfig {
+            name: "channel-two".into(), weight: 10,
+            model_aliases: [("Model-A".into(), "upstream-b".into())].into(),
+            ..source.clone()
+        };
+        let legacy = ProviderConfig {
+            name: "Codex · Model-A · a1b2c3".into(),
+            model_aliases: [("Model-A-a1b2c3".into(), "upstream-a".into())].into(),
+            ..source.clone()
+        };
+        let mut config = AppConfig { state_path: temp.path().join("state.json"), ..Default::default() };
+        config.ai_gateway.enabled = false;
+        config.ai_gateway.providers = vec![source.clone(), other.clone(), legacy.clone()];
+        config.ai_gateway.codex_visible_models = vec!["Model-A-a1b2c3".into()];
+        config.save(&path).unwrap();
+        let before = serde_json::to_value(&config.ai_gateway.providers).unwrap();
+        let state = crate::app_state::AppState::new(path.clone(), config, None, None);
+
+        let (code, added) = save_codex_from(&state, &source, "Model-A").await;
+        assert!(code.is_success(), "{added}");
+        assert_eq!(added["status"]["model"], "Model-A");
+        assert_eq!(added["status"]["added"], true);
+        let (code, existing) = save_codex_from(&state, &other, "model-a").await;
+        assert!(code.is_success(), "{existing}");
+        assert_eq!(existing["status"]["model"], "Model-A");
+        assert_eq!(existing["status"]["added"], false);
+        assert_eq!(existing["revision"], added["revision"]);
+        for (invalid_source, invalid_model) in [(&source, "unknown"), (&legacy, "Model-A-a1b2c3")] {
+            let (code, _) = save_codex_from(&state, invalid_source, invalid_model).await;
+            assert_eq!(code, axum::http::StatusCode::CONFLICT);
+        }
+
+        let config = AppConfig::load_or_default(&path).unwrap();
+        assert_eq!(config.revision.as_deref(), added["revision"].as_str());
+        let gateway = &config.ai_gateway;
+        assert!(gateway.enabled);
+        assert_eq!(gateway.codex_visible_models, ["Model-A-a1b2c3", "Model-A"]);
+        assert_eq!(serde_json::to_value(&gateway.providers).unwrap(), before);
+        let route = gateway.select_provider("Model-A").unwrap();
+        assert_eq!(route.name, other.name);
+        assert_eq!(route.resolve_upstream_model("Model-A"), Some("upstream-b"));
+        assert_eq!(gateway.select_provider("Model-A-a1b2c3").unwrap().name, legacy.name);
+    }
+
     #[tokio::test]
     async fn non_catgirl_builtin_actions_do_not_read_login_or_modify_configuration() {
         use crate::assistant::personality::Personality;
@@ -889,15 +985,9 @@ mod copy_contract_tests {
             }),
             ..Default::default()
         };
-        let mut copy = source.clone();
-        copy.name = "Codex · 天工内置-外网 · abc123".into();
-        copy.model_aliases = std::collections::BTreeMap::from([(
-            "天工内置-外网-abc123".into(),
-            "fixture-model".into(),
-        )]);
         let mut config = AppConfig::default();
         config.state_path = temp.path().join("state.json");
-        config.ai_gateway.providers = vec![source, copy];
+        config.ai_gateway.providers = vec![source.clone()];
         config.ai_gateway.codex_visible_models.clear();
         config.save(&path).unwrap();
         let state = crate::app_state::AppState::new(
@@ -912,7 +1002,11 @@ mod copy_contract_tests {
             "x-tiancai-desktop",
             axum::http::HeaderValue::from_static("1"),
         );
-        for _ in 0..2 {
+        // The ordinary model writer cannot create a host share.
+        let (code, _) = save_codex_from(&state, &source, "天工内置-外网").await;
+        assert_eq!(code, axum::http::StatusCode::CONFLICT);
+        let mut shared_id = String::new();
+        for step in 0..3 {
             let rev = state.config.lock().await.revision.clone().unwrap();
             let result = share_tiangong_builtin(
                 State(state.clone()),
@@ -932,12 +1026,19 @@ mod copy_contract_tests {
             )
             .unwrap();
             assert_eq!(body["outcomes"][0]["ok"], true, "{body}");
-            let current = AppConfig::load_or_default(&path).unwrap();
+            let mut current = AppConfig::load_or_default(&path).unwrap();
             assert_eq!(current.ai_gateway.providers.len(), 2);
-            assert_eq!(
-                current.ai_gateway.codex_visible_models,
-                vec!["天工内置-外网-abc123"]
-            );
+            if step == 0 {
+                shared_id = current.ai_gateway.codex_visible_models[0].clone();
+                assert!(shared_id.starts_with("天工内置-外网-"));
+                assert_eq!(current.ai_gateway.providers[1].resolve_upstream_model(&shared_id), Some("fixture-model"));
+            }
+            assert_eq!(current.ai_gateway.codex_visible_models, [shared_id.as_str()]);
+            if step == 0 {
+                current.ai_gateway.codex_visible_models.clear();
+                current.save(&path).unwrap();
+                *state.config.lock().await = current;
+            }
         }
     }
     #[tokio::test]

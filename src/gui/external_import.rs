@@ -340,7 +340,19 @@ struct ImportModels {
 }
 
 impl ImportModels {
-    fn new(parent: &Panel, content: &BoxSizer, models: &[String]) -> Self {
+    fn new(
+        parent: &Panel,
+        content: &BoxSizer,
+        provider: &crate::ai_gateway::config::ProviderConfig,
+    ) -> Self {
+        let mut models = provider.models.clone();
+        for (alias, upstream) in &provider.model_aliases {
+            if provider.models.contains(upstream)
+                && !models.iter().any(|id| id.eq_ignore_ascii_case(alias))
+            {
+                models.push(alias.clone());
+            }
+        }
         let search = TextCtrl::builder(parent).build();
         search.set_name("import-model-search");
         search.set_hint("搜索模型");
@@ -381,8 +393,8 @@ impl ImportModels {
             list,
             search,
             count,
-            models: Rc::new(models.to_vec()),
-            selected: Rc::new(RefCell::new(models.iter().cloned().collect())),
+            models: Rc::new(models),
+            selected: Rc::new(RefCell::new(provider.models.iter().cloned().collect())),
         };
         let u = ui.clone();
         search.on_text_updated(move |_| u.render());
@@ -549,7 +561,7 @@ impl ImportResults {
     }
     fn outcome(&self, outcome: &batch::Outcome) {
         let (state, detail, failed) = match &outcome.result {
-            Ok(message) => ("已接入", message.as_str(), false),
+            Ok(message) => ("已配置", message.as_str(), false),
             Err(error) => ("未完成", error.as_str(), true),
         };
         self.add(&outcome.target, &outcome.model, state, detail, failed);
@@ -575,6 +587,7 @@ struct ImportPreview {
     target_status: StaticText,
     target_rows: Rc<RefCell<Vec<(ClientTarget, CheckBox)>>>,
     enabled: CheckBox,
+    manual_enabled: Rc<Cell<bool>>,
     aliases: CheckBox,
     result_card: Panel,
     results: ImportResults,
@@ -591,7 +604,7 @@ impl ImportPreview {
             .ai_gateway
             .providers
             .iter()
-            .filter(|p| !p.is_client_reserved())
+            .filter(|p| p.is_client_model_source())
             .cloned()
             .collect::<Vec<_>>();
         let matching = channels.iter().position(|p| {
@@ -667,19 +680,6 @@ impl ImportPreview {
             .build();
         name.set_name("import-channel-name");
         source_fields.add(&name, 0, SizerFlag::Expand, 0);
-        {
-            let channels = channels.clone();
-            operation.on_selection_changed(move |_| {
-                let index = operation.get_selection().unwrap_or(0) as usize;
-                name.change_value(
-                    index
-                        .checked_sub(1)
-                        .map(|i| channels[i].name.as_str())
-                        .unwrap_or(&new_name),
-                );
-            });
-        }
-
         let (model_card, model_fields) = ui.section("要导入的模型");
         if let Some(warning) = &draft.model_warning {
             let warning = note(&model_card, warning);
@@ -706,7 +706,7 @@ impl ImportPreview {
                 model_card.from_dip(8),
             );
         }
-        let models = ImportModels::new(&model_card, &model_fields, &draft.provider.models);
+        let models = ImportModels::new(&model_card, &model_fields, &draft.provider);
 
         let (target_card, target_fields) = ui.section("在哪些客户端使用");
         let target_status = note(&target_card, "正在查找本机客户端…");
@@ -747,7 +747,30 @@ impl ImportPreview {
         );
         let enabled = CheckBox::builder(&advanced_panel)
             .with_label("保存后启用渠道")
+            .with_value(matching.is_some_and(|i| channels[i].enabled))
             .build();
+        let manual_enabled = Rc::new(Cell::new(enabled.is_checked()));
+        {
+            let preference = manual_enabled.clone();
+            enabled.on_toggled(move |_| preference.set(enabled.is_checked()));
+            let preference = manual_enabled.clone();
+            let enabled_channels: Vec<_> = channels
+                .iter()
+                .map(|p| (p.name.clone(), p.enabled))
+                .collect();
+            let rows = target_rows.clone();
+            operation.on_selection_changed(move |_| {
+                let selected = operation
+                    .get_selection()
+                    .and_then(|index| index.checked_sub(1))
+                    .and_then(|i| enabled_channels.get(i as usize));
+                name.change_value(selected.map_or(&new_name, |p| &p.0));
+                preference.set(selected.is_some_and(|p| p.1));
+                enabled.set_value(
+                    preference.get() || rows.borrow().iter().any(|(_, c)| c.is_checked()),
+                );
+            });
+        }
         enabled.set_tooltip(
             "启用后，Hub 可以使用这个渠道里的模型。选择客户端时会自动勾选；暂不使用时，可以只保存。",
         );
@@ -755,7 +778,7 @@ impl ImportPreview {
             .with_label("用本次的模型别名替换旧别名")
             .build();
         aliases.set_tooltip(
-            "更新已有渠道时，勾选会用本次导入的模型别名替换旧别名，未勾选则保留。新建渠道使用本次导入的别名。",
+            "重复导入同一渠道会保留旧别名，并加入新别名。勾选后会用本次导入的别名表替换旧表。",
         );
         advanced_col.add(&enabled, 0, SizerFlag::Bottom, advanced_card.from_dip(10));
         advanced_col.add(&aliases, 0, SizerFlag::default(), 0);
@@ -806,6 +829,7 @@ impl ImportPreview {
             target_status,
             target_rows,
             enabled,
+            manual_enabled,
             aliases,
             result_card,
             results,
@@ -825,10 +849,8 @@ impl ImportPreview {
                     "可以多选；不选则只保存到 Hub。ChatGPT 首次使用还需完成接入设置。"
                 });
                 let mut rows = self.target_rows.borrow_mut();
-                let manual_enabled = Rc::new(Cell::new(self.enabled.is_checked()));
+                let manual_enabled = self.manual_enabled.clone();
                 let enabled = self.enabled;
-                let preference = manual_enabled.clone();
-                enabled.on_toggled(move |_| preference.set(enabled.is_checked()));
                 for target in targets {
                     let same_client = rows.iter().any(|(t, _)| t.client == target.client);
                     let label = if target.label == "默认" && !same_client {
@@ -878,8 +900,8 @@ impl ImportPreview {
         self.save.enable(true);
         self.layout();
     }
-    fn request(&self) -> Result<(CommitImport, Vec<ClientTarget>), String> {
-        let models = self.models.selected_models();
+    fn request(&self) -> Result<(CommitImport, Vec<ClientTarget>, Vec<String>), String> {
+        let client_models = self.models.selected_models();
         let targets = self
             .target_rows
             .borrow()
@@ -887,11 +909,12 @@ impl ImportPreview {
             .filter(|(_, check)| check.is_checked())
             .map(|(target, _)| target.clone())
             .collect::<Vec<_>>();
-        if !targets.is_empty() && models.is_empty() {
+        if !targets.is_empty() && client_models.is_empty() {
             return Err("请至少选择一个要接入的模型。".into());
         }
         let selected = self.operation.get_selection().unwrap_or(0) as usize;
         let mut draft = self.draft.clone();
+        let models = batch::channel_models(&draft.provider, &client_models)?;
         draft
             .provider
             .model_aliases
@@ -910,7 +933,23 @@ impl ImportPreview {
         };
         let mut trial = self.config.clone();
         import::merge_import(&mut trial, &request)?;
-        Ok((request, targets))
+        if !targets.is_empty() {
+            let provider = trial
+                .ai_gateway
+                .providers
+                .iter()
+                .find(|p| p.name == request.name.trim())
+                .ok_or("找不到导入的渠道")?;
+            if let Some(id) = client_models.iter().find(|id| {
+                provider.resolve_upstream_model(id)
+                    != request.draft.provider.resolve_upstream_model(id)
+            }) {
+                return Err(format!(
+                    "渠道现有配置与本次导入的 {id} 不一致。请核对模型别名，或在更多设置中选择替换旧别名。"
+                ));
+            }
+        }
+        Ok((request, targets, client_models))
     }
     fn start(&self) {
         self.save.enable(false);
@@ -984,20 +1023,20 @@ fn preview_with_config(parent: &Frame, api: &ApiClient, draft: ImportDraft, conf
             if saving.get() {
                 return;
             }
-            let (request, targets) = match u.request() {
+            let (request, targets, client_models) = match u.request() {
                 Ok(value) => value,
                 Err(error) => {
                     super::feedback::error(&u.chrome.dialog, &error);
                     return;
                 }
             };
-            total.set(targets.len() * request.models.len());
+            total.set(targets.len() * client_models.len());
             saving.set(true);
             u.start();
             let api = api.clone();
             let sender = event_tx.clone();
             thread::spawn(move || {
-                let report = batch::run(&api, request, targets, |progress| {
+                let report = batch::run(&api, request, targets, &client_models, |progress| {
                     let _ = sender.send(ImportEvent::Progress(progress));
                 });
                 let _ = sender.send(ImportEvent::Complete(report));
@@ -1165,7 +1204,14 @@ mod native_import_review {
                     parent.set_client_size(crate::gui::visual::dip_size(&parent, width, height));
                     let draft = draft();
                     let mut config = AppConfig::default();
-                    config.ai_gateway.providers.push(draft.provider.clone());
+                    let previously_enabled = width > 760;
+                    config
+                        .ai_gateway
+                        .providers
+                        .push(crate::ai_gateway::config::ProviderConfig {
+                            enabled: previously_enabled,
+                            ..draft.provider.clone()
+                        });
                     let ui = ImportPreview::new(&parent, draft.clone(), config);
                     ui.load_targets(Ok(targets()));
                     assert_eq!(
@@ -1180,9 +1226,10 @@ mod native_import_review {
                             .iter()
                             .all(|(_, check)| !check.is_checked())
                     );
-                    let (channel_only, targets) = ui.request().unwrap();
+                    let (channel_only, targets, _) = ui.request().unwrap();
                     assert!(targets.is_empty());
-                    assert!(!channel_only.enabled && !channel_only.visible_models);
+                    assert_eq!(channel_only.enabled, previously_enabled);
+                    assert!(!channel_only.visible_models);
                     ui.models.search.change_value("needle");
                     ui.models.render();
                     assert_eq!(ui.models.list.get_count(), 1);
@@ -1205,7 +1252,7 @@ mod native_import_review {
                     for (_, check) in ui.target_rows.borrow().iter() {
                         check.set_value(true);
                     }
-                    let (request, chosen) = ui.request().unwrap();
+                    let (request, chosen, _) = ui.request().unwrap();
                     assert!(request.enabled);
                     assert!(!request.visible_models);
                     assert_eq!(chosen.len(), 5);
@@ -1257,7 +1304,7 @@ mod native_import_review {
                         outcomes,
                     });
                     assert_eq!(ui.results.table.get_item_count(), 3);
-                    assert_eq!(ui.results.table.get_item_text(1, 2), "已接入");
+                    assert_eq!(ui.results.table.get_item_text(1, 2), "已配置");
                     assert_eq!(ui.results.table.get_item_text(2, 2), "未完成");
                     ui.results.select(2);
                     assert!(ui.results.detail.get_value().contains("结果未知"));
@@ -1278,7 +1325,7 @@ mod native_import_review {
                     empty_draft.model_warning = Some("合成目录为空，允许先保存渠道。".into());
                     let empty = ImportPreview::new(&parent, empty_draft, AppConfig::default());
                     empty.load_targets(Ok(vec![]));
-                    let (request, chosen) = empty.request().unwrap();
+                    let (request, chosen, _) = empty.request().unwrap();
                     assert!(request.models.is_empty() && chosen.is_empty() && !request.enabled);
                     assert!(empty.target_rows.borrow().is_empty());
                     capture(&empty, &format!("import-empty-catalog-{width}-{suffix}"));

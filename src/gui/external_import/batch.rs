@@ -2,7 +2,7 @@
 //! uncertain write is reported once, never replayed by this batch.
 use super::ApiClient;
 use crate::{
-    ai_gateway::config::provider_route_id,
+    ai_gateway::config::{ProviderConfig, provider_route_id},
     config::AppConfig,
     desktop::{clients::ClientId, targets::ClientTarget},
     external_import::CommitImport,
@@ -94,6 +94,24 @@ pub(super) struct Report {
     pub outcomes: Vec<Outcome>,
 }
 
+// The channel stores upstream IDs, while each client gets the exact ID the user selected.
+pub(super) fn channel_models(
+    source: &ProviderConfig,
+    selected: &[String],
+) -> Result<Vec<String>, String> {
+    let mut upstream = Vec::new();
+    for id in selected {
+        let model = source
+            .resolve_upstream_model(id)
+            .filter(|model| source.models.iter().any(|known| known == *model))
+            .ok_or_else(|| format!("渠道未提供模型 {id}，请重新读取模型列表"))?;
+        if !upstream.iter().any(|known| known == model) {
+            upstream.push(model.to_string());
+        }
+    }
+    Ok(upstream)
+}
+
 impl Report {
     pub fn message(&self) -> String {
         if let Some(error) = &self.save_error {
@@ -104,10 +122,10 @@ impl Report {
         if self.outcomes.is_empty() {
             "渠道已保存，可在渠道页继续管理。".into()
         } else if failures == 0 {
-            format!("渠道已保存，已接入 {successes} 项。")
+            format!("渠道已保存，已配置 {successes} 项客户端模型。")
         } else {
             format!(
-                "渠道已保存，已接入 {successes} 项，{failures} 项未完成。请在对应客户端页核对后处理，成功项已保留。"
+                "渠道已保存，已配置 {successes} 项客户端模型，{failures} 项未完成。请在对应客户端页核对后处理。"
             )
         }
     }
@@ -117,10 +135,11 @@ pub(super) fn run(
     api: &impl BatchApi,
     mut request: CommitImport,
     targets: Vec<ClientTarget>,
+    client_models: &[String],
     mut progress: impl FnMut(Progress),
 ) -> Report {
-    // Client destinations use the real client writers below, never the old
-    // shortcut that merely exposed the source model in Codex's global list.
+    // Save the channel once. Report each client model separately; Codex only
+    // needs its visible model ID, while other clients use their own writers.
     request.visible_models = false;
     if !targets.is_empty() {
         request.enabled = true;
@@ -134,7 +153,7 @@ pub(super) fn run(
     progress(Progress::Saved);
     let mut outcomes = Vec::new();
     for target in targets {
-        for model in &request.models {
+        for model in client_models {
             let result = configure_one(api, &request, &target, model);
             let outcome = Outcome {
                 target: format!("{} · {}", target.client.name(), target.label),
@@ -172,7 +191,7 @@ fn configure_one(
         .find(|p| {
             p.name == request.name.trim()
                 && p.enabled
-                && !p.is_client_reserved()
+                && p.is_client_model_source()
                 && p.import_source
                     .as_ref()
                     .is_some_and(|s| s.same_key(&request.draft.source))
@@ -200,7 +219,7 @@ fn configure_one(
     Ok(value["message"]
         .as_str()
         .or_else(|| value["status"]["message"].as_str())
-        .unwrap_or("已接入")
+        .unwrap_or("已配置")
         .into())
 }
 
@@ -299,6 +318,40 @@ mod tests {
             Ok(json!({"revision":format!("rev-{next}"),"message":"已配置"}))
         }
     }
+
+    #[test]
+    fn import_client_receives_selected_alias_while_channel_stores_actual_upstream_id() {
+        let api = MockApi::default();
+        let mut import = request();
+        import.draft.provider.model_aliases = [
+            ("public-fast".into(), "model-a".into()),
+            ("other-name".into(), "model-a".into()),
+        ]
+        .into();
+        let selected = vec!["public-fast".into()];
+        import.models = channel_models(&import.draft.provider, &selected).unwrap();
+        assert_eq!(import.models, ["model-a"]);
+        let report = run(
+            &api,
+            import,
+            vec![target(ClientId::Codex, "codex")],
+            &selected,
+            |_| {},
+        );
+        assert!(report.save_error.is_none());
+        assert_eq!(report.outcomes.len(), 1);
+        assert!(report.outcomes[0].result.is_ok());
+        assert_eq!(report.outcomes[0].model, "public-fast");
+        let writes = api.writes.borrow();
+        assert_eq!(writes[0].1["models"], json!(["model-a"]));
+        assert_eq!(writes[1].1["model"], "public-fast");
+        let config = api.config.borrow();
+        assert_eq!(config.ai_gateway.providers.len(), 1);
+        assert_eq!(
+            config.ai_gateway.providers[0].resolve_upstream_model("public-fast"),
+            Some("model-a")
+        );
+    }
     #[test]
     fn import_batch_saves_once_and_uses_native_writers_with_fresh_revisions() {
         let api = MockApi::default();
@@ -306,7 +359,7 @@ mod tests {
             .iter()
             .map(|c| target(*c, c.key()))
             .collect();
-        let report = run(&api, request(), targets, |_| {});
+        let report = run(&api, request(), targets, &request().models, |_| {});
         assert!(report.save_error.is_none());
         assert_eq!(report.outcomes.len(), 10);
         assert!(report.outcomes.iter().all(|o| o.result.is_ok()));
@@ -347,6 +400,7 @@ mod tests {
                 target(ClientId::DeepSeekHarness, "deepseek-harness"),
                 target(ClientId::ZCode, "zcode"),
             ],
+            &request().models,
             |_| {},
         );
         assert_eq!(
@@ -377,6 +431,7 @@ mod tests {
             &api,
             request(),
             vec![target(ClientId::Codex, "codex")],
+            &request().models,
             |_| {},
         );
         assert!(report.save_error.is_some());
@@ -384,7 +439,7 @@ mod tests {
         assert_eq!(api.writes.borrow().len(), 1);
         assert_eq!(api.reads.get(), 0);
         let only_source = MockApi::default();
-        let report = run(&only_source, request(), vec![], |_| {});
+        let report = run(&only_source, request(), vec![], &[], |_| {});
         assert!(report.outcomes.is_empty());
         assert!(!only_source.config.borrow().ai_gateway.providers[0].enabled);
         assert!(

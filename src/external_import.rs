@@ -336,7 +336,9 @@ pub fn merge_import(config: &mut AppConfig, request: &CommitImport) -> Result<()
             .enumerate()
             .find(|(_, p)| p.name == target.name)
             .ok_or("目标渠道已删除，请重新打开预览 / Channel was deleted")?;
-        if existing.is_client_reserved() || provider_fingerprint(existing) != target.fingerprint {
+        if !existing.is_client_model_source()
+            || provider_fingerprint(existing) != target.fingerprint
+        {
             return Err("目标渠道已修改，请重新打开预览 / Channel changed during preview".into());
         }
         Some(i)
@@ -358,24 +360,57 @@ pub fn merge_import(config: &mut AppConfig, request: &CommitImport) -> Result<()
     let mut provider = index
         .map(|i| config.ai_gateway.providers[i].clone())
         .unwrap_or_default();
+    // A second partial import from the same connection adds models. Otherwise
+    // choosing B would silently break clients already using A through it.
+    let same_connection = provider
+        .import_source
+        .as_ref()
+        .is_some_and(|s| s.same_key(&request.draft.source))
+        && provider.provider_type == incoming.provider_type
+        && [provider.base_url.as_str(), provider.identity_base_url()]
+            .iter()
+            .any(|url| url.trim_end_matches('/') == incoming.base_url.trim_end_matches('/'));
     provider.name = name.into();
     provider.enabled = request.enabled;
     provider.provider_type = incoming.provider_type.clone();
     provider.compatibility = incoming.compatibility.clone();
-    provider.base_url = incoming.base_url.clone();
+    if !same_connection {
+        provider.base_url = incoming.base_url.clone();
+        provider.base_url_repair_origin = None;
+    }
     provider.models_url = incoming.models_url.clone();
     provider.api_key = incoming.api_key.clone();
     provider.chatgpt_auth_id = None;
     provider.import_source = Some(request.draft.source.clone());
-    provider.models = models.clone();
+    if same_connection {
+        for model in &models {
+            if !provider.models.contains(model) {
+                provider.models.push(model.clone());
+            }
+        }
+    } else {
+        provider.models = models.clone();
+    }
     if index.is_none() || request.replace_aliases {
         provider.model_aliases = incoming.model_aliases.clone();
+    } else if same_connection {
+        for (alias, upstream) in &incoming.model_aliases {
+            if !provider
+                .model_aliases
+                .keys()
+                .any(|id| id.eq_ignore_ascii_case(alias))
+            {
+                provider
+                    .model_aliases
+                    .insert(alias.clone(), upstream.clone());
+            }
+        }
     }
     if request.enabled
         && provider
             .model_aliases
             .values()
-            .any(|value| !models.contains(value))
+            .any(|value| !provider.models.contains(value))
     {
         return Err("已有模型映射指向不在本次列表中的模型，请补全模型或选择替换映射 / Existing aliases require review".into());
     }
@@ -385,7 +420,12 @@ pub fn merge_import(config: &mut AppConfig, request: &CommitImport) -> Result<()
     }
     if request.visible_models {
         for model in models {
-            if !config.ai_gateway.codex_visible_models.contains(&model) {
+            if !config
+                .ai_gateway
+                .codex_visible_models
+                .iter()
+                .any(|v| v.eq_ignore_ascii_case(&model))
+            {
                 config.ai_gateway.codex_visible_models.push(model);
             }
         }

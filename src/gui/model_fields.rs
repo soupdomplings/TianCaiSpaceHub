@@ -254,6 +254,7 @@ impl DraftFields {
             .flatten()
             .filter(|s| {
                 s["enabled"] == true
+                    && (client != ClientId::Codex || s["clientModelSource"] != false)
                     && ClientId::ALL
                         .iter()
                         .find(|id| s["client"] == id.key())

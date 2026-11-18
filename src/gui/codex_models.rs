@@ -5,7 +5,6 @@ use super::{
 };
 use std::{
     cell::{Cell, RefCell},
-    collections::BTreeSet,
     rc::Rc,
 };
 use wxdragon::prelude::*;
@@ -19,7 +18,7 @@ pub(super) struct ChannelModels {
     list: ScrolledWindow,
     grid: GridSizer,
     groups: Rc<RefCell<Vec<Vec<String>>>>,
-    selected: Rc<RefCell<BTreeSet<String>>>,
+    selected: Rc<RefCell<Vec<String>>>,
     checks: Rc<RefCell<Vec<CheckBox>>>,
     enabled: Rc<Cell<bool>>,
     rendered_group: Rc<Cell<Option<u32>>>,
@@ -39,15 +38,17 @@ fn codex_discovery_is_visible_and_deletion_is_staged_without_filtering_other_mod
         let record = changed.clone();
         picker.on_changed(move |models| *record.borrow_mut() = models);
         picker.channel.append("合成渠道");
+        picker.channel.set_selection(0);
         picker.update(
-            vec![vec![], vec!["saved".into(), "another".into()]],
-            Some(&["saved".into()]),
+            vec![vec!["saved".into(), "another".into()]],
+            Some(&["orphan".into(), "saved".into()]),
         );
         picker.focus_model("saved");
         assert_eq!(picker.checks.borrow().len(), 2);
-        picker.show_discovered(1, &["new-a".into(), "new-b".into()]);
+        picker.show_discovered(0, &["new-a".into(), "new-b".into()]);
         assert_eq!(picker.checks.borrow().len(), 4);
-        assert_eq!(picker.selected_models(), vec!["saved"]); // Fetching never enables every model.
+        assert_eq!(picker.selected_models(), ["orphan", "saved"]); // Fetching never selects candidates.
+        picker.remove_model("orphan"); // Missing from the source, still removable.
         picker.remove_model("saved");
         assert!(picker.selected_models().is_empty());
         assert!(changed.borrow().is_empty());
@@ -63,8 +64,6 @@ impl ChannelModels {
         let col = BoxSizer::builder(Orientation::Vertical).build();
         let tools = BoxSizer::builder(Orientation::Horizontal).build();
         let channel = Choice::builder(&page).with_size(Size::new(240, 36)).build();
-        channel.append("内置与其他模型");
-        channel.set_selection(0);
         let search = TextCtrl::builder(&page).build();
         search.set_hint("搜索当前渠道模型");
         search.set_tooltip("搜索当前渠道模型");
@@ -130,7 +129,7 @@ impl ChannelModels {
             .groups
             .borrow()
             .iter()
-            .position(|g| g.iter().any(|m| m == model))
+            .position(|g| g.iter().any(|m| m.eq_ignore_ascii_case(model)))
         {
             self.channel.set_selection(index as u32);
         }
@@ -149,14 +148,20 @@ impl ChannelModels {
         }
     }
     pub fn remove_model(&self, model: &str) {
-        self.selected.borrow_mut().remove(model);
+        self.selected
+            .borrow_mut()
+            .retain(|m| !m.eq_ignore_ascii_case(model));
         self.render();
         self.notify_changed();
     }
     pub fn show_discovered(&self, index: usize, models: &[String]) {
-        if let Some(group) = self.groups.borrow_mut().get_mut(index) {
+        {
+            let mut groups = self.groups.borrow_mut();
+            let Some(group) = groups.get_mut(index) else {
+                return;
+            };
             for model in models {
-                if !group.iter().any(|m| m == model) {
+                if !group.iter().any(|m| m.eq_ignore_ascii_case(model)) {
                     group.push(model.clone());
                 }
             }
@@ -167,7 +172,7 @@ impl ChannelModels {
     }
     pub fn update(&self, groups: Vec<Vec<String>>, selected: Option<&[String]>) {
         if let Some(selected) = selected {
-            *self.selected.borrow_mut() = selected.iter().cloned().collect();
+            *self.selected.borrow_mut() = selected.to_vec();
         }
         let initialize = selected.is_some();
         if !initialize
@@ -183,22 +188,30 @@ impl ChannelModels {
         }
     }
     pub fn select_models(&self, models: &[String]) {
-        self.selected.borrow_mut().extend(models.iter().cloned());
+        {
+            let mut selected = self.selected.borrow_mut();
+            for model in models {
+                if !selected.iter().any(|m| m.eq_ignore_ascii_case(model)) {
+                    selected.push(model.clone());
+                }
+            }
+        }
         self.render();
         self.notify_changed();
     }
     pub fn replace_selected_models(&self, models: &[String]) {
-        *self.selected.borrow_mut() = models.iter().cloned().collect();
+        *self.selected.borrow_mut() = models.to_vec();
         self.render();
         self.notify_changed();
     }
     pub fn selected_models(&self) -> Vec<String> {
-        self.selected.borrow().iter().cloned().collect()
+        self.selected.borrow().clone()
     }
     pub fn enable(&self, enabled: bool) {
         self.enabled.set(enabled);
-        self.channel.enable(enabled);
-        self.search.enable(enabled);
+        let has_channel = self.channel.get_selection().is_some();
+        self.channel.enable(enabled && has_channel);
+        self.search.enable(enabled && has_channel);
         for check in self.checks.borrow().iter() {
             check.enable(enabled);
         }
@@ -214,7 +227,12 @@ impl ChannelModels {
         for name in names.iter().filter(|n| n.to_lowercase().contains(&query)) {
             let check = CheckBox::builder(&self.list)
                 .with_label(name)
-                .with_value(self.selected.borrow().contains(name))
+                .with_value(
+                    self.selected
+                        .borrow()
+                        .iter()
+                        .any(|m| m.eq_ignore_ascii_case(name)),
+                )
                 .build();
             check.set_name(&format!("codex-visible-{name}"));
             check.set_min_size(Size::new(0, self.list.from_dip(24)));
@@ -225,9 +243,11 @@ impl ChannelModels {
             let (u, name) = (self.clone(), name.clone());
             check.on_toggled(move |_| {
                 if check.is_checked() {
-                    u.selected.borrow_mut().insert(name.clone());
+                    u.selected.borrow_mut().push(name.clone());
                 } else {
-                    u.selected.borrow_mut().remove(&name);
+                    u.selected
+                        .borrow_mut()
+                        .retain(|m| !m.eq_ignore_ascii_case(&name));
                 }
                 u.update_summary();
                 u.notify_changed();
@@ -241,6 +261,11 @@ impl ChannelModels {
         self.page.layout();
     }
     fn update_summary(&self) {
+        if self.groups.borrow().is_empty() {
+            self.summary
+                .set_label("暂无已启用的模型渠道，可手动填写模型 ID。");
+            return;
+        }
         self.summary.set_label(&format!(
             "当前渠道 {} 个模型 · 共选 {} 个",
             self.checks.borrow().len(),
