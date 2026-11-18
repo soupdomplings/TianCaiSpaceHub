@@ -145,6 +145,7 @@ pub(super) async fn configure_codex_app(
                     "authPath": report.auth_path.to_string_lossy().to_string(),
                     "backendUrl": report.backend_url,
                     "guiApiBase": gui_api_base,
+                    "projectHistory": report.project_history,
                     "remoteControlSwitch": remote_control_switch,
                 })),
             )

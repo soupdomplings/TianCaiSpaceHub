@@ -1,5 +1,7 @@
 # TianCaiSpaceHub 文档总入口
 
+2026-11-18 · [V1.0.37 Windows 测试与交付](releases/v1.0.37.md)：仅删除 Codex 配置后的原项目、分组会话与已有历史位置恢复。
+
 2026-11-18 · [V1.0.36 Windows 测试与交付](releases/v1.0.36.md)：升级后核对聊天模型、按渠道选路、同源分批导入及默认生图模型。
 
 2026-11-17 **V1.0.35 Dumpling-MCP 诊断测试交付**：集成具体失败分类、网络设置修正及默认阶段日志，Windows GUI／release、50 项定向回归和唯一 MSI `180134` 的版本／升级／5 项载荷核验通过。产品源码本地提交 `6e75ed4`，推送遇网络失败。实现见[Dumpling 专题](customizations/nvwa-mcp.md)，包身份与复现步骤见[V35 交付](releases/v1.0.35.md)。用户现场及 macOS 待验，不触发 Actions、标签或 Release；V34 旧包身份保持。

@@ -68,9 +68,10 @@ pub fn move_thread_to_provider(
     }
 
     let codex_home = codex_home.unwrap_or_else(codex_app_config::default_codex_home);
-    let rollout_path = resolve_rollout_path(&codex_home, thread_id, rollout_path)?;
+    let db_path = existing_state_db_path(&codex_home)?;
+    let rollout_path = resolve_rollout_path(db_path.as_deref(), thread_id, rollout_path)?;
     let from_provider = rewrite_rollout_provider(&rollout_path, thread_id, target_provider)?;
-    let sqlite_updated = update_state_db_provider(&codex_home, thread_id, target_provider)?;
+    let sqlite_updated = update_state_db_provider(db_path.as_deref(), thread_id, target_provider)?;
     let migration_log_path = record_provider_move(
         &codex_home,
         thread_id,
@@ -99,7 +100,7 @@ pub fn move_thread_to_provider(
 }
 
 fn resolve_rollout_path(
-    codex_home: &Path,
+    db_path: Option<&Path>,
     thread_id: &str,
     rollout_path: Option<PathBuf>,
 ) -> Result<PathBuf> {
@@ -110,7 +111,7 @@ fn resolve_rollout_path(
         return Ok(path);
     }
 
-    if let Some(path) = find_rollout_path_in_state_db(codex_home, thread_id)? {
+    if let Some(path) = find_rollout_path_in_state_db(db_path, thread_id)? {
         if path.exists() {
             return Ok(path);
         }
@@ -122,11 +123,14 @@ fn resolve_rollout_path(
     ))
 }
 
-fn find_rollout_path_in_state_db(codex_home: &Path, thread_id: &str) -> Result<Option<PathBuf>> {
-    let Some(db_path) = existing_state_db_path(codex_home) else {
+fn find_rollout_path_in_state_db(
+    db_path: Option<&Path>,
+    thread_id: &str,
+) -> Result<Option<PathBuf>> {
+    let Some(db_path) = db_path else {
         return Ok(None);
     };
-    let conn = open_state_db_readonly(&db_path)?;
+    let conn = open_state_db_readonly(db_path)?;
     let path = conn
         .query_row(
             "SELECT rollout_path FROM threads WHERE id = ?",
@@ -228,14 +232,14 @@ fn restore_file_times(path: &Path, times: FileTimes) -> Result<()> {
 }
 
 fn update_state_db_provider(
-    codex_home: &Path,
+    db_path: Option<&Path>,
     thread_id: &str,
     target_provider: &str,
 ) -> Result<bool> {
-    let Some(db_path) = existing_state_db_path(codex_home) else {
+    let Some(db_path) = db_path else {
         return Ok(false);
     };
-    let conn = open_state_db_write(&db_path)?;
+    let conn = open_state_db_write(db_path)?;
     let changed = conn
         .execute(
             "UPDATE threads SET model_provider = ? WHERE id = ?",
@@ -299,19 +303,20 @@ fn migration_log_path(codex_home: &Path) -> PathBuf {
         .join(MIGRATION_LOG_FILE)
 }
 
-fn existing_state_db_path(codex_home: &Path) -> Option<PathBuf> {
-    let sqlite_home = std::env::var_os("CODEX_SQLITE_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| codex_home.to_path_buf());
-    [
+fn existing_state_db_path(codex_home: &Path) -> Result<Option<PathBuf>> {
+    let sqlite_home = crate::codex_project_status::sqlite_dir(codex_home)?;
+    for name in [
         "state_5.sqlite",
         "state.v2.sqlite",
         "state.sqlite",
         "codex.sqlite",
-    ]
-    .into_iter()
-    .map(|name| sqlite_home.join(name))
-    .find(|path| path.exists())
+    ] {
+        let path = sqlite_home.join(name);
+        if path.try_exists()? {
+            return Ok(Some(path));
+        }
+    }
+    Ok(None)
 }
 
 fn open_state_db_readonly(path: &Path) -> Result<Connection> {
@@ -377,6 +382,35 @@ fn unix_now_millis() -> Result<i64> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn restored_location_keeps_manual_provider_move_in_the_original_project_and_database() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("codex");
+        let original = temp.path().join("history");
+        std::fs::create_dir(&home).unwrap();
+        std::fs::create_dir(&original).unwrap();
+        let mut config = toml_edit::DocumentMut::new();
+        config["sqlite_home"] = toml_edit::value(original.to_str().unwrap());
+        std::fs::write(home.join("config.toml"), config.to_string()).unwrap();
+        for dir in [&home, &original] {
+            let db = Connection::open(dir.join("state_5.sqlite")).unwrap();
+            db.execute_batch("CREATE TABLE threads(id TEXT, model_provider TEXT, project_id TEXT); INSERT INTO threads VALUES('test','openai','project-A');").unwrap();
+        }
+        let chosen = existing_state_db_path(&home).unwrap().unwrap();
+        assert!(update_state_db_provider(Some(&chosen), "test", "ai-gateway").unwrap());
+        for (dir, expected) in [(&home, "openai"), (&original, "ai-gateway")] {
+            let conn = open_state_db_readonly(&dir.join("state_5.sqlite")).unwrap();
+            let actual: (String, String) = conn
+                .query_row(
+                    "SELECT model_provider, project_id FROM threads WHERE id='test'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(actual, (expected.to_owned(), "project-A".to_owned()));
+        }
+    }
 
     #[test]
     fn rewrites_first_session_meta_provider() {
@@ -474,7 +508,9 @@ mod tests {
         .unwrap();
         drop(conn);
 
-        assert!(update_state_db_provider(&dir, "thread-1", "ai-gateway").unwrap());
+        let selected = existing_state_db_path(&dir).unwrap();
+        assert_eq!(selected.as_ref(), Some(&db));
+        assert!(update_state_db_provider(selected.as_deref(), "thread-1", "ai-gateway").unwrap());
         let conn = Connection::open(&db).unwrap();
         let provider: String = conn
             .query_row(

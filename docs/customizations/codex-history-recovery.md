@@ -1,5 +1,16 @@
 # Codex 历史会话加载恢复
 
+## 删除 config.toml 后找回本机项目（V1.0.37）
+
+适用情形：只删除了 Codex 用户目录中的 `config.toml`，会话库和桌面状态仍在。Windows 桌面版 26.1103.7773.0 的安装资源表明，原生项目、来源目录、会话归属分别保存在 `state_5.sqlite` 的 `projects`、`project_roots` 与 `threads.project_id`。侧栏显示、手动排序和账户相关自定义分组另由桌面状态管理。TOML 中的 `[projects.<path>]` 是文件夹的信任设置，不是项目列表。参见 [OpenAI 项目说明](https://learn.chatgpt.com/docs/projects)和[配置参考](https://learn.chatgpt.com/docs/config-file/config-reference)。
+
+- **还没初始化**：Hub 初始化时，若配置文件确实缺失，优先按最近有效记录取回该 Codex 目录原先的 `sqlite_home`。只接受存在且具备原生会话表结构的本机绝对目录。原先没有指定位置的继续用 Codex 默认位置。初始化后若能读到项目，提示项目数及归入项目的未归档会话数，不表示已经验证桌面可见。增强启动或 WebSocket 设置先创建配置时也沿用相同规则。
+- **已经用旧 Hub 初始化过**：进入 **ChatGPT / Codex → 接入设置 → 检查与修复 → 删除配置后，项目或分组会话不见了**。先检查当前库；仅在原位置有证据且与当前默认位置不同时提供修复，退出 Codex 后点修复再重新打开。只在当前配置未指定位置时补一项，现有新库保留，不合并两库。撤销这项修复可退出 Codex 后移除新增的顶层 `sqlite_home` 设置。
+- **已有项目但侧栏没有归类**：用原来的账户，在 Codex 左栏选 **整理侧边栏 → 分项目显示**。如历史属于另一模型提供方，先在 Hub 的「Codex 会话管理」核对；仅由用户明确选择需要迁移的会话。Hub 不会改写账户私有分组、置顶、顺序、归档状态或项目信任。
+- **无证据时**：同目录 `config.toml.bak` 和 Hub 自己按 Codex 用户目录隔离的位置快照均可能提供线索；没有可用记录时不扫描磁盘、不根据聊天标题或 cwd 猜分组。若找得到自己保留的旧配置，可从中核对原库的 `sqlite_home`。缺库、不可读取、旧版无项目表与可读但为空分别提示。
+
+代码：`src/codex_app_config/history_location.rs` 处理配置缺失、位置快照与手动修复；`src/codex_project_status.rs` 只读统计，不读取对话正文；`src/codex_session_history.rs` 的手动迁移沿用原库位置。实机步骤及验证记录见 [V37 交付](../releases/v1.0.37.md)。下文为先前的会话加载与分页功能。
+
 维护日期：2026-10-29。适用版本：`v0.4.30-9`，关联 TC-006 / TC-007。已实现，Windows 本地测试包由用户验收；具体构建、包身份及验证结果见 [v9 交付](../releases/v0.4.30-9.md)。
 
 ## 触发与使用

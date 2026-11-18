@@ -18,6 +18,7 @@ use std::{
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Kind {
     Startup,
+    ProjectHistory,
     Models,
     Plugins,
     Browser,
@@ -32,8 +33,9 @@ pub(crate) enum Kind {
     Desktop,
 }
 impl Kind {
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 14] = [
         Self::Startup,
+        Self::ProjectHistory,
         Self::Models,
         Self::Plugins,
         Self::Browser,
@@ -50,6 +52,7 @@ impl Kind {
     pub fn key(self) -> &'static str {
         match self {
             Self::Startup => "startup",
+            Self::ProjectHistory => "project-history",
             Self::Models => "models",
             Self::Plugins => "plugins",
             Self::Browser => "browser",
@@ -67,6 +70,7 @@ impl Kind {
     pub fn label(self) -> &'static str {
         match self {
             Self::Startup => "无法加载组织设置 / 启动失败",
+            Self::ProjectHistory => "删除配置后，项目或分组会话不见了",
             Self::Models => "模型与速度选项缺失（Fast / Power / Ultra）",
             Self::Plugins => "插件市场或缓存不完整",
             Self::Browser => "内置浏览器 / Chrome 本机连接失效",
@@ -83,6 +87,7 @@ impl Kind {
     }
     pub fn help(self) -> &'static str {
         match self {
+            Self::ProjectHistory => "检查本机历史库中的项目与会话归属。如果旧配置记录了另一份可用的历史库，可以退出 Codex 后恢复原位置。",
             Self::Startup => {
                 "分别检查内置程序路径和状态库。可将 CODEX_CLI_PATH 重新绑定到当前安装包；没有迁移冲突也能修复路径。数据库仅处理已确认冲突，先备份并验证副本，保留会话历史。"
             }
@@ -535,6 +540,32 @@ pub(crate) fn run(
     }
     if kind == Kind::Startup {
         return startup_issue(apply, &mut progress);
+    }
+    if kind == Kind::ProjectHistory {
+        let home = crate::codex_app_config::default_codex_home();
+        if apply {
+            startup::require_stopped()?;
+        }
+        let candidate = crate::codex_app_config::repair_history_location(&home, apply)?;
+        let status = crate::codex_project_status::inspect(&home);
+        use crate::codex_project_status::ProjectState;
+        let mut message = match (status.state, status.project_count, status.grouped_thread_count) {
+            (ProjectState::Available, Some(p), Some(t)) => format!("当前本机历史库：{p} 个项目，{t} 个未归档会话已归入项目。"),
+            (ProjectState::MissingDatabase, _, _) => "当前位置未找到历史库。".into(),
+            (ProjectState::UnsupportedSchema, _, _) => "这是旧版历史库，无法从中核对项目归属；旧版桌面也可能单独保存了分组。".into(),
+            _ => "暂时无法读取项目归属；请完全退出 Codex 后再检查。".into(),
+        };
+        if candidate {
+            message.push_str(if apply { " 已恢复原历史库位置，请重新打开 Codex。" } else { " 找到旧配置指向的另一份历史库。若要切回，请退出 Codex，再点修复。当前库会保留。" });
+        } else if status.project_count.is_some_and(|n| n > 0) {
+            message.push_str(" 若侧栏仍为空，请用原账户打开 Codex，在「整理侧边栏」选「分项目显示」。");
+            if status.other_provider_grouped_thread_count.is_some_and(|n| n > 0) {
+                message.push_str(" 有会话使用其他模型提供方，可在 Hub 的「Codex 会话管理」中核对。");
+            }
+        } else {
+            message.push_str(" 未找到可切回的原库位置。如有删除前的配置副本，请核对其中的 sqlite_home。");
+        }
+        return Ok(Outcome { message, backup: None, applied: apply && candidate, can_restore: false, needs_repair: !apply && candidate });
     }
     let _access = if apply {
         crate::codex_access::repair()?

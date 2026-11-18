@@ -652,9 +652,18 @@ pub(super) fn apply_pending_action(
             refresh_config_buttons(tab, service_enabled);
             force_dashboard_refresh(api, refresh);
         }
-        CodexActionResult::Inject(Ok(_)) => {
+        CodexActionResult::Inject(Ok(response)) => {
             refresh_configured(tab, true, true);
-            show_info(frame, text.codex_app_config_injected());
+            let history = response.get("projectHistory").cloned()
+                .and_then(|v| serde_json::from_value::<crate::codex_project_status::ProjectStatus>(v).ok());
+            let notice = history.as_ref().and_then(|h| match (h.project_count?, h.grouped_thread_count?) {
+                (0, _) => None,
+                (projects, chats) => Some(match text.locale {
+                    super::text::GuiLocale::ZhCn => format!("配置已重建。本机原库中有 {projects} 个项目、{chats} 个已归入项目的未归档会话。请完全退出并重新打开 Codex 查看。"),
+                    super::text::GuiLocale::EnUs => format!("Config rebuilt. The local database contains {projects} projects and {chats} unarchived project chats. Fully quit and reopen Codex to view them."),
+                }),
+            });
+            show_info(frame, notice.as_deref().unwrap_or_else(|| text.codex_app_config_injected()));
             force_dashboard_refresh(api, refresh);
         }
         CodexActionResult::Inject(Err(err)) => {

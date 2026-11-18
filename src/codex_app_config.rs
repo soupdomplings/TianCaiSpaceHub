@@ -1,3 +1,6 @@
+mod history_location;
+pub(crate) use history_location::repair_history_location;
+
 #[cfg(target_os = "macos")]
 use std::process::Command;
 use std::{
@@ -121,6 +124,7 @@ impl ConfigureCodexAppOptions {
 pub struct ConfigureCodexAppReport {
     pub codex_home: PathBuf,
     pub config_path: PathBuf,
+    pub project_history: Option<crate::codex_project_status::ProjectStatus>,
     pub auth_path: PathBuf,
     pub backend_url: String,
     pub remote_control_switch: CodexAppRemoteControlSwitchStatus,
@@ -273,6 +277,7 @@ pub fn configure_codex_app(options: ConfigureCodexAppOptions) -> Result<Configur
 
     let config_path = codex_home.join("config.toml");
     let auth_path = codex_home.join("auth.json");
+    let rebuilding = !config_path.try_exists()?;
     ensure_managed_backup(&codex_home, &config_path, &auth_path)?;
     chain_log::write_line(format!(
         "[codex_app_config] event=write_config_start path={}",
@@ -341,6 +346,7 @@ pub fn configure_codex_app(options: ConfigureCodexAppOptions) -> Result<Configur
     chain_log::write_line("[codex_app_config] event=gui_environment_configure_done");
 
     Ok(ConfigureCodexAppReport {
+        project_history: rebuilding.then(|| crate::codex_project_status::inspect(&codex_home)),
         codex_home,
         config_path,
         auth_path,
@@ -440,11 +446,7 @@ pub(crate) fn prepare_codex_app_conversation_mode(
     let _access = crate::codex_access::operation()?;
     let codex_home = codex_home.unwrap_or_else(default_codex_home);
     let config_path = codex_home.join("config.toml");
-    let mut doc = if config_path.exists() {
-        parse_existing_config_toml_for_update(&config_path)?
-    } else {
-        toml_edit::DocumentMut::new()
-    };
+    let mut doc = history_location::open_or_initialize(&config_path)?;
     if desktop_conversation_mode(&doc)?.as_deref() == Some(DESKTOP_COMMANDS_MODE) {
         return Ok(false);
     }
@@ -550,11 +552,7 @@ pub fn set_codex_app_provider_websocket(
     let provider_name = provider_name(Some(provider_name_value))?;
     let codex_home = codex_home.unwrap_or_else(default_codex_home);
     let config_path = codex_home.join("config.toml");
-    let mut doc = if config_path.exists() {
-        parse_existing_config_toml_for_update(&config_path)?
-    } else {
-        toml_edit::DocumentMut::new()
-    };
+    let mut doc = history_location::open_or_initialize(&config_path)?;
 
     let provider = provider_table_mut(&mut doc, &provider_name);
     provider["name"] = toml_edit::value(provider_name.as_str());
@@ -1733,11 +1731,7 @@ fn config_value(value: &str) -> Option<String> {
 }
 
 fn write_config_toml(path: &Path, options: &ConfigureCodexAppOptions) -> Result<()> {
-    let mut doc = if path.exists() {
-        parse_existing_config_toml_for_update(path)?
-    } else {
-        toml_edit::DocumentMut::new()
-    };
+    let mut doc = history_location::open_or_initialize(path)?;
     let codex_home = path.parent().unwrap_or_else(|| Path::new("."));
     enable_model_controls(codex_home, &mut doc)?;
     set_managed_commands_mode(codex_home, &mut doc)?;
@@ -3455,6 +3449,15 @@ fn backup_existing(path: &Path) -> Result<()> {
             backup.display()
         ));
         return Ok(());
+    }
+    // Capture the one history field before a normal write can overwrite the
+    // last legacy .bak. Other backups (especially auth.json) never enter here.
+    if path.file_name() == Some(std::ffi::OsStr::new("config.toml"))
+        && let Some(home) = path.parent()
+        && let Ok(raw) = std::str::from_utf8(&contents)
+        && let Ok(doc) = raw.trim_start_matches('\u{feff}').parse::<toml_edit::DocumentMut>()
+    {
+        history_location::remember(home, &doc);
     }
     write_file_atomically(&backup, &contents).with_context(|| {
         format!(
@@ -6177,7 +6180,7 @@ base_url = "https://api.example.invalid"
         let _ = std::fs::remove_dir_all(codex_home);
     }
 
-    fn test_configure_options(codex_home: PathBuf) -> ConfigureCodexAppOptions {
+    pub(super) fn test_configure_options(codex_home: PathBuf) -> ConfigureCodexAppOptions {
         ConfigureCodexAppOptions {
             codex_home: Some(codex_home),
             backend_url: "http://127.0.0.1:3847/backend-api".to_string(),
