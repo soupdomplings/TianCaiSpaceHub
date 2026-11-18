@@ -1,6 +1,6 @@
 # 二开功能总表
 
-2026-11-19 **TC-006／007 · V1.0.39**：[Codex 历史恢复](codex-history-recovery.md)覆盖项目清单已被用户手动重建的情况，按已核实项目根目录补回未归属会话；已归属会话、账户作用域和有歧义目录保持不动。Windows 本地测试与验收见 [V1.0.39](../releases/v1.0.39.md)。
+2026-11-19 **TC-006／007 · V1.0.39**：[Codex 历史恢复](codex-history-recovery.md)覆盖项目清单已被用户手动重建的情况，按已核实项目根目录补回未归属会话；有手动归入的样本时可重连同根不可见旧项目，保留现有手动归属及其他账户数据。Windows 本地测试与验收见 [V1.0.39](../releases/v1.0.39.md)。
 
 2026-11-18 **TC-002／006／007 · V1.0.38**：[ChatGPT 模型页](../dynamic-codex-models.zh-CN.md)改为从渠道勾选模型，保留旧清单；初始化处理 CC Switch 的已知目录引用。[请求日志](../ai-gateway-request-log-detail-patch.zh-CN.md)区分 WorkBuddy 客户端条目和模型。[交付与验收](../releases/v1.0.38.md)。
 

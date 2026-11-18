@@ -5,11 +5,10 @@ mod sidebar_projects;
 pub(crate) use cc_switch::active_hub_has_cc_switch_catalog;
 pub(crate) use history_location::repair_history_location;
 pub(crate) use project_membership::{
-    LocalProjectCandidate, ThreadAssignment, local_project_candidates,
-    local_project_candidates_for_ids, local_project_owner, repair_thread_memberships,
+    LocalProjectCandidate, ThreadAssignment, local_project_owner, repair_thread_memberships,
     undo_thread_memberships,
 };
-pub(crate) use sidebar_projects::{SidebarAction, sidebar_projects};
+pub(crate) use sidebar_projects::{SidebarAction, sidebar_projects, sidebar_receipt_dir};
 
 #[cfg(target_os = "macos")]
 use std::process::Command;
@@ -358,14 +357,24 @@ pub fn configure_codex_app(options: ConfigureCodexAppOptions) -> Result<Configur
     #[cfg(not(test))]
     chain_log::write_line("[codex_app_config] event=gui_environment_configure_done");
 
+    drop(_access);
     let project_sidebar = if rebuilding {
-        match sidebar_projects(&codex_home, SidebarAction::Repair) {
+        let repair = || -> Result<_> {
+            let _access = crate::codex_access::repair()?;
+            crate::codex_startup_repair::require_stopped()?;
+            sidebar_projects(&codex_home, SidebarAction::Repair)
+        };
+        match repair() {
             Ok(report) => Some(report),
             Err(error) => {
                 chain_log::write_line(format!(
                     "[codex_app_config] event=project_sidebar_repair_skipped error={error}"
                 ));
-                None
+                Some(sidebar_projects::SidebarReport {
+                    skipped: true,
+                    detail: format!("项目归属暂未恢复：{error}。可稍后在“检查与修复”中操作。"),
+                    ..Default::default()
+                })
             }
         }
     } else {

@@ -24,6 +24,7 @@
 | 窗口中的问题 | 实际处理 | 平台与限制 |
 | --- | --- | --- |
 | 无法加载组织设置 / 启动失败 | 独立检查当前内置程序及 CODEX_CLI_PATH，可按用户脚本重新绑定路径；数据库另检查物理副本，只有已知冲突才备份、原生迁移并验证后替换 | Windows/macOS；不以迁移数量少为删库标准。数据库未知原因不改库，路径分支仍独立处理。详见 [启动修复](codex-startup-repair.md) |
+| 删除配置后，项目或分组会话不见了 | 检查原库位置和当前项目，支持用户已重建项目、手动移动一两条会话后补回其余记录；完全退出客户端后执行 | 按当前 Hub 身份和原目录核对。匹配、撤销和限制见[项目恢复](codex-history-recovery.md) |
 | 模型与速度选项缺失 | 合并已有思考列表中的 `max/ultra`，设置 `features.fast_mode=true`，下一次增强启动按实际页面组件适配 | Windows/macOS；保留用户已有列表与原真实模型能力；没有组件时保留原菜单，不强制全部请求 Fast |
 | 插件市场或缓存不完整 | 从当前安装包恢复 stable 市场、reserved 镜像和已有插件缓存；使用正式插件安装命令在隔离 home 注册、列出确认，再把结果纳入文件计划 | Windows/macOS；不安装无关可选插件，不将缓存存在等同正式安装；不导入隔离 home 的登录、数据库或其他配置 |
 | 内置浏览器 / Chrome 本机连接失效 | 同源插件、当前 Node/Node REPL/CLI 稳定副本、native messaging manifest、host-config、两份 v2 连接记录和 Windows HKCU 注册路径 | Windows/macOS；保留可信 `browser-client.mjs` 原字节；浏览器扩展本身仍需正常安装，真实系统权限由系统管理 |

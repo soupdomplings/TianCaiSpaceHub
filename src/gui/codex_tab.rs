@@ -604,24 +604,29 @@ pub(super) fn apply_pending_action(
             let history = response.get("projectHistory").cloned().and_then(|v| {
                 serde_json::from_value::<crate::codex_project_status::ProjectStatus>(v).ok()
             });
-            let notice = sidebar
-                .map(|(projects, threads)| match text.locale {
+            let deferred_repair = response.get("projectSidebar").and_then(|v| {
+                v.get("skipped")?.as_bool()?.then(|| match text.locale {
                     super::text::GuiLocale::ZhCn => format!(
-                        "配置已重建。已恢复 {projects} 个项目卡片、{threads} 个会话归属；请完全退出并重新打开 Codex 查看。"
+                        "配置已重建。{}", v.get("detail").and_then(|d| d.as_str())
+                            .unwrap_or("项目归属可稍后在「检查与修复」中恢复。")
                     ),
-                    super::text::GuiLocale::EnUs => format!(
-                        "Config rebuilt. Restored {projects} project cards and {threads} conversation memberships; fully quit and reopen Codex to view them."
-                    ),
+                    super::text::GuiLocale::EnUs =>
+                        "Config rebuilt. Project recovery was deferred. Fully quit Codex, then use Check and Repair to inspect project history.".into(),
                 })
-                .or_else(|| {
-                    history.as_ref().and_then(|h| match (h.project_count?, h.grouped_thread_count?) {
-                        (0, _) => None,
-                        (projects, chats) => Some(match text.locale {
-                            super::text::GuiLocale::ZhCn => format!("配置已重建。本机原库中有 {projects} 个项目、{chats} 个已归入项目的未归档会话。请完全退出并重新打开 Codex 查看。"),
-                            super::text::GuiLocale::EnUs => format!("Config rebuilt. The local database contains {projects} projects and {chats} unarchived project chats. Fully quit and reopen Codex to view them."),
-                        }),
-                    })
-                });
+            });
+            let restored = sidebar.map(|(projects, threads)| match text.locale {
+                super::text::GuiLocale::ZhCn => format!("配置已重建。已补回 {projects} 个项目，{threads} 个会话已归入项目。请重新打开 Codex 查看。"),
+                super::text::GuiLocale::EnUs => format!("Config rebuilt. Restored {projects} projects and grouped {threads} conversations. Reopen Codex to view them."),
+            });
+            let notice = deferred_repair.or(restored).or_else(|| {
+                history.as_ref().and_then(|h| match (h.project_count?, h.grouped_thread_count?) {
+                    (0, _) => None,
+                    (projects, chats) => Some(match text.locale {
+                        super::text::GuiLocale::ZhCn => format!("配置已重建。本机原库中有 {projects} 个项目、{chats} 个已归入项目的未归档会话。请完全退出并重新打开 Codex 查看。"),
+                        super::text::GuiLocale::EnUs => format!("Config rebuilt. The local database contains {projects} projects and {chats} unarchived project chats. Fully quit and reopen Codex to view them."),
+                    }),
+                })
+            });
             show_info(
                 frame,
                 notice

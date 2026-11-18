@@ -88,7 +88,7 @@ impl Kind {
     pub fn help(self) -> &'static str {
         match self {
             Self::ProjectHistory => {
-                "检查本机历史库中的项目与会话归属。如果旧配置记录了另一份可用的历史库，可以退出 Codex 后恢复原位置。"
+                "找回原历史库、项目和分组。已重建项目并手动移过部分会话的，也可以先检查剩余可归类数量，再完全退出 Codex 进行修复。"
             }
             Self::Startup => {
                 "分别检查内置程序路径和状态库。可将 CODEX_CLI_PATH 重新绑定到当前安装包；没有迁移冲突也能修复路径。数据库仅处理已确认冲突，先备份并验证副本，保留会话历史。"
@@ -544,7 +544,12 @@ pub(crate) fn run(
         return startup_issue(apply, &mut progress);
     }
     if kind == Kind::ProjectHistory {
-        let home = crate::codex_app_config::default_codex_home();
+        let home = startup::user_directory()?;
+        let _access = if apply {
+            crate::codex_access::repair()?
+        } else {
+            crate::codex_access::operation()?
+        };
         if apply {
             startup::require_stopped()?;
         }
@@ -595,31 +600,32 @@ pub(crate) fn run(
                 " 未找到可切回的原库位置。如有删除前的配置副本，请核对其中的 sqlite_home。",
             );
         }
+        let backup = crate::codex_app_config::sidebar_receipt_dir(&home);
         let (sidebar_applied, sidebar_needs_repair) = match sidebar {
             Ok(sidebar) => {
-                if sidebar.can_repair
-                    || sidebar.changed_count > 0
-                    || sidebar.grouped_thread_count > 0
-                    || sidebar.active_project_count > 0
-                {
-                    message.push('\n');
-                    message.push_str(&sidebar.detail);
-                }
+                message.push('\n');
+                message.push_str(&sidebar.detail);
                 (
                     sidebar.changed_count > 0 || sidebar.grouped_thread_count > 0,
                     sidebar.can_repair,
                 )
             }
             Err(error) => {
+                if apply && !candidate {
+                    return Err(error);
+                }
                 message.push_str(&format!("\n侧栏项目未处理：{error}"));
                 (false, false)
             }
         };
         return Ok(Outcome {
             message,
-            backup: None,
+            backup: backup
+                .join("receipt.json")
+                .is_file()
+                .then(|| backup.clone()),
             applied: apply && (candidate || sidebar_applied),
-            can_restore: false,
+            can_restore: backup.join("receipt.json").is_file(),
             needs_repair: !apply && (candidate || sidebar_needs_repair),
         });
     }
@@ -761,6 +767,14 @@ pub(crate) fn records() -> Result<Vec<Record>> {
         .map(|(_, db)| db)
         .unwrap_or_else(|_| home.join("state_5.sqlite"));
     let mut records = Vec::new();
+    let sidebar = crate::codex_app_config::sidebar_receipt_dir(&home);
+    if sidebar.join("receipt.json").is_file() {
+        records.push(Record {
+            path: sidebar,
+            label: "最近一次项目与会话归属修复".into(),
+            can_restore: true,
+        });
+    }
     for root in [
         backup_root(&home),
         db.parent().unwrap().join("hub-startup-repair-backups"),
@@ -877,6 +891,22 @@ pub(crate) fn restore(path: &Path, mut progress: impl FnMut(&str)) -> Result<Out
         .map(|(_, db)| db)
         .unwrap_or_else(|_| home.join("state_5.sqlite"));
     let path = path.canonicalize()?;
+    let sidebar = crate::codex_app_config::sidebar_receipt_dir(&home);
+    if sidebar.join("receipt.json").is_file() && path == sidebar {
+        let _access = crate::codex_access::repair()?;
+        startup::require_stopped()?;
+        let report = crate::codex_app_config::sidebar_projects(
+            &home,
+            crate::codex_app_config::SidebarAction::Undo,
+        )?;
+        return Ok(Outcome {
+            message: report.detail,
+            backup: report.can_undo.then_some(path),
+            applied: false,
+            can_restore: report.can_undo,
+            needs_repair: false,
+        });
+    }
     let startup_root = db.parent().unwrap().join("hub-startup-repair-backups");
     if startup_root.exists() && path.starts_with(startup_root.canonicalize()?) {
         startup::restore(&path)?;

@@ -144,11 +144,7 @@ fn last_location(home: &Path, path: &Path, manual: bool) -> Result<Option<String
 /// Opt-in repair for an older Hub that already rebuilt the config. The user's
 /// existing keys and the historical config.toml.bak must survive the repair.
 pub(crate) fn repair_history_location(home: &Path, apply: bool) -> Result<bool> {
-    let _access = if apply {
-        crate::codex_access::repair()?
-    } else {
-        crate::codex_access::operation()?
-    };
+    // The repair center holds one guard for the database location and sidebar.
     repair_with_default(home, apply, || {
         crate::codex_project_status::sqlite_dir(home)
     })
