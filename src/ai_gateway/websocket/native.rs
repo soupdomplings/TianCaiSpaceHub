@@ -13,7 +13,7 @@ use crate::ai_gateway::{
     encrypted_content::{EncryptedContentScope, prepare_responses_request},
     error::GatewayError,
     handler,
-    providers::execute_openai_request_with_auth,
+    providers::{execute_openai_request_with_auth, openai_images},
 };
 
 pub(in crate::ai_gateway) struct NativeConnection {
@@ -140,8 +140,12 @@ pub(super) fn prepare(
     provider: &ProviderConfig,
     context: &GatewayContext,
     filter_images: bool,
+    image_model: Option<&str>,
 ) {
     handler::filter_image_generation_tools(raw, filter_images);
+    if !filter_images {
+        openai_images::apply_hosted_default(raw, provider, image_model);
+    }
     handler::strip_hosted_web_search_from_lite_request_tools(raw, &provider.provider_type);
     if let Some(model) = raw["model"]
         .as_str()

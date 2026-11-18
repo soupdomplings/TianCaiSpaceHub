@@ -89,6 +89,9 @@ pub struct AiGatewayConfig {
     pub codex_model_profiles: Vec<CodexModelProfile>,
     /// 是否过滤 Codex 请求中的 image_generation tool。
     pub filter_image_generation_tool: bool,
+    /// Hub 受管 Codex 客户端的默认生图模型；未设置时保留客户端请求。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub codex_image_model: Option<String>,
     /// 是否启用请求日志记录。
     #[serde(default = "default_false")]
     pub request_logging_enabled: bool,
@@ -111,6 +114,7 @@ impl Default for AiGatewayConfig {
             codex_visible_models: Vec::new(),
             codex_model_profiles: Vec::new(),
             filter_image_generation_tool: false,
+            codex_image_model: None,
             request_logging_enabled: false,
             request_log_details_enabled: false,
         }

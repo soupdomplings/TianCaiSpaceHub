@@ -198,7 +198,9 @@ async fn handle_image_request(
     let request_log_details_enabled = gateway_config.request_log_details_enabled;
     drop(config);
 
-    let inspection = match openai_images::inspect_request(&body, endpoint) {
+    let default =
+        openai_images::codex_default_model(gateway_config.codex_image_model.as_deref(), &headers);
+    let inspection = match openai_images::inspect_request(&body, endpoint, default) {
         Ok(inspection) => inspection,
         Err(error) => return error.into_response(),
     };
@@ -281,7 +283,7 @@ async fn handle_image_request(
         &client,
         &context,
         body,
-        &request_model,
+        inspection.original_model.as_deref(),
         &upstream_model,
         provider,
         endpoint,
@@ -678,6 +680,13 @@ pub(crate) async fn handle_responses_pinned(
         | ProviderType::DeepSeekResponses
         | ProviderType::KimiResponses
         | ProviderType::GrokResponses => {
+            if scope.is_none() && pin.is_none() && !filter_image_generation_tool {
+                let default = openai_images::codex_default_model(
+                    gw_config.codex_image_model.as_deref(),
+                    &headers,
+                );
+                openai_images::apply_hosted_default(&mut raw_body, provider, default);
+            }
             let result = openai_responses::passthrough_with_tool_names(
                 &http_client,
                 &ctx,

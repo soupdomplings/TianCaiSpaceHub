@@ -17,7 +17,7 @@ use tokio_tungstenite::tungstenite::Message as UpstreamMessage;
 
 use super::{
     config::ProviderConfig, context::GatewayContext, error::GatewayError, handler,
-    router::resolve_provider_with_state,
+    providers::openai_images, router::resolve_provider_with_state,
 };
 use crate::app_state::SharedState;
 
@@ -203,6 +203,10 @@ impl Session {
                     &provider,
                     &context,
                     config.filter_image_generation_tool,
+                    openai_images::codex_default_model(
+                        config.codex_image_model.as_deref(),
+                        headers,
+                    ),
                 );
                 let result = async {
                     if self.native.is_none() {

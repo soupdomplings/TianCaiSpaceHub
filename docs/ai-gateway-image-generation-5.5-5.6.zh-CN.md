@@ -1,4 +1,21 @@
-# Codex 5.5 与 5.6 Responses Lite 生图协议变化
+# ChatGPT / Codex 默认生图模型与生图协议
+
+## 在 Hub 里指定默认生图模型（2026-11-18，未发布）
+
+在 **ChatGPT / Codex → 接入设置 → 默认生图模型** 选择图片模型。保存后，下一个经 Hub 受管接入发起的生图或改图请求即读取新设置，无需重启客户端。不会修改本次对话的 GPT 模型、聊天模型列表或已有渠道。旧配置默认「沿用客户端默认」；随时选回此项即可恢复原行为。
+
+可选 `gpt-image-2.6-sunburst`、`gpt-image-2.6-flare`，或已启用渠道提供的模型 ID／公开别名。预设表示可选型号，不代表你的渠道已开通。[Codex 内置图片工具说明](https://learn.chatgpt.com/docs/image-generation)将其模型标为 `gpt-image-2`，而 [Responses 的图片工具参数](https://developers.openai.com/api/reference/resources/responses/methods/create)列有以上两个 2.6 型号。前者解释了为什么客户端仍可能发来旧型号，即使上游已支持新型号。
+
+| 请求类型 | Hub 怎样应用选择 | 在哪里核对 |
+| --- | --- | --- |
+| 独立生成／改图（Images JSON） | 用所选公开 ID 匹配已启用渠道，再按该渠道的别名映射向其 Images 接口发送。没有路由则报错，不退回旧型号。 | 请求日志列表为选路用的 ID。开启详情后，比较同一条 `image_generation` 或 `image_edit` 的「Codex 请求」与「上游请求」中的 `model`；后者是 Hub 发出的型号，图片数据沿用摘要。 |
+| 随对话提交的托管图片工具（Responses HTTP / WebSocket） | 仅更新已声明的 `image_generation` 工具的 `model`；仍由当前聊天渠道执行，该渠道必须支持指定的图片模型。顶层聊天模型不变，已过滤的工具不会重新开启。 | 查看对话请求详情中上游的图片工具声明；列表仍是聊天模型。 |
+
+Hub 仅在受管 ChatGPT / Codex 请求未指定图片模型，或使用旧默认名（精确的 `gpt-image-2` 或 `image2`）时替换。显式指定其他图片型号、其他客户端及不经 Hub 的请求均保留原行为。若选了渠道别名，例如 `studio → gpt-image-2.6-sunburst`，独立请求的日志列表会显示 `studio`，上游请求显示 `gpt-image-2.6-sunburst`。这能核对 Hub 发出的请求；渠道内部如何执行由提供方决定。
+
+维护入口：`src/gui/codex_tab/image_model.rs`（候选与保存）、`aiGateway.codexImageModel`（可选字段）、`src/ai_gateway/providers/openai_images.rs`（两类请求的默认值与独立图片转发）、`src/ai_gateway/handler.rs` 和 `src/ai_gateway/websocket/native.rs`（HTTP、WebSocket 接入）。本轮验证记录见[二开变更记录](customizations/CHANGELOG.md)。
+
+## 历史：5.5 与 5.6 Responses Lite 生图协议变化
 
 2026-09-22 复核：独立 Images API 链路仍在，当前工具请求模型为 `gpt-image-2`。工具可见性不能只依据 `requires_openai_auth`：Core 还检查有效生图 feature、非 Free 套餐、模型图像输入能力、provider capabilities，以及 Actor 或 Codex backend 认证。最新配置条件见 [Provider 取舍文档](codex-app-web-run-model-visibility-tradeoff.zh-CN.md)。下文模型版本对比保留历史迁移背景，不表示只要切换到 5.6 就自动获得生图能力。
 

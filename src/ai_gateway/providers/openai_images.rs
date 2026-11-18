@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use axum::{
     body::{Body, Bytes},
-    http::{HeaderValue, StatusCode, header::CONTENT_TYPE},
+    http::{HeaderMap, HeaderValue, StatusCode, header::CONTENT_TYPE},
     response::Response,
 };
 use serde::Deserialize;
@@ -39,14 +39,15 @@ impl ImageEndpoint {
 }
 
 pub struct ImageRequestInspection {
+    pub original_model: Option<String>,
     pub model: String,
     pub sanitized_log: Value,
 }
 
 #[derive(Deserialize)]
 struct ImageRequestBody<'a> {
-    #[serde(borrow)]
-    model: Cow<'a, str>,
+    #[serde(default, borrow)]
+    model: Option<Cow<'a, str>>,
     #[serde(default, borrow)]
     prompt: Option<Cow<'a, str>>,
     #[serde(default, borrow)]
@@ -97,21 +98,70 @@ struct ImageResponseData<'a> {
     url: Option<Cow<'a, str>>,
 }
 
+/// Preference of the managed local Codex provider. The marker identifies a
+/// client configuration; it never grants access or gets sent upstream.
+pub fn codex_default_model<'a>(
+    configured: Option<&'a str>,
+    headers: &HeaderMap,
+) -> Option<&'a str> {
+    let marker = headers.get("x-openai-actor-authorization")?;
+    if marker.as_bytes() != b"codexhub-local" {
+        return None;
+    }
+    configured.map(str::trim).filter(|value| !value.is_empty())
+}
+
+fn uses_client_default(requested: Option<&str>) -> bool {
+    matches!(requested, None | Some("gpt-image-2" | "image2"))
+}
+
+/// Hosted image tools run on the conversation's upstream. Do not change the
+/// text model, create a tool, or rewrite custom/local tools with similar names.
+pub fn apply_hosted_default(body: &mut Value, provider: &ProviderConfig, default: Option<&str>) {
+    let Some(default) = default else { return };
+    let wire_model = provider.resolve_upstream_model(default).unwrap_or(default);
+    let update = |container: &mut Value| {
+        let Some(tools) = container.get_mut("tools").and_then(Value::as_array_mut) else {
+            return;
+        };
+        for tool in tools {
+            let model = &tool["model"];
+            if tool["type"] == "image_generation"
+                && (model.is_null() || model.is_string())
+                && uses_client_default(model.as_str())
+            {
+                tool["model"] = json!(wire_model);
+            }
+        }
+    };
+    update(body);
+    if let Some(input) = body.get_mut("input").and_then(Value::as_array_mut) {
+        for item in input
+            .iter_mut()
+            .filter(|item| item["type"] == "additional_tools")
+        {
+            update(item);
+        }
+    }
+}
+
 pub fn inspect_request(
     raw_body: &Bytes,
     endpoint: ImageEndpoint,
+    default: Option<&str>,
 ) -> Result<ImageRequestInspection, GatewayError> {
     let request: ImageRequestBody<'_> = serde_json::from_slice(raw_body)
         .map_err(|error| GatewayError::bad_request(format!("invalid image request: {error}")))?;
-    let model = request.model.trim();
-    if model.is_empty() {
-        return Err(GatewayError::bad_request(
-            "image request model must not be empty",
-        ));
-    }
+    let original_model = request.model.as_deref();
+    let requested = original_model.map(str::trim);
+    let model = default
+        .filter(|_| uses_client_default(requested))
+        .or(requested)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| GatewayError::bad_request("image request model must not be empty"))?;
 
     let mut sanitized = Map::new();
-    sanitized.insert("model".to_string(), Value::String(model.to_string()));
+    insert_optional_string(&mut sanitized, "model", original_model);
     insert_optional_string(&mut sanitized, "prompt", request.prompt.as_deref());
     insert_optional_string(&mut sanitized, "background", request.background.as_deref());
     insert_optional_string(&mut sanitized, "quality", request.quality.as_deref());
@@ -146,6 +196,7 @@ pub fn inspect_request(
     );
 
     Ok(ImageRequestInspection {
+        original_model: original_model.map(str::to_owned),
         model: model.to_string(),
         sanitized_log: Value::Object(sanitized),
     })
@@ -155,14 +206,14 @@ pub async fn passthrough(
     client: &reqwest::Client,
     ctx: &GatewayContext,
     raw_body: Bytes,
-    request_model: &str,
+    original_model: Option<&str>,
     upstream_model: &str,
     provider: &ProviderConfig,
     endpoint: ImageEndpoint,
     log_context: Option<RequestLogContext>,
     upstream_request_log: Option<Value>,
 ) -> Result<Response<Body>, GatewayError> {
-    let request_body = rewrite_model_if_needed(raw_body, request_model, upstream_model)?;
+    let request_body = rewrite_model_if_needed(raw_body, original_model, upstream_model)?;
     let request_body_bytes = byte_len(request_body.len());
 
     let url = chatgpt_auth::endpoint(provider, &format!("/v1/{}", endpoint.path()));
@@ -404,10 +455,10 @@ fn byte_len(value: usize) -> i64 {
 
 fn rewrite_model_if_needed(
     raw_body: Bytes,
-    request_model: &str,
+    original_model: Option<&str>,
     upstream_model: &str,
 ) -> Result<Bytes, GatewayError> {
-    if request_model == upstream_model {
+    if original_model == Some(upstream_model) {
         return Ok(raw_body);
     }
 
@@ -511,15 +562,202 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn managed_codex_image_model_routes_both_endpoints_and_records_the_wire_model() {
+        use crate::{ai_gateway::config::AiGatewayConfig, app_state::AppState, config::AppConfig};
+        use axum::{body::Body, http::Request};
+        use tower::ServiceExt;
+
+        let (base_url, mut seen, server) = mock_image_server().await;
+        let temp = tempfile::tempdir().unwrap();
+        let public_id = "art-studio";
+        let actual_id = "gpt-image-2.6-sunburst";
+        let legacy_id = "gpt-image-2";
+        let legacy = ProviderConfig {
+            name: "prior-route".into(),
+            weight: 100,
+            ..provider(base_url.clone())
+        };
+        let studio = ProviderConfig {
+            name: "studio".into(),
+            models: vec![actual_id.into()],
+            model_aliases: [(public_id.into(), actual_id.into())].into(),
+            ..provider(base_url)
+        };
+        let config = AppConfig {
+            state_path: temp.path().join("state.json"),
+            ai_gateway: AiGatewayConfig {
+                enabled: true,
+                providers: vec![legacy, studio],
+                codex_image_model: Some(public_id.into()),
+                request_logging_enabled: true,
+                request_log_details_enabled: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let state = AppState::new(temp.path().join("hub.toml"), config, None, None);
+        let app = crate::ai_gateway::router().with_state(state.clone());
+        for (endpoint, preferred, incoming_id, managed, expected_channel, effective, wire) in [
+            (
+                "generations",
+                Some(public_id),
+                legacy_id,
+                true,
+                "studio",
+                public_id,
+                actual_id,
+            ),
+            (
+                "edits",
+                Some(public_id),
+                legacy_id,
+                true,
+                "studio",
+                public_id,
+                actual_id,
+            ),
+            (
+                "generations",
+                Some(actual_id),
+                "image2",
+                true,
+                "studio",
+                actual_id,
+                actual_id,
+            ),
+            (
+                "generations",
+                Some(public_id),
+                legacy_id,
+                false,
+                "prior-route",
+                legacy_id,
+                legacy_id,
+            ),
+            (
+                "edits",
+                None,
+                legacy_id,
+                true,
+                "prior-route",
+                legacy_id,
+                legacy_id,
+            ),
+        ] {
+            state.config.lock().await.ai_gateway.codex_image_model = preferred.map(str::to_owned);
+            let mut body = json!({"model":incoming_id, "prompt":"test", "size":"auto"});
+            if endpoint == "edits" {
+                body["images"] = json!([{"image_url":"data:image/png;base64,YW5vbmltYWdl"}]);
+            }
+            let path = format!("/v1/images/{endpoint}");
+            let mut request = Request::post(&path).header("content-type", "application/json");
+            if managed {
+                request = request.header("x-openai-actor-authorization", "codexhub-local");
+            }
+            let response = app
+                .clone()
+                .oneshot(request.body(Body::from(body.to_string())).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), axum::http::StatusCode::OK);
+            let sent = seen.recv().await.unwrap();
+            assert_eq!(sent.path, path);
+            body["model"] = json!(wire);
+            assert_eq!(sent.body, body);
+            assert!(!sent.headers.contains_key("x-openai-actor-authorization"));
+
+            let summary = state
+                .ai_gateway_request_logs
+                .list_recent(1)
+                .unwrap()
+                .pop()
+                .unwrap();
+            assert_eq!(summary.model_id, effective);
+            assert_eq!(summary.channel, expected_channel);
+            let detail = state
+                .ai_gateway_request_logs
+                .get_detail(summary.id)
+                .unwrap()
+                .unwrap();
+            let incoming = detail.request_json.unwrap();
+            let outgoing = detail.upstream_request_json.unwrap();
+            assert_eq!(
+                serde_json::from_str::<Value>(&incoming).unwrap()["model"],
+                incoming_id
+            );
+            assert_eq!(
+                serde_json::from_str::<Value>(&outgoing).unwrap()["model"],
+                wire
+            );
+            assert!(!incoming.contains("YW5vbmltYWdl") && !outgoing.contains("YW5vbmltYWdl"));
+        }
+        server.abort();
+    }
+
     #[test]
     fn keeps_original_request_bytes_when_model_does_not_change() {
         let original =
             Bytes::from_static(br#"{ "model": "gpt-image-2", "prompt": "paint a city" }"#);
 
-        let rewritten = rewrite_model_if_needed(original.clone(), "gpt-image-2", "gpt-image-2")
-            .expect("unchanged model should preserve request body");
+        let rewritten =
+            rewrite_model_if_needed(original.clone(), Some("gpt-image-2"), "gpt-image-2")
+                .expect("unchanged model should preserve request body");
 
         assert_eq!(rewritten, original);
+    }
+
+    #[test]
+    fn managed_codex_image_model_respects_explicit_models_and_omitted_defaults() {
+        let default = Some("preferred-image");
+        let endpoint = ImageEndpoint::Generations;
+        let missing = Bytes::from_static(br#"{"prompt":"a city"}"#);
+        assert!(inspect_request(&missing, endpoint, None).is_err());
+        let inspection = inspect_request(&missing, endpoint, default).unwrap();
+        assert_eq!(inspection.model, "preferred-image");
+        assert!(inspection.sanitized_log.get("model").is_none());
+        let bytes = rewrite_model_if_needed(
+            missing,
+            inspection.original_model.as_deref(),
+            &inspection.model,
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&bytes).unwrap(),
+            json!({"prompt":"a city","model":"preferred-image"})
+        );
+
+        for id in ["image2", "gpt-image-2"] {
+            let bytes = Bytes::from(json!({"model":id}).to_string());
+            assert_eq!(
+                inspect_request(&bytes, endpoint, default).unwrap().model,
+                "preferred-image"
+            );
+            assert_eq!(inspect_request(&bytes, endpoint, None).unwrap().model, id);
+        }
+        let explicit = Bytes::from_static(br#"{ "model": "image2-custom" }"#);
+        let inspection = inspect_request(&explicit, endpoint, default).unwrap();
+        assert_eq!(inspection.model, "image2-custom");
+        assert_eq!(
+            rewrite_model_if_needed(
+                explicit.clone(),
+                inspection.original_model.as_deref(),
+                &inspection.model
+            )
+            .unwrap(),
+            explicit
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-openai-actor-authorization",
+            "another-client".parse().unwrap(),
+        );
+        assert!(super::codex_default_model(default, &headers).is_none());
+        headers.insert(
+            "x-openai-actor-authorization",
+            "codexhub-local".parse().unwrap(),
+        );
+        assert!(super::codex_default_model(Some(" "), &headers).is_none());
     }
 
     #[test]
@@ -528,8 +766,9 @@ mod tests {
             br#"{"model":"gpt-image-2","prompt":"paint a city","quality":"auto"}"#,
         );
 
-        let rewritten = rewrite_model_if_needed(original, "gpt-image-2", "upstream-image-model")
-            .expect("provider alias should rewrite model");
+        let rewritten =
+            rewrite_model_if_needed(original, Some("gpt-image-2"), "upstream-image-model")
+                .expect("provider alias should rewrite model");
         let body: Value = serde_json::from_slice(&rewritten).expect("rewritten JSON");
 
         assert_eq!(body["model"], "upstream-image-model");
@@ -543,7 +782,8 @@ mod tests {
             br#"{"model":"gpt-image-2","prompt":"edit","images":[{"image_url":"data:image/png;base64,U0VDUkVUX0lNQUdF"}]}"#,
         );
 
-        let inspection = inspect_request(&body, ImageEndpoint::Edits).expect("inspect request");
+        let inspection =
+            inspect_request(&body, ImageEndpoint::Edits, None).expect("inspect request");
         let logged = serde_json::to_string(&inspection.sanitized_log).expect("serialize log");
 
         assert_eq!(inspection.model, "gpt-image-2");
@@ -601,7 +841,7 @@ mod tests {
                 &client,
                 &context,
                 Bytes::from(serde_json::to_vec(&body).expect("encode image request")),
-                "gpt-image-2",
+                Some("gpt-image-2"),
                 "upstream-image-model",
                 &provider,
                 endpoint,
@@ -669,7 +909,7 @@ mod tests {
         };
         let body = Bytes::from_static(br#"{"model":"gpt-image-2","prompt":"paint a city"}"#);
         let inspection =
-            inspect_request(&body, ImageEndpoint::Generations).expect("inspect request");
+            inspect_request(&body, ImageEndpoint::Generations, None).expect("inspect request");
         let mut upstream_log = inspection.sanitized_log;
         upstream_log["model"] = json!("upstream-image-model");
 
@@ -677,7 +917,7 @@ mod tests {
             &client,
             &context,
             body,
-            "gpt-image-2",
+            Some("gpt-image-2"),
             "upstream-image-model",
             &provider,
             ImageEndpoint::Generations,

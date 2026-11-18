@@ -1,3 +1,5 @@
+mod image_model;
+
 use super::controls::Button;
 use crate::gui::controls::{Choice, TextCtrl};
 use std::{
@@ -42,6 +44,7 @@ pub(super) struct CodexTab {
     websocket_checkbox: CheckBox,
     websocket_enabled: Rc<Cell<bool>>,
     websocket_saving: Rc<Cell<bool>>,
+    image_model: image_model::Picker,
     save_models_button: Button,
     sync_models_button: Button,
     fetch_models_button: Button,
@@ -123,6 +126,7 @@ pub(super) fn create_with_settings(
         SizerFlag::Left | SizerFlag::Right | SizerFlag::Top,
         10,
     );
+    let image_model = image_model::Picker::new(&local_config_box, &local_config_section, text);
     let local_config_actions = BoxSizer::builder(Orientation::Horizontal).build();
     local_config_actions.add_stretch_spacer(1);
     if header_actions.is_none() {
@@ -361,6 +365,7 @@ pub(super) fn create_with_settings(
         websocket_checkbox,
         websocket_enabled: Rc::new(Cell::new(false)),
         websocket_saving: Rc::new(Cell::new(false)),
+        image_model,
         save_models_button,
         sync_models_button,
         fetch_models_button,
@@ -487,6 +492,7 @@ pub(super) fn bind_actions(
     super::startup_repair::bind_button(&tab.startup_repair_button, frame, tab.text, in_flight);
     bind_inject_action(api, frame, tab, refresh, gui_tx, in_flight);
     bind_websocket_action(api, frame, tab, refresh, gui_tx, in_flight);
+    image_model::bind(api, frame, tab, refresh, gui_tx, in_flight);
     bind_enhanced_launch_action(api, frame, tab, refresh, gui_tx, in_flight);
     bind_save_models_action(api, frame, tab, refresh, gui_tx, in_flight);
     bind_sync_models_action(api, frame, tab, refresh, gui_tx, in_flight);
@@ -536,6 +542,8 @@ pub(super) fn refresh_remote_ready(tab: &CodexTab, remote_ready: bool) {
 }
 
 pub(super) fn initialize_visible_model_checks(tab: &CodexTab, gateway_config: &AiGatewayConfig) {
+    tab.image_model
+        .sync(gateway_config, tab.service_enabled.get());
     *tab.latest_models.borrow_mut() = Some(gateway_config.codex_visible_models.clone());
     let (names, mut groups) = super::codex_model_catalog::channel_groups(gateway_config);
     if *tab.model_provider_names.borrow() != names {
@@ -624,6 +632,10 @@ pub(super) fn apply_pending_action(
     set_candidate_actions_enabled(tab, service_enabled);
 
     match result {
+        CodexActionResult::ImageModel(result) => {
+            tab.image_model.finish(result, frame, service_enabled);
+            force_dashboard_refresh(api, refresh);
+        }
         CodexActionResult::WebSocket(result) => {
             tab.websocket_saving.set(false);
             match result {
@@ -752,6 +764,7 @@ fn refresh_config_buttons(tab: &CodexTab, service_enabled: bool) {
     tab.clear_button.enable(service_enabled && configured);
     tab.websocket_checkbox
         .enable(service_enabled && configured && !tab.websocket_saving.get());
+    tab.image_model.enable(service_enabled);
 }
 
 fn config_update_enabled(service_enabled: bool, up_to_date: bool, saving: bool) -> bool {
@@ -759,6 +772,7 @@ fn config_update_enabled(service_enabled: bool, up_to_date: bool, saving: bool) 
 }
 
 pub(super) enum CodexActionResult {
+    ImageModel(Result<Option<String>, String>),
     WebSocket(Result<bool, String>),
     Inject(Result<serde_json::Value, String>),
     Clear(Result<serde_json::Value, String>),

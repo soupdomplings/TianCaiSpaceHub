@@ -60,7 +60,7 @@ fn native_request_preserves_lite_and_incremental_fields() {
             {"type":"custom_tool_call_output","call_id":"call_a","output":"done"}],
         "future_field":{"nested":[1,2,3]}});
     let original = request.clone();
-    native::prepare(&mut request, &provider, &context, false);
+    native::prepare(&mut request, &provider, &context, false, None);
     assert_eq!(request["model"], "real-model");
     assert_eq!(request["prompt_cache_key"], "session-key");
     assert!(request.get("stream").is_none());
@@ -101,6 +101,73 @@ fn metadata_cannot_override_credentials_and_event_headers_win() {
     native::add_response_headers(&mut event, &headers);
     assert_eq!(event["headers"]["x-codex-turn-state"], "event-state");
     assert!(event["headers"].get("set-cookie").is_none());
+}
+
+#[tokio::test]
+async fn managed_codex_image_model_changes_only_the_hosted_tool_on_http() {
+    use axum::{body::Body, http::Request, routing::post};
+    use tower::ServiceExt;
+
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let (upstream, task) = server(Router::new().route(
+        "/v1/responses",
+        post(move |Json(body): Json<Value>| {
+            let tx = tx.clone();
+            async move {
+                tx.send(body).unwrap();
+                Json(json!({"id":"resp_test","object":"response","status":"completed","output":[]}))
+            }
+        }),
+    ))
+    .await;
+    let temp = tempfile::tempdir().unwrap();
+    let state = state(
+        &temp,
+        vec![ProviderConfig {
+            name: "chat".into(),
+            base_url: format!("{upstream}/v1"),
+            models: vec!["chat-model".into()],
+            model_aliases: [("studio".into(), "wire-image".into())].into(),
+            ..Default::default()
+        }],
+    );
+    state.config.lock().await.ai_gateway.codex_image_model = Some("studio".into());
+    let app = crate::ai_gateway::router().with_state(state.clone());
+    let body = json!({"model":"chat-model","input":"draw a city","tools":[
+        {"type":"image_generation","size":"auto"},
+        {"type":"image_generation","model":"explicit-image"},
+        {"type":"function","name":"local_image","parameters":{"type":"object"}}
+    ]});
+    for (managed, filter) in [(true, false), (false, false), (true, true)] {
+        state
+            .config
+            .lock()
+            .await
+            .ai_gateway
+            .filter_image_generation_tool = filter;
+        let mut request = Request::post("/v1/responses").header("content-type", "application/json");
+        if managed {
+            request = request.header("x-openai-actor-authorization", "codexhub-local");
+        }
+        let response = app
+            .clone()
+            .oneshot(request.body(Body::from(body.to_string())).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let wire = rx.recv().await.unwrap();
+        assert_eq!(wire["model"], "chat-model");
+        if filter {
+            assert_eq!(wire["tools"], json!([body["tools"][2]]));
+        } else {
+            let mut expected = body["tools"].clone();
+            if managed {
+                expected[0]["model"] = json!("wire-image");
+            }
+            assert_eq!(wire["tools"], expected);
+        }
+    }
+    task.abort();
 }
 
 #[tokio::test]
@@ -186,10 +253,19 @@ async fn openai_api_key_channel_probes_and_reuses_native_websocket() {
             api_key: "upstream-secret".into(),
             base_url: format!("{upstream}/custom/v1"),
             models: vec!["upstream-model".into()],
-            model_aliases: [("client-model".into(), "upstream-model".into())].into(),
+            model_aliases: [
+                ("client-model".into(), "upstream-model".into()),
+                ("studio".into(), "wire-image".into()),
+            ]
+            .into(),
             ..Default::default()
         }],
     );
+    {
+        let mut config = state.config.lock().await;
+        config.ai_gateway.codex_image_model = Some("studio".into());
+        config.ai_gateway.filter_image_generation_tool = false;
+    }
     let (base, task) = server(crate::ai_gateway::router().with_state(state.clone())).await;
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
     let mut handshake = format!("{}/v1/responses", base.replace("http:", "ws:"))
@@ -207,7 +283,9 @@ async fn openai_api_key_channel_probes_and_reuses_native_websocket() {
     );
     let (mut socket, _) = tokio_tungstenite::connect_async(handshake).await.unwrap();
     for index in 0..2 {
-        let mut request = json!({"type":"response.create","model":"client-model","input":[],"future_field":{"unchanged":true}});
+        let mut request = json!({"type":"response.create","model":"client-model","input":[],
+            "tools":[{"type":"image_generation","model":"gpt-image-2","size":"auto"}],
+            "future_field":{"unchanged":true}});
         if index == 1 {
             request["previous_response_id"] = json!("resp_0");
         }
@@ -234,6 +312,10 @@ async fn openai_api_key_channel_probes_and_reuses_native_websocket() {
         .await
         .unwrap();
         assert_eq!(forwarded["model"], "upstream-model");
+        assert_eq!(
+            forwarded["tools"],
+            json!([{"type":"image_generation","model":"wire-image","size":"auto"}])
+        );
         assert_eq!(
             forwarded["previous_response_id"],
             request["previous_response_id"]
