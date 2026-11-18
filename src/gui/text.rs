@@ -921,10 +921,10 @@ impl GuiText {
         }
         match self.locale {
             GuiLocale::ZhCn => {
-                "Codex 可见模型列表已保存。\nCodex 端模型列表有缓存，通常会在 5 分钟内更新。"
+                "模型列表已保存。请在 ChatGPT / Codex 中重新打开模型列表查看。"
             }
             GuiLocale::EnUs => {
-                "Codex visible model list saved.\nCodex caches the model picker list and usually updates it within 5 minutes."
+                "Model list saved. Reopen the model picker in ChatGPT / Codex to check for the change."
             }
         }.into()
     }

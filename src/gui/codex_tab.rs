@@ -1344,6 +1344,95 @@ mod dynamic_model_tests {
     use super::*;
     use crate::ai_gateway::config::ProviderConfig;
 
+    #[tokio::test]
+    async fn legacy_builtin_selection_survives_upgrade_and_updates_the_running_catalog() {
+        use crate::{ai_gateway::handler::handle_models, app_state::AppState, config::AppConfig};
+        use axum::{extract::State, response::IntoResponse};
+
+        async fn catalog(state: &crate::app_state::SharedState) -> (Vec<String>, String) {
+            let response = handle_models(State(state.clone())).await.into_response();
+            let etag = response.headers()["etag"].to_str().unwrap().to_owned();
+            let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+                .await
+                .unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            (
+                json["models"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|m| m["slug"].as_str().unwrap().to_owned())
+                    .collect(),
+                etag,
+            )
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        // This is the on-disk shape written by the former built-in picker.
+        let raw = r#"[aiGateway]
+enabled = true
+codexVisibleModels = ["deepseek-v4-pro", "gpt-5.4-mini", "old-public-name"]
+[[aiGateway.providers]]
+name = "fixture"
+providerType = "open_ai_responses"
+models = ["deepseek-v4-pro", "upstream-name", "not-selected"]
+[aiGateway.providers.modelAliases]
+old-public-name = "upstream-name"
+"#;
+        std::fs::write(&path, raw).unwrap();
+        let mut config = AppConfig::load_or_default(&path).unwrap();
+        config.state_path = dir.path().join("state.json");
+        let state = AppState::new(path.clone(), config.clone(), None, None);
+        let expected = ["deepseek-v4-pro", "gpt-5.4-mini", "old-public-name"];
+        let client = crate::desktop::models::public(&config.ai_gateway);
+        assert_eq!(client["codexVisibleModels"], serde_json::json!(expected));
+        let (ids, original_etag) = catalog(&state).await;
+        assert_eq!(ids, expected);
+        let gateway = &mut config.ai_gateway;
+        let sources = serde_json::to_value(&gateway.providers).unwrap();
+        assert!(gateway.select_provider("gpt-5.4-mini").is_none());
+        assert_eq!(
+            gateway
+                .select_provider("old-public-name")
+                .unwrap()
+                .resolve_upstream_model("old-public-name"),
+            Some("upstream-name")
+        );
+        assert!(!prepare_visible_models(gateway, ids.clone(), Some(ids.clone())).unwrap());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), raw);
+
+        // Save an explicit clear and re-read through the same running Hub. A
+        // fresh gateway response is not proof that the native picker refetched it.
+        assert!(prepare_visible_models(gateway, vec![], Some(ids)).unwrap());
+        config.save(&path).unwrap();
+        let reloaded = AppConfig::load_or_default(&path).unwrap();
+        assert!(reloaded.ai_gateway.codex_visible_models.is_empty());
+        assert_eq!(
+            serde_json::to_value(&reloaded.ai_gateway.providers).unwrap(),
+            sources
+        );
+        *state.config.lock().await = reloaded;
+        let (ids, cleared_etag) = catalog(&state).await;
+        assert!(ids.is_empty());
+        assert_ne!(cleared_etag, original_etag);
+    }
+
+    #[test]
+    fn legacy_builtin_selection_absent_or_explicitly_empty_stays_empty() {
+        use crate::{ai_gateway::catalog::configured_models_response, config::AppConfig};
+        for selection in ["", "codexVisibleModels = []"] {
+            let config: AppConfig = toml::from_str(&format!(
+                "[aiGateway]\n{selection}\n[[aiGateway.providers]]\nname='fixture'\nmodels=['gpt-5.6-sol']"
+            )).unwrap();
+            assert!(config.ai_gateway.codex_visible_models.is_empty());
+            assert_eq!(
+                configured_models_response(&config.ai_gateway)["models"],
+                serde_json::json!([])
+            );
+        }
+    }
+
     #[test]
     fn saving_visible_ids_never_creates_or_changes_a_channel() {
         let mut config = AiGatewayConfig {

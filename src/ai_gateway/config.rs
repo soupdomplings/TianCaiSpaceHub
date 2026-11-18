@@ -80,6 +80,8 @@ pub struct AiGatewayConfig {
     pub providers: Vec<ProviderConfig>,
     /// Codex App 前端模型选择器可见的模型列表。
     ///
+    /// 旧版「内置与其他模型」勾选结果也保存在这个有序列表。
+    /// 读取时不能根据现有渠道过滤或因列表为空补回默认模型。
     /// 该列表只控制 `/models` 暴露给 Codex App 的 catalog 模型，不参与上游 provider 路由。
     pub codex_visible_models: Vec<String>,
     /// User-defined metadata for models discovered from providers or entered manually.
