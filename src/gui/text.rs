@@ -663,17 +663,6 @@ impl GuiText {
         }
     }
 
-    pub(super) fn codex_custom_models_help(self) -> &'static str {
-        match self.locale {
-            GuiLocale::ZhCn => {
-                "每行一个模型 ID。保存只更新客户端列表；使用前，请确保「模型与渠道」中有匹配的模型 ID 或别名。"
-            }
-            GuiLocale::EnUs => {
-                "Enter one model ID per line. Saving updates only the client list. An enabled channel in Models & Channels must match the model ID or alias before you can use it."
-            }
-        }
-    }
-
     pub(super) fn codex_model_choose_provider(self) -> &'static str {
         match self.locale {
             GuiLocale::ZhCn => "请先选择一个已启用的大模型渠道。",
@@ -901,32 +890,50 @@ impl GuiText {
         }
     }
 
-    pub(super) fn codex_models_saved(self, unmatched: &[String]) -> String {
+    pub(super) fn codex_models_saved(
+        self,
+        refresh: &super::api::ModelListRefresh,
+        unmatched: &[String],
+    ) -> String {
+        use super::api::ModelListRefresh::*;
+        let mut message = match (self.locale, refresh) {
+            (GuiLocale::ZhCn, CcSwitchCatalog) => "Hub 已保存；Codex 仍使用 CC Switch 模型目录。请在「接入设置」更新配置，再增强启动。".to_owned(),
+            (GuiLocale::EnUs, CcSwitchCatalog) => "Saved in Hub. Codex still uses the CC Switch catalog. Update the configuration in Connection Settings, then launch in enhanced mode.".to_owned(),
+            (GuiLocale::ZhCn, Disconnected) => "Hub 已保存；Codex 尚未连接。请增强启动后查看模型列表。".to_owned(),
+            (GuiLocale::EnUs, Disconnected) => "Saved in Hub. Codex is not connected. Launch in enhanced mode to check the model list.".to_owned(),
+            (GuiLocale::ZhCn, MissingFromRuntime(id)) => format!("Hub 已保存；当前 Codex 还未列出 {id}。请完全退出客户端，重新增强启动后查看。"),
+            (GuiLocale::EnUs, MissingFromRuntime(id)) => format!("Saved in Hub. The Codex runtime does not list {id} yet. Fully quit the client, then launch in enhanced mode."),
+            (GuiLocale::ZhCn, Queried) => "Hub 已保存，Codex 已返回模型清单。请在客户端重新打开模型菜单核对。".to_owned(),
+            (GuiLocale::EnUs, Queried) => "Saved in Hub. The Codex runtime returned its model list. Reopen the model picker to check it.".to_owned(),
+            (GuiLocale::ZhCn, Failed(_)) => "Hub 已保存，未能刷新 Codex 模型列表。可再次点「保存模型列表」重试。".to_owned(),
+            (GuiLocale::EnUs, Failed(_)) => "Saved in Hub. Could not refresh the Codex model list. Select Save model list to retry.".to_owned(),
+        };
+        if let Failed(detail) = refresh
+            && !detail.trim().is_empty()
+        {
+            message.push('\n');
+            message.push_str(detail.trim());
+        }
         if let Some(first) = unmatched.first() {
             let count = unmatched.len();
-            return match (self.locale, count) {
+            let hint = match (self.locale, count) {
                 (GuiLocale::ZhCn, 1) => {
-                    format!("列表已保存。{first} 暂无可用渠道，请到「模型与渠道」配置。")
+                    format!("{first} 暂无可用渠道，请到「模型与渠道」配置。")
                 }
-                (GuiLocale::ZhCn, _) => format!(
-                    "列表已保存。{first} 等 {count} 个模型暂无可用渠道，请到「模型与渠道」配置。"
-                ),
-                (GuiLocale::EnUs, 1) => format!(
-                    "List saved. No enabled channel matches {first}. Check Models & Channels."
-                ),
+                (GuiLocale::ZhCn, _) => {
+                    format!("{first} 等 {count} 个模型暂无可用渠道，请到「模型与渠道」配置。")
+                }
+                (GuiLocale::EnUs, 1) => {
+                    format!("No enabled channel matches {first}. Check Models & Channels.")
+                }
                 (GuiLocale::EnUs, _) => format!(
-                    "List saved. {count} models, including {first}, have no matching channel. Check Models & Channels."
+                    "{count} models, including {first}, have no matching channel. Check Models & Channels."
                 ),
             };
+            message.push('\n');
+            message.push_str(&hint);
         }
-        match self.locale {
-            GuiLocale::ZhCn => {
-                "模型列表已保存。请在 ChatGPT / Codex 中重新打开模型列表查看。"
-            }
-            GuiLocale::EnUs => {
-                "Model list saved. Reopen the model picker in ChatGPT / Codex to check for the change."
-            }
-        }.into()
+        message
     }
 
     pub(super) fn codex_enhanced_launch(self) -> &'static str {

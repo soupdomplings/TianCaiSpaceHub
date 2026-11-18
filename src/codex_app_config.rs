@@ -1,4 +1,6 @@
+mod cc_switch;
 mod history_location;
+pub(crate) use cc_switch::active_hub_has_cc_switch_catalog;
 pub(crate) use history_location::repair_history_location;
 
 #[cfg(target_os = "macos")]
@@ -216,6 +218,8 @@ struct ManagedCodexAppBackupManifest {
     original_model_provider: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     original_gateway_features: Option<GatewayFeaturesBackup>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    removed_cc_switch_catalog: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     model_controls: Option<ModelControlsBackup>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1520,6 +1524,12 @@ fn managed_gateway_config_is_current(
     let Ok(doc) = parse_existing_config_toml(config_path) else {
         return false;
     };
+    if config_path
+        .parent()
+        .is_some_and(|home| cc_switch::reference(home, &doc).is_some())
+    {
+        return false;
+    }
     let Some(provider) = doc
         .get("model_providers")
         .and_then(|providers| providers.get(AI_GATEWAY_PROVIDER_NAME))
@@ -1748,7 +1758,7 @@ fn write_config_toml(path: &Path, options: &ConfigureCodexAppOptions) -> Result<
     let default_ai_gateway_base_url =
         inject_default_ai_gateway.then(|| options.ai_gateway_base_url());
     if inject_default_ai_gateway {
-        backup_gateway_features(codex_home, &doc)?;
+        prepare_gateway_settings(codex_home, &mut doc, options.activate_provider)?;
         let features = ensure_config_table(&mut doc, "features");
         features["standalone_web_search"] = toml_edit::value(true);
         features["api_key_model_discovery"] = toml_edit::value(true);
@@ -2027,23 +2037,30 @@ fn restore_model_controls(doc: &mut toml_edit::DocumentMut, controls: &ModelCont
     }
 }
 
-fn backup_gateway_features(codex_home: &Path, doc: &toml_edit::DocumentMut) -> Result<()> {
+fn prepare_gateway_settings(
+    codex_home: &Path,
+    doc: &mut toml_edit::DocumentMut,
+    activate: bool,
+) -> Result<()> {
     let backup = managed_backup_paths(codex_home);
     if !backup.manifest_path.exists() {
         return Ok(());
     }
     let mut manifest = read_managed_backup_manifest(&backup.manifest_path)?;
-    if manifest.original_gateway_features.is_some() {
+    let catalog_backup_changed = activate && cc_switch::hand_off(codex_home, doc, &mut manifest)?;
+    if manifest.original_gateway_features.is_some() && !catalog_backup_changed {
         return Ok(());
     }
-    let features = doc.get("features").and_then(|item| item.as_table_like());
-    manifest.original_gateway_features = Some(GatewayFeaturesBackup {
-        standalone_web_search: features
-            .and_then(|features| features.get("standalone_web_search"))
-            .and_then(|item| item.as_bool()),
-        api_key_model_discovery: features
-            .and_then(|features| features.get("api_key_model_discovery"))
-            .and_then(|item| item.as_bool()),
+    manifest.original_gateway_features.get_or_insert_with(|| {
+        let features = doc.get("features").and_then(|item| item.as_table_like());
+        GatewayFeaturesBackup {
+            standalone_web_search: features
+                .and_then(|features| features.get("standalone_web_search"))
+                .and_then(|item| item.as_bool()),
+            api_key_model_discovery: features
+                .and_then(|features| features.get("api_key_model_discovery"))
+                .and_then(|item| item.as_bool()),
+        }
     });
     let raw = serde_json::to_vec_pretty(&manifest)?;
     write_file_atomically(&backup.manifest_path, &raw)
@@ -2385,7 +2402,7 @@ fn normalize_config_toml_order(raw: &str) -> String {
 }
 
 fn uninstall_config_toml(path: &Path, backend_url: &str) -> Result<(bool, bool)> {
-    cleanup_codexhub_config(path, backend_url, true, None, None, None, None)
+    cleanup_codexhub_config(path, backend_url, None, None)
 }
 
 fn managed_provider_names_in_config(
@@ -3022,6 +3039,7 @@ fn ensure_managed_backup(codex_home: &Path, config_path: &Path, auth_path: &Path
             None
         },
         original_gateway_features: None,
+        removed_cc_switch_catalog: None,
         model_controls: None,
         conversation_mode: None,
     };
@@ -3066,11 +3084,8 @@ fn uninstall_with_managed_state(
     let (removed_chatgpt_base_url, removed_model_provider) = cleanup_codexhub_config(
         config_path,
         backend_url,
-        manifest.config_existed,
         original_model_provider.as_deref(),
-        manifest.original_gateway_features.as_ref(),
-        manifest.model_controls.as_ref(),
-        manifest.conversation_mode.as_ref(),
+        Some(&manifest),
     )?;
     let removed_auth = restore_or_remove_managed_file(
         auth_path,
@@ -3099,11 +3114,8 @@ fn uninstall_with_managed_state(
 fn cleanup_codexhub_config(
     path: &Path,
     backend_url: &str,
-    config_existed_before_first_write: bool,
     original_model_provider: Option<&str>,
-    original_gateway_features: Option<&GatewayFeaturesBackup>,
-    model_controls: Option<&ModelControlsBackup>,
-    conversation_mode: Option<&ConversationModeBackup>,
+    manifest: Option<&ManagedCodexAppBackupManifest>,
 ) -> Result<(bool, bool)> {
     if !path.exists() {
         return Ok((false, false));
@@ -3127,6 +3139,9 @@ fn cleanup_codexhub_config(
         .map(str::trim)
         .is_some_and(|active| managed_provider_names.contains(active));
     if removed_model_provider {
+        if let (Some(home), Some(manifest)) = (path.parent(), manifest) {
+            cc_switch::restore(home, &mut doc, manifest);
+        }
         let original_model_provider = original_model_provider
             .map(str::trim)
             .filter(|provider| !provider.is_empty())
@@ -3145,13 +3160,13 @@ fn cleanup_codexhub_config(
         }
         remove_provider_table(&mut doc, &provider_name);
     }
-    if !config_existed_before_first_write {
+    if manifest.is_some_and(|m| !m.config_existed) {
         remove_created_feature_defaults(&mut doc);
         remove_created_telemetry_defaults(&mut doc);
         remove_created_plugin_defaults(&mut doc);
         remove_created_local_marketplaces(&mut doc);
     }
-    if let Some(original) = original_gateway_features {
+    if let Some(original) = manifest.and_then(|m| m.original_gateway_features.as_ref()) {
         if let Some(features) = doc.get_mut("features").and_then(|item| item.as_table_mut()) {
             for (key, value) in [
                 ("standalone_web_search", original.standalone_web_search),
@@ -3172,10 +3187,10 @@ fn cleanup_codexhub_config(
         }
     }
 
-    if let Some(controls) = model_controls {
+    if let Some(controls) = manifest.and_then(|m| m.model_controls.as_ref()) {
         restore_model_controls(&mut doc, controls);
     }
-    if let Some(mode) = conversation_mode {
+    if let Some(mode) = manifest.and_then(|m| m.conversation_mode.as_ref()) {
         restore_conversation_mode(&mut doc, mode);
     }
 
@@ -3455,7 +3470,9 @@ fn backup_existing(path: &Path) -> Result<()> {
     if path.file_name() == Some(std::ffi::OsStr::new("config.toml"))
         && let Some(home) = path.parent()
         && let Ok(raw) = std::str::from_utf8(&contents)
-        && let Ok(doc) = raw.trim_start_matches('\u{feff}').parse::<toml_edit::DocumentMut>()
+        && let Ok(doc) = raw
+            .trim_start_matches('\u{feff}')
+            .parse::<toml_edit::DocumentMut>()
     {
         history_location::remember(home, &doc);
     }

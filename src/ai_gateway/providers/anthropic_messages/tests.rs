@@ -3417,7 +3417,7 @@ async fn anthropic_stream_records_ttft_end_to_end() {
     let store = RequestLogStore::new(db_path.clone());
     let record = RequestLogRecord {
         request_id: "req-anthropic-e2e".to_string(),
-        model_id: "claude-opus-4-8".to_string(),
+        model: "claude-opus-4-8".into(),
         stream: true,
         channel: "anthropic".to_string(),
         provider_type: "anthropic_messages".to_string(),
@@ -3492,7 +3492,7 @@ async fn anthropic_real_fixture_records_ttft_bytewise() {
     let store = RequestLogStore::new(db_path.clone());
     let record = RequestLogRecord {
         request_id: "req-anthropic-fixture".to_string(),
-        model_id: "claude-opus-4-8".to_string(),
+        model: "claude-opus-4-8".into(),
         stream: true,
         channel: "anthropic".to_string(),
         provider_type: "anthropic_messages".to_string(),

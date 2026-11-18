@@ -14,7 +14,7 @@ pub(super) fn begin(
     let store = state.ai_gateway_request_logs.clone();
     let record = RequestLogRecord {
         request_id: uuid::Uuid::new_v4().to_string(),
-        model_id: model.into(),
+        model: model.into(),
         stream,
         channel: "天才搭档管理员服务".into(),
         provider_type: "openai_responses".into(),

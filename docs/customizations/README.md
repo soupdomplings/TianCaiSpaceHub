@@ -1,5 +1,7 @@
 # 二开功能总表
 
+2026-11-18 **TC-002／006／007 · V1.0.38**：[ChatGPT 模型页](../dynamic-codex-models.zh-CN.md)改为从渠道勾选模型，保留旧清单；初始化处理 CC Switch 的已知目录引用。[请求日志](../ai-gateway-request-log-detail-patch.zh-CN.md)区分 WorkBuddy 客户端条目和模型。[交付与验收](../releases/v1.0.38.md)。
+
 2026-11-18 **TC-006／007 · V1.0.37 本地测试**：[Codex 历史恢复](codex-history-recovery.md)支持删除配置后接回有备份记录的原库，检查与修复可核对项目归属数量。操作及验收见 [V37](../releases/v1.0.37.md)。
 
 2026-11-18 **TC-006／016／018／023 · V1.0.36 本地测试**：本批 ChatGPT / Codex 聊天模型、分批导入和生图设置的范围与验收步骤集中见 [V36 交付](../releases/v1.0.36.md)。

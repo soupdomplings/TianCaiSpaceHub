@@ -1,9 +1,6 @@
 //! Same-protocol Messages forwarding preserves signatures and provider fields.
 use super::*;
-use crate::ai_gateway::{
-    config::provider_route_id,
-    handler::{GatewayRequestEnvelope, insert_initial_log},
-};
+use crate::ai_gateway::{config::provider_route_id, handler::insert_initial_log};
 use crate::app_state::SharedState;
 use axum::response::IntoResponse;
 use std::time::Instant;
@@ -65,11 +62,8 @@ async fn execute(
                 &state.ai_gateway_request_logs,
                 &ctx,
                 &headers,
-                &GatewayRequestEnvelope {
-                    model: model.clone(),
-                    stream: streaming,
-                    prompt_cache_key: None,
-                },
+                model.as_str().into(),
+                streaming,
                 Some(&provider),
                 &original,
                 started,

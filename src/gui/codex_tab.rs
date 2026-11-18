@@ -1,7 +1,7 @@
 mod image_model;
 
 use super::controls::Button;
-use crate::gui::controls::{Choice, TextCtrl};
+use crate::gui::controls::Choice;
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
@@ -18,7 +18,7 @@ use wxdragon::prelude::*;
 use crate::ai_gateway::config::AiGatewayConfig;
 use crate::config::LocalConnectionMode;
 
-use super::api::{ApiClient, ConfigureRequest};
+use super::api::{ApiClient, ConfigureRequest, ModelListRefresh};
 use super::text::GuiText;
 use super::theme;
 use super::widgets::card_section;
@@ -50,7 +50,6 @@ pub(super) struct CodexTab {
     fetch_models_button: Button,
     model_provider: Choice,
     model_provider_names: Rc<RefCell<Vec<String>>>,
-    custom_models_input: TextCtrl,
     models_updated: Panel,
     discovered_models: Rc<RefCell<std::collections::BTreeMap<String, Vec<String>>>>,
     base_models: Rc<RefCell<Option<Vec<String>>>>,
@@ -250,19 +249,6 @@ pub(super) fn create_with_settings(
         6,
     );
 
-    let custom_models_hint = StaticText::builder(&models_box)
-        .with_label(text.codex_custom_models_help())
-        .build();
-    custom_models_hint.set_foreground_color(theme::theme().ink_muted);
-    custom_models_hint.wrap(980);
-    custom_models_hint.hide();
-    custom_models_hint.set_tooltip(text.codex_custom_models_help());
-    models_section.add(
-        &custom_models_hint,
-        0,
-        SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Top,
-        6,
-    );
     let model_picker = super::codex_models::ChannelModels::new(&models_box);
     let model_provider = model_picker.channel;
     models_section.add(
@@ -271,29 +257,6 @@ pub(super) fn create_with_settings(
         SizerFlag::Expand | SizerFlag::All,
         page.from_dip(10),
     );
-    let custom_models_input = TextCtrl::builder(&models_box)
-        .with_style(TextCtrlStyle::MultiLine | TextCtrlStyle::Default)
-        .build();
-    custom_models_input.set_min_size(super::visual::dip_size(&custom_models_input, 0, 64));
-    custom_models_input.set_tooltip(text.codex_custom_models_help());
-    custom_models_input.hide();
-    models_section.add(
-        &custom_models_input,
-        0,
-        SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right,
-        page.from_dip(10),
-    );
-    let manual = Button::builder(&models_box)
-        .with_label("手动填写模型 ID")
-        .with_kind(super::controls::ButtonKind::Ghost)
-        .build();
-    models_section.add(&manual, 0, SizerFlag::Left, page.from_dip(10));
-    manual.on_click(move |_| {
-        custom_models_input.show(!custom_models_input.is_shown());
-        models_box.layout();
-        page.layout();
-    });
-
     let models_updated = Panel::builder(&models_box).build();
     models_updated.set_background_color(models_box.get_background_color());
     let updated_row = BoxSizer::builder(Orientation::Horizontal).build();
@@ -371,7 +334,6 @@ pub(super) fn create_with_settings(
         fetch_models_button,
         model_provider,
         model_provider_names: Rc::new(RefCell::new(Vec::new())),
-        custom_models_input,
         models_updated,
         discovered_models: Default::default(),
         base_models: Default::default(),
@@ -397,7 +359,6 @@ pub(super) fn invalidate_visible_models(tab: &CodexTab) {
 pub(super) fn reload_visible_models(tab: &CodexTab) {
     tab.models_initialized.set(false);
     tab.discovered_models.borrow_mut().clear();
-    tab.custom_models_input.change_value("");
     if let Some(models) = tab.latest_models.borrow().clone() {
         *tab.base_models.borrow_mut() = Some(models.clone());
         tab.model_picker.replace_selected_models(&models);
@@ -415,32 +376,14 @@ pub(super) fn focus_model(tab: &CodexTab, model: &str) {
 pub(super) fn bind_model_list(tab: &CodexTab, page: &super::clients::ClientPage) {
     let view = page.clone();
     let current = tab.clone();
-    tab.model_picker.on_changed(move |_| {
+    tab.model_picker.on_changed(move |models| {
         view.set_codex_selection(
-            selected_visible_models(&current),
-            current.base_models.borrow().clone().unwrap_or_default(),
-        );
-    });
-    let view = page.clone();
-    let current = tab.clone();
-    tab.custom_models_input.on_text_updated(move |_| {
-        view.set_codex_selection(
-            selected_visible_models(&current),
+            models,
             current.base_models.borrow().clone().unwrap_or_default(),
         );
     });
     let picker = tab.model_picker.clone();
-    let manual = tab.custom_models_input;
-    page.on_model_remove(move |model| {
-        manual.change_value(
-            &merge_model_ids(&manual.get_value(), &[])
-                .into_iter()
-                .filter(|m| !m.eq_ignore_ascii_case(model))
-                .collect::<Vec<_>>()
-                .join("\n"),
-        );
-        picker.remove_model(model);
-    });
+    page.on_model_remove(move |model| picker.remove_model(model));
     let view = page.clone();
     *tab.list_saved.borrow_mut() = Some(Rc::new(move || view.finish_codex_models()));
 }
@@ -456,8 +399,7 @@ pub(super) fn review_remote_model_updates(tab: &CodexTab, config: &mut AiGateway
     assert_eq!(tab.model_picker.selected_models(), ["external-saved-model"]);
     assert!(!tab.models_updated.is_shown());
 
-    // A manual selection and a typed entry are both drafts. A second remote
-    // save must leave them intact until the user explicitly loads the update.
+    // Preserve the local selection until the user explicitly loads the remote update.
     tab.model_picker.select_models(&["draft-model".into()]);
     config.codex_visible_models = vec!["second-external-model".into()];
     initialize_visible_model_checks(tab, config);
@@ -467,9 +409,6 @@ pub(super) fn review_remote_model_updates(tab: &CodexTab, config: &mut AiGateway
             .contains(&"draft-model".into())
     );
     assert!(tab.models_updated.is_shown());
-    tab.custom_models_input.change_value("typed-model");
-    initialize_visible_model_checks(tab, config);
-    assert_eq!(tab.custom_models_input.get_value(), "typed-model");
     reload_visible_models(tab);
     assert_eq!(
         tab.model_picker.selected_models(),
@@ -504,7 +443,6 @@ pub(super) fn bind_actions(
 pub(super) fn set_actions_enabled(tab: &CodexTab, enabled: bool) {
     tab.service_enabled.set(enabled);
     tab.save_models_button.enable(enabled);
-    tab.custom_models_input.enable(enabled);
     set_candidate_actions_enabled(tab, enabled);
     refresh_config_buttons(tab, enabled);
     tab.session_history_button
@@ -577,10 +515,8 @@ pub(super) fn initialize_visible_model_checks(tab: &CodexTab, gateway_config: &A
         }
     }
     let base = tab.base_models.borrow().clone();
-    let has_draft = base.as_ref().is_some_and(|base| {
-        !same_model_set(&selected_visible_models(tab), base)
-            || !tab.custom_models_input.get_value().trim().is_empty()
-    });
+    let has_draft = base.as_ref()
+        .is_some_and(|base| !same_model_set(&tab.model_picker.selected_models(), base));
     let remote_changed = base
         .as_ref()
         .is_some_and(|base| !same_model_set(base, &gateway_config.codex_visible_models));
@@ -679,18 +615,34 @@ pub(super) fn apply_pending_action(
             show_error(frame, &err);
             force_dashboard_refresh(api, refresh);
         }
-        CodexActionResult::SaveModels(Ok(unmatched)) => {
+        CodexActionResult::SaveModels(Ok(saved_models)) => {
+            *tab.base_models.borrow_mut() = Some(saved_models.confirmed);
             tab.models_initialized.set(false);
             tab.discovered_models.borrow_mut().clear();
-            tab.custom_models_input.change_value("");
             if let Some(saved) = tab.list_saved.borrow().clone() {
                 saved();
             }
-            show_info(frame, &text.codex_models_saved(&unmatched));
+            let message = text.codex_models_saved(&saved_models.refresh, &saved_models.unmatched);
+            if matches!(
+                saved_models.refresh,
+                ModelListRefresh::CcSwitchCatalog
+                    | ModelListRefresh::MissingFromRuntime(_)
+                    | ModelListRefresh::Failed(_)
+            ) {
+                show_error(frame, &message);
+            } else {
+                show_info(frame, &message);
+            }
             force_dashboard_refresh(api, refresh);
         }
         CodexActionResult::SaveModels(Err(err)) => {
-            show_error(frame, &err);
+            let message = match text.locale {
+                super::text::GuiLocale::ZhCn => format!("Hub 未能确认保存模型列表：{err}"),
+                super::text::GuiLocale::EnUs => {
+                    format!("Hub could not confirm the model list was saved: {err}")
+                }
+            };
+            show_error(frame, &message);
             force_dashboard_refresh(api, refresh);
         }
         CodexActionResult::SyncModels(Ok(models)) => {
@@ -734,24 +686,6 @@ pub(super) fn apply_pending_action(
     }
 }
 
-fn merge_model_ids(existing: &str, incoming: &[String]) -> Vec<String> {
-    let mut models = Vec::new();
-    for model in existing
-        .split([',', '\n', '\r'])
-        .chain(incoming.iter().map(String::as_str))
-        .map(str::trim)
-        .filter(|model| !model.is_empty())
-    {
-        if !models
-            .iter()
-            .any(|known: &String| known.eq_ignore_ascii_case(model))
-        {
-            models.push(model.to_string());
-        }
-    }
-    models
-}
-
 fn refresh_config_buttons(tab: &CodexTab, service_enabled: bool) {
     let configured = tab.configured.get();
     if !tab.config_saving.get() {
@@ -785,7 +719,7 @@ pub(super) enum CodexActionResult {
     WebSocket(Result<bool, String>),
     Inject(Result<serde_json::Value, String>),
     Clear(Result<serde_json::Value, String>),
-    SaveModels(Result<Vec<String>, String>),
+    SaveModels(Result<SavedModels, String>),
     SyncModels(Result<Vec<String>, String>),
     FetchModels(String, Result<Vec<String>, String>),
     EnhancedLaunch(Result<serde_json::Value, String>),
@@ -1142,7 +1076,7 @@ fn bind_save_models_action(
         tab.save_models_button
             .set_label(tab.text.saving_codex_models());
         tab.save_models_button.enable(false);
-        let selected_models = selected_visible_models(&tab);
+        let selected_models = tab.model_picker.selected_models();
         let expected_models = tab.base_models.borrow().clone();
         let thread_api = api.clone();
         let gui_tx = gui_tx.clone();
@@ -1223,43 +1157,40 @@ fn bind_session_history_action(
     });
 }
 
-fn selected_visible_models(tab: &CodexTab) -> Vec<String> {
-    let mut selected = tab.model_picker.selected_models();
-    for model in tab
-        .custom_models_input
-        .get_value()
-        .split(|ch: char| ch == ',' || ch == '\n' || ch == '\r')
-        .map(str::trim)
-        .filter(|model| !model.is_empty())
-    {
-        if !selected
-            .iter()
-            .any(|known| known.eq_ignore_ascii_case(model))
-        {
-            selected.push(model.to_string());
-        }
-    }
-    selected
+#[derive(Debug)]
+pub(super) struct SavedModels {
+    confirmed: Vec<String>,
+    unmatched: Vec<String>,
+    refresh: ModelListRefresh,
 }
 
 fn save_visible_models(
     api: &ApiClient,
     models: Vec<String>,
     expected_models: Option<Vec<String>>,
-) -> Result<Vec<String>, String> {
+) -> Result<SavedModels, String> {
     let mut config = api.get_app_config()?;
     if prepare_visible_models(&mut config.ai_gateway, models, expected_models)? {
         api.save_app_config(&config)?;
-        let _ = api.refresh_codex_app_models();
     }
-    Ok(config
+    let unmatched = config
         .ai_gateway
         .codex_visible_models
         .iter()
         .filter(|id| config.ai_gateway.select_provider(id).is_none())
         .cloned()
-        .collect())
+        .collect();
+    // Refresh even when nothing changed: the previous save may have happened offline.
+    let refresh = api
+        .refresh_codex_app_models()
+        .unwrap_or_else(ModelListRefresh::Failed);
+    Ok(SavedModels {
+        confirmed: config.ai_gateway.codex_visible_models,
+        unmatched,
+        refresh,
+    })
 }
+
 fn prepare_visible_models(
     config: &mut AiGatewayConfig,
     mut models: Vec<String>,
@@ -1366,6 +1297,71 @@ fn bind_fetch_models_action(
 mod dynamic_model_tests {
     use super::*;
     use crate::ai_gateway::config::ProviderConfig;
+
+    #[tokio::test]
+    async fn saving_after_cc_switch_keeps_the_list_and_retries_only_refresh() {
+        use crate::config::AppConfig;
+        use axum::{
+            Json, Router,
+            routing::{get, post},
+        };
+        use serde_json::json;
+        use std::sync::{Mutex, atomic::AtomicUsize};
+
+        // Simulate Hub writes and successive runtime replies without touching any client files.
+        let mut config = AppConfig::default();
+        config.ai_gateway.codex_visible_models = vec!["legacy-manual".into()];
+        let current = Arc::new(Mutex::new(config));
+        let reading = current.clone();
+        let writes = Arc::new(AtomicUsize::new(0));
+        let writing = writes.clone();
+        let refreshes = Arc::new(AtomicUsize::new(0));
+        let refreshing = refreshes.clone();
+        let router = Router::new()
+            .route("/api/config", get(move || async move { Json(reading.lock().unwrap().clone()) })
+                .post(move |Json(value): Json<AppConfig>| async move {
+                    writing.fetch_add(1, Ordering::SeqCst);
+                    *current.lock().unwrap() = value;
+                    Json(json!({"ok": true}))
+                }))
+            .route("/api/codex-app/models/refresh", post(move || async move {
+                Json(match refreshing.fetch_add(1, Ordering::SeqCst) {
+                    0 => json!({"modelListRefreshed": false, "reason": "ccSwitchCatalog"}),
+                    1 => json!({"modelListRefreshed": false, "reason": "disconnected"}),
+                    2 => json!({"modelListRefreshed": false, "error": "fixture runtime failed"}),
+                    3 => json!({"modelListRefreshed": true, "count": 1, "missingModel":"provider-model"}),
+                    _ => json!({"modelListRefreshed": true, "count": 2}),
+                })
+            }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async { axum::serve(listener, router).await.unwrap() });
+        tokio::task::spawn_blocking(move || {
+            let text = GuiText::new(super::super::text::GuiLocale::ZhCn);
+            let api = ApiClient::new(url, text);
+            let chosen = vec!["legacy-manual".to_owned(), "provider-model".to_owned()];
+            let save = |base| save_visible_models(&api, chosen.clone(), Some(base)).unwrap();
+            let first = save(vec!["legacy-manual".into()]);
+            assert_eq!(first.refresh, ModelListRefresh::CcSwitchCatalog);
+            assert!(first.unmatched.contains(&"legacy-manual".into()));
+            assert_eq!(save(chosen.clone()).refresh, ModelListRefresh::Disconnected);
+            assert_eq!(
+                save(chosen.clone()).refresh,
+                ModelListRefresh::Failed("fixture runtime failed".into())
+            );
+            assert_eq!(
+                save(chosen.clone()).refresh,
+                ModelListRefresh::MissingFromRuntime("provider-model".into())
+            );
+            assert_eq!(save(chosen.clone()).refresh, ModelListRefresh::Queried);
+            assert!(save_visible_models(&api, vec![], Some(vec![])).is_err()); // A stale edit may not refresh.
+        })
+        .await
+        .unwrap();
+        assert_eq!(writes.load(Ordering::SeqCst), 1);
+        assert_eq!(refreshes.load(Ordering::SeqCst), 5);
+        server.abort();
+    }
 
     #[tokio::test]
     async fn legacy_builtin_selection_survives_upgrade_and_updates_the_running_catalog() {
@@ -1501,16 +1497,6 @@ old-public-name = "upstream-name"
         assert_eq!(serde_json::to_value(&config.providers).unwrap(), before);
     }
 
-    #[test]
-    fn sync_preserves_manual_entries_and_deduplicates() {
-        assert_eq!(
-            merge_model_ids(
-                " custom-one\nGPT-new,custom-two ",
-                &["gpt-new".into(), "vendor/new".into()]
-            ),
-            ["custom-one", "GPT-new", "custom-two", "vendor/new"]
-        );
-    }
 }
 
 #[cfg(test)]

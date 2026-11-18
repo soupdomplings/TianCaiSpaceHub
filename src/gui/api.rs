@@ -27,6 +27,15 @@ pub(super) struct ApiClient {
     text: GuiText,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum ModelListRefresh {
+    Queried,
+    Disconnected,
+    CcSwitchCatalog,
+    MissingFromRuntime(String),
+    Failed(String),
+}
+
 impl ApiClient {
     pub(super) fn desktop_post(&self, path: &str, body: &Value) -> Result<Value, String> {
         super::dialog_job::post(self, path, body)
@@ -287,8 +296,30 @@ impl ApiClient {
         self.post_empty_with_timeout("/api/codex-app/repair-gui-environment", GUI_CONFIG_TIMEOUT)
     }
 
-    pub(super) fn refresh_codex_app_models(&self) -> Result<serde_json::Value, String> {
-        self.post_empty_with_timeout("/api/codex-app/models/refresh", GUI_CONFIG_TIMEOUT)
+    pub(super) fn refresh_codex_app_models(&self) -> Result<ModelListRefresh, String> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Response {
+            model_list_refreshed: bool,
+            reason: Option<String>,
+            error: Option<String>,
+            missing_model: Option<String>,
+        }
+        let response: Response =
+            self.post_empty_with_timeout("/api/codex-app/models/refresh", GUI_CONFIG_TIMEOUT)?;
+        Ok(
+            match (
+                response.model_list_refreshed,
+                response.reason.as_deref(),
+                response.missing_model,
+            ) {
+                (false, Some("ccSwitchCatalog"), _) => ModelListRefresh::CcSwitchCatalog,
+                (false, Some("disconnected"), _) => ModelListRefresh::Disconnected,
+                (true, _, Some(id)) => ModelListRefresh::MissingFromRuntime(id),
+                (true, _, None) => ModelListRefresh::Queried,
+                _ => ModelListRefresh::Failed(response.error.unwrap_or_default()),
+            },
+        )
     }
 
     pub(super) fn launch_codex_app_enhanced(&self) -> Result<serde_json::Value, String> {
@@ -881,6 +912,10 @@ pub(super) struct RequestLogDetail {
     pub(super) summary: RequestLogItem,
     #[serde(default)]
     pub(super) client_id: Option<String>,
+    #[serde(default)]
+    pub(super) client_model_id: Option<String>,
+    #[serde(default)]
+    pub(super) upstream_model_id: Option<String>,
     pub(super) request_headers_json: Option<String>,
     pub(super) request_json: Option<String>,
     pub(super) upstream_request_headers_json: Option<String>,

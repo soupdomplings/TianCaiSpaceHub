@@ -277,22 +277,61 @@ pub(super) async fn uninstall_codex_app(State(state): State<SharedState>) -> imp
 pub(super) async fn refresh_codex_app_models(
     State(state): State<SharedState>,
 ) -> impl IntoResponse {
-    let cache_removed = match codex_app_config::clear_codex_models_cache(None) {
-        Ok(removed) => removed,
-        Err(err) => {
-            state
-                .push_event(
-                    "warn",
-                    "codex_app_models_cache_clear_failed",
-                    err.to_string(),
-                )
-                .await;
-            false
-        }
-    };
+    refresh_models_in_home(&state, None).await
+}
 
+async fn refresh_models_in_home(
+    state: &SharedState,
+    home: Option<&std::path::Path>,
+) -> Json<serde_json::Value> {
+    let skipped = |cache_removed: bool, reason: &str, error: &str| {
+        Json(
+            json!({ "ok": true, "cacheRemoved": cache_removed, "modelListRefreshed": false,
+            "reason": reason, "error": error }),
+        )
+    };
+    let (backend_url, selected) = {
+        let config = state.config.lock().await;
+        (
+            config.remote_control_base_url(),
+            config.ai_gateway.codex_visible_models.clone(),
+        )
+    };
+    match codex_app_config::active_hub_has_cc_switch_catalog(home, &backend_url) {
+        Ok(true) => {
+            let message = "当前 Codex 仍使用 CC Switch 模型目录。请到接入设置更新 Hub 配置。";
+            state
+                .push_event("warn", "codex_app_models_cc_switch_catalog", message)
+                .await;
+            return skipped(false, "ccSwitchCatalog", message);
+        }
+        Err(err) => return skipped(false, "configReadFailed", &err.to_string()),
+        Ok(false) => {}
+    }
+    let cache_removed =
+        match codex_app_config::clear_codex_models_cache(home.map(ToOwned::to_owned)) {
+            Ok(removed) => removed,
+            Err(err) => {
+                state
+                    .push_event(
+                        "warn",
+                        "codex_app_models_cache_clear_failed",
+                        err.to_string(),
+                    )
+                    .await;
+                return skipped(false, "cacheClearFailed", &err.to_string());
+            }
+        };
+
+    if !state.remote_control.inner.lock().await.connected {
+        return skipped(
+            cache_removed,
+            "disconnected",
+            "No Codex runtime is connected.",
+        );
+    }
     let model_list_result = remote_control_backend::model_list_for_client(
-        &state,
+        state,
         remote_control_backend::default_remote_client_key(),
         true,
         Some(200),
@@ -301,11 +340,14 @@ pub(super) async fn refresh_codex_app_models(
 
     match model_list_result {
         Ok(value) => {
-            let count = value
-                .get("data")
-                .and_then(|value| value.as_array())
-                .map(Vec::len)
-                .unwrap_or(0);
+            let Some(models) = value.get("data").and_then(|value| value.as_array()) else {
+                return skipped(
+                    cache_removed,
+                    "invalidModelList",
+                    "Codex did not return a model list.",
+                );
+            };
+            let count = models.len();
             state
                 .push_event(
                     "info",
@@ -314,7 +356,8 @@ pub(super) async fn refresh_codex_app_models(
                 )
                 .await;
             Json(
-                json!({ "ok": true, "cacheRemoved": cache_removed, "modelListRefreshed": true, "count": count }),
+                json!({ "ok": true, "cacheRemoved": cache_removed, "modelListRefreshed": true,
+                "count": count, "missingModel": first_missing_model(&selected, models, &value["nextCursor"]) }),
             )
         }
         Err(err) => {
@@ -325,10 +368,115 @@ pub(super) async fn refresh_codex_app_models(
                     format!("cache_removed={cache_removed} err={err}"),
                 )
                 .await;
-            Json(
-                json!({ "ok": true, "cacheRemoved": cache_removed, "modelListRefreshed": false, "error": err.to_string() }),
-            )
+            skipped(cache_removed, "queryFailed", &err.to_string())
         }
+    }
+}
+
+// Compare only a complete, identifiable page. Include both protocol ID forms;
+// neither the runtime nor Hub can observe a desktop picker's rendered contents here.
+fn first_missing_model<'a>(
+    selected: &'a [String],
+    models: &[serde_json::Value],
+    cursor: &serde_json::Value,
+) -> Option<&'a str> {
+    use std::collections::HashSet;
+    if selected.is_empty() || models.is_empty() || !cursor.is_null() {
+        return None;
+    }
+    let mut known = HashSet::new();
+    for row in models {
+        let mut ids = ["id", "model"]
+            .into_iter()
+            .filter_map(|key| row[key].as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .peekable();
+        ids.peek()?;
+        known.extend(ids.map(str::to_ascii_lowercase));
+    }
+    selected
+        .iter()
+        .find(|id| !known.contains(&id.to_ascii_lowercase()))
+        .map(String::as_str)
+}
+
+#[cfg(test)]
+mod refresh_tests {
+    use super::*;
+
+    #[test]
+    fn runtime_missing_models_require_a_complete_identifiable_page() {
+        let selected = vec!["first".into(), "second".into()];
+        let rows = [json!({"id":"opaque", "model":"FIRST"})];
+        assert_eq!(
+            first_missing_model(&selected, &rows, &json!(null)),
+            Some("second")
+        );
+        assert_eq!(first_missing_model(&selected, &rows, &json!("next")), None);
+        assert_eq!(
+            first_missing_model(
+                &selected,
+                &[rows[0].clone(), json!({"displayName":"Second"})],
+                &json!(null)
+            ),
+            None
+        );
+        assert_eq!(
+            first_missing_model(
+                &selected,
+                &[rows[0].clone(), json!({"id":"second"})],
+                &json!(null)
+            ),
+            None
+        );
+        assert_eq!(first_missing_model(&selected, &[], &json!(null)), None);
+    }
+
+    #[tokio::test]
+    async fn cc_switch_refresh_requires_explicit_setup_and_leaves_third_party_files_intact() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let config = crate::config::AppConfig {
+            bind: "127.0.0.1:3847".into(),
+            state_path: home.join("state.json"),
+            ..Default::default()
+        };
+        let state = crate::app_state::AppState::new(home.join("hub.toml"), config, None, None);
+        let raw = r#"model_provider = "ai-gateway"
+model_catalog_json = "cc-switch-model-catalog.json"
+[model_providers.ai-gateway]
+name = "ai-gateway"
+base_url = "http://127.0.0.1:3847/ai-gateway/v1"
+wire_api = "responses"
+requires_openai_auth = false
+http_headers = { x-openai-actor-authorization = "codexhub-local" }
+"#;
+        let config_file = home.join("config.toml");
+        let catalog = home.join("cc-switch-model-catalog.json");
+        let cache = home.join("models_cache.json");
+        std::fs::write(&config_file, raw).unwrap();
+        std::fs::write(&catalog, "external list").unwrap();
+        std::fs::write(&cache, "old cache").unwrap();
+        let Json(result) = refresh_models_in_home(&state, Some(home)).await;
+        assert_eq!(result["reason"], "ccSwitchCatalog");
+        assert_eq!(result["modelListRefreshed"], false);
+        assert_eq!(std::fs::read_to_string(&config_file).unwrap(), raw);
+        assert!(cache.exists());
+
+        std::fs::write(
+            &config_file,
+            raw.lines()
+                .filter(|line| !line.starts_with("model_catalog_json"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+        .unwrap();
+        let Json(result) = refresh_models_in_home(&state, Some(home)).await;
+        assert_eq!(result["reason"], "disconnected");
+        assert_eq!(result["cacheRemoved"], true);
+        assert!(!cache.exists());
+        assert_eq!(std::fs::read_to_string(catalog).unwrap(), "external list");
     }
 }
 

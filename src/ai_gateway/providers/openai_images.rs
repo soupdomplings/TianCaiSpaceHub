@@ -881,7 +881,7 @@ mod tests {
         let store = RequestLogStore::new(db_path.clone());
         let record = RequestLogRecord {
             request_id: "image-log-test".to_string(),
-            model_id: "gpt-image-2".to_string(),
+            model: "gpt-image-2".into(),
             stream: false,
             channel: "image-provider".to_string(),
             provider_type: "image_generation".to_string(),

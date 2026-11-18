@@ -41,10 +41,43 @@ pub struct LogUsage {
     pub write_cache_1h_tokens: Option<i64>,
 }
 
+/// The list and its SQL filters share one display ID. Only a routed WorkBuddy
+/// request has additional identities, captured together at insert time.
+#[derive(Debug, Clone)]
+pub struct RequestLogModel {
+    display: String,
+    client: Option<String>,
+    upstream: Option<String>,
+}
+
+impl From<&str> for RequestLogModel {
+    fn from(model: &str) -> Self {
+        Self {
+            display: model.into(),
+            client: None,
+            upstream: None,
+        }
+    }
+}
+
+impl RequestLogModel {
+    pub(super) fn workbuddy(client: &str, selected: Option<&str>, upstream: &str) -> Self {
+        let display = selected.unwrap_or(upstream);
+        if display == client && display == upstream {
+            return client.into();
+        }
+        Self {
+            display: display.into(),
+            client: Some(client.into()),
+            upstream: Some(upstream.into()),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct RequestLogRecord {
     pub request_id: String,
-    pub model_id: String,
+    pub model: RequestLogModel,
     pub stream: bool,
     pub channel: String,
     pub provider_type: String,
@@ -121,6 +154,10 @@ pub struct RequestLogDetail {
     pub summary: RequestLogEntry,
     #[serde(default)]
     pub client_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_model_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upstream_model_id: Option<String>,
     pub request_headers_json: Option<String>,
     pub request_json: Option<String>,
     pub upstream_request_headers_json: Option<String>,
@@ -708,12 +745,12 @@ fn insert_record_with_optional_id(
             ttft_ms, created_at_ms, error_message, request_headers_json, request_json,
             upstream_request_body_bytes, upstream_request_headers_json, upstream_request_json,
             upstream_response_sse, response_json,
-            write_cache_5m_tokens, write_cache_1h_tokens
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27)",
+            write_cache_5m_tokens, write_cache_1h_tokens, client_model_id, upstream_model_id
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29)",
         params![
             id,
             &record.request_id,
-            &record.model_id,
+            &record.model.display,
             record.stream as i64,
             &record.channel,
             &record.provider_type,
@@ -738,6 +775,8 @@ fn insert_record_with_optional_id(
             &record.response_json,
             record.usage.write_cache_5m_tokens,
             record.usage.write_cache_1h_tokens,
+            &record.model.client,
+            &record.model.upstream,
         ],
     )?;
     Ok(id.unwrap_or_else(|| conn.last_insert_rowid()))
@@ -975,13 +1014,15 @@ fn get_detail_with_conn(conn: &Connection, id: i64) -> rusqlite::Result<Option<R
             upstream_request_body_bytes, upstream_request_headers_json, upstream_request_json,
             upstream_response_sse, response_json,
             write_cache_5m_tokens, write_cache_1h_tokens, upstream_response_headers_json,
-            upstream_stream, client_id
+            upstream_stream, client_id, client_model_id, upstream_model_id
          FROM ai_gateway_request_logs
          WHERE id = ?1",
         params![id],
         |row| {
             Ok(RequestLogDetail {
                 client_id: row.get(30)?,
+                client_model_id: row.get(31)?,
+                upstream_model_id: row.get(32)?,
                 summary: RequestLogEntry {
                     id: row.get(0)?,
                     request_id: row.get(1)?,
@@ -1416,6 +1457,8 @@ fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
 
     add_text_column_if_missing(conn, "request_headers_json")?;
     add_text_column_if_missing(conn, "client_id")?;
+    add_text_column_if_missing(conn, "client_model_id")?;
+    add_text_column_if_missing(conn, "upstream_model_id")?;
     add_text_column_if_missing(conn, "client_entry")?;
     add_text_column_if_missing(conn, "route_id")?;
     add_integer_column_if_missing(conn, "upstream_request_body_bytes")?;
@@ -1605,7 +1648,7 @@ mod tests {
         let store = test_store(db_path);
         let record = RequestLogRecord {
             request_id: request_id.to_string(),
-            model_id: "deepseek-v4-flash".to_string(),
+            model: "deepseek-v4-flash".into(),
             stream: true,
             channel: "deepseek".to_string(),
             provider_type: "chat_completions".to_string(),
@@ -1827,6 +1870,20 @@ mod tests {
                 .unwrap();
         assert_eq!(value["x-request-id"], "retry-id");
         assert!(value.get("x-codex-turn-state").is_none());
+    }
+
+    #[test]
+    fn workbuddy_log_model_migration_keeps_unresolved_history() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        conn.execute_batch("ALTER TABLE ai_gateway_request_logs DROP COLUMN client_model_id;
+            ALTER TABLE ai_gateway_request_logs DROP COLUMN upstream_model_id;
+            INSERT INTO ai_gateway_request_logs(request_id,model_id,stream,channel,provider_type,status,created_at_ms)
+            VALUES ('old','tiancaispacehub-old',0,'workbuddy:old','openai_responses','completed',1);").unwrap();
+        init_schema(&conn).unwrap();
+        let old = get_detail_with_conn(&conn, 1).unwrap().unwrap();
+        assert_eq!(old.summary.model_id, "tiancaispacehub-old");
+        assert!(old.client_model_id.is_none() && old.upstream_model_id.is_none());
     }
 
     #[test]
@@ -2082,7 +2139,7 @@ mod tests {
         let store = test_store(&db_path);
         let record = RequestLogRecord {
             request_id: "req-store".to_string(),
-            model_id: "deepseek-v4-flash".to_string(),
+            model: "deepseek-v4-flash".into(),
             stream: false,
             channel: "deepseek".to_string(),
             provider_type: "chat_completions".to_string(),
@@ -2127,7 +2184,7 @@ mod tests {
         ));
         let record = RequestLogRecord {
             request_id: "req-1".to_string(),
-            model_id: "deepseek-v4-flash".to_string(),
+            model: "deepseek-v4-flash".into(),
             stream: true,
             channel: "deepseek".to_string(),
             provider_type: "chat_completions".to_string(),
@@ -2406,7 +2463,7 @@ mod tests {
         for (request_id, created_at_ms) in [("old", now - 5_000), ("recent", now)] {
             let record = RequestLogRecord {
                 request_id: request_id.to_string(),
-                model_id: "deepseek-v4-flash".to_string(),
+                model: "deepseek-v4-flash".into(),
                 stream: true,
                 channel: "deepseek".to_string(),
                 provider_type: "chat_completions".to_string(),
@@ -2493,7 +2550,7 @@ mod tests {
         let store = test_store(&db_path);
         let old_record = RequestLogRecord {
             request_id: "before-maintenance".to_string(),
-            model_id: "test-model".to_string(),
+            model: "test-model".into(),
             stream: true,
             channel: "test".to_string(),
             provider_type: "responses".to_string(),
@@ -2579,7 +2636,7 @@ mod tests {
         for request_id in ["req-1", "req-2"] {
             let record = RequestLogRecord {
                 request_id: request_id.to_string(),
-                model_id: "deepseek-v4-flash".to_string(),
+                model: "deepseek-v4-flash".into(),
                 stream: true,
                 channel: "deepseek".to_string(),
                 provider_type: "chat_completions".to_string(),
@@ -2615,7 +2672,7 @@ mod tests {
         ));
         let record = RequestLogRecord {
             request_id: "req-ttft".to_string(),
-            model_id: "deepseek-v4-flash".to_string(),
+            model: "deepseek-v4-flash".into(),
             stream: true,
             channel: "deepseek".to_string(),
             provider_type: "chat_completions".to_string(),

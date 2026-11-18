@@ -59,9 +59,20 @@ pub(super) fn show(parent: &Frame, text: GuiText, detail: &RequestLogDetail) {
 
     let root = BoxSizer::builder(Orientation::Vertical).build();
 
+    let model_ids = match (&detail.client_model_id, &detail.upstream_model_id) {
+        (Some(client), Some(upstream)) => match text.locale {
+            super::text::GuiLocale::ZhCn => {
+                format!("\n客户端请求模型：{client}　上游路由模型：{upstream}")
+            }
+            super::text::GuiLocale::EnUs => {
+                format!("\nClient request model: {client}    Upstream route model: {upstream}")
+            }
+        },
+        _ => String::new(),
+    };
     let summary = StaticText::builder(&panel)
         .with_label(&format!(
-            "来源：{}\n{}",
+            "来源：{}{model_ids}\n{}",
             detail
                 .client_id
                 .as_deref()

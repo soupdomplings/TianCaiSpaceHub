@@ -29,16 +29,12 @@ impl TurnLog {
         let context = config
             .request_logging_enabled
             .then(|| {
-                let envelope = handler::GatewayRequestEnvelope {
-                    model: request["model"].as_str()?.to_owned(),
-                    stream: true,
-                    prompt_cache_key: request["prompt_cache_key"].as_str().map(str::to_owned),
-                };
                 handler::insert_initial_log(
                     store,
                     context,
                     headers,
-                    &envelope,
+                    request["model"].as_str()?.into(),
+                    true,
                     Some(provider),
                     request,
                     Instant::now(),

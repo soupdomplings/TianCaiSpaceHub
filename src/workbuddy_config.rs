@@ -367,7 +367,7 @@ fn write_file_atomically(path: &Path, contents: &[u8]) -> Result<()> {
 /// A configured source provider remains authoritative for the cache namespace;
 /// Anthropic uses it internally but never sends an OpenAI prompt_cache_key.
 pub fn configured_cache_key(model: &str) -> Option<String> {
-    configured_request_defaults_at(&config_path(), None, model).1
+    configured_request_defaults_at(&config_path(), None, model).cache_key
 }
 
 fn model_cache_key(configured: &WorkBuddyModelConfig) -> Option<String> {
@@ -394,7 +394,7 @@ fn model_cache_key(configured: &WorkBuddyModelConfig) -> Option<String> {
 /// An explicit effort in the request always wins, so changing effort in
 /// WorkBuddy continues to select the corresponding upstream value.
 pub fn configured_default_reasoning_effort(model: &str) -> Option<String> {
-    configured_request_defaults_at(&config_path(), None, model).0
+    configured_request_defaults_at(&config_path(), None, model).effort
 }
 
 fn model_default_effort(configured: &WorkBuddyModelConfig) -> Option<String> {
@@ -971,13 +971,21 @@ pub fn load_selected(config: &AppConfig, selected: Option<&str>) -> Result<WorkB
     status_from_raw(&path, read_optional(&path)?.as_deref(), config, selected)
 }
 
-/// Resolve the exact dedicated entry once; identical names in other entries
-/// must never supply its reasoning or cache defaults.
+#[derive(Debug, Default, PartialEq)]
+pub struct WorkBuddyRequestDefaults {
+    pub effort: Option<String>,
+    pub cache_key: Option<String>,
+    /// Explicit native providerModel of the verified entry; never a serde default.
+    pub selected_model: Option<String>,
+}
+
+/// Resolve the exact dedicated entry once; another entry with the same model
+/// must never supply its display name, reasoning or cache defaults.
 pub fn configured_request_defaults(
     gateway: &crate::ai_gateway::config::AiGatewayConfig,
     entry_id: Option<&str>,
     model: &str,
-) -> (Option<String>, Option<String>) {
+) -> WorkBuddyRequestDefaults {
     configured_gateway_request_defaults_at(&config_path(), gateway, entry_id, model)
 }
 
@@ -986,9 +994,9 @@ fn configured_gateway_request_defaults_at(
     gateway: &crate::ai_gateway::config::AiGatewayConfig,
     entry_id: Option<&str>,
     model: &str,
-) -> (Option<String>, Option<String>) {
+) -> WorkBuddyRequestDefaults {
     let Some(name) = workbuddy_provider_name(entry_id.unwrap_or(WORKBUDDY_LEGACY_ENTRY_ID)) else {
-        return (None, None);
+        return Default::default();
     };
     let mut providers = gateway
         .providers
@@ -996,7 +1004,7 @@ fn configured_gateway_request_defaults_at(
         .filter(|provider| provider.name.eq_ignore_ascii_case(&name));
     let provider = providers.next();
     if providers.next().is_some() {
-        return (None, None);
+        return Default::default();
     }
     match provider {
         Some(provider) if provider.enabled => {
@@ -1005,7 +1013,7 @@ fn configured_gateway_request_defaults_at(
         // Legacy files and the old endpoint predate the dedicated provider.
         // Keep their direct field matching, without looking at another entry.
         None if entry_id.is_none() => configured_request_defaults_at(path, None, model),
-        _ => (None, None),
+        _ => Default::default(),
     }
 }
 
@@ -1013,7 +1021,7 @@ fn configured_request_defaults_at(
     path: &Path,
     entry_id: Option<&str>,
     model: &str,
-) -> (Option<String>, Option<String>) {
+) -> WorkBuddyRequestDefaults {
     configured_request_defaults_for_provider_at(path, entry_id, model, None)
 }
 
@@ -1022,7 +1030,7 @@ fn configured_request_defaults_for_provider_at(
     entry_id: Option<&str>,
     model: &str,
     provider: Option<&ProviderConfig>,
-) -> (Option<String>, Option<String>) {
+) -> WorkBuddyRequestDefaults {
     let result = (|| -> Result<_> {
         let entry_id = entry_id.unwrap_or(WORKBUDDY_LEGACY_ENTRY_ID);
         ensure!(
@@ -1035,9 +1043,9 @@ fn configured_request_defaults_for_provider_at(
         let index = positions
             .get(entry_id)
             .ok_or_else(|| anyhow!("missing WorkBuddy entry"))?;
-        let configured: WorkBuddyModelConfig =
-            serde_json::from_value(document.rows[*index].clone())?;
-        if let Some(provider) = provider {
+        let row = &document.rows[*index];
+        let configured: WorkBuddyModelConfig = serde_json::from_value(row.clone())?;
+        let selected_model = if let Some(provider) = provider {
             let name = workbuddy_provider_name(entry_id)
                 .ok_or_else(|| anyhow!("invalid WorkBuddy identity"))?;
             ensure!(
@@ -1054,18 +1062,26 @@ fn configured_request_defaults_for_provider_at(
                 requested.eq_ignore_ascii_case(target),
                 "WorkBuddy model does not match selected entry"
             );
+            // Use only a field present on disk and resolving to this exact
+            // upstream ID; the typed config has a historical GPT default.
+            row.get("providerModel")
+                .and_then(Value::as_str)
+                .filter(|id| !id.trim().is_empty() && requested == target)
+                .map(str::to_owned)
         } else {
             ensure!(
                 configured_model_matches(&configured, model),
                 "WorkBuddy model does not match selected entry"
             );
-        }
-        Ok((
-            model_default_effort(&configured),
-            model_cache_key(&configured),
-        ))
+            None
+        };
+        Ok(WorkBuddyRequestDefaults {
+            effort: model_default_effort(&configured),
+            cache_key: model_cache_key(&configured),
+            selected_model,
+        })
     })();
-    result.unwrap_or((None, None))
+    result.unwrap_or_default()
 }
 
 fn merge_object_fields(target: &mut Value, update: Value) {
@@ -2017,18 +2033,42 @@ mod tests {
         assert_eq!(updated[1], rows[1]);
         assert_eq!(
             configured_request_defaults_at(&path, Some(&id), "friendly")
-                .0
+                .effort
                 .as_deref(),
             Some("xhigh")
         );
         assert_eq!(
             configured_request_defaults_at(&path, None, "friendly"),
-            (None, None)
+            WorkBuddyRequestDefaults::default()
         );
         assert_eq!(
             configured_request_defaults_at(&path, Some(&id), "different"),
-            (None, None)
+            WorkBuddyRequestDefaults::default()
         );
+    }
+
+    #[test]
+    fn workbuddy_log_model_does_not_invent_a_missing_native_selection() {
+        let (_dir, path, _, mut config) = multi_fixture();
+        let id = "slot";
+        let client = "tiancaispacehub-slot";
+        let target = WorkBuddyModelConfig::default().provider_model;
+        config.ai_gateway.providers = vec![ProviderConfig {
+            name: "workbuddy:slot".into(),
+            enabled: true,
+            models: vec![target.clone()],
+            model_aliases: [(client.into(), target)].into(),
+            ..Default::default()
+        }];
+        let row = json!({"id":client,"url":local_url(&config,id).unwrap()});
+        fs::write(&path, serde_json::to_vec(&vec![row]).unwrap()).unwrap();
+        let defaults =
+            configured_gateway_request_defaults_at(&path, &config.ai_gateway, Some(id), client);
+        assert!(
+            defaults.effort.is_some(),
+            "old reasoning defaults remain available"
+        );
+        assert!(defaults.selected_model.is_none());
     }
 
     #[test]
@@ -2058,13 +2098,17 @@ mod tests {
                         Some(id),
                         &model
                     ),
-                    (Some(effort.into()), Some(cache.into()))
+                    WorkBuddyRequestDefaults {
+                        effort: Some(effort.into()),
+                        cache_key: Some(cache.into()),
+                        selected_model: Some("friendly".into())
+                    }
                 );
             }
         }
         assert_eq!(
             configured_gateway_request_defaults_at(&path, &config.ai_gateway, None, "same-model"),
-            (None, None)
+            WorkBuddyRequestDefaults::default()
         );
         assert_eq!(
             configured_gateway_request_defaults_at(
@@ -2073,7 +2117,7 @@ mod tests {
                 Some("missing"),
                 "same-model"
             ),
-            (None, None)
+            WorkBuddyRequestDefaults::default()
         );
         assert_eq!(
             configured_gateway_request_defaults_at(
@@ -2082,7 +2126,7 @@ mod tests {
                 Some(&first_id),
                 "unmapped"
             ),
-            (None, None)
+            WorkBuddyRequestDefaults::default()
         );
 
         let position = provider_position(&config, &first_id).unwrap().unwrap();
@@ -2094,7 +2138,7 @@ mod tests {
                 "same-model",
                 Some(&config.ai_gateway.providers[other_position])
             ),
-            (None, None)
+            WorkBuddyRequestDefaults::default()
         );
         let provider = config.ai_gateway.providers[position].clone();
         config.ai_gateway.providers[position]
@@ -2107,7 +2151,7 @@ mod tests {
                 Some(&first_id),
                 "same-model"
             ),
-            (None, None)
+            WorkBuddyRequestDefaults::default()
         );
         config.ai_gateway.providers[position] = provider.clone();
         config.ai_gateway.providers[position].enabled = false;
@@ -2118,7 +2162,7 @@ mod tests {
                 Some(&first_id),
                 "friendly"
             ),
-            (None, None)
+            WorkBuddyRequestDefaults::default()
         );
         config.ai_gateway.providers[position] = provider.clone();
         config.ai_gateway.providers.push(provider);
@@ -2129,7 +2173,7 @@ mod tests {
                 Some(&first_id),
                 "same-model"
             ),
-            (None, None)
+            WorkBuddyRequestDefaults::default()
         );
     }
 
@@ -2141,7 +2185,11 @@ mod tests {
         let mut request = save_request(&path, &config, Some("legacy"), "source-a");
         request.model.upstream_default_reasoning_effort = "xhigh".into();
         save_entry_at(&path, &request, &mut config, &hub_path).unwrap();
-        let expected = (Some("xhigh".into()), Some("workbuddy:source-a".into()));
+        let expected = WorkBuddyRequestDefaults {
+            effort: Some("xhigh".into()),
+            cache_key: Some("workbuddy:source-a".into()),
+            selected_model: Some("friendly".into()),
+        };
         for model in ["old-visible-id", "friendly", "same-model"] {
             assert_eq!(
                 configured_gateway_request_defaults_at(&path, &config.ai_gateway, None, model),
@@ -2156,13 +2204,17 @@ mod tests {
         );
         let position = provider_position(&config, "legacy").unwrap().unwrap();
         config.ai_gateway.providers.remove(position);
+        let expected = WorkBuddyRequestDefaults {
+            selected_model: None,
+            ..expected
+        };
         assert_eq!(
             configured_gateway_request_defaults_at(&path, &config.ai_gateway, None, "friendly"),
             expected
         );
         assert_eq!(
             configured_gateway_request_defaults_at(&path, &config.ai_gateway, None, "same-model"),
-            (None, None)
+            WorkBuddyRequestDefaults::default()
         );
     }
 

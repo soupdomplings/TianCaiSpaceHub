@@ -1,5 +1,7 @@
 # TianCaiSpaceHub 文档总入口
 
+2026-11-18 · [V1.0.38 Windows 测试与交付](releases/v1.0.38.md)：从 CC Switch 切回 Hub 后的模型菜单修复、ChatGPT 从渠道选模型，以及 WorkBuddy 请求日志的模型名称。
+
 2026-11-18 · [V1.0.37 Windows 测试与交付](releases/v1.0.37.md)：仅删除 Codex 配置后的原项目、分组会话与已有历史位置恢复。
 
 2026-11-18 · [V1.0.36 Windows 测试与交付](releases/v1.0.36.md)：升级后核对聊天模型、按渠道选路、同源分批导入及默认生图模型。

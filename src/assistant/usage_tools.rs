@@ -404,7 +404,7 @@ mod tests {
         for i in 0..27 {
             let record = RequestLogRecord {
                 request_id: format!("request-{i}"),
-                model_id: "local-model".into(),
+                model: "local-model".into(),
                 stream: true,
                 channel: "local-channel".into(),
                 provider_type: "test".into(),

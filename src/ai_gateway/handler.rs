@@ -29,7 +29,7 @@ use super::providers::{
     anthropic_messages, deepseek_chat, openai_alpha_search, openai_images, openai_responses,
 };
 use super::request_log::{
-    self, RequestLogContext, RequestLogRecord, RequestLogStore, RequestLogUpdate,
+    self, RequestLogContext, RequestLogModel, RequestLogRecord, RequestLogStore, RequestLogUpdate,
 };
 use super::responses_lite_tools::prepare_for_provider;
 use super::router::{
@@ -368,7 +368,8 @@ pub async fn handle_responses_compact(
                             &state.ai_gateway_request_logs,
                             &ctx,
                             &headers,
-                            &envelope,
+                            envelope.model.as_str().into(),
+                            envelope.stream,
                             None,
                             &raw_body,
                             started_at,
@@ -390,7 +391,8 @@ pub async fn handle_responses_compact(
                 &state.ai_gateway_request_logs,
                 &ctx,
                 &headers,
-                &envelope,
+                envelope.model.as_str().into(),
+                envelope.stream,
                 Some(provider),
                 &raw_body,
                 started_at,
@@ -584,7 +586,8 @@ pub(crate) async fn handle_responses_pinned(
                             &state.ai_gateway_request_logs,
                             &ctx,
                             &headers,
-                            &envelope,
+                            envelope.model.as_str().into(),
+                            envelope.stream,
                             None,
                             original.as_ref().unwrap_or(&raw_body),
                             started_at,
@@ -607,7 +610,8 @@ pub(crate) async fn handle_responses_pinned(
                 &state.ai_gateway_request_logs,
                 &ctx,
                 &headers,
-                &envelope,
+                envelope.model.as_str().into(),
+                envelope.stream,
                 Some(provider),
                 original.as_ref().unwrap_or(&raw_body),
                 started_at,
@@ -835,6 +839,18 @@ impl ChatClient {
             Self::Desktop(client) => client.key(),
         }
     }
+
+    fn routed_log_model(
+        self,
+        client: &str,
+        selected: Option<&str>,
+        upstream: &str,
+    ) -> RequestLogModel {
+        match self {
+            Self::WorkBuddy => RequestLogModel::workbuddy(client, selected, upstream),
+            _ => client.into(),
+        }
+    }
 }
 
 pub(super) async fn handle_client_chat_completions(
@@ -885,7 +901,7 @@ pub(super) async fn handle_client_chat_completions(
         Ok(model) => model,
         Err(error) => return GatewayError::bad_request(error).into_response(),
     };
-    let (default_effort, configured_cache_key) = if chat_client == ChatClient::WorkBuddy {
+    let defaults = if chat_client == ChatClient::WorkBuddy {
         let defaults_gateway = gw_config.clone();
         let defaults_entry = client_entry.clone();
         let defaults_model = model.clone();
@@ -905,9 +921,9 @@ pub(super) async fn handle_client_chat_completions(
             }
         }
     } else {
-        (None, None)
+        Default::default()
     };
-    workbuddy::apply_default_reasoning_effort(&mut raw_chat, default_effort.as_deref());
+    workbuddy::apply_default_reasoning_effort(&mut raw_chat, defaults.effort.as_deref());
     let stream = workbuddy::chat_request_stream(&raw_chat);
     let cache_key = workbuddy::chat_request_cache_key(&raw_chat)
         .or_else(|| {
@@ -922,14 +938,9 @@ pub(super) async fn handle_client_chat_completions(
                 .filter(|value| !value.is_empty())
                 .map(str::to_string)
         })
-        .or(configured_cache_key)
+        .or(defaults.cache_key)
         .unwrap_or_else(|| format!("{namespace}:{model}"));
     let ctx = GatewayContext::extract(&headers, Some(&cache_key)).with_state(&state);
-    let envelope = GatewayRequestEnvelope {
-        model: model.clone(),
-        stream,
-        prompt_cache_key: Some(cache_key.clone()),
-    };
     let routing_session_id = ctx
         .session_id
         .as_deref()
@@ -995,7 +1006,8 @@ pub(super) async fn handle_client_chat_completions(
                             &state.ai_gateway_request_logs,
                             &ctx,
                             &headers,
-                            &envelope,
+                            model.as_str().into(),
+                            stream,
                             None,
                             &raw_chat,
                             started_at,
@@ -1011,13 +1023,22 @@ pub(super) async fn handle_client_chat_completions(
     };
     ctx.bind_activity(&model, provider, &route_id);
     let route_ms = request_log::elapsed_ms(route_started);
+    let upstream_model = provider
+        .resolve_upstream_model(&model)
+        .unwrap_or(model.as_str())
+        .to_string();
     let log_context = request_logging_enabled
         .then(|| {
             insert_initial_log(
                 &state.ai_gateway_request_logs,
                 &ctx,
                 &headers,
-                &envelope,
+                chat_client.routed_log_model(
+                    &model,
+                    defaults.selected_model.as_deref(),
+                    &upstream_model,
+                ),
+                stream,
                 Some(provider),
                 &raw_chat,
                 started_at,
@@ -1028,10 +1049,6 @@ pub(super) async fn handle_client_chat_completions(
         .flatten();
 
     crate::desktop::models::apply_request_defaults(&mut raw_chat, provider, false);
-    let upstream_model = provider
-        .resolve_upstream_model(&model)
-        .unwrap_or(model.as_str())
-        .to_string();
     info!(
         model = %model,
         upstream_model = %upstream_model,
@@ -1233,8 +1250,7 @@ pub(super) async fn handle_client_chat_completions(
                     return gateway_error.into_response();
                 }
             };
-            let converted = match client_responses_to_chat(&value, &envelope.model, &provider.name)
-            {
+            let converted = match client_responses_to_chat(&value, &model, &provider.name) {
                 Ok(converted) => converted,
                 Err(error) => {
                     update_failed_log(&log_context, &error.message);
@@ -1694,7 +1710,8 @@ pub(super) fn insert_initial_log(
     store: &RequestLogStore,
     ctx: &GatewayContext,
     headers: &HeaderMap,
-    request: &GatewayRequestEnvelope,
+    model: RequestLogModel,
+    stream: bool,
     provider: Option<&ProviderConfig>,
     raw_body: &serde_json::Value,
     started_at: Instant,
@@ -1703,8 +1720,8 @@ pub(super) fn insert_initial_log(
 ) -> Option<RequestLogContext> {
     let record = RequestLogRecord {
         request_id: ctx.request_id.clone(),
-        model_id: request.model.clone(),
-        stream: request.stream,
+        model,
+        stream,
         channel: provider
             .map(|provider| provider.name.clone())
             .unwrap_or_else(|| "-".to_string()),
@@ -1761,7 +1778,7 @@ fn insert_initial_image_log(
 ) -> Option<RequestLogContext> {
     let record = RequestLogRecord {
         request_id: ctx.request_id.clone(),
-        model_id: model.to_string(),
+        model: model.into(),
         stream: false,
         channel: provider
             .map(|provider| provider.name.clone())
@@ -1816,7 +1833,7 @@ fn insert_initial_alpha_search_log(
 ) -> Option<RequestLogContext> {
     let record = RequestLogRecord {
         request_id: ctx.request_id.clone(),
-        model_id: model.to_string(),
+        model: model.into(),
         stream: false,
         channel: provider
             .map(|provider| provider.name.clone())
@@ -1978,6 +1995,85 @@ mod tests {
 
         assert_eq!(error.status, axum::http::StatusCode::BAD_REQUEST);
         assert!(error.message.contains("unsupported Content-Encoding"));
+    }
+
+    #[test]
+    fn workbuddy_log_model_names_match_list_filter_and_routed_detail() {
+        use super::{ChatClient, insert_initial_log};
+        use crate::ai_gateway::request_log::desktop::LogFilter;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = RequestLogStore::new(dir.path().join("fixture.sqlite"));
+        let headers = HeaderMap::new();
+        let ctx = GatewayContext::extract(&headers, None);
+        let client = "tiancaispacehub-slot";
+        let workbuddy = ProviderConfig {
+            name: "workbuddy:slot".into(),
+            ..Default::default()
+        };
+        let other = ProviderConfig {
+            name: "gmclaw:slot".into(),
+            ..Default::default()
+        };
+        let raw = json!({"model":client,"messages":[]});
+        let write = |model, provider| {
+            insert_initial_log(
+                &store,
+                &ctx,
+                &headers,
+                model,
+                false,
+                provider,
+                &raw,
+                Instant::now(),
+                100,
+                false,
+            )
+            .unwrap()
+            .log_id
+        };
+        let named = write(
+            ChatClient::WorkBuddy.routed_log_model(client, Some("my-gpt"), "gpt-a"),
+            Some(&workbuddy),
+        );
+        let next = write(
+            ChatClient::WorkBuddy.routed_log_model(client, None, "gpt-b"),
+            Some(&workbuddy),
+        );
+        let unrelated = write(
+            ChatClient::GmClaw.routed_log_model(client, Some("my-gpt"), "gpt-c"),
+            Some(&other),
+        );
+        let no_route = write(client.into(), None);
+
+        let filter = LogFilter {
+            model: Some("my-gpt".into()),
+            from: 1,
+            to: 200,
+            ..Default::default()
+        };
+        let list = store.desktop_page(&filter).unwrap();
+        assert_eq!(list["total"], 1);
+        assert_eq!(list["rows"][0]["id"], named);
+        assert_eq!(list["rows"][0]["modelId"], "my-gpt");
+        let usage = store.desktop_usage(&filter).unwrap();
+        assert_eq!(usage["breakdown"]["models"][0]["name"], "my-gpt");
+        assert_eq!(
+            usage["filters"]["models"],
+            json!(["gpt-b", "my-gpt", client])
+        );
+        let detail = |id| store.get_detail(id).unwrap().unwrap();
+        let d = detail(named);
+        assert_eq!(d.summary.model_id, "my-gpt");
+        assert_eq!(d.client_model_id.as_deref(), Some(client));
+        assert_eq!(d.upstream_model_id.as_deref(), Some("gpt-a"));
+        assert!(d.request_json.is_none());
+        assert_eq!(detail(next).summary.model_id, "gpt-b");
+        for id in [unrelated, no_route] {
+            let d = detail(id);
+            assert_eq!(d.summary.model_id, client);
+            assert!(d.client_model_id.is_none() && d.upstream_model_id.is_none());
+        }
     }
 
     #[test]

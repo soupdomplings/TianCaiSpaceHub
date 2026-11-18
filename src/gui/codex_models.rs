@@ -263,7 +263,7 @@ impl ChannelModels {
     fn update_summary(&self) {
         if self.groups.borrow().is_empty() {
             self.summary
-                .set_label("暂无已启用的模型渠道，可手动填写模型 ID。");
+                .set_label("请先在「模型与渠道」中添加并启用厂商渠道。");
             return;
         }
         self.summary.set_label(&format!(
