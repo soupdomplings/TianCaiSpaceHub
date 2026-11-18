@@ -1,5 +1,7 @@
 # TianCaiSpaceHub 文档总入口
 
+2026-11-18 · [V1.0.36 Windows 测试与交付](releases/v1.0.36.md)：升级后核对聊天模型、按渠道选路、同源分批导入及默认生图模型。
+
 2026-11-17 **V1.0.35 Dumpling-MCP 诊断测试交付**：集成具体失败分类、网络设置修正及默认阶段日志，Windows GUI／release、50 项定向回归和唯一 MSI `180134` 的版本／升级／5 项载荷核验通过。产品源码本地提交 `6e75ed4`，推送遇网络失败。实现见[Dumpling 专题](customizations/nvwa-mcp.md)，包身份与复现步骤见[V35 交付](releases/v1.0.35.md)。用户现场及 macOS 待验，不触发 Actions、标签或 Release；V34 旧包身份保持。
 
 2026-11-17 **V1.0.34 源码内置组网**：按用户要求将 EasyTier 固定核心源码与用户态网络依赖纳入仓库，由 Hub 同进程启动和停止；移除组件准备／下载／安装 UI，默认关闭，启用后直接创建或加入网络。网络库／完整 GUI、91 项不同定向回归和 Windows 依赖树检查通过，release 及唯一 MSI `095734` 的版本／升级／5 项载荷核验完成，源码 `f6c4b35` 已推送。来源及二开入口见[组网](customizations/remote-network.md)，包身份及双机／macOS 待验范围见[V34](releases/v1.0.34.md)；未触发 Actions／标签／Release。
