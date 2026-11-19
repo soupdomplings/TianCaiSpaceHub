@@ -6505,7 +6505,25 @@ fn ensure_service_ready_for_action(
     false
 }
 
+fn update_service_badge(service: &Button, online: bool, starting: bool) {
+    let t = theme::theme();
+    let (label, description, color) = if online {
+        ("本机服务", "本机服务 · 运行中", t.ok)
+    } else if starting {
+        ("本机服务 · 启动中", "本机服务 · 启动中", t.ink_muted)
+    } else {
+        ("本机服务 · 未运行", "本机服务 · 未运行", t.ink_muted)
+    };
+    if service.get_label() != label {
+        service.set_name(description);
+        service.set_tooltip(description);
+        service.set_foreground_color(color);
+        service.set_label(label);
+    }
+}
+
 fn show_dashboard_starting(handles: &UiHandles) {
+    update_service_badge(&handles.shell.service, false, true);
     let text = handles.text;
     set_status_panel(
         &handles.service_status,
@@ -6563,6 +6581,7 @@ fn show_dashboard_starting(handles: &UiHandles) {
 }
 
 fn show_dashboard_startup_error(handles: &UiHandles, detail: &str) {
+    update_service_badge(&handles.shell.service, false, false);
     set_status_panel(
         &handles.service_status,
         handles.text.startup_failed(),
@@ -6599,21 +6618,11 @@ fn show_dashboard_startup_error(handles: &UiHandles, detail: &str) {
 
 fn update_dashboard(handles: &UiHandles, snapshot: &DashboardSnapshot, daemon_starting: bool) {
     let text = handles.text;
-    handles.shell.service.set_label(if snapshot.service_online {
-        "本机服务 · 运行中"
-    } else if daemon_starting {
-        "本机服务 · 启动中"
-    } else {
-        "本机服务 · 未运行"
-    });
-    handles
-        .shell
-        .service
-        .set_foreground_color(if snapshot.service_online {
-            theme::theme().ok
-        } else {
-            theme::theme().ink_muted
-        });
+    update_service_badge(
+        &handles.shell.service,
+        snapshot.service_online,
+        daemon_starting,
+    );
     refresh_service_settings_button(handles, snapshot);
     if !snapshot.service_online {
         if daemon_starting {

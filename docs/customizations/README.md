@@ -1,5 +1,15 @@
 # 二开功能总表
 
+2026-11-19 **V1.0.44 · 桌面导航精简**：天才小分队归入工作空间、请求日志归入共用能力；顶栏移除前进、返回、快捷分组与问号。概览入口与服务状态见[视觉专题](../development/desktop-visual-system.md)及[本地交付](../releases/v1.0.44.md)。
+
+2026-11-19 **V1.0.43 · 桌面工作空间**：新[原生导航与概览](../development/desktop-visual-system.md)、[模型和会话多选](codex-repair-center.md)、[操作提示](../development/operation-feedback.md)及[搭档浮窗](genius-buddy.md)纳入同一份 [Windows 测试交付](../releases/v1.0.43.md)。
+
+2026-11-19 **TC-006／007 · V1.0.42**：[检查与修复中心](codex-repair-center.md)把项目勾选操作与[撤销修复](codex-partial-project-recovery.md)分开；撤销展示同一批次的项目与会话影响。[Windows 验收](../releases/v1.0.42.md)。
+
+2026-11-19 **TC-006／007 · V1.0.41**：[项目恢复](codex-partial-project-recovery.md)在手动重建的同目录项目下，支持逐条选回标记为“无项目”的当前用户会话。默认不选，支持撤销。[Windows 验收](../releases/v1.0.41.md)。
+
+2026-11-19 **TC-006／007 · V1.0.40**：[部分侧栏项目恢复](codex-partial-project-recovery.md)覆盖仅找回部分卡片、尚未手动移入任何会话的情况。按目录找回有证据的缺失项目；未记录账号的旧会话默认不动。[Windows 测试与交付](../releases/v1.0.40.md)。
+
 2026-11-19 **TC-006／007 · V1.0.39**：[Codex 历史恢复](codex-history-recovery.md)覆盖项目清单已被用户手动重建的情况，按已核实项目根目录补回未归属会话；有手动归入的样本时可重连同根不可见旧项目，保留现有手动归属及其他账户数据。Windows 本地测试与验收见 [V1.0.39](../releases/v1.0.39.md)。
 
 2026-11-18 **TC-002／006／007 · V1.0.38**：[ChatGPT 模型页](../dynamic-codex-models.zh-CN.md)改为从渠道勾选模型，保留旧清单；初始化处理 CC Switch 的已知目录引用。[请求日志](../ai-gateway-request-log-detail-patch.zh-CN.md)区分 WorkBuddy 客户端条目和模型。[交付与验收](../releases/v1.0.38.md)。

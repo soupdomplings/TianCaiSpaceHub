@@ -1,3 +1,7 @@
+mod rail;
+mod strip;
+pub(super) use strip::SlidingStrip;
+
 use super::{
     controls::{Button, ButtonKind},
     theme,
@@ -115,15 +119,12 @@ pub(super) struct Shell {
     pub assistant_launcher: Button,
     pub assistant_host: Panel,
     assistant_footer: Panel,
-    title: StaticText,
-    back: Button,
-    secondary_origin: Rc<Cell<PageId>>,
+    rail: rail::Rail,
     pub status: StaticText,
     breadcrumb: StaticText,
     sidebar: ScrolledWindow,
     pages: Rc<RefCell<Vec<PageId>>>,
     current: Rc<Cell<PageId>>,
-    buttons: Rc<RefCell<Vec<(PageId, Button)>>>,
     changed: Rc<RefCell<Option<Changed>>>,
     source_focus: Rc<RefCell<Option<String>>>,
 }
@@ -157,94 +158,8 @@ impl Shell {
         sidebar.set_scroll_rate(0, sidebar.from_dip(10));
         sidebar.show_scroll_indicators(false);
         sidebar.set_background_color(t.bg_card);
-        let side = BoxSizer::builder(Orientation::Vertical).build();
-        let mut buttons = Vec::new();
-        for id in [PageId::Overview, PageId::Squad, PageId::Assistant] {
-            let b = nav_button(&sidebar, id.title());
-            b.set_icon(match id {
-                PageId::Overview => Icon::Overview,
-                PageId::Assistant => Icon::Chat,
-                _ => Icon::Squad,
-            });
-            side.add(
-                &b,
-                0,
-                SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Bottom,
-                sidebar.from_dip(4),
-            );
-            buttons.push((id, b));
-        }
-        let label = StaticText::builder(&sidebar).with_label("客户端").build();
-        label.set_font(&theme::font(theme::TextRole::Caption));
-        label.set_foreground_color(t.ink_secondary);
-        side.add(
-            &label,
-            0,
-            SizerFlag::Expand
-                | SizerFlag::Left
-                | SizerFlag::Right
-                | SizerFlag::Top
-                | SizerFlag::Bottom,
-            sidebar.from_dip(12),
-        );
-        // The five supported destinations stay visible and stationary.
-        for id in ClientId::VISIBLE {
-            let b = nav_button(&sidebar, visual::client_short(id));
-            b.set_icon(Icon::client(id));
-            side.add(
-                &b,
-                0,
-                SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Bottom,
-                sidebar.from_dip(4),
-            );
-            buttons.push((PageId::Client(id), b));
-        }
-        let shared = StaticText::builder(&sidebar).with_label("共用能力").build();
-        shared.set_font(&theme::font(theme::TextRole::Caption));
-        shared.set_foreground_color(t.ink_secondary);
-        side.add(
-            &shared,
-            0,
-            SizerFlag::Left | SizerFlag::Top | SizerFlag::Bottom,
-            sidebar.from_dip(12),
-        );
-        for (id, icon) in [
-            (PageId::Sources, Icon::Model),
-            (PageId::Dumpling, Icon::Mcp),
-            (PageId::Chat, Icon::Chat),
-            (PageId::Remote, Icon::Hub),
-            (PageId::Logs, Icon::Logs),
-        ] {
-            let b = nav_button(&sidebar, id.title());
-            b.set_icon(icon);
-            side.add(
-                &b,
-                0,
-                SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Bottom,
-                sidebar.from_dip(4),
-            );
-            buttons.push((id, b));
-            if id == PageId::Dumpling {
-                // The resource controller applies the saved optional visibility.
-                b.hide();
-            }
-        }
-        sidebar.set_sizer(side, true);
+        let navigation = rail::Rail::new(sidebar);
         rail_column.add(&sidebar, 1, SizerFlag::Expand, 0);
-        for (id, icon) in [
-            (PageId::Settings, Icon::Settings),
-            (PageId::Help, Icon::Help),
-        ] {
-            let b = nav_button(&rail, id.title());
-            b.set_icon(icon);
-            rail_column.add(
-                &b,
-                0,
-                SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Bottom,
-                rail.from_dip(4),
-            );
-            buttons.push((id, b));
-        }
         let version = StaticText::builder(&rail)
             .with_label(&format!("TianCaiSpaceHub  {}", env!("CARGO_PKG_VERSION")))
             .build();
@@ -264,31 +179,30 @@ impl Shell {
         let bar = Panel::builder(&content).build();
         bar.set_background_color(t.bg_card);
         let top = BoxSizer::builder(Orientation::Horizontal).build();
-        let breadcrumb = StaticText::builder(&bar).with_label("工作台").build();
+        let breadcrumb = StaticText::builder(&bar)
+            .with_label("工作空间  /  概览")
+            .build();
+        breadcrumb.set_name("shell-page-path");
         breadcrumb.set_font(&theme::font(theme::TextRole::Caption));
         breadcrumb.set_foreground_color(t.ink_secondary);
         let service = Button::builder(&bar)
             .with_label("本机服务 · 读取中")
             .with_kind(ButtonKind::Ghost)
-            .with_size(Size::new(152, 30))
+            .with_size(Size::new(130, 30))
             .build();
         service.set_foreground_color(t.ink_secondary);
         let account = Button::builder(&bar)
             .with_label("登录账户")
             .with_icon(Icon::Squad)
             .with_kind(ButtonKind::Ghost)
-            .with_size(Size::new(184, 30))
+            .with_size(Size::new(149, 30))
             .build();
         account.set_name("squad-account-profile");
         account.set_tooltip("天才小分队账户、资料和余额");
         top.add(&breadcrumb, 1, SizerFlag::AlignCenterVertical, 0);
-        top.add(&service, 0, SizerFlag::AlignCenterVertical, 0);
-        top.add(
-            &account,
-            0,
-            SizerFlag::AlignCenterVertical | SizerFlag::Left,
-            bar.from_dip(8),
-        );
+        for button in [service, account] {
+            top.add(&button, 0, SizerFlag::AlignCenterVertical, 0);
+        }
         if integrated {
             frame.register_chrome_drag_region(&brand);
             frame.register_chrome_drag_region(&bar);
@@ -312,47 +226,17 @@ impl Shell {
         bar.set_min_size(visual::dip_size(&bar, -1, 44));
         bar.set_sizer(bs, true);
         column.add(&bar, 0, SizerFlag::Expand, 0);
-        let heading = BoxSizer::builder(Orientation::Horizontal).build();
-        let back = Button::builder(&content)
-            .with_icon(Icon::Back)
-            .with_kind(ButtonKind::Ghost)
-            .with_size(Size::new(34, 34))
-            .build();
-        back.set_name("back-to-parent");
-        back.set_tooltip("返回上一级");
-        back.hide();
-        heading.add(
-            &back,
-            0,
-            SizerFlag::AlignCenterVertical | SizerFlag::Right,
-            content.from_dip(8),
-        );
-        let title = StaticText::builder(&content).with_label("概览").build();
-        title.set_foreground_color(t.ink_primary);
-        title.set_font(&theme::font(theme::TextRole::PageTitle));
         let status = StaticText::builder(&content).with_label("").build();
         status.set_foreground_color(t.ink_secondary);
         status.set_font(&theme::font(theme::TextRole::Caption));
-        let help = Button::builder(&content)
-            .with_label("?")
-            .with_kind(ButtonKind::Ghost)
-            .with_size(Size::new(30, 30))
-            .build();
-        help.set_tooltip("本页使用说明");
-        heading.add(
-            &title,
+        status.hide();
+        column.add(
+            &status,
             0,
-            SizerFlag::AlignCenterVertical | SizerFlag::Right,
-            content.from_dip(20),
+            SizerFlag::Expand | SizerFlag::Left | SizerFlag::Top,
+            content.from_dip(12),
         );
-        heading.add(&status, 1, SizerFlag::AlignCenterVertical, 0);
-        heading.add(&help, 0, SizerFlag::AlignCenterVertical, 0);
-        column.add_sizer(
-            &heading,
-            0,
-            SizerFlag::Expand | SizerFlag::All,
-            content.from_dip(theme::PAGE_GUTTER),
-        );
+        column.add_spacer(content.from_dip(9));
         let book = SimpleBook::builder(&content).build();
         book.set_background_color(t.bg_app);
         column.add(
@@ -394,26 +278,17 @@ impl Shell {
             assistant_launcher,
             assistant_host: content,
             assistant_footer,
-            title,
-            back,
-            secondary_origin: Rc::new(Cell::new(PageId::Overview)),
+            rail: navigation,
             status,
             breadcrumb,
             sidebar,
             pages: Default::default(),
             current: Rc::new(Cell::new(PageId::Overview)),
-            buttons: Rc::new(RefCell::new(buttons)),
             changed: Default::default(),
             source_focus: Default::default(),
         };
-        for (id, b) in shell.buttons.borrow().iter() {
-            let (id, nav) = (*id, shell.clone());
-            b.on_click(move |_| nav.navigate(id));
-        }
         let nav = shell.clone();
-        back.on_click(move |_| nav.navigate(nav.secondary_origin.get()));
-        let nav = shell.clone();
-        help.on_click(move |_| super::show_info(&nav.panel, &help_text(nav.current())));
+        shell.rail.bind(Rc::new(move |id| nav.navigate(id)));
         shell.refresh_navigation();
         shell
     }
@@ -463,15 +338,12 @@ impl Shell {
         )
     }
     pub fn set_dumpling_visible(&self, visible: bool) {
-        if let Some((_, button)) = self
-            .buttons
-            .borrow()
-            .iter()
-            .find(|(id, _)| *id == PageId::Dumpling)
-        {
-            button.show(visible);
+        self.rail.set_dumpling(visible);
+        if !visible && self.current() == PageId::Dumpling {
+            self.navigate(PageId::Overview);
+        } else {
+            self.refresh_navigation();
         }
-        self.refresh_navigation();
     }
     pub fn navigate(&self, id: PageId) {
         let id = id.visible_destination();
@@ -483,34 +355,24 @@ impl Shell {
         let Some(index) = self.pages.borrow().iter().position(|v| *v == id) else {
             return;
         };
-        self.back.hide();
+        if id == PageId::Dumpling && !self.rail.dumpling() {
+            return;
+        }
         let previous = self.book.selection();
         self.book.change_selection(index);
         self.current.set(id);
-        self.title.set_label(id.title());
-        self.breadcrumb.set_label(match id {
-            PageId::Client(_) => "客户端",
-            PageId::Sources | PageId::Skills | PageId::Mcp | PageId::Chat | PageId::Logs => {
-                "共用能力"
-            }
-            PageId::Squad => "账户服务",
-            PageId::Dumpling | PageId::Assistant | PageId::Remote => "共用能力",
-            _ => "工作台",
-        });
+        self.breadcrumb
+            .set_label(&format!("{}  /  {}", rail::group_name(id), id.title()));
         self.status.set_label("");
+        self.status.show(matches!(id, PageId::Client(_)));
+        self.rail.select(id);
         self.refresh_navigation();
-        self.panel.layout();
         if let Some(callback) = self.changed.borrow().clone() {
             callback(id);
         }
         super::motion::page_changed(self.book, previous);
     }
     fn refresh_navigation(&self) {
-        let t = theme::theme();
-        for (id, button) in self.buttons.borrow().iter() {
-            nav_colour(button, *id == self.current.get());
-        }
-        self.title.set_foreground_color(t.ink_primary);
         self.sidebar.layout();
         self.sidebar.fit_inside();
         self.panel.layout();
@@ -535,60 +397,4 @@ mod visibility_tests {
         }
         assert_eq!(PageId::Assistant.visible_destination(), PageId::Assistant);
     }
-}
-
-fn nav_button(parent: &dyn WxWidget, label: &str) -> Button {
-    Button::builder(parent)
-        .with_label(label)
-        .with_kind(ButtonKind::Nav)
-        .with_size(Size::new(184, 36))
-        .build()
-}
-fn nav_colour(b: &Button, selected: bool) {
-    b.set_selected(selected);
-    b.set_foreground_color(theme::theme().ink_secondary);
-}
-fn help_text(page: PageId) -> String {
-    let text = match page {
-        PageId::Overview => {
-            "运行状态只展示打开或有请求的客户端；有进行中请求时连线流动。用量统计来自本机已记录的请求，输入已包含协议报告的缓存用量，不另列缓存或首字。站点余额和账单请到天才小分队查看。"
-        }
-        PageId::Client(ClientId::Codex) => {
-            "模型列表决定 ChatGPT / Codex 里显示哪些模型。渠道、地址和密钥在“模型与渠道”管理；请求时 Hub 按模型 ID 自动匹配已启用的渠道。"
-        }
-        PageId::Client(_) => {
-            "选择模型即可配置到当前客户端。复用其他客户端的模型会建立独立副本，各端可以分别调整。如需重开客户端会在操作结果中提示。天工本机协助、接入设置和历史维护在本页对应区域。"
-        }
-        PageId::Sources => {
-            "在这里设置厂商的账号或 API Key、地址和可用模型。ChatGPT / Codex 自动匹配已启用的渠道；使用独立配置的其他客户端可按需同步。"
-        }
-        PageId::Skills => {
-            "从本地目录、ZIP 或仓库导入 Skill。在卡片打开“管理客户端”，选择要使用的端后点击“应用更改”；返回会放弃未应用选择。只有成功的端显示使用中。未读取项目可查看原因及打开所在文件夹，原客户端文件不会因读取失败被删除。"
-        }
-        PageId::Mcp => {
-            "添加 MCP 可使用配置表单或 JSON，两种视图共用草稿。远程服务填写地址及认证；本地服务填写命令、参数和环境变量。选择客户端后真实配置，失败端可单独重试。Dumpling-MCP 先配置环境与认证，再接入客户端。"
-        }
-        PageId::Squad => {
-            "登录天才小分队后管理 API 密钥、站点用量及充值订阅；组织与扣费按账户实际权限显示。登录和付款由官网验证。退出账户不会删除已经导入的模型渠道。"
-        }
-        PageId::Assistant => {
-            "启用后检查共享的天才搭档 Server；需要安装时由你确认。登录天才小分队后使用管理员提供的模型，费用由管理员承担。右下角可继续本次对话，收起不会结束；停止会中断执行，清空会删除本次临时内容。真正退出 Hub 后统一清理。密钥通过本机表单输入，删除配置会集中确认一次。"
-        }
-        PageId::Chat => {
-            "添加聊天账号后，可在聊天平台内选择目录、模型和会话并处理审批。WorkBuddy 暂无外部任务执行；天工的执行授权、桌面同步与模型连接分别显示。"
-        }
-        PageId::Remote => {
-            "将自己的电脑加入同一个网络，首次连接时在目标 Hub 确认一次。两端 Hub 和目标客户端保持运行，即可在浏览器继续原有 Codex 或天工会话。最小化到托盘保持连接，退出 Hub 会关闭远程入口。"
-        }
-        PageId::Logs => {
-            "记录开关沿用原设置。筛选和分页针对全部已记录请求，详情保留客户端请求与实际上游请求、缓存和首字等原始字段。未记录的历史无法补回。"
-        }
-        PageId::Dumpling => {
-            "先添加环境并选择认证方式，再连接到客户端。保留密码、应用和浏览器认证，连接时自动检查配置；高级设置及撤销只影响当前环境和客户端。"
-        }
-        PageId::Settings | PageId::Help => {
-            "设置包含外观、语言、本机服务、网络及系统集成。修复、恢复与诊断保留原功能；导出资料前可选择保存位置。"
-        }
-    };
-    format!("{}\n\n{}", page.title(), text)
 }

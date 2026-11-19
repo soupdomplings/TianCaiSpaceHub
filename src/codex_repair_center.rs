@@ -5,11 +5,13 @@ mod launch_path;
 mod package;
 mod proxy;
 
+use crate::codex_app_config::{ProjectlessChoice, SidebarUndoPreview};
 use crate::codex_startup_repair as startup;
 use anyhow::{Context, Result, bail, ensure};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
     time::Duration,
@@ -88,7 +90,7 @@ impl Kind {
     pub fn help(self) -> &'static str {
         match self {
             Self::ProjectHistory => {
-                "找回原历史库、项目和分组。已重建项目并手动移过部分会话的，也可以先检查剩余可归类数量，再完全退出 Codex 进行修复。"
+                "按原目录补回缺失的项目和会话。已重建项目下的旧聊天若被标为“无项目”，检查后可逐条选回。默认只处理当前账号；若电脑由多人使用，请保留未记录账号的旧会话。"
             }
             Self::Startup => {
                 "分别检查内置程序路径和状态库。可将 CODEX_CLI_PATH 重新绑定到当前安装包；没有迁移冲突也能修复路径。数据库仅处理已确认冲突，先备份并验证副本，保留会话历史。"
@@ -145,6 +147,12 @@ pub(crate) struct Record {
     pub path: PathBuf,
     pub label: String,
     pub can_restore: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct RepairOptions {
+    pub proxy_for_mcp: bool,
+    pub include_legacy: bool,
 }
 
 fn rt() -> Result<tokio::runtime::Runtime> {
@@ -529,11 +537,129 @@ fn outcome(value: &Value) -> Outcome {
     }
 }
 
+pub(crate) type Inspection = (Outcome, Vec<ProjectlessChoice>, Option<(usize, usize)>);
+
 pub(crate) fn run(
     kind: Kind,
     apply: bool,
     evidence: &str,
-    proxy_for_mcp: bool,
+    options: RepairOptions,
+    selected: &BTreeMap<String, String>,
+    progress: impl FnMut(&str),
+) -> Result<Inspection> {
+    if kind == Kind::ProjectHistory {
+        inspect_project_history(apply, options, selected)
+    } else {
+        run_other(kind, apply, evidence, options, progress).map(|result| (result, Vec::new(), None))
+    }
+}
+
+fn inspect_project_history(
+    apply: bool,
+    options: RepairOptions,
+    selected: &BTreeMap<String, String>,
+) -> Result<Inspection> {
+    let home = startup::user_directory()?;
+    let _access = if apply {
+        crate::codex_access::repair()?
+    } else {
+        crate::codex_access::operation()?
+    };
+    if apply {
+        startup::require_stopped()?;
+    }
+    let candidate =
+        crate::codex_app_config::repair_history_location(&home, apply && selected.is_empty())?;
+    // A restored sqlite_home points at different records. Preview that library
+    // before letting a subsequent Apply change its project memberships.
+    if candidate {
+        ensure!(
+            selected.is_empty(),
+            "历史库位置已变化，请重新检查后选择会话。"
+        );
+        return Ok((Outcome {
+            message: if apply {
+                "已切回原历史库，其他库和会话均已保留。请再次点击“检查所选问题”，查看原库中可恢复的项目和会话。"
+            } else {
+                "找到旧配置指向的另一份历史库。本次修复只切回原库，保留当前库；切回后再检查项目和会话。"
+            }.into(),
+            applied: apply,
+            needs_repair: !apply,
+            can_restore: false,
+            backup: None,
+        }, Vec::new(), None));
+    }
+    let sidebar = crate::codex_app_config::sidebar_projects_with_selection(
+        &home,
+        if apply {
+            crate::codex_app_config::SidebarAction::Repair
+        } else {
+            crate::codex_app_config::SidebarAction::Check
+        },
+        options.include_legacy,
+        selected,
+    );
+    let status = crate::codex_project_status::inspect(&home);
+    use crate::codex_project_status::ProjectState;
+    let mut message = match (
+        status.state,
+        status.project_count,
+        status.grouped_thread_count,
+    ) {
+        (ProjectState::Available, Some(p), Some(t)) => {
+            format!("本机历史库：共 {p} 条项目记录，{t} 条未归档会话已归组。")
+        }
+        (ProjectState::MissingDatabase, _, _) => "当前位置未找到历史库。".into(),
+        (ProjectState::UnsupportedSchema, _, _) => {
+            "这是旧版历史库，无法从中核对项目归属；旧版桌面也可能单独保存了分组。".into()
+        }
+        _ => "暂时无法统计历史库中的项目和会话数量。".into(),
+    };
+    let backup = crate::codex_app_config::sidebar_receipt_dir(&home);
+    let (sidebar_applied, sidebar_needs_repair, choices, planned) = match sidebar {
+        Ok(sidebar) => {
+            message.push('\n');
+            message.push_str(&sidebar.detail);
+            (
+                sidebar.changed_count > 0 || sidebar.grouped_thread_count > 0,
+                sidebar.can_repair,
+                if apply {
+                    Vec::new()
+                } else {
+                    sidebar.projectless_choices
+                },
+                (!apply).then_some((sidebar.planned_projects, sidebar.planned_threads)),
+            )
+        }
+        Err(error) => {
+            if apply {
+                return Err(error);
+            }
+            message.push_str(&format!("\n侧栏项目未处理：{error}"));
+            (false, false, Vec::new(), None)
+        }
+    };
+    Ok((
+        Outcome {
+            message,
+            backup: backup
+                .join("receipt.json")
+                .is_file()
+                .then(|| backup.clone()),
+            applied: apply && sidebar_applied,
+            can_restore: backup.join("receipt.json").is_file(),
+            needs_repair: !apply && sidebar_needs_repair,
+        },
+        choices,
+        planned,
+    ))
+}
+
+fn run_other(
+    kind: Kind,
+    apply: bool,
+    evidence: &str,
+    options: RepairOptions,
     mut progress: impl FnMut(&str),
 ) -> Result<Outcome> {
     if cfg!(target_os = "macos") && matches!(kind, Kind::Surface | Kind::Context | Kind::Screenshot)
@@ -542,92 +668,6 @@ pub(crate) fn run(
     }
     if kind == Kind::Startup {
         return startup_issue(apply, &mut progress);
-    }
-    if kind == Kind::ProjectHistory {
-        let home = startup::user_directory()?;
-        let _access = if apply {
-            crate::codex_access::repair()?
-        } else {
-            crate::codex_access::operation()?
-        };
-        if apply {
-            startup::require_stopped()?;
-        }
-        let candidate = crate::codex_app_config::repair_history_location(&home, apply)?;
-        let status = crate::codex_project_status::inspect(&home);
-        let sidebar = crate::codex_app_config::sidebar_projects(
-            &home,
-            if apply {
-                crate::codex_app_config::SidebarAction::Repair
-            } else {
-                crate::codex_app_config::SidebarAction::Check
-            },
-        );
-        use crate::codex_project_status::ProjectState;
-        let mut message = match (
-            status.state,
-            status.project_count,
-            status.grouped_thread_count,
-        ) {
-            (ProjectState::Available, Some(p), Some(t)) => {
-                format!("当前本机历史库：{p} 个项目，{t} 个未归档会话已归入项目。")
-            }
-            (ProjectState::MissingDatabase, _, _) => "当前位置未找到历史库。".into(),
-            (ProjectState::UnsupportedSchema, _, _) => {
-                "这是旧版历史库，无法从中核对项目归属；旧版桌面也可能单独保存了分组。".into()
-            }
-            _ => "暂时无法读取项目归属；请完全退出 Codex 后再检查。".into(),
-        };
-        if candidate {
-            message.push_str(if apply {
-                " 已恢复原历史库位置，请重新打开 Codex。"
-            } else {
-                " 找到旧配置指向的另一份历史库。若要切回，请退出 Codex，再点修复。当前库会保留。"
-            });
-        } else if status.project_count.is_some_and(|n| n > 0) {
-            message.push_str(
-                " 若侧栏仍为空，请用原账户打开 Codex，在「整理侧边栏」选「分项目显示」。",
-            );
-            if status
-                .other_provider_grouped_thread_count
-                .is_some_and(|n| n > 0)
-            {
-                message
-                    .push_str(" 有会话使用其他模型提供方，可在 Hub 的「Codex 会话管理」中核对。");
-            }
-        } else {
-            message.push_str(
-                " 未找到可切回的原库位置。如有删除前的配置副本，请核对其中的 sqlite_home。",
-            );
-        }
-        let backup = crate::codex_app_config::sidebar_receipt_dir(&home);
-        let (sidebar_applied, sidebar_needs_repair) = match sidebar {
-            Ok(sidebar) => {
-                message.push('\n');
-                message.push_str(&sidebar.detail);
-                (
-                    sidebar.changed_count > 0 || sidebar.grouped_thread_count > 0,
-                    sidebar.can_repair,
-                )
-            }
-            Err(error) => {
-                if apply && !candidate {
-                    return Err(error);
-                }
-                message.push_str(&format!("\n侧栏项目未处理：{error}"));
-                (false, false)
-            }
-        };
-        return Ok(Outcome {
-            message,
-            backup: backup
-                .join("receipt.json")
-                .is_file()
-                .then(|| backup.clone()),
-            applied: apply && (candidate || sidebar_applied),
-            can_restore: backup.join("receipt.json").is_file(),
-            needs_repair: !apply && (candidate || sidebar_needs_repair),
-        });
     }
     let _access = if apply {
         crate::codex_access::repair()?
@@ -644,7 +684,7 @@ pub(crate) fn run(
     let toolkit = tempfile::tempdir()?;
     assets::extract(toolkit.path())?;
     let node = node(toolkit.path(), &res)?;
-    let (candidate, changes) = candidate(kind, &home, &res, proxy_for_mcp)?;
+    let (candidate, changes) = candidate(kind, &home, &res, options.proxy_for_mcp)?;
     let enabled_plugins = document(&home)
         .ok()
         .and_then(|(_, d)| {
@@ -771,7 +811,7 @@ pub(crate) fn records() -> Result<Vec<Record>> {
     if sidebar.join("receipt.json").is_file() {
         records.push(Record {
             path: sidebar,
-            label: "最近一次项目与会话归属修复".into(),
+            label: "项目和会话 · 最近一次归类".into(),
             can_restore: true,
         });
     }
@@ -885,20 +925,83 @@ fn associated_record(root: &Path, path: &Path) -> Result<Option<PathBuf>> {
     );
     Ok(Some(related))
 }
-pub(crate) fn restore(path: &Path, mut progress: impl FnMut(&str)) -> Result<Outcome> {
+#[derive(Clone, Debug)]
+pub(crate) struct RestorePreview {
+    path: PathBuf,
+    project_batch: Option<SidebarUndoPreview>,
+    pub message: String,
+    pub is_project_undo: bool,
+}
+
+pub(crate) fn preview_restore(record: &Record) -> Result<RestorePreview> {
+    ensure!(record.can_restore, "这份备份已还原。");
+    let home = startup::user_directory()?;
+    let path = record
+        .path
+        .canonicalize()
+        .context("这份备份已不在原位置，请刷新列表。")?;
+    let sidebar = crate::codex_app_config::sidebar_receipt_dir(&home);
+    let project_batch = if sidebar.canonicalize().ok().as_ref() == Some(&path) {
+        Some(crate::codex_app_config::preview_sidebar_undo(&home)?)
+    } else {
+        None
+    };
+    let message = if let Some(batch) = &project_batch {
+        format!(
+            "将撤销最近一次项目修复：从侧栏移除这次补回的 {} 个项目，把 {} 个会话的归属改回修复前。\n\n不会删除聊天内容。",
+            batch.cards, batch.assignments
+        )
+    } else {
+        let db = startup::locations()
+            .map(|(_, db)| db)
+            .unwrap_or_else(|_| home.join("state_5.sqlite"));
+        let startup_root = db
+            .parent()
+            .context("状态库没有父目录。")?
+            .join("hub-startup-repair-backups");
+        if startup_root
+            .canonicalize()
+            .ok()
+            .as_deref()
+            .is_some_and(|root| path.parent() == Some(root))
+        {
+            format!(
+                "将用这份备份还原修复前的整个状态库：{}。\n\n这是回退操作，不会把勾选的会话归入项目。",
+                record.label
+            )
+        } else {
+            ensure!(
+                path.parent() == Some(backup_root(&home).canonicalize()?.as_path()),
+                "所选备份不属于本用户的修复记录。"
+            );
+            format!(
+                "将用这份备份还原修复前的文件或设置：{}。原问题也可能再次出现。",
+                record.label
+            )
+        }
+    };
+    Ok(RestorePreview {
+        path,
+        is_project_undo: project_batch.is_some(),
+        project_batch,
+        message,
+    })
+}
+
+pub(crate) fn restore(preview: &RestorePreview, mut progress: impl FnMut(&str)) -> Result<Outcome> {
     let home = startup::user_directory()?;
     let db = startup::locations()
         .map(|(_, db)| db)
         .unwrap_or_else(|_| home.join("state_5.sqlite"));
-    let path = path.canonicalize()?;
-    let sidebar = crate::codex_app_config::sidebar_receipt_dir(&home);
-    if sidebar.join("receipt.json").is_file() && path == sidebar {
+    let path = preview.path.canonicalize()?;
+    if let Some(batch) = &preview.project_batch {
         let _access = crate::codex_access::repair()?;
         startup::require_stopped()?;
-        let report = crate::codex_app_config::sidebar_projects(
-            &home,
-            crate::codex_app_config::SidebarAction::Undo,
-        )?;
+        ensure!(
+            path == crate::codex_app_config::sidebar_receipt_dir(&home).canonicalize()?,
+            "当前备份目录已改变，请重新查看。"
+        );
+        let report = crate::codex_app_config::apply_sidebar_undo(&home, batch)?;
         return Ok(Outcome {
             message: report.detail,
             backup: report.can_undo.then_some(path),

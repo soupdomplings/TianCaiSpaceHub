@@ -127,14 +127,14 @@ impl MessageCard {
     fn new(parent: &ScrolledWindow, message: ChatMessage) -> Self {
         let t = theme::theme();
         let user = message.role == "user";
-        let background = if user { t.accent } else { t.bg_card_alt };
-        let foreground = if user { t.on_accent } else { t.ink_primary };
+        let background = if user { t.bg_muted } else { t.bg_card_alt };
+        let foreground = t.ink_primary;
         let row = Panel::builder(parent).build();
         row.add_style(WindowStyle::ClipChildren);
         row.set_background_color(t.bg_card);
         let bubble = Panel::builder(&row).build();
         bubble.add_style(WindowStyle::ClipChildren);
-        paint_chat_surface(bubble, background, None);
+        paint_chat_surface(bubble, background, None, 15);
         let content = BoxSizer::builder(Orientation::Vertical).build();
         let caption = match message.role.as_str() {
             "tool" => Some("操作结果"),
@@ -244,7 +244,7 @@ impl MessageCard {
     }
 }
 
-fn paint_chat_surface(panel: Panel, fill: Colour, border: Option<Colour>) {
+fn paint_chat_surface(panel: Panel, fill: Colour, border: Option<Colour>, radius: i32) {
     panel.set_background_color(fill);
     panel.set_background_style(BackgroundStyle::Paint);
     visual::redraw_on_resize(panel);
@@ -267,7 +267,7 @@ fn paint_chat_surface(panel: Panel, fill: Colour, border: Option<Colour>) {
                 (size.width as f64 / scale) as i32,
                 (size.height as f64 / scale) as i32,
             ),
-            theme::SURFACE_RADIUS,
+            radius,
             fill,
             border,
         );
@@ -298,6 +298,8 @@ fn fit_chat_mode(area: Rect, preferred: Size, frame_width: i32, maximized: bool)
     )
 }
 
+const CHAT_WIDTH_DIP: i32 = 446;
+const CHAT_HEIGHT_DIP: i32 = 505;
 const CHAT_MOTION_DURATION: Duration = Duration::from_millis(160);
 
 /// Normalized displacement, separate from message layout. Retargeting samples
@@ -652,7 +654,7 @@ impl AssistantUi {
         chat.add_style(WindowStyle::ClipChildren);
         chat.set_name("对话浮层");
         chat.hide();
-        paint_chat_surface(chat, t.bg_card, Some(t.divider));
+        paint_chat_surface(chat, t.bg_card, Some(t.divider), 22);
         chat.set_font(&theme::font(theme::TextRole::Body));
         let root = chat;
         let col = BoxSizer::builder(Orientation::Vertical).build();
@@ -698,7 +700,7 @@ impl AssistantUi {
             &bar,
             0,
             SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Top,
-            root.from_dip(12),
+            root.from_dip(15),
         );
         let transcript = ScrolledWindow::builder(&root)
             .with_style(ScrolledWindowStyle::VScroll)
@@ -729,13 +731,22 @@ impl AssistantUi {
             root.from_dip(20),
         );
         let mut suggestions = Vec::new();
-        for (text, prompt) in [
-            ("查看当前模型配置", "帮我查看当前模型和渠道配置。"),
-            ("了解 Hub 的常用功能", "介绍一下 Hub 的常用功能和使用方法。"),
+        for (icon, text, prompt) in [
+            (
+                visual::Icon::Model,
+                "查看当前模型配置",
+                "帮我查看当前模型和渠道配置。",
+            ),
+            (
+                visual::Icon::Help,
+                "了解 Hub 的常用功能",
+                "介绍一下 Hub 的常用功能和使用方法。",
+            ),
         ] {
             let button = Button::builder(&welcome)
                 .with_label(text)
-                .with_kind(ButtonKind::Secondary)
+                .with_icon(icon)
+                .with_kind(ButtonKind::Ghost)
                 .build();
             intro.add(&button, 0, SizerFlag::Bottom, root.from_dip(8));
             suggestions.push((button, prompt));
@@ -754,7 +765,7 @@ impl AssistantUi {
             &transcript,
             1,
             SizerFlag::Expand | SizerFlag::All,
-            root.from_dip(12),
+            root.from_dip(16),
         );
         let question = QuestionCard::new(&root);
         col.add(
@@ -807,20 +818,21 @@ impl AssistantUi {
             .with_size(Size::new(-1, 68))
             .build();
         input.set_name("assistant-message-input");
+        input.set_background_color(t.bg_card_alt);
         input.set_tooltip("输入消息，Ctrl+Enter 发送；Esc 收起对话");
         input.set_hint("输入消息…");
         col.add(
             &input,
             0,
             SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Top,
-            root.from_dip(12),
+            root.from_dip(15),
         );
         let row = BoxSizer::builder(Orientation::Horizontal).build();
         let shortcut = label(&root, "Ctrl+Enter 发送", theme::TextRole::Caption);
         shortcut.set_foreground_color(t.ink_muted);
         let stop = Button::builder(&root)
             .with_label("停止")
-            .with_kind(ButtonKind::Secondary)
+            .with_kind(ButtonKind::Ghost)
             .build();
         let send = Button::builder(&root)
             .with_label("发送")
@@ -841,7 +853,7 @@ impl AssistantUi {
             root.from_dip(8),
         );
         row.add_stretch_spacer(1);
-        row.add(&stop, 0, SizerFlag::default(), 0);
+        row.add(&stop, 0, SizerFlag::Right, root.from_dip(5));
         row.add(&send, 0, SizerFlag::default(), 0);
         col.add_sizer(
             &row,
@@ -1148,8 +1160,13 @@ impl AssistantUi {
 
     fn animate_chat(&self, open: bool) {
         let mut motion = self.motion.get();
-        let area = self.shell.assistant_overlay_area();
-        let room_to_move = fit_chat(area, visual::dip_size(&self.chat, 420, 560)).y > area.y;
+        let area = self.chat_area();
+        let room_to_move = !self.maximized.get()
+            && fit_chat(
+                area,
+                visual::dip_size(&self.chat, CHAT_WIDTH_DIP, CHAT_HEIGHT_DIP),
+            )
+            .y > area.y;
         let animate = theme::motion_enabled()
             && self.parent.is_shown()
             && !self.parent.is_iconized()
@@ -1277,11 +1294,22 @@ impl AssistantUi {
         });
     }
 
-    fn position_chat(&self) {
+    fn chat_area(&self) -> Rect {
         let area = self.shell.assistant_overlay_area();
+        if !self.maximized.get() {
+            return area;
+        }
+        // The integrated Windows frame keeps its system buttons in the toolbar.
+        // The expanded chat reaches both the right and bottom edges below that bar.
+        let host = self.shell.assistant_host.get_client_size();
+        let top = area.y.clamp(0, (host.height - 1).max(0));
+        Rect::new(0, top, host.width.max(1), (host.height - top).max(1))
+    }
+    fn position_chat(&self) {
+        let area = self.chat_area();
         let mut bounds = fit_chat_mode(
             area,
-            visual::dip_size(&self.chat, 420, 560),
+            visual::dip_size(&self.chat, CHAT_WIDTH_DIP, CHAT_HEIGHT_DIP),
             self.parent.get_client_size().width,
             self.maximized.get(),
         );
@@ -2287,9 +2315,12 @@ fn assistant_styles_waiting_labels_and_width_keep_one_conversation_and_native_se
         assert_eq!(ui.personality.selected(),Personality::Girlfriend);
         assert!(ui.full_access.is_checked());
         ui.maximized.set(true); ui.position_chat(); ui.layout_chat();
-        let area=shell.assistant_overlay_area();
+        let area=ui.chat_area();
         assert_eq!(ui.chat.get_size().width,(parent.get_client_size().width/2).min(area.width));
         assert_eq!(ui.chat.get_size().height,area.height);
+        let host_size=shell.assistant_host.get_client_size();
+        assert_eq!(ui.chat.get_position().x+ui.chat.get_size().width,host_size.width);
+        assert_eq!(ui.chat.get_position().y+ui.chat.get_size().height,host_size.height);
         ui.maximized.set(false); ui.position_chat(); ui.layout_chat();
         assert_eq!(ui.input.get_value(),"当前未发送草稿");
         assert_eq!(ui.cards.borrow()[0].body.primary_text().handle_ptr(),handle);
@@ -3020,7 +3051,7 @@ mod native_overlay_tests {
             assert_eq!(body.get_selection(), body_selection);
             let settled = fit_chat(
                 shell.assistant_overlay_area(),
-                visual::dip_size(&ui.chat, 420, 560),
+                visual::dip_size(&ui.chat, CHAT_WIDTH_DIP, CHAT_HEIGHT_DIP),
             );
             assert_eq!(ui.chat.get_position(), Point::new(settled.x, settled.y));
             ui.collapse();

@@ -1,0 +1,56 @@
+/* The toolbar gives location; the first line of the workspace is useful content. */
+.sr-only{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+:root{--bg:#f5f6f8;--line:#18233816;--soft:#eef0f3;--accent:#1465bd;--rail:#f2f5f7db;--hairline:#18233812}
+:root[data-theme=dark]{--bg:#191b20;--card:#25282e;--line:#c3d2e51d;--soft:#31353c;--rail:#232831e8;--hairline:#d9e1f013}
+.workspace .toolbar{background:var(--bg);gap:14px;border-bottom-color:var(--hairline)}
+.history-controls,.inline-tools{display:flex;align-items:center;gap:8px}
+.history-controls{gap:0;flex:none}
+.history-controls .tool{width:28px;height:30px}
+.history-controls .tool:disabled{opacity:.25}
+.history-controls .tool:first-child svg{transform:rotate(180deg)}
+.toolbar .top-navigation{flex:none;margin:0;border-right:1px solid var(--line);padding-right:9px}
+.window #view{padding-top:clamp(20px,2.3vw,34px)}
+.chartgrid>.card,.tablecard,.workspace #view>section.card{border-radius:15px;box-shadow:0 1px 3px #18223504}
+.cardhead .seg,.log-tools .seg{background:var(--soft);border-color:transparent}
+.chart{height:126px}.trendcard .metric{margin-top:12px;line-height:1.15;font-weight:560;letter-spacing:-.055em}
+.trendcard .axis{margin-top:4px}
+.cardhead h2,.sectionhead h2{font-weight:625;letter-spacing:0}
+.cardhead.logtools{margin:0;padding:14px 19px;border-bottom:1px solid var(--hairline)}
+.card.maintenance{margin-top:var(--gap)}
+.tablehead,.logtable thead{background:transparent}
+.tablehead,.logtable th{color:var(--muted);font-weight:520}
+.clientrow{border:0;position:relative;min-height:54px}
+.clientrow+.clientrow::before{content:"";pointer-events:none;position:absolute;inset:0 19px auto 62px;height:1px;background:var(--hairline)}
+.clientrow>svg:last-child{color:var(--muted);width:13px}
+.clientrow .clientname b{font-weight:560}
+.clientrow .pill{background:transparent;padding-inline:0}
+.clientrow:active:not(:disabled){transform:none;background:var(--accent-soft)}
+.quiet{border:1px solid var(--line);background:var(--card);box-shadow:0 1px 2px #14253909}
+.healthrow{border-color:var(--hairline)}
+.navbtn .c0{color:var(--ink);background:var(--soft)}.navbtn .c1,.navbtn .c3{color:var(--accent);background:var(--accent-soft)}.navbtn .c2{color:#67538b;background:#eeeaf7}.navbtn .c4{color:#925740;background:#fbede4}
+[data-theme=dark] .navbtn .c2{color:#d6c8ef;background:#373146}[data-theme=dark] .navbtn .c4{color:#f4cbb7;background:#42332f}
+@media(max-width:680px){.history-controls{display:none}.workspace .toolbar{gap:5px}.inline-tools{gap:5px}.inline-tools .quiet{padding-inline:9px}.log-tools{padding:12px}.clientrow+.clientrow::before{inset-inline:40px 10px}}
+.choice-row{position:relative;display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:13px;cursor:pointer;min-height:50px;margin-inline:-5px;padding:9px 13px;border:0;border-radius:11px;transition:background-color 130ms ease}
+.choice-row + .choice-row::before{content:"";position:absolute;inset:0 13px auto;height:1px;background:var(--hairline)}
+.choice-row small{display:block;margin-top:2px}
+.choice-row:hover,.prefrow:hover{background:var(--soft)}
+.choice-row input{flex-shrink:0}
+.choice-row b{font-weight:540}
+.choice-row:has(input:focus-visible){outline:2px solid var(--accent);outline-offset:-2px;background:var(--soft)}
+input[type=checkbox]:not([role=switch]){appearance:none;display:grid;place-content:center;width:20px;height:20px;margin:0;border-radius:50%;border:1.5px solid var(--muted);background:transparent;cursor:pointer;transition:border-color 140ms,background-color 140ms}
+input[type=checkbox]:not([role=switch]):checked{background:var(--accent);border-color:var(--accent)}
+input[type=checkbox]:not([role=switch])::after{content:"";width:8px;height:4px;box-sizing:content-box;border:solid white;border-width:0 0 2px 2px;opacity:0;transform:translateY(-1px) rotate(-45deg) scale(.7);transition:opacity 120ms,transform 150ms}
+input[type=checkbox]:not([role=switch]):checked::after{opacity:1;transform:translateY(-1px) rotate(-45deg) scale(1)}
+.choice-row input:focus-visible{outline:none}
+[data-theme=dark] input[type=checkbox]:not([role=switch])::after{border-color:var(--bg)}
+@media(forced-colors:active){input[type=checkbox]:not([role=switch]){appearance:auto}input[type=checkbox]:not([role=switch])::after{display:none}.choice-row:has(input:focus-visible){outline-color:Highlight}}
+.prefrow{padding:11px 8px;min-height:46px;border-radius:8px;cursor:pointer}
+input[role=switch]{appearance:none;display:inline-flex;align-items:center;flex:none;box-sizing:border-box;width:36px;height:22px;padding:2px;margin:0 0 0 auto;border:1px solid var(--muted);border-radius:20px;background:var(--muted);cursor:pointer;transition:background-color 140ms,border-color 140ms}
+input[role=switch]::before{content:"";width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 2px #0003;transition:transform 150ms ease}
+input[role=switch]:checked{background:var(--accent);border-color:var(--accent)}
+input[role=switch]:checked::before{transform:translateX(14px)}
+input[role=switch]:disabled,.prefrow:has(input:disabled){cursor:default;opacity:.7}
+.prefrow:has(input:focus-visible){outline:2px solid var(--accent);outline-offset:-2px}
+@media(prefers-reduced-motion:reduce){input[type=checkbox]::before,input[type=checkbox]::after{transition:none!important}}
+:root[data-reduce=on] input[type=checkbox]::before,:root[data-reduce=on] input[type=checkbox]::after{transition:none!important}
+@media(forced-colors:active){input[role=switch]{appearance:auto}input[role=switch]::before{display:none}.prefrow:has(input:focus-visible){outline-color:Highlight}}

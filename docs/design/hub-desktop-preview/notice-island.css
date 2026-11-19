@@ -1,0 +1,87 @@
+/* A compact temporary surface, measured against .window rather than the browser. */
+.notice-island {
+  --notice-fill: #252a30;
+  --notice-ink: #f9fafb;
+  --notice-accent: #82e8af;
+  --notice-width: 90vw;
+  --notice-height: 60vh;
+  box-sizing: border-box;
+  position: fixed;
+  inset: var(--notice-y, 10px) auto auto var(--notice-x, 50%);
+  z-index: 10;
+  margin: 0;
+  translate: -50% 0;
+  width: max-content;
+  max-width: min(32rem, var(--notice-width));
+  max-height: var(--notice-height);
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) 22px;
+  align-items: center;
+  column-gap: 9px;
+  padding: 9px 10px 10px 13px;
+  border: 1px solid #ffffff29;
+  border-radius: 23px;
+  background: var(--notice-fill);
+  color: var(--notice-ink);
+  box-shadow: 0 4px 17px #10171d29, 0 1px 4px #10171d26;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  transform: translateY(-3px) scale(.97);
+  transform-origin: 50% 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 125ms ease-out, transform 145ms cubic-bezier(.2,.78,.24,1);
+}
+.notice-island[hidden] {display: none}
+.notice-island[popover]:not(:popover-open) {display: none}
+.notice-island[data-position="window"] {position: absolute}
+.notice-island[data-position="sheet"] {
+  position: sticky; inset: auto 0 0; margin: 6px auto; translate: none;
+  max-width: calc(100% - 16px); max-height: min(45vh, 100%);
+}
+.notice-island::backdrop {background: transparent; pointer-events: none}
+.notice-island.show {opacity: 1; transform: none; pointer-events: auto}
+.notice-island.error {--notice-accent: #ffaaa6; border-radius: 17px}
+[data-theme="dark"] .notice-island {
+  --notice-fill: #30363d;
+  border-color: #ffffff35;
+  box-shadow: 0 5px 20px #0006;
+}
+.notice-mark {
+  display: grid; place-items: center; flex: none;
+  width: 21px; height: 21px; border-radius: 50%;
+  color: var(--notice-fill); background: var(--notice-accent);
+}
+.notice-mark svg {display: block}
+.notice-mark svg[stroke] {stroke-width: 2.6}
+.notice-copy {
+  min-width: 0;
+  min-height: 0;
+  max-height: max(1em, calc(var(--notice-height) - 22px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.notice-copy:focus-visible,.notice-close:focus-visible {outline: 2px solid #b7dbff; outline-offset: -2px}
+.notice-heading {display: none}
+.notice-island.error .notice-heading {display: block; font-size: 12px; color: var(--notice-accent); margin-bottom: 1px}
+.notice-message {font-weight: 520}
+.notice-close {
+  display: grid; place-items: center; width: 22px; height: 22px;
+  border: 0; border-radius: 50%; padding: 0; cursor: pointer;
+  color: #d7dce2; background: transparent;
+}
+.notice-close:hover {background: #ffffff24; color: white}
+.notice-countdown {
+  display: block; height: 2px; position: absolute; inset: auto 14px 0;
+  background: #ffffff16; border-radius: 2px; overflow: hidden; pointer-events: none;
+}
+.notice-island .toast-timer {display: block; width: 100%; height: 100%; background: var(--notice-accent); transform-origin: left}
+@media (prefers-reduced-motion: reduce) {
+  .notice-island {transform: none; transition: none}
+}
+:root[data-reduce="on"] .notice-island {transform: none; transition: none}

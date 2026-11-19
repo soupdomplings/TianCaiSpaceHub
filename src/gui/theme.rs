@@ -117,11 +117,11 @@ pub(super) const SPACE_LG: i32 = 16;
 pub(super) const SPACE_XL: i32 = 24;
 
 /// Shared desktop geometry, in DIP (convert once at the window boundary).
-pub(super) const PAGE_GUTTER: i32 = 20;
+pub(super) const PAGE_GUTTER: i32 = 22;
 pub(super) const PANEL_INSET: i32 = 16;
 pub(super) const CONTROL_HEIGHT: i32 = 34;
-pub(super) const BUTTON_RADIUS: i32 = 7;
-pub(super) const SURFACE_RADIUS: i32 = 12;
+pub(super) const BUTTON_RADIUS: i32 = 9;
+pub(super) const SURFACE_RADIUS: i32 = 15;
 
 /// Corner radius for cards and buttons.
 pub(super) const RADIUS: f64 = 8.0;
@@ -182,7 +182,7 @@ pub(super) fn font(role: TextRole) -> Font {
         builder = builder.with_face_name("PingFang SC");
     }
     if role.bold() {
-        builder = builder.with_weight(FontWeight::Bold);
+        builder = builder.with_weight(FontWeight::SemiBold);
     }
     builder
         .build()
@@ -271,28 +271,28 @@ impl Theme {
         Self {
             is_dark: false,
 
-            bg_app: Colour::rgb(246, 248, 250),
+            bg_app: Colour::rgb(245, 246, 248),
             bg_card: Colour::rgb(255, 255, 255),
-            bg_card_alt: Colour::rgb(241, 245, 248),
-            bg_muted: Colour::rgb(231, 244, 243),
+            bg_card_alt: Colour::rgb(239, 242, 246),
+            bg_muted: Colour::rgb(230, 239, 251),
             table_row: Colour::rgb(255, 255, 255),
             table_row_alt: Colour::rgb(248, 250, 252),
 
-            border: Colour::rgb(204, 215, 224),
-            divider: Colour::rgb(229, 235, 240),
+            border: Colour::rgb(215, 220, 227),
+            divider: Colour::rgb(228, 231, 236),
 
-            ink_primary: Colour::rgb(30, 41, 54),
-            ink_secondary: Colour::rgb(78, 96, 113),
-            ink_muted: Colour::rgb(96, 112, 126),
+            ink_primary: Colour::rgb(25, 33, 44),
+            ink_secondary: Colour::rgb(69, 82, 100),
+            ink_muted: Colour::rgb(83, 99, 118),
 
-            accent: Colour::rgb(7, 118, 124),
-            accent_hover: Colour::rgb(6, 100, 108),
+            accent: Colour::rgb(20, 95, 180),
+            accent_hover: Colour::rgb(15, 78, 151),
             on_accent: Colour::rgb(255, 255, 255),
 
             ok: Colour::rgb(26, 119, 83),
             warn: Colour::rgb(150, 90, 18),
             error: Colour::rgb(192, 58, 58),
-            info: Colour::rgb(7, 118, 124),
+            info: Colour::rgb(20, 95, 180),
 
             warn_soft: Colour::rgb(252, 245, 230),
             error_soft: Colour::rgb(252, 238, 238),
@@ -316,22 +316,22 @@ impl Theme {
         Self {
             is_dark: true,
 
-            bg_app: Colour::rgb(19, 25, 32),
-            bg_card: Colour::rgb(25, 33, 42),
-            bg_card_alt: Colour::rgb(32, 42, 53),
-            bg_muted: Colour::rgb(28, 58, 62),
-            table_row: Colour::rgb(25, 33, 42),
-            table_row_alt: Colour::rgb(29, 38, 48),
+            bg_app: Colour::rgb(25, 27, 32),
+            bg_card: Colour::rgb(37, 40, 46),
+            bg_card_alt: Colour::rgb(44, 48, 56),
+            bg_muted: Colour::rgb(40, 57, 79),
+            table_row: Colour::rgb(37, 40, 46),
+            table_row_alt: Colour::rgb(40, 44, 50),
 
-            border: Colour::rgb(57, 72, 86),
-            divider: Colour::rgb(40, 52, 65),
+            border: Colour::rgb(61, 67, 77),
+            divider: Colour::rgb(53, 59, 69),
 
             ink_primary: Colour::rgb(231, 237, 243),
             ink_secondary: Colour::rgb(175, 190, 203),
             ink_muted: Colour::rgb(148, 165, 181),
 
-            accent: Colour::rgb(76, 199, 197),
-            accent_hover: Colour::rgb(110, 220, 217),
+            accent: Colour::rgb(139, 188, 244),
+            accent_hover: Colour::rgb(166, 204, 249),
             on_accent: Colour::rgb(16, 20, 28),
 
             ok: Colour::rgb(72, 196, 148),

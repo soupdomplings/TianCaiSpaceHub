@@ -35,6 +35,16 @@ pub(crate) struct ThreadAssignment {
     pub(crate) project_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) previous_project_id: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) legacy: bool,
+}
+
+#[derive(Default, Debug)]
+pub(crate) struct ProjectEvidence {
+    pub(crate) eligible_legacy_count: usize,
+    pub(crate) eligible_legacy_by_project: HashMap<String, usize>,
+    /// Native target -> (older sibling, standalone thread IDs and display titles).
+    pub(crate) standalone: HashMap<String, (String, Vec<(String, String)>)>,
 }
 
 /// Compare desktop ownership only for the actual active, Hub-managed identity.
@@ -93,21 +103,48 @@ pub(crate) fn local_project_candidates_with_anchors(
     preferred_project_ids: &[String],
     manual: &HashMap<String, String>,
 ) -> Result<Vec<LocalProjectCandidate>> {
+    Ok(inspect_project_candidates(home, preferred_project_ids, manual, false)?.0)
+}
+
+pub(crate) fn inspect_project_candidates(
+    home: &Path,
+    preferred_project_ids: &[String],
+    manual: &HashMap<String, String>,
+    include_legacy: bool,
+) -> Result<(Vec<LocalProjectCandidate>, ProjectEvidence)> {
+    inspect_with_standalone(
+        home,
+        preferred_project_ids,
+        manual,
+        include_legacy,
+        &HashSet::new(),
+    )
+}
+
+pub(crate) fn inspect_with_standalone(
+    home: &Path,
+    preferred_project_ids: &[String],
+    manual: &HashMap<String, String>,
+    include_legacy: bool,
+    standalone: &HashSet<String>,
+) -> Result<(Vec<LocalProjectCandidate>, ProjectEvidence)> {
     if local_project_owner(home)?.is_none() {
-        return Ok(vec![]);
+        return Ok(Default::default());
     }
     let (dir, provider) = database_settings(home)?;
     if provider.as_deref() != Some(AI_GATEWAY_PROVIDER_NAME)
         || !dir.join(super::CODEX_APP_STATE_DB).try_exists()?
     {
-        return Ok(vec![]);
+        return Ok(Default::default());
     }
     let preferred = preferred_project_ids
         .iter()
         .cloned()
         .collect::<HashSet<_>>();
-    with_database(&dir, |tx| read_candidates(tx, &preferred, manual))
-        .context("无法核实本机原项目和会话来源。")
+    with_database(&dir, |tx| {
+        read_candidates(tx, &preferred, manual, include_legacy, standalone)
+    })
+    .context("无法核实本机原项目和会话来源。")
 }
 
 /// Both directions use a compare-and-set in one transaction. A later manual
@@ -127,7 +164,7 @@ pub(crate) fn repair_thread_memberships(
     let tx = db.transaction()?;
     {
         let mut update = tx.prepare(&format!(
-            "UPDATE threads SET project_id=?4 WHERE id=?5 AND project_id IS ?6 AND {THREAD_SCOPE} RETURNING cwd"
+            "UPDATE threads SET project_id=?4 WHERE id=?5 AND project_id IS ?6 AND {BASE_SCOPE} AND {WRITE_OWNER} RETURNING cwd"
         ))?;
         for project in candidates {
             for assignment in &project.pending_assignments {
@@ -139,7 +176,8 @@ pub(crate) fn repair_thread_memberships(
                             AI_GATEWAY_PROVIDER_NAME,
                             project.id,
                             assignment.thread_id,
-                            assignment.previous_project_id
+                            assignment.previous_project_id,
+                            assignment.legacy
                         ],
                         |r| r.get(0),
                     )
@@ -168,9 +206,15 @@ fn open_for_repair(home: &Path) -> Result<Connection> {
     )?)
 }
 
-const THREAD_SCOPE: &str = "creator_user_id=?1 AND creator_account_id=?2 AND model_provider=?3
-    AND source='vscode' AND thread_source='user' AND archived=0
+const BASE_SCOPE: &str = "model_provider=?3 AND source='vscode' AND archived=0
     AND attached_thread_parent_id IS NULL AND thread_section_id IS NULL";
+const CURRENT_OWNER: &str =
+    "(creator_user_id=?1 AND creator_account_id=?2 AND thread_source='user')";
+const LEGACY_OWNER: &str =
+    "(creator_user_id IS NULL AND creator_account_id IS NULL AND thread_source='user')";
+const WRITE_OWNER: &str =
+    "((?7=0 AND creator_user_id=?1 AND creator_account_id=?2 AND thread_source='user')
+    OR (?7=1 AND creator_user_id IS NULL AND creator_account_id IS NULL AND thread_source='user'))";
 
 pub(crate) fn undo_thread_memberships(home: &Path, assignments: &[ThreadAssignment]) -> Result<()> {
     if assignments.is_empty() {
@@ -180,7 +224,7 @@ pub(crate) fn undo_thread_memberships(home: &Path, assignments: &[ThreadAssignme
     let tx = db.transaction()?;
     {
         let mut update = tx.prepare(&format!(
-            "UPDATE threads SET project_id=?4 WHERE id=?5 AND project_id=?6 AND {THREAD_SCOPE}"
+            "UPDATE threads SET project_id=?4 WHERE id=?5 AND project_id=?6 AND {BASE_SCOPE} AND {WRITE_OWNER}"
         ))?;
         for assignment in assignments {
             ensure!(
@@ -190,7 +234,8 @@ pub(crate) fn undo_thread_memberships(home: &Path, assignments: &[ThreadAssignme
                     AI_GATEWAY_PROVIDER_NAME,
                     assignment.previous_project_id,
                     assignment.thread_id,
-                    assignment.project_id
+                    assignment.project_id,
+                    assignment.legacy
                 ])? == 1,
                 "会话归属已经改变，未执行撤销。"
             );
@@ -267,11 +312,21 @@ fn root_identity(key: &str) -> String {
     }
 }
 
+pub(crate) fn root_match_key(raw: &str) -> Option<String> {
+    root_key(raw).map(|k| root_identity(&k))
+}
+
+pub(super) fn same_root(a: &str, b: &str) -> bool {
+    root_key(a).is_some_and(|a| Some(a) == root_key(b))
+}
+
 fn read_candidates(
     tx: &Transaction<'_>,
     preferred_project_ids: &HashSet<String>,
     manual: &HashMap<String, String>,
-) -> Result<Vec<LocalProjectCandidate>> {
+    include_legacy: bool,
+    standalone: &HashSet<String>,
+) -> Result<(Vec<LocalProjectCandidate>, ProjectEvidence)> {
     // An unrecognized project scope/ownership column is a new contract. Do
     // not use default assumptions for it.
     let known_schema: bool = tx.query_row(
@@ -281,7 +336,7 @@ fn read_candidates(
              ('creator_user_id','creator_account_id','source','thread_source','archived','attached_thread_parent_id','thread_section_id','model_provider','cwd','project_id'))",
         [], |r| r.get(0))?;
     if !known_schema {
-        return Ok(vec![]);
+        return Ok(Default::default());
     }
     let mut projects = tx.prepare(
         "SELECT p.id,p.name,p.metadata,p.created_at_ms,p.updated_at_ms,r.path,
@@ -336,12 +391,15 @@ fn read_candidates(
             },
         ));
     }
-    let mut conflicts = tx.prepare(
+    let mut conflicts = tx.prepare(&format!(
         "SELECT DISTINCT project_id FROM threads WHERE project_id IS NOT NULL
-         AND (creator_user_id IS NOT ?1 OR creator_account_id IS NOT ?2)",
-    )?;
+         AND (creator_user_id IS NOT ?1 OR creator_account_id IS NOT ?2)
+         AND NOT COALESCE(model_provider=?3 AND source='vscode' AND {LEGACY_OWNER},0)"
+    ))?;
     let foreign = conflicts
-        .query_map([HUB_USER, HUB_ACCOUNT], |r| r.get::<_, String>(0))?
+        .query_map([HUB_USER, HUB_ACCOUNT, AI_GATEWAY_PROVIDER_NAME], |r| {
+            r.get::<_, String>(0)
+        })?
         .collect::<rusqlite::Result<HashSet<_>>>()?;
     candidates.retain(|(_, p)| !foreign.contains(&p.id));
 
@@ -354,14 +412,11 @@ fn read_candidates(
         .collect();
     candidates.retain(|(key, p)| {
         let identity = root_identity(key);
-        if preferred_project_ids.is_empty() {
-            counts.get(&identity) == Some(&1)
-        } else {
-            preferred_project_ids.contains(&p.id) && visible_counts.get(&identity) == Some(&1)
-        }
+        counts.get(&identity) == Some(&1)
+            || (preferred_project_ids.contains(&p.id) && visible_counts.get(&identity) == Some(&1))
     });
     if candidates.is_empty() {
-        return Ok(vec![]);
+        return Ok(Default::default());
     }
     for (key, project) in &mut candidates {
         if counts.get(&root_identity(key)) == Some(&2) {
@@ -378,10 +433,26 @@ fn read_candidates(
         .map(|(i, (k, _))| (k.clone(), i))
         .collect();
     let mut evidence = tx.prepare(&format!(
-        "SELECT id,cwd,project_id FROM threads WHERE {THREAD_SCOPE} ORDER BY id"
+        "SELECT id,cwd,project_id,creator_user_id IS NULL FROM threads WHERE {BASE_SCOPE}
+        AND ({CURRENT_OWNER} OR ({LEGACY_OWNER} AND project_id IS NULL)) ORDER BY id"
     ))?;
     let mut rows = evidence.query(params![HUB_USER, HUB_ACCOUNT, AI_GATEWAY_PROVIDER_NAME])?;
     let mut seeded = HashSet::new();
+    let mut legacy_rows = vec![Vec::new(); candidates.len()];
+    let mut info = ProjectEvidence::default();
+    // Old SQLite fixtures and older clients may not store a title. Fetch only
+    // a short display title of an eligible row, never a message or rollout.
+    let mut title_query = if standalone.is_empty() {
+        None
+    } else {
+        let cols: (bool,bool) = tx.query_row("SELECT count(*) FILTER (WHERE name='name'),count(*) FILTER (WHERE name='title') FROM pragma_table_info('threads')",[],|r|Ok((r.get(0)?,r.get(1)?)))?;
+        match cols {
+            (true,true) => Some(tx.prepare("SELECT substr(coalesce(nullif(trim(name),''),title),1,120) FROM threads WHERE id=?1")?),
+            (true,false) => Some(tx.prepare("SELECT substr(name,1,120) FROM threads WHERE id=?1")?),
+            (false,true) => Some(tx.prepare("SELECT substr(title,1,120) FROM threads WHERE id=?1")?),
+            (false,false) => None
+        }
+    };
     while let Some(row) = rows.next()? {
         let Some(key) = row
             .get::<_, Option<String>>(1)?
@@ -393,8 +464,33 @@ fn read_candidates(
         let Some(&i) = index.get(&key) else { continue };
         let project = &mut candidates[i].1;
         let thread_id: String = row.get(0)?;
+        let legacy: bool = row.get(3)?;
         if let Some(target) = manual.get(&thread_id) {
-            if target == &project.id && preferred_project_ids.contains(target) {
+            if standalone.contains(&thread_id)
+                && !legacy
+                && row.get::<_, Option<String>>(2)?.is_none()
+                && preferred_project_ids.contains(&project.id)
+                && let Some(old) = &project.predecessor_id
+            {
+                let title = match &mut title_query {
+                    Some(q) => q.query_row([&thread_id], |r| r.get::<_, Option<String>>(0))?,
+                    None => None,
+                }
+                .unwrap_or_default()
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+                let title = if title.is_empty() {
+                    thread_id.clone()
+                } else {
+                    title
+                };
+                info.standalone
+                    .entry(project.id.clone())
+                    .or_insert_with(|| (old.clone(), Vec::new()))
+                    .1
+                    .push((thread_id, title));
+            } else if !legacy && target == &project.id && preferred_project_ids.contains(target) {
                 seeded.insert(i);
             }
             // Keep an explicit placement, including manual "no project".
@@ -408,25 +504,49 @@ fn read_candidates(
         if prev.is_some() && prev != project.predecessor_id {
             continue;
         }
-        project.pending_assignments.push(ThreadAssignment {
+        let change = ThreadAssignment {
             thread_id,
             project_id: project.id.clone(),
             previous_project_id: prev,
-        });
+            legacy,
+        };
+        if legacy {
+            legacy_rows[i].push(change);
+        } else {
+            project.pending_assignments.push(change);
+        }
     }
-    Ok(candidates
+    let candidates = candidates
         .into_iter()
         .enumerate()
-        .filter_map(|(i, (key, project))| {
-            // Duplicate roots need a sample already in the visible card. This
-            // distinguishes a deliberate recreated target from an unrelated card.
+        .filter_map(|(i, (_, mut project))| {
             let has_seed = seeded.contains(&i);
-            if !has_seed && counts.get(&root_identity(&key)) != Some(&1) {
-                return None;
+            if !has_seed {
+                // A visible card suffices for matching an unassigned chat. A
+                // non-null link to its older sibling needs a manual placement sample.
+                project.predecessor_id = None;
+                project
+                    .pending_assignments
+                    .retain(|a| a.previous_project_id.is_none());
             }
-            (has_seed || !project.pending_assignments.is_empty()).then_some(project)
+            let owned = has_seed || !project.pending_assignments.is_empty();
+            let verified_target = owned || preferred_project_ids.contains(&project.id);
+            let eligible_count = legacy_rows[i].len();
+            if verified_target && eligible_count > 0 {
+                info.eligible_legacy_by_project
+                    .insert(project.id.clone(), eligible_count);
+                info.eligible_legacy_count += eligible_count;
+                if include_legacy {
+                    project.pending_assignments.append(&mut legacy_rows[i]);
+                }
+            }
+            (owned
+                || (verified_target && eligible_count > 0)
+                || info.standalone.contains_key(&project.id))
+            .then_some(project)
         })
-        .collect())
+        .collect();
+    Ok((candidates, info))
 }
 
 #[cfg(test)]
@@ -560,7 +680,7 @@ mod tests {
             .iter()
             .flat_map(|p| &p.pending_assignments)
             .collect();
-        assert_eq!(plan.len(), 100);
+        assert_eq!(plan.len(), 101);
         assert_eq!(
             plan.iter()
                 .filter(|a| a.previous_project_id.as_deref() == Some(OLD))
@@ -569,10 +689,12 @@ mod tests {
         );
         assert_eq!(f.state(), before);
         let changes = repair_thread_memberships(f.tmp.path(), &candidates).unwrap();
-        assert_eq!(changes.len(), 100);
+        assert_eq!(changes.len(), 101);
         for ((id, previous), (_, now)) in before.iter().zip(&f.state()) {
             if id.starts_with("old-") || id.starts_with("unassigned-") {
                 assert_eq!(now.as_deref(), Some(NEW));
+            } else if id == "hidden-root" {
+                assert_eq!(now.as_deref(), Some(HIDDEN));
             } else {
                 assert_eq!(now, previous, "unexpected move: {id}");
             }
@@ -649,9 +771,318 @@ mod tests {
             vec![ThreadAssignment {
                 thread_id: "remaining".into(),
                 project_id: NEW.into(),
-                previous_project_id: Some(OLD.into())
+                previous_project_id: Some(OLD.into()),
+                legacy: false
             }]
         );
+    }
+
+    #[test]
+    fn partial_sidebar_with_no_prior_memberships_repairs_four_cards_and_nineteen_chats() {
+        use super::super::{SidebarAction, sidebar_projects};
+        let f = Fixture::new();
+        let home = f.tmp.path();
+        f.project(OLD, &f.root, 1);
+        f.project(NEW, &f.root, 2);
+        let independent: Vec<_> = (0..10).map(|n| format!("no-project-{n}")).collect();
+        for id in &independent {
+            f.thread(id, &f.root, None);
+        }
+        let mut expected = HashMap::new();
+        for (group, count) in [13, 2, 1, 3].into_iter().enumerate() {
+            let project = format!("00000000-0000-4000-8000-{group:012}");
+            let path = home.join(format!("project{group}")).display().to_string();
+            f.project(&project, &path, 1);
+            for n in 0..count {
+                let id = format!("group-{group}-chat-{n}");
+                f.thread(&id, &path, None);
+                expected.insert(id, project.clone());
+            }
+        }
+        let host = format!("local:{}", home.display());
+        let state_path = home.join(".codex-global-state.json");
+        let state = json!({
+            "local-projects":{"manual-card":{"id":"manual-card","name":"手动重建","rootPaths":[f.root]}},
+            "project-order":["manual-card"],
+            "thread-project-assignments":{},
+            "projectless-thread-ids":independent,
+            "app-server-project-id-by-legacy-project-id-by-host":{(&host):{"manual-card":NEW,"vanished-card":OLD}},
+            "electron-account-renderer-state-v1":{"owner":local_project_owner(home).unwrap().unwrap()}
+        });
+        fs::write(&state_path, state.to_string()).unwrap();
+        let original = f.state();
+        assert!(original.iter().all(|(_, p)| p.is_none()));
+        let check = sidebar_projects(home, SidebarAction::Check).unwrap();
+        assert!(check.can_repair);
+        assert_eq!(f.state(), original);
+        let repaired = sidebar_projects(home, SidebarAction::Repair).unwrap();
+        assert_eq!(
+            (
+                repaired.changed_count,
+                repaired.grouped_thread_count,
+                repaired.active_project_count
+            ),
+            (4, 19, 5)
+        );
+        let after: Value = serde_json::from_slice(&fs::read(&state_path).unwrap()).unwrap();
+        assert_eq!(after["local-projects"].as_object().unwrap().len(), 5);
+        assert_eq!(
+            after["local-projects"]["manual-card"],
+            state["local-projects"]["manual-card"]
+        );
+        assert_eq!(
+            after["projectless-thread-ids"],
+            state["projectless-thread-ids"]
+        );
+        assert_eq!(
+            after["thread-project-assignments"]
+                .as_object()
+                .unwrap()
+                .len(),
+            19
+        );
+        for (id, project) in f.state() {
+            assert_eq!(project.as_ref(), expected.get(&id));
+            if let Some(native) = expected.get(&id) {
+                let card = after["thread-project-assignments"][&id]["projectId"]
+                    .as_str()
+                    .unwrap();
+                assert_eq!(
+                    after["app-server-project-id-by-legacy-project-id-by-host"][&host][card]
+                        .as_str(),
+                    Some(native.as_str())
+                );
+            } else {
+                assert!(
+                    !after["thread-project-assignments"]
+                        .as_object()
+                        .unwrap()
+                        .contains_key(&id)
+                );
+            }
+        }
+        assert!(
+            !sidebar_projects(home, SidebarAction::Check)
+                .unwrap()
+                .can_repair
+        );
+        sidebar_projects(home, SidebarAction::Undo).unwrap();
+        assert_eq!(f.state(), original);
+        assert_eq!(
+            serde_json::from_slice::<Value>(&fs::read(&state_path).unwrap()).unwrap(),
+            state
+        );
+
+        // After an accidental undo in the previous release, the next Apply must
+        // restore the old batch *and* the new selection in one operation.
+        let picked = independent[0].clone();
+        let selected = std::collections::BTreeMap::from([(picked.clone(), NEW.to_owned())]);
+        let result = super::super::sidebar_projects_with_selection(
+            home,
+            SidebarAction::Repair,
+            false,
+            &selected,
+        )
+        .unwrap();
+        assert_eq!(
+            (
+                result.changed_count,
+                result.grouped_thread_count,
+                result.active_project_count
+            ),
+            (4, 20, 5)
+        );
+        let restored: Value = serde_json::from_slice(&fs::read(&state_path).unwrap()).unwrap();
+        expected.insert(picked.clone(), NEW.to_owned());
+        for (thread, project) in f.state() {
+            assert_eq!(project.as_ref(), expected.get(&thread));
+            if let Some(native) = project {
+                let card = restored["thread-project-assignments"][&thread]["projectId"]
+                    .as_str()
+                    .unwrap();
+                assert_eq!(
+                    restored["app-server-project-id-by-legacy-project-id-by-host"][&host][card],
+                    native
+                );
+            }
+        }
+        assert_eq!(restored["projectless-thread-ids"], json!(&independent[1..]));
+        assert!(
+            !sidebar_projects(home, SidebarAction::Check)
+                .unwrap()
+                .can_repair
+        );
+    }
+
+    #[test]
+    fn partial_sidebar_rebuild_and_explicit_legacy_repair_are_owner_scoped_and_reversible() {
+        let f = Fixture::new();
+        f.project(OLD, &f.root, 1);
+        f.project(NEW, &f.root, 2);
+        let second = format!("{}/another", f.root);
+        f.project(OTHER, &second, 1);
+        let unknown = format!("{}/unknown", f.root);
+        f.project(HIDDEN, &unknown, 1);
+        f.thread("known", &second, None);
+        for (id, cwd) in [
+            ("visible-legacy", &f.root),
+            ("hidden-legacy", &second),
+            ("protected-legacy", &second),
+            ("unknown-origin", &second),
+            ("partial-identity", &second),
+            ("only-unknown", &unknown),
+        ] {
+            f.thread(id, cwd, None);
+        }
+        f.db.execute(
+            "UPDATE threads SET creator_user_id=NULL, creator_account_id=NULL WHERE id!='known'",
+            [],
+        )
+        .unwrap();
+        f.db.execute(
+            "UPDATE threads SET thread_source=NULL WHERE id='unknown-origin'",
+            [],
+        )
+        .unwrap();
+        f.db.execute(
+            "UPDATE threads SET creator_user_id='someone' WHERE id='partial-identity'",
+            [],
+        )
+        .unwrap();
+        let choices = HashMap::from([("protected-legacy".to_owned(), String::new())]);
+        let inspect = |opt| {
+            inspect_project_candidates(f.tmp.path(), &[NEW.to_owned()], &choices, opt).unwrap()
+        };
+        let before = f.state();
+        let (strict, summary) = inspect(false);
+        assert_eq!(summary.eligible_legacy_count, 2);
+        assert_eq!(summary.eligible_legacy_by_project.len(), 2);
+        assert_eq!(summary.eligible_legacy_by_project[NEW], 1);
+        assert!(!strict.iter().any(|p| p.id == HIDDEN));
+        let strict_updates = repair_thread_memberships(f.tmp.path(), &strict).unwrap();
+        assert_eq!(strict_updates.len(), 1);
+        assert_eq!(strict_updates[0].thread_id, "known");
+        undo_thread_memberships(f.tmp.path(), &strict_updates).unwrap();
+        let (opt, _) = inspect(true);
+        let changes = repair_thread_memberships(f.tmp.path(), &opt).unwrap();
+        assert_eq!(changes.len(), 3);
+        assert_eq!(changes.iter().filter(|a| a.legacy).count(), 2);
+        let null_users:u64=f.db.query_row("SELECT count(*) FROM threads WHERE creator_user_id IS NULL AND creator_account_id IS NULL",[],|r|r.get(0)).unwrap();
+        assert_eq!(null_users, 5);
+        assert_eq!(inspect(true).1.eligible_legacy_count, 0);
+        undo_thread_memberships(f.tmp.path(), &changes).unwrap();
+        assert_eq!(f.state(), before);
+    }
+
+    #[test]
+    fn choose_one_projectless_chat_for_a_rebuilt_card_and_undo_only_that_choice() {
+        use super::super::{SidebarAction, sidebar_projects, sidebar_projects_with_selection};
+        use std::collections::BTreeMap;
+        let f = Fixture::new();
+        let home = f.tmp.path();
+        f.project(OLD, &f.root, 1);
+        f.project(NEW, &f.root, 2);
+        let unrelated = home.join("other").display().to_string();
+        f.project(OTHER, &unrelated, 1);
+        for id in [
+            "wanted",
+            "leave-alone",
+            "archived",
+            "other-user",
+            "other-host",
+            "placed",
+            "legacy",
+        ] {
+            f.thread(id, &f.root, None);
+        }
+        f.thread("unrelated", &unrelated, None);
+        f.db.execute_batch(
+            "ALTER TABLE threads ADD COLUMN name TEXT;
+            ALTER TABLE threads ADD COLUMN title TEXT;
+            UPDATE threads SET name='桌面标题',title='较长的旧标题' WHERE id='wanted';
+            UPDATE threads SET archived=1 WHERE id='archived';
+            UPDATE threads SET creator_user_id='different' WHERE id='other-user';
+            UPDATE threads SET creator_user_id=NULL, creator_account_id=NULL WHERE id='legacy';",
+        )
+        .unwrap();
+        let host = format!("local:{}", home.display());
+        let path = home.join(".codex-global-state.json");
+        let state = json!({
+            "local-projects":{"rebuilt":{"id":"rebuilt","name":"重建项目","rootPaths":[f.root]}},
+            "project-order":["rebuilt"],
+            "app-server-project-id-by-legacy-project-id-by-host":{(&host):{"rebuilt":NEW}},
+            "projectless-thread-ids":["unrelated","wanted","leave-alone","archived","other-user","other-host","placed","legacy"],
+            "thread-project-membership-host-ids":{"other-host":"remote:abc"},
+            "thread-project-assignments":{"placed":{"projectKind":"remote","projectId":"external"}}
+        });
+        fs::write(&path, state.to_string()).unwrap();
+        let before = f.state();
+        let checked =
+            sidebar_projects_with_selection(home, SidebarAction::Check, false, &BTreeMap::new())
+                .unwrap();
+        assert!(!checked.can_repair);
+        assert_eq!(checked.projectless_choices.len(), 2);
+        let target = checked
+            .projectless_choices
+            .iter()
+            .find(|c| c.thread_id == "wanted")
+            .unwrap();
+        assert_eq!(target.project_id, NEW);
+        assert_eq!(target.title, "桌面标题");
+        let stale = BTreeMap::from([("wanted".into(), OLD.into())]);
+        assert!(
+            sidebar_projects_with_selection(home, SidebarAction::Repair, false, &stale).is_err()
+        );
+        assert_eq!(f.state(), before);
+        let selected = BTreeMap::from([("wanted".into(), NEW.into())]);
+        let changed =
+            sidebar_projects_with_selection(home, SidebarAction::Repair, false, &selected).unwrap();
+        assert_eq!(
+            (changed.changed_count, changed.grouped_thread_count),
+            (0, 1)
+        );
+        let mut after: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(after["local-projects"], state["local-projects"]);
+        assert_eq!(
+            after["thread-project-assignments"]["wanted"],
+            json!({"projectKind":"local","projectId":"rebuilt"})
+        );
+        assert!(f.state().iter().all(|(id, p)| if id == "wanted" {
+            p.as_deref() == Some(NEW)
+        } else {
+            p.is_none()
+        }));
+        let flags = after["projectless-thread-ids"].as_array_mut().unwrap();
+        assert!(
+            flags.iter().all(|id| id != "wanted") && flags.iter().any(|id| id == "leave-alone")
+        );
+        flags.push(json!("new-independent"));
+        fs::write(&path, after.to_string()).unwrap();
+        let recheck =
+            sidebar_projects_with_selection(home, SidebarAction::Check, false, &BTreeMap::new())
+                .unwrap();
+        assert!(
+            recheck
+                .projectless_choices
+                .iter()
+                .all(|c| c.thread_id != "wanted")
+        );
+        sidebar_projects(home, SidebarAction::Undo).unwrap();
+        let undone: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(
+            undone["thread-project-assignments"],
+            state["thread-project-assignments"]
+        );
+        let flags = undone["projectless-thread-ids"].as_array().unwrap();
+        assert!(
+            flags.iter().any(|id| id == "new-independent")
+                && state["projectless-thread-ids"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|id| flags.contains(id))
+        );
+        assert_eq!(f.state(), before);
     }
 
     #[test]
@@ -662,7 +1093,13 @@ mod tests {
         assert_eq!(f.preview(&[])[0].pending_assignments.len(), 1);
         f.project(NEW, &f.root, 2);
         f.thread("older-link", &f.root, Some(OLD));
-        assert!(f.preview(&[NEW]).is_empty());
+        let before_seed = f.preview(&[NEW]);
+        assert_eq!(before_seed[0].pending_assignments.len(), 1);
+        assert_eq!(
+            before_seed[0].pending_assignments[0].thread_id,
+            "not-yet-assigned"
+        );
+        assert!(before_seed[0].predecessor_id.is_none());
         f.thread("seed", &f.root, Some(NEW));
         assert!(f.preview(&[OLD, NEW]).is_empty());
         assert!(f.preview(&[]).is_empty());

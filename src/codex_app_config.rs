@@ -8,7 +8,11 @@ pub(crate) use project_membership::{
     LocalProjectCandidate, ThreadAssignment, local_project_owner, repair_thread_memberships,
     undo_thread_memberships,
 };
-pub(crate) use sidebar_projects::{SidebarAction, sidebar_projects, sidebar_receipt_dir};
+pub(crate) use sidebar_projects::{
+    ProjectlessChoice, SidebarAction, SidebarUndoPreview, apply_sidebar_undo, preview_sidebar_undo,
+    sidebar_projects, sidebar_projects_with_options, sidebar_projects_with_selection,
+    sidebar_receipt_dir,
+};
 
 #[cfg(target_os = "macos")]
 use std::process::Command;
@@ -3831,6 +3835,56 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    // Opt-in field diagnosis: never infer the user's home and never apply a repair.
+    #[test]
+    #[ignore = "set HUB_PROJECT_PREVIEW_HOME to a specific Codex directory for a read-only check"]
+    fn preview_project_repair_readonly() {
+        let home = PathBuf::from(
+            std::env::var_os("HUB_PROJECT_PREVIEW_HOME").expect("explicit directory required"),
+        );
+        assert!(home.is_absolute());
+        for include_legacy in [false, true] {
+            let report = sidebar_projects_with_selection(
+                &home,
+                SidebarAction::Check,
+                include_legacy,
+                &Default::default(),
+            )
+            .expect("read-only project preview");
+            println!(
+                "include_legacy={include_legacy}; visible={}; can_repair={}; {}",
+                report.active_project_count, report.can_repair, report.detail
+            );
+            if let Ok(thread) = std::env::var("HUB_PROJECT_PREVIEW_THREAD") {
+                let c = report
+                    .projectless_choices
+                    .iter()
+                    .find(|c| c.thread_id == thread)
+                    .expect("specified chat should be offered for the rebuilt project");
+                if let Ok(expected) = std::env::var("HUB_PROJECT_PREVIEW_NAME") {
+                    assert!(c.project_name == expected, "unexpected destination");
+                }
+                if let Ok(expected) = std::env::var("HUB_PROJECT_PREVIEW_TITLE") {
+                    assert!(c.title == expected, "unexpected visible title");
+                }
+                let selected = std::collections::BTreeMap::from([(thread, c.project_id.clone())]);
+                let selected_preview = sidebar_projects_with_selection(
+                    &home,
+                    SidebarAction::Check,
+                    include_legacy,
+                    &selected,
+                )
+                .expect("read-only selection preview");
+                println!(
+                    "specified title and destination matched; choices={}; selected preview: {}",
+                    report.projectless_choices.len(),
+                    selected_preview.detail
+                );
+                assert!(selected_preview.can_repair);
+            }
+        }
+    }
 
     fn assert_standalone_tools_provider(config: &str, provider_name: &str) {
         let doc = config

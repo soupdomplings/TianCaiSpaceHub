@@ -1,0 +1,26 @@
+/* The moving surface never owns text, focus or pointer input. */
+[data-track]{position:relative;isolation:isolate}
+.selection-track{position:absolute;z-index:-1;pointer-events:none;transform-origin:0 0;background:var(--selection-fill,var(--accent-soft));border-radius:var(--selection-radius,9px);box-shadow:var(--selection-shadow,none)}
+#nav-stack{--selection-fill:var(--card);--selection-shadow:0 1px 4px #20344a19;--selection-radius:10px;padding:2px}
+[data-theme=dark] #nav-stack{--selection-fill:var(--accent-soft);--selection-shadow:none}
+#nav .navbtn[aria-current],#nav .fold-toggle.is-current,.seg[data-track] button[aria-pressed=true],.providerrow.active{background:transparent;box-shadow:none}
+#nav button:active:not(:disabled),[data-track] button:active:not(:disabled){transform:none}
+#nav .navbtn,#nav .navbtn[aria-current]{font-weight:550}
+.seg[data-track]{--selection-fill:var(--card);--selection-radius:7px;--selection-shadow:0 1px 4px #19273520}
+.navgroup{margin-bottom:17px}
+.fold-toggle{width:100%;display:flex;align-items:center;justify-content:space-between;border-radius:9px;padding:5px 10px;min-height:31px;color:var(--muted);font-size:12px;font-weight:610;text-align:left}
+.fold-toggle:hover{color:var(--ink);background:var(--soft)}
+.fold-toggle.is-current{color:var(--accent)}
+.fold-toggle svg{transition:transform 180ms ease;transform:rotate(0)}
+.fold-toggle[aria-expanded=true] svg{transform:rotate(90deg)}
+.navfold{display:grid;grid-template-rows:1fr;transition:grid-template-rows 235ms cubic-bezier(.22,.72,.18,1)}
+.navfold[inert]{grid-template-rows:0fr}
+.fold-clip{min-height:0;overflow:hidden}
+.fold-clip .navbtn{transition:opacity 145ms ease var(--row-delay,0ms),color .14s,background .14s}
+.navfold[inert] .navbtn{opacity:0;transition-delay:0ms}
+.fold-clip .navbtn:focus-visible{outline-offset:-3px}
+.fold-toggle:focus-visible{outline-offset:-2px}
+.crumb .selection-track{opacity:1}
+@media(prefers-reduced-motion:reduce){.navfold,.navfold .navbtn,.fold-toggle svg{transition:none!important}}
+:root[data-reduce=on] :is(.navfold,.navfold .navbtn,.fold-toggle svg){transition:none!important}
+@media(forced-colors:active){.selection-track{background:Highlight;forced-color-adjust:none}[data-track] [aria-current=page],[data-track] [aria-pressed=true],.fold-toggle.is-current{color:HighlightText!important;forced-color-adjust:none}}

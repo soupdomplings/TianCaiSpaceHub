@@ -1,3 +1,5 @@
+mod dashboard;
+const SUMMARY: usize = 2;
 use super::{
     api::ApiClient,
     shell::{PageId, Shell},
@@ -5,7 +7,6 @@ use super::{
     theme,
 };
 use super::{
-    controls::{Button, ButtonKind},
     runtime_scene::RuntimeScene,
     visual::{self, Canvas},
 };
@@ -57,14 +58,16 @@ fn visible_activity(mut activity: Value) -> Value {
 #[derive(Clone)]
 pub(super) struct Overview {
     pub page: Panel,
+    book: SimpleBook,
     graph: Panel,
     scroll: ScrolledWindow,
     chart: Panel,
+    dashboard: dashboard::Dashboard,
+    summary_days: Rc<Cell<i64>>,
     stats: [StaticText; 4],
     status: StaticText,
     mode: Rc<Cell<usize>>,
     days: Rc<Cell<i64>>,
-    data: Rc<RefCell<Value>>,
     scene: Rc<RefCell<RuntimeScene>>,
     usage: Rc<RefCell<Value>>,
     hits: Rc<RefCell<Vec<Hit>>>,
@@ -89,26 +92,6 @@ impl Overview {
         let page = Panel::builder(&shell.book).build();
         page.set_background_color(theme::theme().bg_app);
         let column = BoxSizer::builder(Orientation::Vertical).build();
-        let toolbar = BoxSizer::builder(Orientation::Horizontal).build();
-        let run = Button::builder(&page)
-            .with_label("运行状态")
-            .with_kind(ButtonKind::Tab)
-            .with_size(Size::new(100, 42))
-            .build();
-        let stats_button = Button::builder(&page)
-            .with_label("使用统计")
-            .with_kind(ButtonKind::Tab)
-            .with_size(Size::new(100, 42))
-            .build();
-        run.set_selected(true);
-        toolbar.add(&run, 0, SizerFlag::Right, 12);
-        toolbar.add(&stats_button, 0, SizerFlag::default(), 0);
-        column.add_sizer(
-            &toolbar,
-            0,
-            SizerFlag::Expand | SizerFlag::Bottom,
-            page.from_dip(12),
-        );
         let book = SimpleBook::builder(&page).build();
         let running = Panel::builder(&book).build();
         let rs = BoxSizer::builder(Orientation::Vertical).build();
@@ -139,6 +122,8 @@ impl Overview {
         let dimension = usage_view.dimension;
         let breakdown = usage_view.breakdown;
         book.add_page(&usage_page, "使用统计", false, None);
+        let dashboard = dashboard::Dashboard::new(&book, shell);
+        book.add_page(&dashboard.page, "概览", true, None);
         column.add(&book, 1, SizerFlag::Expand, 0);
         let status = StaticText::builder(&page).with_label("").build();
         status.set_foreground_color(theme::theme().error);
@@ -149,14 +134,16 @@ impl Overview {
         shell.register(PageId::Overview, &page);
         let ui = Self {
             page,
+            book,
             graph,
             scroll,
             chart,
             stats,
             status,
-            mode: Rc::new(Cell::new(0)),
+            mode: Rc::new(Cell::new(SUMMARY)),
+            dashboard,
+            summary_days: Rc::new(Cell::new(1)),
             days,
-            data: Default::default(),
             scene: Default::default(),
             usage: Default::default(),
             hits: Default::default(),
@@ -245,26 +232,26 @@ impl Overview {
             }
             super::request_browser::show(frame, action_api.clone(), text, filter);
         });
-        for (i, b) in [run, stats_button].into_iter().enumerate() {
-            let ui = ui.clone();
+        for (index, b) in ui.dashboard.periods.keys().iter().enumerate() {
+            let u = ui.clone();
             b.on_click(move |_| {
-                if i == 0 && ui.mode.get() != 0 {
-                    ui.reset_scene();
+                let days = [1, 7][index];
+                if u.summary_days.replace(days) == days {
+                    return;
                 }
-                ui.mode.set(i);
-                super::motion::change_page(book, i);
-                run.set_selected(i == 0);
-                stats_button.set_selected(i == 1);
-                run.set_foreground_color(if i == 0 {
-                    theme::theme().accent
-                } else {
-                    theme::theme().ink_secondary
-                });
-                stats_button.set_foreground_color(if i == 1 {
-                    theme::theme().accent
-                } else {
-                    theme::theme().ink_secondary
-                });
+                u.dashboard.periods.select(index);
+                u.dashboard.usage(Value::Null);
+                u.usage_dirty.set(true);
+                u.fetch();
+            });
+        }
+        for (index, link) in [ui.dashboard.runtime_link, ui.dashboard.usage_link]
+            .into_iter()
+            .enumerate()
+        {
+            let ui = ui.clone();
+            link.on_click(move |_| {
+                ui.select_panel(index);
                 ui.fetch();
             });
         }
@@ -376,50 +363,64 @@ impl Overview {
             let result = u.pending.lock().ok().and_then(|mut s| s.take());
             if let Some(result) = result {
                 u.busy.store(false, Ordering::SeqCst);
+                let previous_error = u.status.get_label();
                 match result {
                     Ok((key, activity, usage)) => {
-                        u.scene.borrow_mut().observe(&activity);
-                        let view = u.scene.borrow().view(
-                            crate::ai_gateway::request_log::now_ms(),
-                            theme::motion_enabled(),
-                        );
-                        let min = visual::dip_size(
-                            &u.graph,
-                            620,
-                            visual::runtime_height(
-                                view.clients.len(),
-                                view.routes.len(),
-                                view.mcps.len(),
-                            ),
-                        );
-                        if u.graph.get_min_size() != min {
-                            u.graph.set_min_size(min);
-                            u.scroll.layout();
-                            u.scroll.fit_inside();
+                        if u.mode.get() == SUMMARY {
+                            u.dashboard.activity(&activity);
                         }
-                        *u.data.borrow_mut() = activity;
-                        u.fresh.set(Instant::now());
+                        if u.mode.get() == 0 {
+                            u.scene.borrow_mut().observe(&activity);
+                            let view = u.scene.borrow().view(
+                                crate::ai_gateway::request_log::now_ms(),
+                                theme::motion_enabled(),
+                            );
+                            let min = visual::dip_size(
+                                &u.graph,
+                                620,
+                                visual::runtime_height(
+                                    view.clients.len(),
+                                    view.routes.len(),
+                                    view.mcps.len(),
+                                ),
+                            );
+                            if u.graph.get_min_size() != min {
+                                u.graph.set_min_size(min);
+                                u.scroll.layout();
+                                u.scroll.fit_inside();
+                            }
+                            u.fresh.set(Instant::now());
+                        }
                         if let Some(usage) = usage.filter(|_| key == u.filter_key()) {
-                            u.render_stats(&usage);
-                            *u.usage.borrow_mut() = usage;
-                            u.render_breakdown();
+                            if u.mode.get() == SUMMARY {
+                                u.dashboard.usage(usage);
+                            } else if u.mode.get() == 1 {
+                                u.render_stats(&usage);
+                                *u.usage.borrow_mut() = usage;
+                                u.render_breakdown();
+                                u.chart.refresh(false, None);
+                            }
                             u.usage_dirty.set(false);
                             u.last_usage.set(Instant::now());
-                            u.chart.refresh(false, None);
                         }
-                        u.status.set_label("");
+                        if !previous_error.is_empty() {
+                            u.status.set_label("");
+                        }
                     }
-                    Err(error) => u.status.set_label(&error),
+                    Err(error) if error != previous_error => u.status.set_label(&error),
+                    Err(_) => {}
                 }
-                u.status.show(!u.status.get_label().is_empty());
-                u.page.layout();
+                let error = u.status.get_label();
+                if error != previous_error {
+                    u.status.show(!error.is_empty());
+                    u.page.layout();
+                }
             }
-            if u.mode.get() == 1 && u.last_usage.get().elapsed() > Duration::from_secs(15) {
+            if u.mode.get() != 0 && u.last_usage.get().elapsed() > Duration::from_secs(15) {
                 u.usage_dirty.set(true);
             }
             if u.last_fetch.get().elapsed()
                 > Duration::from_millis(if u.mode.get() == 0 { 300 } else { 1200 })
-                || (u.mode.get() == 1 && u.usage_dirty.get())
             {
                 u.fetch();
             }
@@ -435,8 +436,9 @@ impl Overview {
     }
     pub fn enter(&self, id: PageId) {
         let active = id == PageId::Overview;
-        if active && !self.active.get() {
-            self.reset_scene();
+        if active {
+            self.select_panel(SUMMARY);
+            self.dashboard.page.scroll_coords(-1, 0);
         }
         self.active.set(active);
         if let Some(timer) = self.timer.borrow().as_ref() {
@@ -447,6 +449,16 @@ impl Overview {
                 timer.stop();
             }
         }
+    }
+    fn select_panel(&self, index: usize) {
+        if self.mode.replace(index) == index {
+            return;
+        }
+        if index == 0 {
+            self.reset_scene();
+        }
+        self.usage_dirty.set(true);
+        super::motion::change_page(self.book, index);
     }
     fn reset_scene(&self) {
         self.scene
@@ -460,6 +472,17 @@ impl Overview {
         self.graph.refresh(false, None);
     }
     fn filter(&self) -> LogFilter {
+        if self.mode.get() == SUMMARY {
+            return LogFilter {
+                calendar_days: self.summary_days.get(),
+                bucket_minutes: if self.summary_days.get() == 1 {
+                    60
+                } else {
+                    1440
+                },
+                ..Default::default()
+            };
+        }
         LogFilter {
             calendar_days: self.days.get(),
             bucket_minutes: if self.days.get() == 1 { 60 } else { 1440 },
@@ -478,7 +501,7 @@ impl Overview {
             self.api.clone(),
             self.pending.clone(),
             self.filter(),
-            self.mode.get() == 1 && self.usage_dirty.get(),
+            self.mode.get() != 0 && self.usage_dirty.get(),
         );
         std::thread::spawn(move || {
             let result = (|| {

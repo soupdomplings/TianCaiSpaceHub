@@ -9,7 +9,7 @@ use std::{
 use wxdragon::{prelude::*, timer::Timer, widgets::SimpleBook};
 
 const TICK_MS: i32 = 16;
-pub(super) const PAGE_MS: u64 = 150;
+pub(super) const PAGE_MS: u64 = 145;
 pub(super) const POPUP_MS: u64 = 130;
 
 #[derive(Clone, Copy)]
@@ -272,7 +272,7 @@ fn parents_visible(window: &dyn WxWidget) -> bool {
 thread_local! {
     static BOOKS: RefCell<Vec<(usize, SimpleBook, PositionMotion)>> = const { RefCell::new(Vec::new()) };
 }
-/// Commit selection immediately, then move the incoming page by only 8 DIP.
+/// Commit selection immediately, then move the incoming page by only 2 DIP.
 /// Repeated background selection of the same page does not restart anything.
 pub(super) fn change_page(book: SimpleBook, index: usize) {
     let previous = book.selection();
@@ -320,7 +320,7 @@ pub(super) fn page_changed(book: SimpleBook, previous: i32) {
             motion.enter(
                 Target::Page(book, book.selection() as usize),
                 page.get_position(),
-                Point::new(book.from_dip(8), 0),
+                Point::new(0, book.from_dip(2)),
                 PAGE_MS,
             );
         }
@@ -362,7 +362,7 @@ pub(super) fn install_notebook(book: Notebook) {
                         motion.enter(
                             Target::NotebookPage(book, index as usize),
                             page.get_position(),
-                            Point::new(book.from_dip(8), 0),
+                            Point::new(0, book.from_dip(2)),
                             PAGE_MS,
                         );
                     }

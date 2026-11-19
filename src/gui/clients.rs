@@ -1374,12 +1374,7 @@ pub(super) fn review_inline_draft(frame: &Frame, shell: &Shell, id: ClientId) {
                 .unwrap();
             ui.model_list.set_selection(index as u32, true);
             ui.fill_model();
-            assert!(
-                picker
-                    .page
-                    .find_window_by_name("codex-visible-gpt-5.6")
-                    .is_some()
-            );
+            assert!(picker.has_visible_candidate("gpt-5.6"));
             super::native_model_review::click(&ui.model_view.remove_saved);
             ui.render();
             assert_eq!(picker.selected_models(), vec!["gpt-6"]);

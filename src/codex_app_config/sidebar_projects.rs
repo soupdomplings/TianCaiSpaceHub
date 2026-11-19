@@ -16,7 +16,10 @@ const STATE_FILE: &str = ".codex-global-state.json";
 const ACCOUNT_SCOPE: &str = "electron-account-renderer-state-v1";
 const CARDS: &str = "local-projects";
 const MEMBERS: &str = "thread-project-assignments";
+const PROJECTLESS: &str = "projectless-thread-ids";
 const SERVER_IDS: &str = "app-server-project-id-by-legacy-project-id-by-host";
+const MIGRATION: &str = "app-server-projects-migration-by-host";
+const ORDER: &str = "project-order";
 const DELETIONS: &str = "app-server-pending-project-deletions-by-host";
 type State = BTreeMap<String, Box<RawValue>>;
 
@@ -24,6 +27,7 @@ type State = BTreeMap<String, Box<RawValue>>;
 pub(crate) enum SidebarAction {
     Check,
     Repair,
+    #[cfg(test)]
     Undo,
 }
 
@@ -31,12 +35,24 @@ pub(crate) enum SidebarAction {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SidebarReport {
     pub(crate) active_project_count: usize,
+    pub(crate) planned_projects: usize,
+    pub(crate) planned_threads: usize,
     pub(crate) changed_count: usize,
     pub(crate) grouped_thread_count: usize,
     pub(crate) can_repair: bool,
     pub(crate) can_undo: bool,
     pub(crate) skipped: bool,
     pub(crate) detail: String,
+    #[serde(skip)] // Titles are for the local repair dialog, not reports or logs.
+    pub(crate) projectless_choices: Vec<ProjectlessChoice>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ProjectlessChoice {
+    pub(crate) thread_id: String,
+    pub(crate) project_id: String,
+    pub(crate) title: String,
+    pub(crate) project_name: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -52,6 +68,20 @@ struct Receipt {
     members_present: bool,
     member_changes: BTreeMap<String, (Option<Value>, Value)>,
     previous: Option<Box<RawValue>>,
+    #[serde(default)]
+    order_change: Option<(Option<Vec<String>>, Vec<String>)>,
+    #[serde(default)]
+    map_change: Option<MapChange>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    removed_markers: Vec<(usize, String)>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct MapChange {
+    host: String,
+    had_map: bool,
+    had_host: bool,
+    added: BTreeMap<String, String>,
 }
 
 pub(crate) fn sidebar_receipt_dir(home: &Path) -> PathBuf {
@@ -93,9 +123,17 @@ fn local_map<T: DeserializeOwned>(
     home: &Path,
 ) -> Result<BTreeMap<String, T>> {
     let all: BTreeMap<String, Box<RawValue>> = read_key(state, key)?;
+    Ok(local_host(all.keys(), home)?
+        .as_ref()
+        .and_then(|key| all.get(key))
+        .map(|raw| serde_json::from_str(raw.get()))
+        .transpose()?
+        .unwrap_or_default())
+}
+fn local_host<'a>(hosts: impl Iterator<Item = &'a String>, home: &Path) -> Result<Option<String>> {
     let current_home = home.canonicalize()?;
     let mut current = None;
-    for (host, section) in all {
+    for host in hosts {
         let Some(path) = host.strip_prefix("local:") else {
             continue;
         };
@@ -104,10 +142,53 @@ fn local_map<T: DeserializeOwned>(
             && (path == home || path.canonicalize().is_ok_and(|p| p == current_home))
         {
             ensure!(current.is_none(), "本机项目身份记录不唯一。");
-            current = Some(serde_json::from_str(section.get())?);
+            current = Some(host.clone());
         }
     }
-    Ok(current.unwrap_or_default())
+    Ok(current)
+}
+fn map_host(state: &State, home: &Path) -> Result<String> {
+    for key in [SERVER_IDS, MIGRATION, DELETIONS] {
+        let hosts: BTreeMap<String, Box<RawValue>> = read_key(state, key)?;
+        if let Some(host) = local_host(hosts.keys(), home)? {
+            return Ok(host);
+        }
+    }
+    let path = home.display().to_string();
+    Ok(format!(
+        "local:{}",
+        path.strip_prefix(r"\\?\").unwrap_or(&path)
+    ))
+}
+fn edit_map(state: &mut State, change: &MapChange, undo: bool) -> Result<()> {
+    let mut groups: BTreeMap<String, Box<RawValue>> = read_key(state, SERVER_IDS)?;
+    let mut ids: BTreeMap<String, String> = groups
+        .get(&change.host)
+        .map(|v| serde_json::from_str(v.get()))
+        .transpose()?
+        .unwrap_or_default();
+    for (legacy, native) in &change.added {
+        if undo {
+            ensure!(
+                ids.get(legacy) == Some(native),
+                "侧栏项目关联已被修改，未撤销本次修复。"
+            );
+            ids.remove(legacy);
+        } else {
+            ids.insert(legacy.clone(), native.clone());
+        }
+    }
+    if undo && !change.had_host && ids.is_empty() {
+        groups.remove(&change.host);
+    } else {
+        groups.insert(change.host.clone(), serde_json::value::to_raw_value(&ids)?);
+    }
+    if undo && !change.had_map && groups.is_empty() {
+        state.remove(SERVER_IDS);
+    } else {
+        state.insert(SERVER_IDS.into(), serde_json::value::to_raw_value(&groups)?);
+    }
+    Ok(())
 }
 fn write_state(home: &Path, state: &State) -> Result<()> {
     write_file_atomically(&home.join(STATE_FILE), &serde_json::to_vec(state)?)
@@ -201,7 +282,12 @@ fn edit_members(
     Ok(())
 }
 
-fn inspect_or_repair(home: &Path, apply: bool) -> Result<SidebarReport> {
+fn inspect_or_repair(
+    home: &Path,
+    apply: bool,
+    include_legacy: bool,
+    selected: &BTreeMap<String, String>,
+) -> Result<SidebarReport> {
     let path = receipt_path(home);
     let mut report = SidebarReport {
         can_undo: path.is_file(),
@@ -210,6 +296,7 @@ fn inspect_or_repair(home: &Path, apply: bool) -> Result<SidebarReport> {
     let state_bytes = match fs::read(home.join(STATE_FILE)) {
         Ok(b) => b,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            ensure!(selected.is_empty(), "侧栏项目已改变，请重新检查。");
             report.detail = "尚未找到 Codex 的桌面项目设置。".into();
             return Ok(report);
         }
@@ -217,12 +304,29 @@ fn inspect_or_repair(home: &Path, apply: bool) -> Result<SidebarReport> {
     };
     let mut state: State = serde_json::from_slice(&state_bytes)?;
     let Some(owner) = local_project_owner(home)? else {
+        ensure!(selected.is_empty(), "当前身份已改变，请重新检查。");
         report.detail = "当前不是 Hub 本机账户，未处理项目。".into();
         return Ok(report);
     };
     verify_owner(&state, &owner)?;
     let cards = current_cards(&state)?;
     let mapping: BTreeMap<String, String> = local_map(&state, SERVER_IDS, home)?;
+    let host = map_host(&state, home)?;
+    let mut rooted: BTreeMap<String, Vec<&String>> = BTreeMap::new();
+    for (id, card) in &cards {
+        for root in card["rootPaths"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+        {
+            if let Some(key) = super::project_membership::root_match_key(root) {
+                rooted.entry(key).or_default().push(id);
+            }
+        }
+    }
+    let remote: Vec<Value> = read_key(&state, "remote-projects")?;
+    let remote: HashSet<_> = remote.iter().filter_map(|p| p["id"].as_str()).collect();
     let deletions: BTreeMap<String, Value> = local_map(&state, DELETIONS, home)?;
     let visible: Vec<_> = cards
         .keys()
@@ -241,7 +345,14 @@ fn inspect_or_repair(home: &Path, apply: bool) -> Result<SidebarReport> {
         .collect();
     let explicit: BTreeMap<String, Value> = read_key(&state, MEMBERS)?;
     let hosts: BTreeMap<String, String> = read_key(&state, "thread-project-membership-host-ids")?;
-    let projectless: HashSet<String> = read_key(&state, "projectless-thread-ids")?;
+    let markers: Vec<String> = read_key(&state, PROJECTLESS)?;
+    let projectless: HashSet<_> = markers.iter().cloned().collect();
+    let projectless_count = projectless.len();
+    let standalone: HashSet<_> = projectless
+        .iter()
+        .filter(|id| !explicit.contains_key(*id) && hosts.get(*id).is_none_or(|h| h == "local"))
+        .cloned()
+        .collect();
     let mut anchors = std::collections::HashMap::new();
     for (thread, entry) in explicit {
         if let Some(id) = entry["projectId"].as_str()
@@ -261,42 +372,164 @@ fn inspect_or_repair(home: &Path, apply: bool) -> Result<SidebarReport> {
     ) {
         anchors.insert(id, String::new());
     }
-    let mut candidates =
-        super::project_membership::local_project_candidates_with_anchors(home, &visible, &anchors)?;
+    // Inspect both sets read-only, then narrow by desktop membership before
+    // presenting the exact opt-in count or passing any updates to SQLite.
+    let (mut candidates, mut evidence) = super::project_membership::inspect_with_standalone(
+        home,
+        &visible,
+        &anchors,
+        true,
+        &standalone,
+    )?;
+    // An existing desktop card can have an unmapped legacy ID. Never synthesize
+    // a second one at that root on the assumption that its ID is a native ID.
+    let mut ignored = 0usize;
+    let mut ids = BTreeMap::new();
     candidates.retain(|p| {
-        !deleting.contains(p.id.as_str()) && (cards.is_empty() || visible.contains(&p.id))
+        let mut legacy = mapping
+            .iter()
+            .filter(|(_, native)| *native == &p.id)
+            .map(|(id, _)| id);
+        let id = legacy.next().unwrap_or(&p.id);
+        let same_root =
+            super::project_membership::root_match_key(&p.root).and_then(|key| rooted.get(&key));
+        let accept = !deleting.contains(p.id.as_str())
+            && !remote.contains(id.as_str())
+            && legacy.next().is_none()
+            && mapping.get(id).is_none_or(|native| native == &p.id)
+            && same_root.is_none_or(|owners| owners.len() == 1 && owners[0] == id)
+            && (!cards.contains_key(id) || same_root.is_some());
+        if accept {
+            ids.insert(p.id.clone(), id.clone());
+        } else {
+            ignored += 1
+        }
+        accept
     });
-    let member_changes = desktop_plan(&state, &mut candidates, &mapping, &cards)?;
+    for candidate in &mut candidates {
+        candidate.pending_assignments.retain(|a| {
+            !a.previous_project_id
+                .as_deref()
+                .is_some_and(|id| deleting.contains(id))
+        });
+    }
+    let mut member_changes = desktop_plan(&state, &mut candidates, &mapping, &cards)?;
+    let mut selected_count = 0;
+    for p in &mut candidates {
+        let desktop_id = &ids[&p.id];
+        let Some((old, rows)) = evidence.standalone.remove(&p.id) else {
+            continue;
+        };
+        let Some(card) = cards.get(desktop_id) else {
+            continue;
+        };
+        if deleting.contains(old.as_str())
+            || card["rootPaths"].as_array().is_none_or(|roots| {
+                roots.len() != 1
+                    || !roots[0]
+                        .as_str()
+                        .is_some_and(|root| super::project_membership::same_root(root, &p.root))
+            })
+        {
+            continue;
+        }
+        let name = card["name"].as_str().unwrap_or(&p.name);
+        for (id, title) in rows {
+            if selected.get(&id) == Some(&p.id) {
+                selected_count += 1;
+                p.pending_assignments.push(ThreadAssignment {
+                    thread_id: id.clone(),
+                    project_id: p.id.clone(),
+                    previous_project_id: None,
+                    legacy: false,
+                });
+                member_changes.insert(
+                    id.clone(),
+                    (None, json!({"projectKind":"local","projectId":desktop_id})),
+                );
+            }
+            report.projectless_choices.push(ProjectlessChoice {
+                thread_id: id,
+                project_id: p.id.clone(),
+                title,
+                project_name: name.to_string(),
+            });
+        }
+    }
+    ensure!(
+        selected_count == selected.len(),
+        "所选会话或目标项目已经改变，未执行修复。请重新检查并选择。"
+    );
+    let eligible = candidates
+        .iter()
+        .flat_map(|p| p.pending_assignments.iter())
+        .filter(|a| a.legacy)
+        .count();
+    if !include_legacy {
+        for p in &mut candidates {
+            p.pending_assignments.retain(|a| {
+                if a.legacy {
+                    member_changes.remove(&a.thread_id);
+                }
+                !a.legacy
+            });
+        }
+    }
     let assignments: Vec<_> = candidates
         .iter()
         .flat_map(|p| p.pending_assignments.iter().cloned())
         .collect();
     let mut rebuilt = BTreeMap::new();
-    if cards.is_empty() {
-        for p in &candidates {
-            let mut legacy = mapping
-                .iter()
-                .filter(|(_, native)| *native == &p.id)
-                .map(|(id, _)| id);
-            let id = legacy.next().unwrap_or(&p.id);
-            ensure!(
-                legacy.next().is_none() && !rebuilt.contains_key(id),
-                "相同目录存在多个项目标识，未更改归属。"
-            );
+    let mut map_added = BTreeMap::new();
+    let mut order: Vec<String> = read_key(&state, ORDER)?;
+    let old_order = state.contains_key(ORDER).then(|| order.clone());
+    let mut added_order = false;
+    for p in &candidates {
+        let id = &ids[&p.id];
+        if !cards.contains_key(id) {
             rebuilt.insert(id.clone(),json!({"id":id,"name":p.name,"rootPaths":[p.root],"createdAt":p.created_at_ms,"updatedAt":p.updated_at_ms}));
+            if !mapping.contains_key(id) {
+                map_added.insert(id.clone(), p.id.clone());
+            }
+            if !order.contains(id) {
+                order.push(id.clone());
+                added_order = true;
+            }
         }
     }
     report.active_project_count = cards.len();
-    report.can_repair = !rebuilt.is_empty() || !assignments.is_empty();
-    report.detail = if report.can_repair {
-        format!(
-            "可补回 {} 个项目、将 {} 个会话归入对应项目。",
-            rebuilt.len(),
-            assignments.len()
-        )
-    } else {
-        "没有找到需要补回且能确定归属的项目或会话。".into()
-    };
+    report.planned_projects = rebuilt.len();
+    report.planned_threads = assignments.len();
+    report.can_repair = report.planned_projects != 0 || report.planned_threads != 0;
+    let detail_tail = format!(
+        "{}{}客户端共标记 {projectless_count} 个“无项目”会话。{}",
+        if !include_legacy && eligible != 0 {
+            format!("另有 {eligible} 个缺少旧身份记录的会话，可勾选后重新检查。")
+        } else {
+            String::new()
+        },
+        if ignored != 0 {
+            format!("跳过 {ignored} 个待删除或无法确认的项目。")
+        } else {
+            String::new()
+        },
+        if report.projectless_choices.is_empty() {
+            "本次保留这些标记。".to_owned()
+        } else {
+            format!(
+                "其中 {} 个与重建项目的目录相同，已选择 {} 个归类，其余保持原状。",
+                report.projectless_choices.len(),
+                selected_count
+            )
+        },
+    );
+    report.detail = format!(
+        "当前侧栏有 {} 个项目。可补回 {} 个项目，将 {} 个会话归入对应项目。{}",
+        cards.len(),
+        rebuilt.len(),
+        assignments.len(),
+        detail_tail
+    );
     if !apply || !report.can_repair {
         return Ok(report);
     }
@@ -307,13 +540,45 @@ fn inspect_or_repair(home: &Path, apply: bool) -> Result<SidebarReport> {
     };
     let cards_before = state.get(CARDS).cloned();
     let members_present = state.contains_key(MEMBERS);
+    let mut removed_markers = Vec::new();
+    if !selected.is_empty() {
+        let mut retained = Vec::new();
+        for (idx, id) in markers.into_iter().enumerate() {
+            if selected.contains_key(&id) {
+                removed_markers.push((idx, id));
+            } else {
+                retained.push(id)
+            }
+        }
+        state.insert(
+            PROJECTLESS.into(),
+            serde_json::value::to_raw_value(&retained)?,
+        );
+    }
+    let order_change = added_order.then_some((old_order, order));
+    if let Some((_, after)) = &order_change {
+        state.insert(ORDER.into(), serde_json::value::to_raw_value(after)?);
+    }
+    let mut map_change = None;
+    if !map_added.is_empty() {
+        let hosts: BTreeMap<String, Box<RawValue>> = read_key(&state, SERVER_IDS)?;
+        map_change = Some(MapChange {
+            had_map: state.contains_key(SERVER_IDS),
+            had_host: hosts.contains_key(&host),
+            host,
+            added: map_added,
+        });
+        edit_map(&mut state, map_change.as_ref().unwrap(), false)?;
+    }
     edit_members(&mut state, &member_changes, false, members_present)?;
     let desktop_changed = !rebuilt.is_empty() || !member_changes.is_empty();
     if !rebuilt.is_empty() {
-        state.insert(CARDS.into(), serde_json::value::to_raw_value(&rebuilt)?);
+        let mut all = cards;
+        all.extend(rebuilt.clone());
+        state.insert(CARDS.into(), serde_json::value::to_raw_value(&all)?);
     }
     let receipt = Receipt {
-        version: 3,
+        version: 5,
         owner,
         db_dir: crate::codex_project_status::sqlite_dir(home)?.canonicalize()?,
         cards_before,
@@ -326,6 +591,9 @@ fn inspect_or_repair(home: &Path, apply: bool) -> Result<SidebarReport> {
         previous,
         members_present,
         member_changes,
+        map_change,
+        order_change,
+        removed_markers,
     };
     fs::create_dir_all(sidebar_receipt_dir(home))?;
     write_file_atomically(&path, &serde_json::to_vec(&receipt)?)?;
@@ -347,20 +615,62 @@ fn inspect_or_repair(home: &Path, apply: bool) -> Result<SidebarReport> {
     report.grouped_thread_count = receipt.assignments.len();
     report.can_repair = false;
     report.can_undo = true;
+    report.projectless_choices.clear();
     report.detail = format!(
-        "已补回 {} 个项目，{} 个会话已归入对应项目。",
-        report.changed_count, report.grouped_thread_count
+        "已补回 {} 个项目，当前侧栏共 {} 个项目；{} 个会话已归入对应项目。{}",
+        report.changed_count, report.active_project_count, report.grouped_thread_count, detail_tail
     );
+    #[cfg(not(test))]
+    crate::chain_log::write_line(format!(
+        "[project_sidebar] action=apply cards={} conversations={}",
+        report.changed_count, report.grouped_thread_count
+    ));
     Ok(report)
 }
-fn undo(home: &Path) -> Result<SidebarReport> {
-    let path = receipt_path(home);
-    let receipt: Receipt = serde_json::from_slice(&fs::read(&path)?)?;
+
+#[derive(Clone, Debug)]
+pub(crate) struct SidebarUndoPreview {
+    fingerprint: [u8; 32],
+    pub(crate) cards: usize,
+    pub(crate) assignments: usize,
+}
+
+fn receipt_for_undo(home: &Path) -> Result<(Receipt, SidebarUndoPreview)> {
+    use sha2::{Digest, Sha256};
+    let bytes = fs::read(receipt_path(home)).context("项目修复记录已不存在，请刷新备份列表。")?;
+    let receipt: Receipt = serde_json::from_slice(&bytes)?;
     ensure!(
-        receipt.version == 3
+        matches!(receipt.version, 3..=5)
             && Some(&receipt.owner) == local_project_owner(home)?.as_ref()
             && receipt.db_dir == crate::codex_project_status::sqlite_dir(home)?.canonicalize()?,
         "恢复记录不属于当前账户或历史库。"
+    );
+    let summary = SidebarUndoPreview {
+        // Shared receipt.json always points to the newest batch, including v3-v5
+        // backups without a batch ID. Confirm the receipt, not just its directory.
+        fingerprint: Sha256::digest(&bytes).into(),
+        cards: receipt.cards_added,
+        assignments: receipt.assignments.len(),
+    };
+    Ok((receipt, summary))
+}
+
+pub(crate) fn preview_sidebar_undo(home: &Path) -> Result<SidebarUndoPreview> {
+    let (receipt, summary) = receipt_for_undo(home)?;
+    let state: State = serde_json::from_slice(&fs::read(home.join(STATE_FILE))?)?;
+    verify_owner(&state, &receipt.owner)?;
+    Ok(summary)
+}
+
+pub(crate) fn apply_sidebar_undo(
+    home: &Path,
+    confirmed: &SidebarUndoPreview,
+) -> Result<SidebarReport> {
+    let path = receipt_path(home);
+    let (receipt, current_batch) = receipt_for_undo(home)?;
+    ensure!(
+        current_batch.fingerprint == confirmed.fingerprint,
+        "项目修复记录已变化，未撤销。请重新查看要撤销的批次。"
     );
     let current = fs::read(home.join(STATE_FILE))?;
     let mut state: State = serde_json::from_slice(&current)?;
@@ -373,12 +683,41 @@ fn undo(home: &Path) -> Result<SidebarReport> {
         current_cards == receipt.cards_after,
         "项目清单已被修改，未撤销本次修复。"
     );
+    if let Some((before, after)) = receipt.order_change {
+        ensure!(
+            read_key::<Vec<String>>(&state, ORDER)? == after,
+            "项目顺序已被修改，未执行撤销。"
+        );
+        match before {
+            Some(list) => {
+                state.insert(ORDER.into(), serde_json::value::to_raw_value(&list)?);
+            }
+            None => {
+                state.remove(ORDER);
+            }
+        }
+    }
+    if let Some(change) = receipt.map_change {
+        edit_map(&mut state, &change, true)?;
+    }
     edit_members(
         &mut state,
         &receipt.member_changes,
         true,
         receipt.members_present,
     )?;
+    if !receipt.removed_markers.is_empty() {
+        // Members above verifies the selected chats still have the assigned
+        // destination and were not marked standalone again after the repair.
+        let mut markers: Vec<String> = read_key(&state, PROJECTLESS)?;
+        for (idx, id) in receipt.removed_markers {
+            markers.insert(idx.min(markers.len()), id);
+        }
+        state.insert(
+            PROJECTLESS.into(),
+            serde_json::value::to_raw_value(&markers)?,
+        );
+    }
     let desktop_changed = receipt.cards_added != 0 || !receipt.member_changes.is_empty();
     if receipt.cards_added != 0 {
         if let Some(old) = receipt.cards_before {
@@ -397,6 +736,12 @@ fn undo(home: &Path) -> Result<SidebarReport> {
         return Err(e);
     }
     store_previous(&path, receipt.previous.as_deref())?;
+    #[cfg(not(test))]
+    crate::chain_log::write_line(format!(
+        "[project_sidebar] action=undo cards={} conversations={}",
+        receipt.cards_added,
+        receipt.assignments.len()
+    ));
     Ok(SidebarReport {
         changed_count: receipt.cards_added,
         grouped_thread_count: receipt.assignments.len(),
@@ -410,10 +755,27 @@ fn undo(home: &Path) -> Result<SidebarReport> {
     })
 }
 pub(crate) fn sidebar_projects(home: &Path, action: SidebarAction) -> Result<SidebarReport> {
+    sidebar_projects_with_options(home, action, false)
+}
+pub(crate) fn sidebar_projects_with_options(
+    home: &Path,
+    action: SidebarAction,
+    include_legacy: bool,
+) -> Result<SidebarReport> {
+    sidebar_projects_with_selection(home, action, include_legacy, &BTreeMap::new())
+}
+
+pub(crate) fn sidebar_projects_with_selection(
+    home: &Path,
+    action: SidebarAction,
+    include_legacy: bool,
+    selected: &BTreeMap<String, String>,
+) -> Result<SidebarReport> {
     match action {
-        SidebarAction::Check => inspect_or_repair(home, false),
-        SidebarAction::Repair => inspect_or_repair(home, true),
-        SidebarAction::Undo => undo(home),
+        SidebarAction::Check => inspect_or_repair(home, false, include_legacy, selected),
+        SidebarAction::Repair => inspect_or_repair(home, true, include_legacy, selected),
+        #[cfg(test)]
+        SidebarAction::Undo => apply_sidebar_undo(home, &preview_sidebar_undo(home)?),
     }
 }
 
@@ -487,29 +849,153 @@ mod tests {
         ] {
             db.execute("INSERT INTO threads VALUES (?1,?2,?3,'vscode','user',0,NULL,NULL,'ai-gateway',?4,?5)",params![id,user,acct,root,prior]).unwrap();
         }
+        let mut native_ids = Vec::new();
+        for n in 3..=8 {
+            let id = format!("00000000-0000-4000-8000-{n:012}");
+            let path = home.join(format!("proj{n}")).display().to_string();
+            db.execute(
+                "INSERT INTO projects VALUES (?1,'同名项目','{}',?2,1,1)",
+                params![id, n],
+            )
+            .unwrap();
+            db.execute(
+                "INSERT INTO project_roots VALUES (?1,0,?2)",
+                params![id, path],
+            )
+            .unwrap();
+            db.execute("INSERT INTO threads VALUES (?1,?2,?3,'vscode','user',0,NULL,NULL,'ai-gateway',?4,?5)",params![format!("owned-{n}"),user,acct,path,id]).unwrap();
+            native_ids.push(id);
+        }
+        db.execute("INSERT INTO threads VALUES ('legacy-no-owner',NULL,NULL,'vscode','user',0,NULL,NULL,'ai-gateway',?1,NULL)",[&root]).unwrap();
+        db.execute("INSERT INTO threads VALUES ('legacy-independent',NULL,NULL,'vscode','user',0,NULL,NULL,'ai-gateway',?1,NULL)",[&root]).unwrap();
         let entry = json!({"projectKind":"local","projectId":"my-card"});
+        let host = format!("local:{}", home.display());
         let state = json!({(CARDS):{"my-card":{"id":"my-card","name":"重建项目","rootPaths":[root]}},
+            (ORDER):["my-card"], "remote-projects":[{"hostId":"remoteHost","id":native_ids[5]}],
+            (DELETIONS):{(&host):{"pending":{"projectId":native_ids[4]}}},
+            (MIGRATION):{(&host):{"projectsMigrated":true,"version":1}},
+            "project-appearances":{"my-card":{"icon":"original"}},
             (MEMBERS):{"one":entry,"two":entry,"stale":{"projectKind":"local","projectId":"old-card"},"stale-desktop":{"projectKind":"local","projectId":"old-card"}},
-            "projectless-thread-ids":["excluded"],(SERVER_IDS):{(format!("local:{}",home.display())):{"my-card":new,"old-card":old}},
+            "projectless-thread-ids":["excluded","legacy-independent"],(SERVER_IDS):{(&host):{"my-card":new,"old-card":old,"saved-id":native_ids[0]},"remote:test":{"other":"untouched"}},
             (ACCOUNT_SCOPE):{"owner":local_project_owner(home).unwrap().unwrap(),"inactive":{"other":{"globals":{"local-projects":{"foreign":{}}},"atoms":{}}}}});
         fs::write(home.join(STATE_FILE), state.to_string()).unwrap();
+        let planned = sidebar_projects(home, SidebarAction::Check).unwrap();
         assert!(
-            sidebar_projects(home, SidebarAction::Check)
-                .unwrap()
-                .can_repair
+            planned.can_repair
+                && planned.detail.contains("可补回 4 个项目")
+                && planned.detail.contains("另有 1 个")
+                && planned.detail.contains("客户端共标记 2 个“无项目”会话")
         );
         let result = sidebar_projects(home, SidebarAction::Repair).unwrap();
-        assert_eq!((result.grouped_thread_count, result.changed_count), (3, 0));
+        assert_eq!(
+            (
+                result.grouped_thread_count,
+                result.changed_count,
+                result.active_project_count
+            ),
+            (3, 4, 5)
+        );
         let after: Value =
             serde_json::from_slice(&fs::read(home.join(STATE_FILE)).unwrap()).unwrap();
         assert_eq!(after[MEMBERS]["stale"], entry);
         assert_eq!(after[MEMBERS]["stale-desktop"], entry);
         assert_eq!(after[MEMBERS]["missing"], entry);
         assert_eq!(after[ACCOUNT_SCOPE], state[ACCOUNT_SCOPE]);
+        assert_eq!(after[CARDS]["my-card"], state[CARDS]["my-card"]);
+        assert_eq!(
+            after[ORDER],
+            json!([
+                "my-card",
+                "saved-id",
+                native_ids[1],
+                native_ids[2],
+                native_ids[3]
+            ])
+        );
+        for id in after[ORDER]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+        {
+            // Migration first indexes native projects by their stored legacy
+            // ID, then imports only cards missing from that index.
+            let native = after[SERVER_IDS][&host][id].as_str().unwrap();
+            assert!(
+                db.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)",
+                    [native],
+                    |r| r.get::<_, bool>(0)
+                )
+                .unwrap()
+            );
+        }
+        assert_eq!(after[MIGRATION], state[MIGRATION]);
+        assert_eq!(after["project-appearances"], state["project-appearances"]);
+        assert_eq!(
+            after[SERVER_IDS]["remote:test"],
+            state[SERVER_IDS]["remote:test"]
+        );
         assert!(
             !sidebar_projects(home, SidebarAction::Check)
                 .unwrap()
                 .can_repair
+        );
+        // A = rebuild missing project cards. B = explicitly return one independent
+        // conversation to the recreated project. They share a receipt path, not
+        // an undo target: a confirmation for A may never operate on B or vice versa.
+        let batch_a = preview_sidebar_undo(home).unwrap();
+        assert_eq!((batch_a.cards, batch_a.assignments), (4, 3));
+        let selected = BTreeMap::from([("excluded".to_owned(), new.to_owned())]);
+        let applied =
+            sidebar_projects_with_selection(home, SidebarAction::Repair, false, &selected).unwrap();
+        assert_eq!(
+            (applied.changed_count, applied.grouped_thread_count),
+            (0, 1)
+        );
+        let after_b: Value =
+            serde_json::from_slice(&fs::read(home.join(STATE_FILE)).unwrap()).unwrap();
+        assert_eq!(after_b[CARDS], after[CARDS]);
+        for (id, placement) in after[MEMBERS].as_object().unwrap() {
+            assert_eq!(&after_b[MEMBERS][id], placement);
+        }
+        assert_eq!(after_b[MEMBERS]["excluded"], entry);
+        assert!(apply_sidebar_undo(home, &batch_a).is_err());
+        let batch_b = preview_sidebar_undo(home).unwrap();
+        assert_eq!((batch_b.cards, batch_b.assignments), (0, 1));
+        assert!(apply_sidebar_undo(home, &batch_b).unwrap().can_undo);
+        // Double submission after B was popped must not undo A.
+        assert!(apply_sidebar_undo(home, &batch_b).is_err());
+        assert_eq!(
+            serde_json::from_slice::<Value>(&fs::read(home.join(STATE_FILE)).unwrap()).unwrap(),
+            after
+        );
+        assert!(
+            db.query_row(
+                "SELECT project_id IS NULL FROM threads WHERE id='excluded'",
+                [],
+                |r| r.get::<_, bool>(0)
+            )
+            .unwrap()
+        );
+        assert_eq!(
+            db.query_row("SELECT project_id FROM threads WHERE id='stale'", [], |r| r
+                .get::<_, String>(0))
+                .unwrap(),
+            new
+        );
+        let extra = sidebar_projects_with_options(home, SidebarAction::Repair, true).unwrap();
+        assert_eq!((extra.changed_count, extra.grouped_thread_count), (0, 1));
+        assert!(
+            !sidebar_projects_with_options(home, SidebarAction::Check, true)
+                .unwrap()
+                .can_repair
+        );
+        let undo_extra = sidebar_projects(home, SidebarAction::Undo).unwrap();
+        assert!(undo_extra.can_undo);
+        assert_eq!(
+            serde_json::from_slice::<Value>(&fs::read(home.join(STATE_FILE)).unwrap()).unwrap(),
+            after
         );
         let mut changed = after.clone();
         changed[MEMBERS]["missing"] = json!({"projectKind":"local","projectId":"elsewhere"});

@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark"><meta http-equiv="Content-Security-Policy" content="default-src 'self' file:; script-src 'self' file:; style-src 'self' file: 'unsafe-inline'; img-src 'self' file: data:; connect-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'">
+<title>天才 Hub · 桌面交互样稿</title><link rel="icon" href="data:,"><link rel="stylesheet" href="studio.css"><link rel="stylesheet" href="navigation.css"><link rel="stylesheet" href="top-navigation.css"><link rel="stylesheet" href="workspace.css"><link rel="stylesheet" href="notice-island.css"><link rel="stylesheet" href="buddy-panel.css"></head>
+<body><div class="desk"><div class="window">
+<aside id="rail" aria-label="主导航"><div class="brand"><span class="brandmark" aria-hidden="true"><svg viewBox="0 0 40 40"><path fill="#b7fff1" d="M6 24 18 9h8L14 24z"/><path fill="white" d="m15 29 13-17 6 4-10 13z"/></svg></span><div><strong>天才 Hub</strong><small>TIANCAI SPACE</small></div></div>
+<nav id="nav"></nav><div class="railfoot"><span class="mini-dot"></span><div><b>本机工作空间</b><small>桌面设计预览</small></div></div></aside>
+<div class="workspace"><header class="toolbar"><button class="tool mobile" id="menu" aria-label="展开导航" aria-expanded="false">☰</button><nav class="route-path" aria-label="当前位置"><ol><li id="crumb-parent">工作空间</li><li aria-current="page"><strong id="crumb">概览</strong></li></ol></nav><div class="top-navigation"></div><div class="tools"><span class="sample">演示数据</span><button class="tool" id="theme" aria-label="切换明暗外观" title="切换明暗外观"></button><button class="tool" id="prefs" aria-label="预览设置" title="预览设置"></button></div></header>
+<main id="scroller"><div id="view" tabindex="-1"></div></main>
+<section id="chatbox" aria-label="助手对话" hidden></section>
+<button id="buddy" class="buddy" title="打开对话" aria-label="打开对话" aria-expanded="false"></button></div></div></div>
+<dialog id="sheet" aria-labelledby="sheetTitle"><div class="shead"><h2 id="sheetTitle"></h2><button id="sheetClose" class="tool" aria-label="关闭">×</button></div><div class="sbody" id="sheetBody"></div></dialog>
+<script src="selection.js"></script><script src="pages.js"></script><script src="studio.js"></script><script src="top-navigation.js"></script><script src="notice-island.js"></script><script src="buddy-panel.js"></script></body></html>

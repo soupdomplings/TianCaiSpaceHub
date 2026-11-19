@@ -15,12 +15,9 @@ pub(super) struct ChannelModels {
     pub channel: Choice,
     search: TextCtrl,
     summary: StaticText,
-    list: ScrolledWindow,
-    grid: GridSizer,
+    list: CheckListBox,
     groups: Rc<RefCell<Vec<Vec<String>>>>,
     selected: Rc<RefCell<Vec<String>>>,
-    checks: Rc<RefCell<Vec<CheckBox>>>,
-    enabled: Rc<Cell<bool>>,
     rendered_group: Rc<Cell<Option<u32>>>,
     changed: Rc<RefCell<Option<Rc<dyn Fn(Vec<String>)>>>>,
 }
@@ -44,15 +41,25 @@ fn codex_discovery_is_visible_and_deletion_is_staged_without_filtering_other_mod
             Some(&["orphan".into(), "saved".into()]),
         );
         picker.focus_model("saved");
-        assert_eq!(picker.checks.borrow().len(), 2);
+        assert_eq!(picker.list.get_count(), 2);
         picker.show_discovered(0, &["new-a".into(), "new-b".into()]);
-        assert_eq!(picker.checks.borrow().len(), 4);
+        assert_eq!(picker.list.get_count(), 4);
         assert_eq!(picker.selected_models(), ["orphan", "saved"]); // Fetching never selects candidates.
+        picker.search.change_value("new-b");
+        picker.render();
+        assert_eq!(picker.list.get_string(0).as_deref(), Some("new-b"));
+        picker.list.check(0, true);
+        picker.toggle_visible(0);
+        assert_eq!(picker.selected_models(), ["orphan", "saved", "new-b"]);
+        picker.list.check(0, false);
+        picker.toggle_visible(0);
+        picker.search.change_value("");
+        picker.render();
         picker.remove_model("orphan"); // Missing from the source, still removable.
         picker.remove_model("saved");
         assert!(picker.selected_models().is_empty());
         assert!(changed.borrow().is_empty());
-        assert_eq!(picker.checks.borrow().len(), 4);
+        assert_eq!(picker.list.get_count(), 4);
         frame.destroy();
     })
     .unwrap();
@@ -79,29 +86,14 @@ impl ChannelModels {
         summary.set_foreground_color(theme::theme().ink_secondary);
         summary.set_background_color(page.get_background_color());
         col.add(&summary, 0, SizerFlag::Bottom, page.from_dip(6));
-        let list = ScrolledWindow::builder(&page)
-            .with_style(ScrolledWindowStyle::VScroll)
+        let list = CheckListBox::builder(&page)
+            .with_style(CheckListBoxStyle::HScroll)
             .build();
         list.set_name("codex-channel-models-list");
         list.set_background_color(page.get_background_color());
-        list.set_scroll_rate(0, list.from_dip(12));
-        list.set_min_size(Size::new(0, list.from_dip(96)));
-        let grid = GridSizer::builder(0, 2)
-            .with_hgap(list.from_dip(16))
-            .with_vgap(list.from_dip(8))
-            .build();
-        let list_col = BoxSizer::builder(Orientation::Vertical).build();
-        list_col.add_sizer(&grid, 0, SizerFlag::Expand, 0);
-        list.set_sizer(list_col, true);
-        list.on_size(move |event| {
-            let columns = (list.get_client_size().width / list.from_dip(280)).clamp(1, 3);
-            if grid.get_cols() != columns {
-                grid.set_cols(columns);
-                list.layout();
-                list.fit_inside();
-            }
-            event.skip(true);
-        });
+        list.set_foreground_color(theme::theme().ink_primary);
+        list.set_min_size(Size::new(0, list.from_dip(110)));
+        list.enable(false);
         col.add(&list, 1, SizerFlag::Expand, 0);
         page.set_sizer(col, true);
         let ui = Self {
@@ -110,11 +102,8 @@ impl ChannelModels {
             search,
             summary,
             list,
-            grid,
             groups: Default::default(),
             selected: Default::default(),
-            checks: Default::default(),
-            enabled: Default::default(),
             rendered_group: Default::default(),
             changed: Default::default(),
         };
@@ -122,6 +111,12 @@ impl ChannelModels {
         channel.on_selection_changed(move |_| u.render());
         let u = ui.clone();
         search.on_text_updated(move |_| u.render());
+        let u = ui.clone();
+        list.on_toggled(move |event| {
+            if let Some(index) = event.get_selection() {
+                u.toggle_visible(index);
+            }
+        });
         ui
     }
     pub fn focus_model(&self, model: &str) {
@@ -208,56 +203,51 @@ impl ChannelModels {
         self.selected.borrow().clone()
     }
     pub fn enable(&self, enabled: bool) {
-        self.enabled.set(enabled);
         let has_channel = self.channel.get_selection().is_some();
         self.channel.enable(enabled && has_channel);
         self.search.enable(enabled && has_channel);
-        for check in self.checks.borrow().iter() {
-            check.enable(enabled);
+        self.list.enable(enabled);
+    }
+    fn toggle_visible(&self, index: u32) {
+        let Some(name) = self.list.get_string(index as usize) else {
+            return;
+        };
+        {
+            let mut selected = self.selected.borrow_mut();
+            if self.list.is_checked(index) {
+                if !selected.iter().any(|m| m.eq_ignore_ascii_case(&name)) {
+                    selected.push(name);
+                }
+            } else {
+                selected.retain(|m| !m.eq_ignore_ascii_case(&name));
+            }
         }
+        self.update_summary();
+        self.notify_changed();
+    }
+    #[cfg(test)]
+    pub(super) fn has_visible_candidate(&self, name: &str) -> bool {
+        (0..self.list.get_count())
+            .any(|i| self.list.get_string(i as usize).as_deref() == Some(name))
     }
     fn render(&self) {
         self.rendered_group.set(self.channel.get_selection());
         let group = self.channel.get_selection().unwrap_or(0) as usize;
         let query = self.search.get_value().trim().to_lowercase();
         let names = self.groups.borrow().get(group).cloned().unwrap_or_default();
-        for check in self.checks.borrow_mut().drain(..) {
-            check.destroy();
-        }
-        for name in names.iter().filter(|n| n.to_lowercase().contains(&query)) {
-            let check = CheckBox::builder(&self.list)
-                .with_label(name)
-                .with_value(
-                    self.selected
-                        .borrow()
-                        .iter()
-                        .any(|m| m.eq_ignore_ascii_case(name)),
-                )
-                .build();
-            check.set_name(&format!("codex-visible-{name}"));
-            check.set_min_size(Size::new(0, self.list.from_dip(24)));
-            check.set_background_color(self.list.get_background_color());
-            check.set_tooltip(name);
-            check.set_foreground_color(theme::theme().ink_primary);
-            check.enable(self.enabled.get());
-            let (u, name) = (self.clone(), name.clone());
-            check.on_toggled(move |_| {
-                if check.is_checked() {
-                    u.selected.borrow_mut().push(name.clone());
-                } else {
-                    u.selected
-                        .borrow_mut()
-                        .retain(|m| !m.eq_ignore_ascii_case(&name));
+        self.list.freeze();
+        self.list.clear();
+        {
+            let selected = self.selected.borrow();
+            for name in names.iter().filter(|n| n.to_lowercase().contains(&query)) {
+                self.list.append(name);
+                if selected.iter().any(|m| m.eq_ignore_ascii_case(name)) {
+                    self.list.check(self.list.get_count() - 1, true);
                 }
-                u.update_summary();
-                u.notify_changed();
-            });
-            self.grid.add(&check, 0, SizerFlag::Expand, 0);
-            self.checks.borrow_mut().push(check);
+            }
         }
+        self.list.thaw();
         self.update_summary();
-        self.list.layout();
-        self.list.fit_inside();
         self.page.layout();
     }
     fn update_summary(&self) {
@@ -268,7 +258,7 @@ impl ChannelModels {
         }
         self.summary.set_label(&format!(
             "当前渠道 {} 个模型 · 共选 {} 个",
-            self.checks.borrow().len(),
+            self.list.get_count(),
             self.selected.borrow().len()
         ));
     }

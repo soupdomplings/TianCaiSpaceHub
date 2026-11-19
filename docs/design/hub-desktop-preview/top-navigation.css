@@ -1,0 +1,79 @@
+.toolbar .top-navigation {
+  position:relative; display:flex; align-items:center; gap:0; min-width:0;
+}
+.top-strip {
+  display:flex; flex:none; align-items:center; gap:3px;
+  --selection-fill:var(--soft); --selection-radius:8px; --selection-shadow:none;
+}
+.top-navigation .selection-track {opacity:1}
+.top-trigger {
+  display:inline-flex; align-items:center; justify-content:center; gap:6px;
+  height:33px; padding:0 10px; border-radius:8px; color:var(--muted);
+  font-size:13px; font-weight:550; white-space:nowrap;
+}
+.top-trigger[aria-expanded=true], .top-trigger:hover {color:var(--ink)}
+.top-trigger > svg {transform:rotate(90deg); transition:transform 160ms ease-out}
+.top-trigger[aria-expanded=true] > svg {transform:rotate(-90deg)}
+.top-group-icon{display:none}
+.top-trigger:active:not(:disabled),.top-entry:active:not(:disabled){transform:none}
+.route-path{min-width:0;flex:1;overflow:hidden}
+.route-path ol{display:flex;align-items:baseline;min-width:0;white-space:nowrap;list-style:none;margin:0;padding:0;color:var(--muted);font-size:13px}
+.route-path li:first-child{flex:none}
+.route-path li[aria-current]{display:flex;align-items:baseline;min-width:0;color:var(--ink)}
+.route-path li[aria-current]::before{content:"/";color:var(--muted);opacity:.65;margin:0 9px;font-weight:400}
+.route-path strong{font-weight:600;text-overflow:ellipsis;overflow:hidden}
+.top-panel {
+  position:absolute; top:100%; left:0; z-index:9;
+  width:var(--panel-width,212px); padding-top:5px;
+  transform:translateX(var(--panel-x,0px)); visibility:hidden;
+  transition:transform 190ms cubic-bezier(.22,.8,.2,1), width 190ms ease-out, visibility 0s linear 140ms;
+}
+.show-panel .top-panel {visibility:visible; transition-delay:0s}
+.top-panel.at-anchor {transition:none}
+.top-glass {
+  position:relative; height:var(--panel-height,130px); overflow:hidden;
+  border-radius:13px; border:1px solid var(--line); background:var(--card); color:var(--ink);
+  box-shadow:0 9px 28px #1c324420,0 2px 6px #1c32440e;
+  opacity:0; transform:translateY(-3px); transform-origin:var(--panel-origin,28px) top;
+  transition:height 190ms cubic-bezier(.22,.8,.2,1),opacity 130ms,transform 160ms cubic-bezier(.22,.8,.2,1);
+}
+.show-panel .top-glass {opacity:1; transform:none}
+.top-panel.at-anchor .top-glass {transition-property:opacity,transform}
+.top-glass .top-list {
+  box-sizing:border-box; position:absolute; inset:0 0 auto;
+  max-height:100%; overflow-x:hidden; overflow-y:auto; overscroll-behavior:contain;
+  scrollbar-width:thin; padding:6px; margin:0; opacity:0; pointer-events:none;
+  transition:opacity 110ms ease-out;
+  --selection-radius:8px; --selection-fill:var(--accent-soft); --selection-shadow:none;
+}
+.top-list.shown {opacity:1; pointer-events:auto; z-index:1}
+.top-entry {
+  width:100%; display:flex; align-items:center; gap:10px; height:35px; padding:0 10px;
+  text-align:left; white-space:nowrap; border-radius:8px; color:var(--ink); font-size:13px;
+}
+.top-entry:hover:not([aria-current=page]) {background:var(--soft)}
+.top-entry[aria-current=page] {color:var(--accent)}
+.top-entry:focus-visible {outline-offset:-3px}
+.top-glyph {display:inline-flex; width:17px; justify-content:center; color:var(--muted)}
+.top-glyph svg {width:15px; height:15px}
+.top-entry[aria-current=page] .top-glyph {color:inherit}
+@media(max-width:540px) {
+  .toolbar .top-navigation {margin-left:3px}
+  .top-strip {gap:0}
+  .top-trigger {padding:0 7px; gap:4px}
+  .toolbar .tools .sample {display:none}
+}
+@media(max-width:810px) {
+  .top-trigger > span,.top-trigger > svg{display:none}
+  .top-trigger .top-group-icon{display:inline-flex}
+  .top-strip .top-trigger{padding:0;width:30px}
+}
+@media(max-width:460px) {
+  .route-path li[aria-current]::before{margin:0 4px}
+  .route-path ol{font-size:12px}
+}
+@media(prefers-reduced-motion:reduce) {
+  .top-navigation *, .top-navigation *::before {transition:none!important; animation:none!important}
+}
+:root[data-reduce=on] .top-navigation *,
+:root[data-reduce=on] .top-navigation *::before {transition:none!important; animation:none!important}

@@ -8,7 +8,107 @@ use super::{
 };
 use crate::gui::controls::{Choice, TextCtrl};
 use serde_json::json;
+use wxdragon::dc::GraphicsDC;
 use wxdragon::prelude::*;
+
+fn save_motion(path: &std::path::Path, reduce: bool) -> anyhow::Result<()> {
+    let bytes = serde_json::to_vec(&json!({ "reduceMotion": reduce }))?;
+    crate::desktop::transaction::atomic_write(path, &bytes)?;
+    // The current session changes only when subsequent launches can use the same value.
+    theme::set_motion_enabled(!reduce);
+    Ok(())
+}
+
+#[cfg(test)]
+#[test]
+fn failed_motion_save_keeps_last_applied_preference() {
+    let before = theme::motion_enabled();
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("appearance.json");
+    save_motion(&file, true).unwrap();
+    let broken = file.join("inside-a-file.json");
+    assert!(save_motion(&broken, false).is_err());
+    assert!(!theme::motion_enabled());
+    let persisted: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    assert_eq!(persisted["reduceMotion"], true);
+    theme::set_motion_enabled(before);
+}
+
+/// Keep the OS toggle's pressed state, Tab focus and Space action. Only its drawing is custom.
+fn motion_switch(page: &ScrolledWindow, frame: Frame) -> ToggleButton {
+    let switch = ToggleButton::builder(page)
+        .with_label("减少界面动效")
+        .with_style(ToggleButtonStyle::BorderNone | ToggleButtonStyle::ExactFit)
+        .build();
+    switch.set_name("减少界面动效");
+    switch.set_tooltip("立即应用；聚焦后按空格切换");
+    switch.set_value(!theme::motion_enabled());
+    let size = super::visual::dip_size(&switch, 112, 34);
+    switch.set_min_size(size);
+    switch.set_max_size(size);
+    switch.set_background_style(BackgroundStyle::Paint);
+    switch.on_paint(move |_| {
+        let base = AutoBufferedPaintDC::new(&switch);
+        let dc = GraphicsDC::new(&base);
+        let scale = super::visual::scale(&switch);
+        let c = super::visual::Canvas::new(&dc, scale);
+        let t = theme::theme();
+        let on = switch.get_value();
+        let size = switch.get_client_size();
+        let height = (size.height as f64 / scale).round() as i32;
+        let width = (size.width as f64 / scale).round() as i32;
+        let mid = height / 2;
+        c.clear(t.bg_card);
+        if switch.has_focus() {
+            c.rounded(
+                Rect::new(1, 1, (width - 2).max(1), (height - 2).max(1)),
+                8,
+                t.bg_card,
+                Some(t.accent),
+            );
+        }
+        c.rounded(
+            Rect::new(5, mid - 11, 40, 22),
+            11,
+            if on { t.accent } else { t.ink_muted },
+            None,
+        );
+        c.dot(if on { 34 } else { 16 }, mid, 8, Colour::rgb(255, 255, 255));
+        c.label(
+            if on { "已开启" } else { "已关闭" },
+            Rect::new(52, 0, (width - 56).max(1), height),
+            13,
+            false,
+            t.ink_primary,
+            false,
+        );
+    });
+    switch.on_set_focus(move |e| {
+        switch.refresh(false, None);
+        e.skip(true);
+    });
+    switch.on_kill_focus(move |e| {
+        switch.refresh(false, None);
+        e.skip(true);
+    });
+    switch.on_toggle(move |_| {
+        let result = super::daemon_config_path()
+            .ok_or_else(|| anyhow::anyhow!("未找到 Hub 配置目录"))
+            .and_then(|cfg| {
+                save_motion(
+                    &crate::desktop::state_root(&cfg).join("appearance.json"),
+                    switch.get_value(),
+                )
+            });
+        if let Err(e) = result {
+            switch.set_value(!theme::motion_enabled());
+            super::show_error(&frame, &format!("无法保存动效设置：{e:#}"));
+        }
+        switch.refresh(false, None);
+    });
+    switch
+}
 
 pub(super) fn create(
     shell: &Shell,
@@ -48,11 +148,8 @@ pub(super) fn create(
     language.set_min_size(super::visual::dip_size(&language, 170, 36));
     language.set_max_size(super::visual::dip_size(&language, 200, -1));
     field(&page, &grid, "语言", &language);
-    let motion = CheckBox::builder(&page)
-        .with_label("减少界面动效")
-        .with_value(!theme::motion_enabled())
-        .build();
-    field(&page, &grid, "动效", &motion);
+    let motion = motion_switch(&page, frame);
+    field(&page, &grid, "减少界面动效", &motion);
     let save = Button::builder(&page).with_label("保存外观设置").build();
     grid.add_spacer(1);
     grid.add(&save, 0, SizerFlag::default(), 0);
@@ -68,18 +165,6 @@ pub(super) fn create(
         } else {
             GuiLocale::ZhCn
         };
-        theme::set_motion_enabled(!motion.get_value());
-        if let Some(path) = super::daemon_config_path() {
-            let file = crate::desktop::state_root(&path).join("appearance.json");
-            if let Err(e) = crate::desktop::transaction::atomic_write(
-                &file,
-                &serde_json::to_vec(&json!({"reduceMotion":motion.get_value()}))
-                    .unwrap_or_default(),
-            ) {
-                super::show_error(&frame, &e.to_string());
-                return;
-            }
-        }
         let result = super::save_gui_theme(mode).and_then(|_| super::save_gui_locale(locale));
         match result {
             Ok(()) => super::show_info(

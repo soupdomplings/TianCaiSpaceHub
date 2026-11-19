@@ -46,6 +46,34 @@ fn integrated_shell_keeps_native_hit_targets_controls_and_vetoable_close() {
                 let max = frame.find_window_by_name("window-maximize").unwrap();
                 let min = frame.find_window_by_name("window-minimize").unwrap();
                 let close = frame.find_window_by_name("window-close").unwrap();
+                // Resizing no longer creates a second navigation system.
+                for name in [
+                    "navigation-back", "navigation-forward", "工作空间快捷导航",
+                    "客户端快捷导航", "quick-navigation-panel", "page-help",
+                ] {
+                    assert!(
+                        frame.find_window_by_name(name).is_none(),
+                        "{name} at {width} DIP"
+                    );
+                }
+                let path = frame.find_window_by_name("shell-page-path").unwrap();
+                for (id, expected) in [
+                    (shell::PageId::Squad, "工作空间  /  天才小分队"),
+                    (shell::PageId::Logs, "共用能力  /  请求日志"),
+                ] {
+                    let target = Panel::builder(&shell.book).build();
+                    shell.register(id, &target);
+                    shell.navigate(id);
+                    assert_eq!(path.get_label().as_deref(), Some(expected));
+                }
+                shell.navigate(shell::PageId::Overview);
+                update_service_badge(&shell.service, true, false);
+                assert_eq!(shell.service.get_label(), "本机服务");
+                assert_eq!(shell.service.get_foreground_color(), theme::theme().ok);
+                update_service_badge(&shell.service, false, false);
+                assert_eq!(shell.service.get_label(), "本机服务 · 未运行");
+                assert_ne!(shell.service.get_foreground_color(), theme::theme().ok);
+                update_service_badge(&shell.service, true, false);
                 assert_eq!(hit(&frame, point(&max)), HTMAXBUTTON as isize);
                 assert_eq!(hit(&max, point(&max)), HTTRANSPARENT as isize);
                 for control in [
