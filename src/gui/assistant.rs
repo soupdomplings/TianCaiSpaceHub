@@ -4,7 +4,7 @@ use super::{
     api::ApiClient,
     assistant_markdown::MessageBody,
     assistant_questions::QuestionCard,
-    controls::{Button, ButtonKind, TextCtrl},
+    controls::{Button, ButtonKind, Choice, TextCtrl},
     dialog_job,
     shell::{PageId, Shell},
     theme, visual,
@@ -24,6 +24,51 @@ use std::{
 #[cfg(all(test, windows))]
 use wxdragon::widgets::textctrl::TextCtrl as MessageText;
 use wxdragon::{dc::GraphicsDC, prelude::*, timer::Timer};
+
+fn show_usage_help(parent: Frame) {
+    let topics = crate::assistant::tools::offline_help_topics();
+    let dialog = Dialog::builder(&parent, "天才搭档 · 使用帮助")
+        .with_size(parent.from_dip(540), parent.from_dip(390))
+        .build();
+    dialog.set_background_color(theme::theme().bg_card);
+    dialog.set_font(&theme::font(theme::TextRole::Body));
+    let layout = BoxSizer::builder(Orientation::Vertical).build();
+    let picker = Choice::builder(&dialog)
+        .with_choices(topics.iter().map(|(name, _)| name.to_string()).collect())
+        .build();
+    picker.set_name("选择帮助主题");
+    picker.set_selection(0);
+    let body = TextCtrl::builder(&dialog)
+        .with_style(TextCtrlStyle::MultiLine | TextCtrlStyle::ReadOnly)
+        .build();
+    body.set_name("使用说明");
+    if let Some((_, content)) = topics.first() {
+        body.set_value(content);
+    }
+    picker.on_selection_changed(move |_| {
+        if let Some((_, content)) = picker.get_selection().and_then(|i| topics.get(i as usize)) {
+            body.set_value(content);
+        }
+    });
+    let close = Button::builder(&dialog)
+        .with_id(ID_CANCEL)
+        .with_label("关闭")
+        .build();
+    close.on_click(move |_| dialog.end_modal(ID_CANCEL));
+    let gap = dialog.from_dip(16);
+    layout.add(&picker, 0, SizerFlag::All | SizerFlag::Expand, gap);
+    layout.add(
+        &body,
+        1,
+        SizerFlag::Left | SizerFlag::Right | SizerFlag::Expand,
+        gap,
+    );
+    layout.add(&close, 0, SizerFlag::AlignRight | SizerFlag::All, gap);
+    dialog.set_sizer(layout, true);
+    dialog.centre();
+    dialog.show_modal();
+    dialog.destroy();
+}
 
 #[derive(Clone)]
 enum Action {
@@ -595,7 +640,14 @@ impl AssistantUi {
             .with_label("清理搭档临时内容")
             .with_kind(ButtonKind::Ghost)
             .build();
-        for button in [prepare, uninstall, login, open, clean] {
+        let help = Button::builder(&scroll)
+            .with_label("使用帮助")
+            .with_icon(visual::Icon::Help)
+            .with_kind(ButtonKind::Ghost)
+            .build();
+        let help_parent = *parent;
+        help.on_click(move |_| show_usage_help(help_parent));
+        for button in [prepare, uninstall, login, open, help, clean] {
             actions.add(
                 &button,
                 0,
@@ -643,10 +695,10 @@ impl AssistantUi {
             SizerFlag::Expand | SizerFlag::Top,
             page.from_dip(16),
         );
-        scroll.set_sizer(column, true);
+        super::shell::inset_page_content(&scroll, column);
         outer.add(&scroll, 1, SizerFlag::Expand, 0);
         page.set_sizer(outer, true);
-        shell.register(PageId::Assistant, &page);
+        shell.register_viewport(PageId::Assistant, &page);
 
         // A normal child of the content panel is clipped by Hub and follows
         // its minimize/tray lifecycle. It is deliberately outside the sizer.
@@ -1069,8 +1121,9 @@ impl AssistantUi {
         ui.bind_collapse_key(&transcript);
         let u = ui.clone();
         page.on_size(move |event| {
-            let width =
-                (u.page.get_client_size().width - u.page.from_dip(30)).max(u.page.from_dip(240));
+            let width = (u.page.get_client_size().width
+                - u.page.from_dip(30 + 2 * theme::PAGE_GUTTER))
+            .max(u.page.from_dip(240));
             for item in [u.runtime, u.account, u.model, u.detail, u.references, note] {
                 item.wrap(width);
             }
@@ -1816,8 +1869,9 @@ impl AssistantUi {
             self.chat.show(false);
         }
         *self.state.borrow_mut() = value;
-        let page_width = (self.page.get_client_size().width - self.page.from_dip(30))
-            .max(self.page.from_dip(240));
+        let page_width = (self.page.get_client_size().width
+            - self.page.from_dip(30 + 2 * theme::PAGE_GUTTER))
+        .max(self.page.from_dip(240));
         for text in [
             self.runtime,
             self.account,
@@ -2716,9 +2770,10 @@ mod native_overlay_tests {
             assert_ne!(GetWindowLongPtrW(chat, GWL_STYLE) & WS_CHILD as isize, 0);
             assert_eq!(GetAncestor(chat, GA_ROOT), ui.parent.get_handle());
             assert_ne!(
-                GetWindowLongPtrW(ui.shell.book.get_handle(), GWL_STYLE) & WS_CLIPSIBLINGS as isize,
+                GetWindowLongPtrW(ui.shell.book.get_parent().unwrap().get_handle(), GWL_STYLE)
+                    & WS_CLIPSIBLINGS as isize,
                 0,
-                "wx style must have reached the native book HWND"
+                "the page viewport and floating chat must clip each other as native siblings"
             );
             assert_eq!(
                 ChildWindowFromPointEx(

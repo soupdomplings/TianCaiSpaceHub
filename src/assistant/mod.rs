@@ -1,6 +1,8 @@
 //! One ephemeral assistant conversation per Hub process. Model auth is owned by Hub.
 #[cfg(test)]
 mod acceptance;
+mod connection;
+pub(crate) use connection::model_transport_error;
 pub(crate) mod model;
 pub(crate) mod personality;
 mod proxy;

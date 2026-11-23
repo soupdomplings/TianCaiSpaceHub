@@ -1,0 +1,56 @@
+<view class="page with-tabs" style="font-size:{{font}}px">
+  <view class="title">天才小分队</view>
+  <view wx:if="{{loading && !account}}" class="note">正在读取…</view>
+  <block wx:if="{{account}}">
+    <view wx:if="{{account.bound}}" class="group pad">
+      <view class="sub">个人余额</view>
+      <view class="big">{{account.balance==null?'—':'¥'+account.balance}}</view>
+      <button wx:if="{{canPay}}" class="control" bindtap="recharge">
+        个人充值 ›
+      </button>
+    </view>
+    <view wx:else class="group pad">
+      <view class="strong">绑定小分队账户</view>
+      <view class="sub section">输入已登录小分队站点中生成的绑定码。</view>
+      <input
+        class="input section"
+        placeholder="一次性绑定码"
+        value="{{code}}"
+        bindinput="input"
+        aria-label="绑定码"
+      />
+      <button class="primary" bindtap="bind" disabled="{{binding || !code}}">
+        绑定账户
+      </button>
+    </view>
+    <view class="caption">公告与活动</view>
+    <view class="group">
+      <block wx:for="{{account.announcements}}" wx:key="id">
+        <button class="row" data-id="{{item.id}}" bindtap="expand">
+          <text class="grow">{{item.title}}</text>
+          <text class="chev">{{expanded===item.id?'⌄':'›'}}</text>
+        </button>
+        <view wx:if="{{expanded===item.id}}" class="pad bodytext">
+          {{item.content}}
+        </view>
+      </block>
+      <view class="row sub" wx:if="{{!account.announcements.length}}">
+        暂无公告
+      </view>
+    </view>
+    <block wx:if="{{account.bound}}">
+      <view class="caption">近期用量</view>
+      <view class="group">
+        <view class="row" wx:for="{{account.usage}}" wx:key="id">
+          <text class="grow">{{item.label}}</text>
+          <text>{{item.amount==null?'—':'¥'+item.amount}}</text>
+        </view>
+        <view class="row sub" wx:if="{{!account.usage.length}}">暂无记录</view>
+      </view>
+    </block>
+  </block>
+  <view wx:if="{{error}}" class="error">
+    {{error}}
+    <button class="control" bindtap="load">重试</button>
+  </view>
+</view>

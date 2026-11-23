@@ -200,6 +200,7 @@ jobs:
             -ext WixToolset.UI.wixext `
             -ext WixToolset.Util.wixext `
             -culture zh-CN `
+            -loc "packaging\windows\installer.zh-CN.wxl" `
             -d "ProductVersion=$env:PRODUCT_VERSION" `
             -d "SourceDir=$sourceDir" `
             -out $msiPath

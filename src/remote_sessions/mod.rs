@@ -1,9 +1,16 @@
 //! Dedicated browser session API. This router is hosted only by the paired
 //! remote gateway; it must not be merged into the public/local management API.
 mod codex;
+mod desktop_text;
+#[cfg(test)]
+pub(crate) mod codex_fixture;
 mod files;
+#[path = "../remote_network/mobile/download.rs"]
+mod mobile_file;
+pub(crate) use mobile_file::read as mobile_download;
 mod service;
 mod tiangong;
+mod transcript;
 mod types;
 
 use crate::app_state::SharedState;
@@ -32,6 +39,7 @@ use types::{
 pub(crate) fn router() -> Router<SharedState> {
     Router::new()
         .route("/clients", get(clients))
+        .route("/clients/{client}/models", get(client_models))
         .route("/clients/{client}/projects", get(projects))
         .route("/clients/{client}/sessions", get(sessions).post(create))
         .route("/clients/{client}/sessions/{session}/history", get(history))
@@ -100,10 +108,40 @@ fn valid_client(client: &str) -> Result<()> {
     );
     Ok(())
 }
-async fn clients(State(state): State<SharedState>) -> Json<Value> {
-    let (mut codex, tiangong) = tokio::join!(codex::clients(&state), tiangong::client(&state));
+#[derive(Deserialize, Default)]
+struct ClientQuery {
+    view: Option<String>,
+}
+async fn clients(State(state): State<SharedState>, Query(view): Query<ClientQuery>) -> Json<Value> {
+    let summary = view.view.as_deref() == Some("summary");
+    let (mut codex, tiangong) = tokio::join!(
+        codex::clients(&state, summary),
+        tiangong::client(&state, summary)
+    );
     codex.push(tiangong);
+    for client in &mut codex {
+        client["capabilities"]["liveActivity"] = true.into();
+    }
     Json(json!({"clients":codex}))
+}
+async fn client_models(
+    State(state): State<SharedState>,
+    Path(client): Path<String>,
+) -> ApiResult<Json<Value>> {
+    valid_client(&client)?;
+    let models = if client == "tiangong" {
+        tiangong::models_for_client(&state).await?
+    } else {
+        codex::models(&state, &codex::target(&state, &client).await?).await?
+    };
+    let switch = client != "tiangong" && !models.is_empty();
+    let effort = switch
+        && models
+            .iter()
+            .any(|m| m["efforts"].as_array().is_some_and(|v| !v.is_empty()));
+    Ok(Json(
+        json!({"models":models,"modelSelection":switch,"effortSelection":effort}),
+    ))
 }
 async fn projects(
     State(state): State<SharedState>,
@@ -148,11 +186,14 @@ async fn history(
 ) -> ApiResult<Json<Value>> {
     valid_client(&client)?;
     let scope = Scope::new(client, session);
-    Ok(Json(if scope.client == "tiangong" {
+    let mut snapshot = if scope.client == "tiangong" {
         tiangong::history(&state, &scope, &page).await?
     } else {
         codex::history(&state, &scope, &page).await?
-    }))
+    };
+    transcript::history(&mut snapshot);
+    snapshot["displayContent"] = json!(crate::remote_network::display_content(&state).await?);
+    Ok(Json(snapshot))
 }
 async fn send(
     State(state): State<SharedState>,
@@ -314,6 +355,8 @@ async fn approve(
 #[derive(Default, Deserialize)]
 struct EventQuery {
     after: Option<u64>,
+    #[serde(rename = "liveActivity")]
+    live_activity: Option<u8>,
 }
 async fn events(
     State(state): State<SharedState>,
@@ -322,6 +365,7 @@ async fn events(
 ) -> ApiResult<Response> {
     valid_client(&client)?;
     let scope = Scope::new(client, session);
+    crate::remote_network::display_content(&state).await?;
     if scope.client == "tiangong" {
         tiangong::history(
             &state,
@@ -334,9 +378,14 @@ async fn events(
         .await?;
     } else {
         let target = codex::target(&state, &scope.client).await?;
-        state.remote_sessions.watch(&scope, Some(target)).await;
+        state
+            .remote_sessions
+            .watch(&scope, Some(target.clone()))
+            .await;
+        codex::subscribe(&state, &scope, &target).await?;
     }
     let after = query.after.unwrap_or(0);
+    let wants_activity = query.live_activity == Some(1);
     let (mut replay, receiver) = {
         let mut feeds = state.remote_sessions.feeds.lock().await;
         let feed = feeds.entry(scope.clone()).or_default();
@@ -371,8 +420,9 @@ async fn events(
     // A fresh empty stream needs no synthetic text or task. Keepalive frames
     // maintain the connection while the native runtime is waiting for input.
     let stream = stream::unfold(
-        (std::mem::take(&mut replay), receiver, scope, after),
-        |(mut replay, mut receiver, scope, last_id)| async move {
+        (std::mem::take(&mut replay), receiver, scope, after, state),
+        move |(mut replay, mut receiver, scope, last_id, state)| async move {
+            let live = replay.is_empty();
             let event = if let Some(event) = replay.pop_front() {
                 event
             } else {
@@ -390,13 +440,15 @@ async fn events(
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
                 }
             };
+            let choices = state.remote_network.display_content().await;
+            let event = transcript::event_with_display(event, live && wants_activity, choices);
             let wire = Event::default()
                 .event("message")
                 .id(event.id.to_string())
                 .data(serde_json::to_string(&event).unwrap_or_default());
             Some((
                 Ok::<_, Infallible>(wire),
-                (replay, receiver, scope, event.id.max(last_id)),
+                (replay, receiver, scope, event.id.max(last_id), state),
             ))
         },
     );
@@ -459,10 +511,7 @@ async fn download(
     Query(query): Query<DownloadQuery>,
 ) -> ApiResult<Response> {
     valid_client(&client)?;
-    let stored = files::lookup(&state, &Scope::new(client, session), &file).await?;
-    let file = tokio::fs::File::open(&stored.path)
-        .await
-        .context("关联文件已移除或无法读取")?;
+    let (stored, file) = files::open_registered(&state, &Scope::new(client, session), &file).await?;
     let stream = stream::try_unfold(file, |mut file| async move {
         let mut bytes = vec![0; 64 * 1024];
         let count = file.read(&mut bytes).await?;
@@ -550,6 +599,41 @@ fn test_state() -> (tempfile::TempDir, SharedState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn display_content_changes_apply_to_the_existing_event_stream() {
+        use futures_util::StreamExt;
+        use tower::ServiceExt;
+        let (_directory, state) = test_state();
+        let _desktop = codex_fixture::Desktop::connect(&state).await;
+        let scope = Scope::new("codex:default", "display-fixture");
+        let target = codex::target(&state, &scope.client).await.unwrap();
+        state.remote_sessions.watch(&scope, Some(target)).await;
+        state.remote_sessions.feeds.lock().await.get_mut(&scope).unwrap().subscribed = true;
+        let response = events(
+            State(state.clone()),
+            Path((scope.client.clone(), scope.session.clone())),
+            Query(EventQuery { after:Some(0),live_activity:Some(1) }),
+        )
+        .await.unwrap();
+        let mut body = response.into_body().into_data_stream();
+        for enabled in [false, true, false] {
+            let result = crate::remote_network::management_router()
+                .with_state(state.clone())
+                .oneshot(axum::http::Request::post("/api/remote-network/display-content")
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({"tool":enabled}).to_string())).unwrap())
+                .await.unwrap();
+            assert_eq!(result.status(), StatusCode::OK);
+            state.remote_sessions.publish(&scope,"message.delta",Some("tool".into()),json!({"type":"tool","text":"fresh"})).await;
+            let wire = tokio::time::timeout(Duration::from_secs(2), body.next()).await.unwrap().unwrap().unwrap();
+            let wire = std::str::from_utf8(&wire).unwrap();
+            let data = wire.lines().find_map(|line|line.strip_prefix("data: ")).unwrap();
+            let event: Value = serde_json::from_str(data).unwrap();
+            assert_eq!(event["data"]["displayContent"]["tool"], enabled);
+            assert_eq!(event["data"].get("liveActivity").is_some(), enabled);
+            assert_eq!(event["sessionId"], scope.session);
+        }
+    }
     #[tokio::test]
     async fn admission_remembers_ambiguous_write_without_replaying() {
         let service = SessionService::default();

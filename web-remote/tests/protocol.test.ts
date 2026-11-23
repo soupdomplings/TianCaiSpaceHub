@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
 import { RemoteApi, readEventStream } from '../src/api';
-import { applyEvent, emptyChat, fromHistory, prependHistory, shouldSendKey } from '../src/session-state';
+import { applyEvent, emptyChat, fromHistory, isTranscriptMessage, prependHistory, shouldSendKey } from '../src/session-state';
 import { mergeLiveSnapshot, mergeSnapshot } from '../src/use-session';
 import type { HistoryResponse, RemoteEvent, RemoteItem } from '../src/types';
 
@@ -34,6 +34,18 @@ describe('native event isolation and replay', () => {
     expect(merged.items.map(value => value.id)).toEqual(['older', 'anchor', 'last', 'new']);
     expect(merged.items[2].text).toBe('完成');
     expect(merged.nextCursor).toBe('older');
+  });
+  it('keeps earlier messages across a filtered empty head and advances hidden SSE without rendering it', () => {
+    const paged=prependHistory(fromHistory(history([])), {...history([item('earlier')]),nextCursor:null});
+    const restored=mergeSnapshot(paged,history([],9));
+    expect(restored.items.map(v=>v.id)).toEqual(['earlier']);
+    expect(restored.nextCursor).toBeNull();
+    const advanced=applyEvent(restored,{...delta,id:10,type:'cursor.advanced',data:{}},'codex:a','thread-a');
+    const progress=applyEvent(advanced,{...delta,id:11,data:{phase:'commentary',text:'进度段'}},'codex:a','thread-a');
+    expect(progress.cursor).toBe(11);
+    expect(progress.items.filter(isTranscriptMessage)).toEqual(restored.items);
+    const answer=applyEvent(progress,{...delta,id:12,itemId:'final',data:{phase:'final_answer',text:'答复'}},'codex:a','thread-a');
+    expect(answer.items.filter(isTranscriptMessage).map(i=>i.text)).toEqual(['earlier','答复']);
   });
 
   it('prepends older history once without replaying duplicate message ids or resetting live state', () => {

@@ -8,12 +8,21 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
+#[path = "delivery_links.rs"]
+mod delivery;
+pub(super) use delivery::{has_local_link, project_links};
 
 pub(super) const MAX_UPLOAD: usize = 32 * 1024 * 1024;
 #[derive(Clone, Serialize, Deserialize)]
 pub(super) struct StoredFile {
     pub public: RemoteFile,
     pub path: PathBuf,
+    /// Resolved path at registration. Older entries retain their recorded lexical path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pinned_path: Option<PathBuf>,
+    /// Only conversational links discovered in a designated output directory set this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    output_root: Option<PathBuf>,
     #[serde(default)]
     pub pending: bool,
 }
@@ -94,6 +103,8 @@ pub(super) async fn upload(
         };
         catalog.files.push(StoredFile {
             public: public.clone(),
+            pinned_path: Some(path.canonicalize()?),
+            output_root: None,
             path,
             pending: true,
         });
@@ -133,6 +144,19 @@ pub(super) async fn lookup(state: &SharedState, scope: &Scope, id: &str) -> Resu
         .next()
         .context("附件不存在")
 }
+pub(super) async fn open_registered(
+    state: &SharedState,
+    scope: &Scope,
+    id: &str,
+) -> Result<(StoredFile, tokio::fs::File)> {
+    let stored = lookup(state, scope, id).await?;
+    let (stored, file) = tokio::task::spawn_blocking(move || {
+        let file = delivery::open_checked(&stored)?;
+        Ok::<_, anyhow::Error>((stored, file))
+    })
+    .await??;
+    Ok((stored, tokio::fs::File::from_std(file)))
+}
 pub(super) async fn associate(
     state: &SharedState,
     scope: &Scope,
@@ -169,6 +193,8 @@ pub(super) async fn associate(
         };
         catalog.files.push(StoredFile {
             public: public.clone(),
+            pinned_path: Some(path.canonicalize()?),
+            output_root: None,
             path,
             pending: false,
         });

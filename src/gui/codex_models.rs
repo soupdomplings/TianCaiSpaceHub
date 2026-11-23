@@ -120,13 +120,15 @@ impl ChannelModels {
         ui
     }
     pub fn focus_model(&self, model: &str) {
-        if let Some(index) = self
-            .groups
-            .borrow()
-            .iter()
-            .position(|g| g.iter().any(|m| m.eq_ignore_ascii_case(model)))
         {
-            self.channel.set_selection(index as u32);
+            let groups = self.groups.borrow();
+            let contains = |group: &Vec<String>| group.iter().any(|id| id.eq_ignore_ascii_case(model));
+            let current = self.channel.get_selection().and_then(|n| groups.get(n as usize));
+            if !current.is_some_and(contains)
+                && let Some(index) = groups.iter().position(contains)
+            {
+                self.channel.set_selection(index as u32);
+            }
         }
         // Focusing the configured list must not hide other candidates from
         // the selected channel, including models returned by discovery.
@@ -262,4 +264,52 @@ impl ChannelModels {
             self.selected.borrow().len()
         ));
     }
+}
+
+#[cfg(all(test, windows))]
+#[test]
+fn direct_checks_from_empty_survive_channel_switch_save_and_reopen() {
+    wxdragon::app::render_offscreen(|| {
+        use crate::{ai_gateway::config::ProviderConfig, config::AppConfig};
+        super::theme::init(super::theme::ThemeMode::Light);
+        let frame = Frame::builder().build();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hub.toml");
+        let mut config = AppConfig::default();
+        config.ai_gateway.providers = vec![
+            ProviderConfig { name: "one".into(), models: vec!["alpha".into(), "shared".into()], ..Default::default() },
+            ProviderConfig { name: "two".into(), models: vec!["beta".into(), "shared".into()], ..Default::default() },
+        ];
+        let open = |config: &AppConfig| {
+            let picker = ChannelModels::new(&frame);
+            let (names, groups) = super::codex_model_catalog::channel_groups(&config.ai_gateway);
+            for name in names {
+                picker.channel.append(&name);
+            }
+            picker.channel.set_selection(0);
+            picker.update(groups, Some(&config.ai_gateway.codex_visible_models));
+            picker
+        };
+        let picker = open(&config);
+        picker.list.check(1, true); // shared in the first channel
+        picker.toggle_visible(1);
+        picker.channel.set_selection(1);
+        picker.render();
+        picker.focus_model("shared");
+        assert_eq!(picker.channel.get_selection(), Some(1));
+        assert!(picker.list.is_checked(1));
+        picker.list.check(0, true); // beta in the second channel
+        picker.toggle_visible(0);
+        assert!(super::codex_tab::prepare_visible_models(
+            &mut config.ai_gateway, picker.selected_models(), Some(Vec::new())
+        ).unwrap());
+        config.save(&path).unwrap();
+        let saved = AppConfig::load_or_default(&path).unwrap();
+        assert!(saved.ai_gateway.enabled);
+        assert_eq!(open(&saved).selected_models(), ["shared", "beta"]);
+        let catalog = crate::ai_gateway::catalog::configured_models_response(&saved.ai_gateway);
+        assert_eq!(catalog["models"][0]["slug"], "shared");
+        assert_eq!(catalog["models"][1]["slug"], "beta");
+        frame.destroy();
+    }).unwrap();
 }

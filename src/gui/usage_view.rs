@@ -215,7 +215,7 @@ impl UsageView {
         );
         detail.set_sizer(detail_col, true);
         column.add(&detail, 1, SizerFlag::Expand, 0);
-        page.set_sizer(column, true);
+        super::shell::inset_page_content(&page, column);
         let view = Self {
             page,
             periods,
@@ -247,7 +247,8 @@ impl UsageView {
         // A real fixed viewport, rather than a scroll area with hidden overflow.
         // Short windows show one useful view at a time; the distribution toggle
         // keeps the same data and drill-down accessible without growing the page.
-        let compact = self.page.get_client_size().height < self.page.from_dip(560);
+        let compact =
+            self.page.get_client_size().height < self.page.from_dip(560 + theme::PAGE_GUTTER);
         let detail_only = compact && self.detail_only.get();
         self.distribution.show(compact);
         self.distribution.set_label(if detail_only {

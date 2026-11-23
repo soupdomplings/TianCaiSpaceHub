@@ -2,7 +2,7 @@ mod cc_switch;
 mod history_location;
 mod project_membership;
 mod sidebar_projects;
-pub(crate) use cc_switch::active_hub_has_cc_switch_catalog;
+pub(crate) use cc_switch::{CatalogConnection, prepare_model_catalog};
 pub(crate) use history_location::repair_history_location;
 pub(crate) use project_membership::{
     LocalProjectCandidate, ThreadAssignment, local_project_owner, repair_thread_memberships,

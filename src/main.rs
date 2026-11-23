@@ -42,6 +42,10 @@ mod types;
 mod vscode_extension_patch;
 mod web;
 mod workbuddy_config;
+#[cfg(windows)]
+mod xshellb;
+#[cfg(windows)]
+mod windows_startup;
 
 use std::{
     env,
@@ -75,6 +79,12 @@ fn main() -> anyhow::Result<()> {
         }
     };
     match &cli.command {
+        #[cfg(windows)]
+        Command::RemoveLoginStartup => return windows_startup::remove_on_uninstall(),
+        #[cfg(windows)]
+        Command::XshellBridge => {
+            return xshellb::serve(&config_path_from_cli(cli.config_path.clone()));
+        }
         Command::Import(link) => {
             #[cfg(feature = "gui")]
             {
@@ -191,6 +201,10 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             );
             Ok(())
         }
+        #[cfg(windows)]
+        Command::XshellBridge => unreachable!("stdio starts before config loading"),
+        #[cfg(windows)]
+        Command::RemoveLoginStartup => unreachable!("uninstall cleanup runs before config loading"),
         Command::Gui | Command::Import(_) | Command::RegisterImport | Command::UnregisterImport => {
             unreachable!("GUI command is handled before config loading")
         }

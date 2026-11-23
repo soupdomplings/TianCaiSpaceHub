@@ -26,6 +26,8 @@ pub(super) enum PageId {
     Sources,
     Skills,
     Mcp,
+    #[cfg(windows)]
+    XshellB,
     Chat,
     Logs,
     Settings,
@@ -50,6 +52,8 @@ impl PageId {
             Self::Sources => "模型与渠道",
             Self::Skills => "Skill 管理",
             Self::Mcp => "MCP 管理",
+            #[cfg(windows)]
+            Self::XshellB => crate::xshellb::NAME,
             Self::Chat => "聊天接入",
             Self::Logs => "请求日志",
             Self::Settings => "设置",
@@ -118,12 +122,13 @@ pub(super) struct Shell {
     pub account: Button,
     pub assistant_launcher: Button,
     pub assistant_host: Panel,
-    assistant_footer: Panel,
+    page_area: Panel,
     rail: rail::Rail,
     pub status: StaticText,
     breadcrumb: StaticText,
     sidebar: ScrolledWindow,
-    pages: Rc<RefCell<Vec<PageId>>>,
+    pages: Rc<RefCell<Vec<(PageId, bool)>>>,
+    viewport: Rc<Cell<bool>>,
     current: Rc<Cell<PageId>>,
     changed: Rc<RefCell<Option<Changed>>>,
     source_focus: Rc<RefCell<Option<String>>>,
@@ -237,36 +242,23 @@ impl Shell {
             content.from_dip(12),
         );
         column.add_spacer(content.from_dip(9));
-        let book = SimpleBook::builder(&content).build();
+        // Full-page viewports own their insets so their scrollbar reaches the
+        // client edge. Fixed pages keep the same gutter outside the book.
+        let page_area = Panel::builder(&content).build();
+        page_area.set_background_color(t.bg_app);
+        let book = SimpleBook::builder(&page_area).build();
         book.set_background_color(t.bg_app);
-        column.add(
-            &book,
-            1,
-            SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Bottom,
-            content.from_dip(theme::PAGE_GUTTER),
-        );
-        // Keep the assistant entrance in the bottom-right corner with a small
-        // reserved row, so it never covers a focused configuration control.
-        let assistant_footer = Panel::builder(&content).build();
-        assistant_footer.set_background_color(t.bg_app);
-        let footer = BoxSizer::builder(Orientation::Horizontal).build();
-        footer.add_stretch_spacer(1);
-        let assistant_launcher = Button::builder(&assistant_footer)
+        column.add(&page_area, 1, SizerFlag::Expand, 0);
+        // Only this 44-DIP native button participates in hit testing. It is
+        // not a sizer item and never reserves space in the active page.
+        let assistant_launcher = Button::builder(&content)
             .with_icon(Icon::Chat)
             .with_kind(ButtonKind::Primary)
             .with_size(Size::new(44, 44))
             .build();
         assistant_launcher.set_name("assistant-floating-chat");
         assistant_launcher.set_tooltip("打开天才搭档，继续本次对话");
-        footer.add(
-            &assistant_launcher,
-            0,
-            SizerFlag::Right | SizerFlag::Bottom,
-            content.from_dip(theme::PAGE_GUTTER),
-        );
-        assistant_footer.set_sizer(footer, true);
-        column.add(&assistant_footer, 0, SizerFlag::Expand, 0);
-        assistant_footer.hide();
+        assistant_launcher.hide();
         content.set_sizer(column, true);
         row.add(&content, 1, SizerFlag::Expand, 0);
         panel.set_sizer(row, true);
@@ -277,26 +269,54 @@ impl Shell {
             account,
             assistant_launcher,
             assistant_host: content,
-            assistant_footer,
+            page_area,
             rail: navigation,
             status,
             breadcrumb,
             sidebar,
             pages: Default::default(),
+            viewport: Default::default(),
             current: Rc::new(Cell::new(PageId::Overview)),
             changed: Default::default(),
             source_focus: Default::default(),
         };
         let nav = shell.clone();
         shell.rail.bind(Rc::new(move |id| nav.navigate(id)));
+        let viewport = shell.viewport.clone();
+        page_area.on_size(move |event| {
+            size_page_book(page_area, book, viewport.get());
+            if assistant_launcher.is_shown() {
+                place_launcher(content, assistant_launcher, viewport.get());
+            }
+            event.skip(true);
+        });
         shell.refresh_navigation();
+        size_page_book(page_area, book, shell.viewport.get());
         shell
     }
     pub fn register<W: WxWidget>(&self, id: PageId, page: &W) {
-        assert!(!self.pages.borrow().contains(&id), "duplicate desktop page");
-        self.book
-            .add_page(page, id.title(), self.pages.borrow().is_empty(), None);
-        self.pages.borrow_mut().push(id);
+        self.add_page(
+            id,
+            page,
+            std::any::TypeId::of::<W>() == std::any::TypeId::of::<ScrolledWindow>(),
+        );
+    }
+    /// A composite page contains its own page-wide scrolling surface.
+    pub fn register_viewport<W: WxWidget>(&self, id: PageId, page: &W) {
+        self.add_page(id, page, true);
+    }
+    fn add_page<W: WxWidget>(&self, id: PageId, page: &W, viewport: bool) {
+        assert!(
+            !self.pages.borrow().iter().any(|entry| entry.0 == id),
+            "duplicate desktop page"
+        );
+        let first = self.pages.borrow().is_empty();
+        self.book.add_page(page, id.title(), first, None);
+        self.pages.borrow_mut().push((id, viewport));
+        if first {
+            self.viewport.set(viewport);
+            size_page_book(self.page_area, self.book, viewport);
+        }
     }
     pub fn current(&self) -> PageId {
         self.current.get()
@@ -315,26 +335,32 @@ impl Shell {
         *self.changed.borrow_mut() = Some(Rc::new(changed));
     }
     pub fn set_assistant_ready(&self, ready: bool) {
-        self.assistant_launcher.show(ready);
-        if self.assistant_footer.is_shown() != ready {
-            self.assistant_footer.show(ready);
-            self.assistant_host.layout();
+        if self.assistant_launcher.is_shown() == ready {
+            return;
+        }
+        if ready {
+            place_launcher(
+                self.assistant_host,
+                self.assistant_launcher,
+                self.viewport.get(),
+            );
+            self.assistant_launcher.show(true);
+            self.assistant_launcher.raise_child_overlay();
+        } else {
+            self.assistant_launcher.hide();
         }
     }
     /// Bounds of the client-area overlay. The title bar, rail and launcher
     /// remain outside the chat so native window controls stay reachable.
     pub fn assistant_overlay_area(&self) -> Rect {
-        let size = self.assistant_host.get_client_size();
-        let inset = self.assistant_host.from_dip(theme::PAGE_GUTTER);
+        let anchor = launcher_bounds(self.assistant_host, self.viewport.get());
+        let inset = self.assistant_host.from_dip(theme::SPACE_SM);
         let top = self.assistant_host.from_dip(56);
-        let bottom = size.height
-            - self.assistant_footer.get_best_size().height
-            - self.assistant_host.from_dip(theme::SPACE_SM);
         Rect::new(
             inset,
             top,
-            (size.width - inset * 2).max(1),
-            (bottom - top).max(1),
+            (anchor.x + anchor.width - inset).max(1),
+            (anchor.y - inset - top).max(1),
         )
     }
     pub fn set_dumpling_visible(&self, visible: bool) {
@@ -352,7 +378,14 @@ impl Shell {
         if matches!(id, PageId::Skills | PageId::Mcp) {
             return;
         }
-        let Some(index) = self.pages.borrow().iter().position(|v| *v == id) else {
+        let Some((index, (_, viewport))) = self
+            .pages
+            .borrow()
+            .iter()
+            .copied()
+            .enumerate()
+            .find(|(_, v)| v.0 == id)
+        else {
             return;
         };
         if id == PageId::Dumpling && !self.rail.dumpling() {
@@ -361,12 +394,18 @@ impl Shell {
         let previous = self.book.selection();
         self.book.change_selection(index);
         self.current.set(id);
+        self.viewport.set(viewport);
         self.breadcrumb
             .set_label(&format!("{}  /  {}", rail::group_name(id), id.title()));
         self.status.set_label("");
         self.status.show(matches!(id, PageId::Client(_)));
         self.rail.select(id);
         self.refresh_navigation();
+        size_page_book(self.page_area, self.book, viewport);
+        if self.assistant_launcher.is_shown() {
+            place_launcher(self.assistant_host, self.assistant_launcher, viewport);
+            self.assistant_launcher.raise_child_overlay();
+        }
         if let Some(callback) = self.changed.borrow().clone() {
             callback(id);
         }
@@ -376,6 +415,57 @@ impl Shell {
         self.sidebar.layout();
         self.sidebar.fit_inside();
         self.panel.layout();
+    }
+}
+
+pub(super) fn inset_page_content<W: WxWidget>(host: &W, body: BoxSizer) {
+    let padded = BoxSizer::builder(Orientation::Vertical).build();
+    padded.add_sizer(
+        &body,
+        1,
+        SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Bottom,
+        host.from_dip(theme::PAGE_GUTTER),
+    );
+    host.set_sizer(padded, true);
+}
+
+fn page_gutter(host: Panel, viewport: bool) -> i32 {
+    if viewport {
+        0
+    } else {
+        host.from_dip(theme::PAGE_GUTTER)
+    }
+}
+
+fn size_page_book(host: Panel, book: SimpleBook, viewport: bool) {
+    let s = host.get_client_size();
+    let inset = page_gutter(host, viewport);
+    let width = (s.width - 2 * inset).max(1);
+    let height = (s.height - inset).max(1);
+    if book.get_position() != Point::new(inset, 0) || book.get_size() != Size::new(width, height) {
+        book.set_size_with_pos(inset, 0, width, height);
+    }
+}
+
+fn launcher_bounds(host: Panel, viewport: bool) -> Rect {
+    let size = host.get_client_size();
+    let button = host.from_dip(44).min(size.width).min(size.height).max(1);
+    // Inside the active page but clear of its right and bottom scrollbar lanes.
+    let margin = page_gutter(host, viewport) + host.from_dip(24);
+    Rect::new(
+        (size.width - margin - button).max(0),
+        (size.height - margin - button).max(0),
+        button,
+        button,
+    )
+}
+
+fn place_launcher(host: Panel, button: Button, viewport: bool) {
+    let r = launcher_bounds(host, viewport);
+    if button.get_position() != Point::new(r.x, r.y)
+        || button.get_size() != Size::new(r.width, r.height)
+    {
+        button.set_size_with_pos(r.x, r.y, r.width, r.height);
     }
 }
 

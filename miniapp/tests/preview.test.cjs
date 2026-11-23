@@ -1,0 +1,35 @@
+const {test}=require('node:test');
+const assert=require('node:assert/strict');
+const {execFileSync}=require('node:child_process'),path=require('node:path'),vm=require('node:vm');
+const {wxmlToJs}=require('miniprogram-compiler');
+const root=path.resolve(__dirname,'..');
+execFileSync(process.execPath,[path.join(root,'preview.cjs')]);
+const preview=path.join(root,'preview/miniprogram');
+const cache=new Map();
+global.wx={getStorageSync:k=>cache.get(k),setStorageSync:(k,v)=>cache.set(k,v)};
+const {cloud,rpc}=require(path.join(preview,'lib/api'));
+test('isolated preview preserves native request decisions and credits a returning order only once',async()=>{
+ const {devices}=await cloud('/devices'), id=devices[0].bindingId;
+ const base='/clients/codex/sessions/demo-chat';
+ const s=await rpc(id,'GET',base+'/history');
+ assert.equal(s.approvals.length,2);
+ await rpc(id,'POST',base+'/approvals/demo-question',{decision:'accept',answers:{format:'md'}});
+ assert.equal((await rpc(id,'GET',base+'/history')).approvals.length,1);
+ const q=await cloud('/squad/quote','POST',{amount:30,platform:'ios'}), input={quoteId:q.quoteId,requestId:'r',code:'preview-only'};
+ const before=(await cloud('/squad')).balance;
+ const first=await cloud('/squad/orders','POST',input);
+ await cloud('/squad/orders','POST',input);
+ assert.equal((await cloud('/squad/orders/'+first.id)).state,'paid');
+ assert.equal((await cloud('/squad')).balance,before+30);
+ assert.equal([...cache.keys()].every(k=>k.startsWith('hub.preview.v1.')),true);
+});
+test('compiled WeChat templates follow Hub settings without local switches and retain downloads and native approval actions',()=>{
+ const render=vm.runInNewContext('(function(global){'+wxmlToJs(preview)+'})({})',{window:{},console})('pages/chat/index.wxml');
+ const base={font:17,connection:'已连接',flags:{},caps:{liveActivity:true},items:[],approvals:[],anchor:'end'};
+ const view=(extra)=>JSON.stringify(render({...base,...extra}));
+ const managed=view({displayManaged:true});assert.equal((managed.match(/"tag":"wx-switch"/g)||[]).length,0);
+ assert.match(managed,/显示内容由会话所在电脑 Hub（发送端）/);assert.doesNotMatch(managed,/bindtap.*settings/);
+ const assets=view({sheet:'artifacts',artifacts:[{id:'c',name:'diagram.png'}]});assert.match(assets,/diagram.png/);assert.match(assets,/下载/);
+ const approval=view({sheet:'approval',activeForm:{title:'权限请求',questions:[],actions:[{label:'拒绝',value:'decline'}]}});
+ assert.match(approval,/权限请求/);assert.match(approval,/拒绝/);
+});

@@ -127,29 +127,10 @@ pub(super) fn show_session_history_window(parent: &Frame, text: GuiText, api: Ap
         fetch_result.clone(),
         in_flight.clone(),
     );
-    bind_move_to_gateway(
-        &move_to_button,
+    bind_move_actions(
         &frame,
-        text,
-        api.clone(),
-        left_list,
-        left_rows.clone(),
-        move_result.clone(),
-        in_flight.clone(),
-    );
-    bind_move_back(
-        &move_back_button,
-        &frame,
-        text,
-        api.clone(),
-        right_list,
-        right_rows.clone(),
-        provider_choices.clone(),
-        move_result.clone(),
-        in_flight.clone(),
-    );
-    bind_session_context_menus(
-        &frame,
+        move_to_button,
+        move_back_button,
         text,
         api.clone(),
         left_list,
@@ -244,37 +225,11 @@ fn bind_refresh(
     });
 }
 
-fn bind_move_to_gateway(
-    button: &Button,
-    frame: &Frame,
-    text: GuiText,
-    api: ApiClient,
-    left_list: ListCtrl,
-    left_rows: SessionRows,
-    move_result: SessionMoveResult,
-    in_flight: Arc<AtomicBool>,
-) {
-    let button = *button;
-    let frame = *frame;
-    button.on_click(move |_| {
-        let sessions = selected_sessions(left_list, &left_rows);
-        if sessions.is_empty() {
-            show_error(&frame, text.session_select_left_first());
-            return;
-        }
-        start_move_many(
-            &api,
-            sessions,
-            AI_GATEWAY_PROVIDER.to_string(),
-            &move_result,
-            &in_flight,
-        );
-    });
-}
-
 #[allow(clippy::too_many_arguments)]
-fn bind_session_context_menus(
+fn bind_move_actions(
     frame: &Frame,
+    move_to_button: Button,
+    move_back_button: Button,
     text: GuiText,
     api: ApiClient,
     left_list: ListCtrl,
@@ -313,165 +268,148 @@ fn bind_session_context_menus(
             right_list.popup_menu(&mut menu, None);
         });
     }
-    {
-        let frame = *frame;
-        let api = api.clone();
-        let left_rows = left_rows.clone();
-        let right_rows = right_rows.clone();
-        let provider_choices = provider_choices.clone();
-        frame.on_menu_selected(move |event| match event.get_id() {
-            ID_SESSION_MOVE_TO_GATEWAY => {
-                let sessions = selected_sessions(left_list, &left_rows);
-                if sessions.is_empty() {
-                    show_error(&frame, text.session_select_left_first());
-                    return;
-                }
-                start_move_many(
-                    &api,
-                    sessions,
-                    AI_GATEWAY_PROVIDER.to_string(),
-                    &move_result,
-                    &in_flight,
-                );
-            }
-            ID_SESSION_MOVE_TO_PROVIDER => {
-                let sessions = selected_sessions(right_list, &right_rows);
-                if sessions.is_empty() {
-                    show_error(&frame, text.session_select_right_first());
-                    return;
-                }
-                let choices = provider_choices.borrow().clone();
-                let Some(target) = prompt_target_provider(&frame, text, choices, sessions.len())
-                else {
-                    return;
-                };
-                start_move_many(&api, sessions, target, &move_result, &in_flight);
-            }
-            _ => {}
-        });
-    }
-}
-
-fn bind_move_back(
-    button: &Button,
-    frame: &Frame,
-    text: GuiText,
-    api: ApiClient,
-    right_list: ListCtrl,
-    right_rows: SessionRows,
-    provider_choices: ProviderChoices,
-    move_result: SessionMoveResult,
-    in_flight: Arc<AtomicBool>,
-) {
-    let button = *button;
     let frame = *frame;
-    button.on_click(move |_| {
-        let sessions = selected_sessions(right_list, &right_rows);
+    let move_selected = Rc::new(move |command| {
+        let (sessions, destination, empty_message) = match command {
+            ID_SESSION_MOVE_TO_GATEWAY => (
+                selected_sessions(left_list, &left_rows),
+                MoveDestination::Gateway,
+                text.session_select_left_first(),
+            ),
+            ID_SESSION_MOVE_TO_PROVIDER => (
+                selected_sessions(right_list, &right_rows),
+                MoveDestination::Providers(provider_choices.borrow().clone()),
+                text.session_select_right_first(),
+            ),
+            _ => return,
+        };
         if sessions.is_empty() {
-            show_error(&frame, text.session_select_right_first());
+            show_error(&frame, empty_message);
             return;
         }
-        let choices = provider_choices.borrow().clone();
-        let Some(target) = prompt_target_provider(&frame, text, choices, sessions.len()) else {
+        if matches!(&destination, MoveDestination::Providers(choices) if choices.is_empty()) {
+            show_error(&frame, text.session_no_target_provider());
             return;
-        };
-        start_move_many(&api, sessions, target, &move_result, &in_flight);
+        }
+        let (dialog, choice) = move_dialog(&frame, text, &destination, sessions.len());
+        let result = dialog.show_modal();
+        let target = destination.confirmed(result, choice.and_then(|c| c.get_selection()));
+        dialog.destroy();
+        if let Some(target) = target {
+            start_move_many(&api, sessions, target, &move_result, &in_flight);
+        }
     });
+    for (button, command) in [
+        (move_to_button, ID_SESSION_MOVE_TO_GATEWAY),
+        (move_back_button, ID_SESSION_MOVE_TO_PROVIDER),
+    ] {
+        let move_selected = move_selected.clone();
+        button.on_click(move |_| move_selected(command));
+    }
+    frame.on_menu_selected(move |event| move_selected(event.get_id()));
 }
 
-fn prompt_target_provider(
+enum MoveDestination {
+    Gateway,
+    Providers(Vec<String>),
+}
+
+impl MoveDestination {
+    fn confirmed(&self, result: i32, selection: Option<u32>) -> Option<String> {
+        if result != ID_OK {
+            return None;
+        }
+        match self {
+            Self::Gateway => Some(AI_GATEWAY_PROVIDER.to_owned()),
+            Self::Providers(choices) => choices
+                .get(selection? as usize)
+                .map(|provider| provider.trim())
+                .filter(|provider| !provider.is_empty())
+                .map(str::to_owned),
+        }
+    }
+}
+
+fn move_dialog(
     frame: &Frame,
     text: GuiText,
-    choices: Vec<String>,
+    destination: &MoveDestination,
     selected_count: usize,
-) -> Option<String> {
-    if choices.is_empty() {
-        show_error(frame, text.session_no_target_provider());
-        return None;
-    }
-    let dialog = Dialog::builder(frame, text.session_target_provider_title())
-        .with_size(520, 240)
-        .build();
+) -> (Dialog, Option<Choice>) {
+    let dialog = Dialog::builder(frame, text.session_target_provider_title()).build();
     super::motion::install_dialog(dialog);
     dialog.set_background_color(theme::theme().bg_card);
-
-    let panel = Panel::builder(&dialog).build();
-    panel.set_background_color(theme::theme().bg_card);
+    dialog.set_font(&theme::font(theme::TextRole::Body));
+    dialog.set_escape_id(ID_CANCEL);
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
-
-    let prompt = StaticText::builder(&panel)
+    let gap = dialog.from_dip(12);
+    let prompt = StaticText::builder(&dialog)
         .with_label(&text.session_target_provider_prompt(selected_count))
         .build();
     prompt.set_foreground_color(theme::theme().ink_primary);
-    sizer.add(
-        &prompt,
-        0,
-        SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Top,
-        18,
-    );
-
-    let display_choices = choices
-        .iter()
-        .map(|provider| provider_display_name(provider))
-        .collect::<Vec<_>>();
-    let choice = Choice::builder(&panel)
-        .with_choices(display_choices)
-        .with_size(Size::new(460, -1))
-        .build();
-    choice.set_selection(0);
-    sizer.add(
-        &choice,
-        0,
-        SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Top,
-        18,
-    );
+    sizer.add(&prompt, 0, SizerFlag::Expand | SizerFlag::Bottom, gap);
+    let choice = match destination {
+        MoveDestination::Gateway => {
+            let target = StaticText::builder(&dialog)
+                .with_label("AI Gateway")
+                .build();
+            target.set_foreground_color(theme::theme().ink_primary);
+            sizer.add(&target, 0, SizerFlag::Expand | SizerFlag::Bottom, gap);
+            None
+        }
+        MoveDestination::Providers(choices) => {
+            let choice = Choice::builder(&dialog)
+                .with_choices(choices.iter().map(|p| provider_display_name(p)).collect())
+                .with_size(Size::new(320, 34))
+                .with_selection(0)
+                .build();
+            sizer.add(&choice, 0, SizerFlag::Expand | SizerFlag::Bottom, gap);
+            Some(choice)
+        }
+    };
 
     let buttons = BoxSizer::builder(Orientation::Horizontal).build();
-    let cancel_button = Button::builder(&panel)
+    let cancel_button = Button::builder(&dialog)
         .with_id(ID_CANCEL)
         .with_label(text.cancel())
         .build();
-    let ok_button = Button::builder(&panel)
+    let ok_button = Button::builder(&dialog)
         .with_id(ID_OK)
         .with_label(text.move_sessions_confirm())
         .build();
     ok_button.set_default();
     buttons.add_stretch_spacer(1);
-    buttons.add(&cancel_button, 0, SizerFlag::Right, 8);
-    buttons.add(&ok_button, 0, SizerFlag::Right, 0);
-    sizer.add_sizer(
-        &buttons,
+    buttons.add(&cancel_button, 0, SizerFlag::Right, dialog.from_dip(8));
+    buttons.add(&ok_button, 0, SizerFlag::default(), 0);
+    sizer.add_sizer(&buttons, 0, SizerFlag::Expand, 0);
+    let outer = BoxSizer::builder(Orientation::Vertical).build();
+    outer.add_sizer(
+        &sizer,
         0,
-        SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Top | SizerFlag::Bottom,
-        18,
+        SizerFlag::Expand | SizerFlag::All,
+        dialog.from_dip(18),
     );
-
-    panel.set_sizer(sizer, true);
-    let dialog_sizer = BoxSizer::builder(Orientation::Vertical).build();
-    dialog_sizer.add(&panel, 1, SizerFlag::Expand, 0);
-    dialog.set_sizer(dialog_sizer, true);
+    dialog.set_sizer_and_fit(outer, true);
     dialog.center();
-
-    {
-        let dialog = dialog;
-        cancel_button.on_click(move |_| dialog.end_modal(ID_CANCEL));
+    cancel_button.on_click(move |_| dialog.end_modal(ID_CANCEL));
+    ok_button.on_click(move |_| dialog.end_modal(ID_OK));
+    // wxDialog maps Escape to a wxButton. Hub's keyboard-focusable command
+    // controls derive from wxControl, so handle Escape on each focus target.
+    fn dismiss_on_escape(widget: &impl WindowEvents, dialog: Dialog) {
+        widget.on_key_down(move |event| {
+            if matches!(&event, WindowEventData::Keyboard(key) if key.get_key_code() == Some(27)) {
+                dialog.end_modal(ID_CANCEL);
+            } else {
+                event.skip(true);
+            }
+        });
     }
-    {
-        let dialog = dialog;
-        ok_button.on_click(move |_| dialog.end_modal(ID_OK));
+    dismiss_on_escape(&cancel_button, dialog);
+    dismiss_on_escape(&ok_button, dialog);
+    if let Some(choice) = &choice {
+        dismiss_on_escape(choice, dialog);
     }
-
-    if dialog.show_modal() != ID_OK {
-        dialog.destroy();
-        return None;
-    }
-    let target = choice
-        .get_selection()
-        .and_then(|index| choices.get(index as usize).cloned())
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
-    dialog.destroy();
-    target
+    (dialog, choice)
 }
 
 fn start_fetch(api: &ApiClient, fetch_result: &SessionFetchResult, in_flight: &Arc<AtomicBool>) {
@@ -658,4 +596,64 @@ fn thread_workspace(cwd: Option<&serde_json::Value>) -> String {
         }
     }
     String::new()
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+    use crate::gui::text::GuiLocale;
+
+    #[test]
+    #[ignore = "isolated hidden session move confirmation dialog"]
+    fn move_confirmation_keeps_actions_inside_dialog_and_requires_acceptance() {
+        wxdragon::app::render_offscreen(|| {
+            theme::init(theme::ThemeMode::Light);
+            let frame = Frame::builder().with_title("Session move fixture").build();
+            for (destination, count, locale, expected) in [
+                (
+                    MoveDestination::Gateway,
+                    1,
+                    GuiLocale::ZhCn,
+                    AI_GATEWAY_PROVIDER,
+                ),
+                (
+                    MoveDestination::Providers(vec!["openai".into(), "custom".into()]),
+                    23,
+                    GuiLocale::EnUs,
+                    "custom",
+                ),
+            ] {
+                let text = GuiText::new(locale);
+                let (dialog, choice) = move_dialog(&frame, text, &destination, count);
+                dialog.layout();
+                let client = dialog.get_client_size();
+                let mut last_right = 0;
+                for id in [ID_CANCEL, ID_OK] {
+                    let button = dialog.find_window_by_id(id).unwrap();
+                    let pos = button.get_position();
+                    let size = button.get_size();
+                    assert!(button.is_shown() && size.width > 0 && size.height > 0);
+                    assert!(pos.x >= last_right && pos.x + size.width <= client.width);
+                    assert!(pos.y > 0 && pos.y + size.height <= client.height);
+                    last_right = pos.x + size.width;
+                    if let Some(choice) = choice {
+                        assert!(pos.y >= choice.get_position().y + choice.get_size().height);
+                    }
+                }
+                let selection = choice.and_then(|c| {
+                    c.set_selection(1);
+                    c.get_selection()
+                });
+                assert_eq!(destination.confirmed(ID_CANCEL, selection), None);
+                assert_eq!(destination.confirmed(wxdragon::id::ID_NONE, selection), None);
+                assert_eq!(
+                    destination.confirmed(ID_OK, selection).as_deref(),
+                    Some(expected)
+                );
+                dialog.destroy();
+            }
+            frame.destroy();
+        })
+        .unwrap();
+    }
 }

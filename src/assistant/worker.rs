@@ -40,10 +40,23 @@ fn server_error_detail(stage: &str, error: &Value) -> String {
     });
     let message = error["message"]
         .as_str()
+        .or_else(|| error.as_str())
         .unwrap_or_default()
         .to_ascii_lowercase();
+    let http_status = http_status.or_else(|| {
+        message
+            .starts_with("unexpected status 502 bad gateway")
+            .then_some(502)
+    });
+    // Some Server versions put the underlying connection failure in additionalDetails.
+    let dns_failure = super::connection::mentions_dns(&message)
+        || error["additionalDetails"]
+            .as_str()
+            .is_some_and(super::connection::mentions_dns);
     let reason = if message.contains("readonly access is no longer supported") {
         "Server 不再接受旧的只读权限参数，请更新 Hub"
+    } else if dns_failure && !matches!(http_status, Some(401 | 403 | 429)) {
+        super::connection::DNS_HINT
     } else if let Some(status) = http_status {
         match status {
             400 | 422 => "管理员模型服务拒绝请求参数",
@@ -843,6 +856,28 @@ mod tests {
                 .unwrap()
                 .contains("fixture-admin-key")
         );
+    }
+    #[test]
+    fn assistant_help_distinguishes_upstream_dns_from_other_gateway_failures() {
+        let sample = "unexpected status 502 Bad Gateway: upstream error: error sending request for url (https://fixture.invalid/v1/responses?token=private), kind=connect; caused by: dns error; caused by: 不知道这样的主机。 (os error 11001), url: http://127.0.0.1:3847/ai-gateway/v1/responses";
+        for error in [
+            json!({"message":sample}),
+            json!({"message":"request failed", "additionalDetails":sample,
+                "codexErrorInfo":{"httpConnectionFailed":{"httpStatusCode":502}}}),
+        ] {
+            let text = server_error_detail("模型请求", &error);
+            assert!(text.contains("DNS") && text.contains("代理") && text.contains("HTTP 502"));
+            assert!(
+                !text.contains("fixture.invalid")
+                    && !text.contains("token")
+                    && !text.contains("127.0.0.1")
+            );
+        }
+        let generic = server_error_detail(
+            "本轮执行",
+            &json!({"message":"unexpected status 502 Bad Gateway"}),
+        );
+        assert!(generic.contains("HTTP 502") && !generic.contains("DNS"));
     }
     #[test]
     fn server_failure_details_preserve_stage_and_codes_without_private_text() {

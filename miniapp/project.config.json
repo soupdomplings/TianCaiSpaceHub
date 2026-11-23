@@ -1,0 +1,12 @@
+{
+  "description": "天才 Hub 微信小程序",
+  "projectname": "tiancai-hub",
+  "compileType": "miniprogram",
+  "miniprogramRoot": "miniprogram/",
+  "appid": "touristappid",
+  "setting": {
+    "es6": true,
+    "minified": true,
+    "urlCheck": true
+  }
+}

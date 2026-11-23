@@ -1,0 +1,4 @@
+node_modules/
+preview/
+project.private.config.json
+miniprogram/config.local.js

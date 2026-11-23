@@ -195,7 +195,7 @@ impl Dashboard {
             .collect();
         table.set_sizer(rows, true);
         col.add(&table, 0, SizerFlag::Expand, 0);
-        page.set_sizer(col, true);
+        crate::gui::shell::inset_page_content(&page, col);
         let trend = Rc::new(RefCell::new(Value::Null));
         let draw = trend.clone();
         chart.on_paint(move |_| {

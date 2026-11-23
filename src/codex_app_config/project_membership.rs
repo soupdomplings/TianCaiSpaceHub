@@ -41,6 +41,15 @@ pub(crate) struct ThreadAssignment {
 
 #[derive(Default, Debug)]
 pub(crate) struct ProjectEvidence {
+    pub(super) unavailable: Option<&'static str>,
+    pub(super) invalid_projects: usize,
+    pub(super) backed_projects: usize,
+    pub(super) conflicting_projects: usize,
+    pub(super) ambiguous_roots: usize,
+    pub(super) unverified_projects: usize,
+    pub(super) mismatched_grouped_paths: usize,
+    /// An opt-in permits restoring only the card for an existing native link.
+    pub(super) legacy_cards: HashSet<String>,
     pub(crate) eligible_legacy_count: usize,
     pub(crate) eligible_legacy_by_project: HashMap<String, usize>,
     /// Native target -> (older sibling, standalone thread IDs and display titles).
@@ -118,6 +127,7 @@ pub(crate) fn inspect_project_candidates(
         manual,
         include_legacy,
         &HashSet::new(),
+        &HashMap::new(),
     )
 }
 
@@ -127,22 +137,41 @@ pub(crate) fn inspect_with_standalone(
     manual: &HashMap<String, String>,
     include_legacy: bool,
     standalone: &HashSet<String>,
+    backup_cards: &HashMap<String, String>,
 ) -> Result<(Vec<LocalProjectCandidate>, ProjectEvidence)> {
     if local_project_owner(home)?.is_none() {
         return Ok(Default::default());
     }
     let (dir, provider) = database_settings(home)?;
-    if provider.as_deref() != Some(AI_GATEWAY_PROVIDER_NAME)
-        || !dir.join(super::CODEX_APP_STATE_DB).try_exists()?
-    {
-        return Ok(Default::default());
+    let unavailable = if provider.as_deref() != Some(AI_GATEWAY_PROVIDER_NAME) {
+        Some("当前 Codex 配置未选用可核实的 Hub 本机模型来源。请核对原账号和使用的配置，再检查。")
+    } else if !dir.join(super::CODEX_APP_STATE_DB).try_exists()? {
+        Some("未找到当前配置指向的原生历史库。请从原配置备份核对历史库位置，再检查。")
+    } else {
+        None
+    };
+    if unavailable.is_some() {
+        return Ok((
+            Vec::new(),
+            ProjectEvidence {
+                unavailable,
+                ..Default::default()
+            },
+        ));
     }
     let preferred = preferred_project_ids
         .iter()
         .cloned()
         .collect::<HashSet<_>>();
     with_database(&dir, |tx| {
-        read_candidates(tx, &preferred, manual, include_legacy, standalone)
+        read_candidates(
+            tx,
+            &preferred,
+            manual,
+            include_legacy,
+            standalone,
+            backup_cards,
+        )
     })
     .context("无法核实本机原项目和会话来源。")
 }
@@ -326,6 +355,7 @@ fn read_candidates(
     manual: &HashMap<String, String>,
     include_legacy: bool,
     standalone: &HashSet<String>,
+    backup_cards: &HashMap<String, String>,
 ) -> Result<(Vec<LocalProjectCandidate>, ProjectEvidence)> {
     // An unrecognized project scope/ownership column is a new contract. Do
     // not use default assumptions for it.
@@ -336,33 +366,58 @@ fn read_candidates(
              ('creator_user_id','creator_account_id','source','thread_source','archived','attached_thread_parent_id','thread_section_id','model_provider','cwd','project_id'))",
         [], |r| r.get(0))?;
     if !known_schema {
-        return Ok(Default::default());
+        return Ok((
+            Vec::new(),
+            ProjectEvidence {
+                unavailable: Some(
+                    "这份库可以统计项目数量，但项目、目录或会话归属字段与已支持的版本不同。请保留原库，在原账号的 Codex 中查看项目。",
+                ),
+                ..Default::default()
+            },
+        ));
     }
+    let mut info = ProjectEvidence::default();
     let mut projects = tx.prepare(
         "SELECT p.id,p.name,p.metadata,p.created_at_ms,p.updated_at_ms,r.path,
             count(*) OVER (PARTITION BY r.project_id),r.position
-         FROM projects p INNER JOIN project_roots r ON r.project_id=p.id
+         FROM projects p LEFT JOIN project_roots r ON r.project_id=p.id
          ORDER BY p.position,p.id,r.position",
     )?;
     let mut roots = projects.query([])?;
     let mut counts = HashMap::<String, usize>::new();
     let mut visible_counts = HashMap::<String, usize>::new();
     let mut candidates = Vec::<(String, LocalProjectCandidate)>::new();
+    let mut invalid_ids = HashSet::new();
     while let Some(row) = roots.next()? {
-        let root: String = row.get(5)?;
-        let Some(key) = root_key(&root) else {
+        let id: String = row.get(0)?;
+        let root: Option<String> = row.get(5)?;
+        let Some(key) = root.as_deref().and_then(root_key) else {
+            invalid_ids.insert(id);
             continue;
         };
+        let root = root.expect("normalized a present project root");
         // Treat case-only duplicates as ambiguous even on case-sensitive
         // directories; the caller may disambiguate a manually recreated card
         // by passing the exact project ID currently shown in the sidebar.
         *counts.entry(root_identity(&key)).or_default() += 1;
-        let id: String = row.get(0)?;
         if preferred_project_ids.contains(&id) {
             *visible_counts.entry(root_identity(&key)).or_default() += 1;
         }
         let name: String = row.get(1)?;
         let metadata: String = row.get(2)?;
+        let metadata: Option<serde_json::Map<String, Value>> = serde_json::from_str(&metadata).ok();
+        if metadata.as_ref().is_some_and(|m| {
+            m.keys().any(|k| {
+                k.starts_with("codex.chatGpt")
+                    || k == "codex.retiredChatGptBacking"
+                    || k == "codex.localProjectId"
+            })
+        }) {
+            // Native Codex only assigns codex.localProjectId to ChatGPT-backed
+            // projects. They must be loaded with the associated ChatGPT account.
+            info.backed_projects += 1;
+            continue;
+        }
         let created_at_ms: i64 = row.get(3)?;
         let updated_at_ms: i64 = row.get(4)?;
         if row.get::<_, i64>(6)? != 1
@@ -370,12 +425,17 @@ fn read_candidates(
             || !local_id(&id)
             || name.trim().is_empty()
             || name.chars().any(char::is_control)
-            || !serde_json::from_str::<Value>(&metadata)
-                .is_ok_and(|v| v.as_object().is_some_and(|o| o.is_empty()))
+            || !metadata.is_some_and(|m| {
+                m.iter().all(|(key, value)| {
+                    matches!(key.as_str(), "appearance.color" | "appearance.marker")
+                        && value.is_string()
+                })
+            })
             || created_at_ms < 0
             || updated_at_ms < created_at_ms
             || updated_at_ms > 9_007_199_254_740_991
         {
+            invalid_ids.insert(id);
             continue;
         }
         candidates.push((
@@ -391,6 +451,7 @@ fn read_candidates(
             },
         ));
     }
+    info.invalid_projects = invalid_ids.len();
     let mut conflicts = tx.prepare(&format!(
         "SELECT DISTINCT project_id FROM threads WHERE project_id IS NOT NULL
          AND (creator_user_id IS NOT ?1 OR creator_account_id IS NOT ?2)
@@ -401,7 +462,9 @@ fn read_candidates(
             r.get::<_, String>(0)
         })?
         .collect::<rusqlite::Result<HashSet<_>>>()?;
+    let before = candidates.len();
     candidates.retain(|(_, p)| !foreign.contains(&p.id));
+    info.conflicting_projects = before - candidates.len();
 
     // A predecessor is provable only if there are exactly two project rows
     // for this root and the other one is a valid, older, invisible local row.
@@ -410,13 +473,15 @@ fn read_candidates(
         .filter(|(_, p)| !preferred_project_ids.contains(&p.id))
         .map(|(key, p)| (key.clone(), (p.id.clone(), p.created_at_ms)))
         .collect();
+    let before = candidates.len();
     candidates.retain(|(key, p)| {
         let identity = root_identity(key);
         counts.get(&identity) == Some(&1)
             || (preferred_project_ids.contains(&p.id) && visible_counts.get(&identity) == Some(&1))
     });
+    info.ambiguous_roots = before - candidates.len();
     if candidates.is_empty() {
-        return Ok(Default::default());
+        return Ok((Vec::new(), info));
     }
     for (key, project) in &mut candidates {
         if counts.get(&root_identity(key)) == Some(&2) {
@@ -432,14 +497,20 @@ fn read_candidates(
         .enumerate()
         .map(|(i, (k, _))| (k.clone(), i))
         .collect();
+    let by_id: HashMap<_, _> = candidates
+        .iter()
+        .enumerate()
+        .map(|(i, (_, p))| (p.id.clone(), i))
+        .collect();
     let mut evidence = tx.prepare(&format!(
         "SELECT id,cwd,project_id,creator_user_id IS NULL FROM threads WHERE {BASE_SCOPE}
-        AND ({CURRENT_OWNER} OR ({LEGACY_OWNER} AND project_id IS NULL)) ORDER BY id"
+        AND ({CURRENT_OWNER} OR {LEGACY_OWNER}) ORDER BY id"
     ))?;
     let mut rows = evidence.query(params![HUB_USER, HUB_ACCOUNT, AI_GATEWAY_PROVIDER_NAME])?;
     let mut seeded = HashSet::new();
+    let mut grouped_cards = HashSet::new();
+    let mut grouped_legacy = HashSet::new();
     let mut legacy_rows = vec![Vec::new(); candidates.len()];
-    let mut info = ProjectEvidence::default();
     // Old SQLite fixtures and older clients may not store a title. Fetch only
     // a short display title of an eligible row, never a message or rollout.
     let mut title_query = if standalone.is_empty() {
@@ -454,17 +525,50 @@ fn read_candidates(
         }
     };
     while let Some(row) = rows.next()? {
+        let prev: Option<String> = row.get(2)?;
+        let linked = prev.as_ref().and_then(|id| by_id.get(id)).copied();
         let Some(key) = row
             .get::<_, Option<String>>(1)?
             .as_deref()
             .and_then(root_key)
         else {
+            if linked.is_some() {
+                info.mismatched_grouped_paths += 1;
+            }
             continue;
         };
-        let Some(&i) = index.get(&key) else { continue };
-        let project = &mut candidates[i].1;
         let thread_id: String = row.get(0)?;
         let legacy: bool = row.get(3)?;
+        if let Some(i) = linked {
+            let (project_root, p) = &candidates[i];
+            let in_root = key == *project_root
+                || key
+                    .strip_prefix(project_root.as_str())
+                    .is_some_and(|tail| tail.starts_with('/'));
+            if !in_root {
+                info.mismatched_grouped_paths += 1;
+            } else if manual
+                .get(&thread_id)
+                .is_none_or(|assigned| assigned == &p.id)
+            {
+                // A stored project ID plus a matching local root can reconstruct a card.
+                // Never repoint this conversation or use a subdirectory to assign ungrouped ones.
+                if !legacy
+                    || backup_cards
+                        .get(&p.id)
+                        .is_some_and(|root| same_root(root, &p.root))
+                {
+                    grouped_cards.insert(i);
+                } else {
+                    grouped_legacy.insert(i);
+                }
+            }
+        }
+        if legacy && prev.is_some() {
+            continue;
+        }
+        let Some(&i) = index.get(&key) else { continue };
+        let project = &mut candidates[i].1;
         if let Some(target) = manual.get(&thread_id) {
             if standalone.contains(&thread_id)
                 && !legacy
@@ -496,7 +600,6 @@ fn read_candidates(
             // Keep an explicit placement, including manual "no project".
             continue;
         }
-        let prev: Option<String> = row.get(2)?;
         if prev.as_deref() == Some(project.id.as_str()) {
             seeded.insert(i);
             continue;
@@ -540,10 +643,18 @@ fn read_candidates(
                     project.pending_assignments.append(&mut legacy_rows[i]);
                 }
             }
-            (owned
+            let regular = owned
+                || grouped_cards.contains(&i)
                 || (verified_target && eligible_count > 0)
-                || info.standalone.contains_key(&project.id))
-            .then_some(project)
+                || info.standalone.contains_key(&project.id);
+            if !regular && grouped_legacy.contains(&i) {
+                info.legacy_cards.insert(project.id.clone());
+                return include_legacy.then_some(project);
+            }
+            if !regular {
+                info.unverified_projects += 1;
+            }
+            regular.then_some(project)
         })
         .collect();
     Ok((candidates, info))
@@ -636,6 +747,172 @@ mod tests {
             )
             .unwrap()
         }
+    }
+
+    #[test]
+    fn empty_sqlite_sidebar_recovers_eleven_native_cards_without_rewriting_thirty_nine_links() {
+        use super::super::{SidebarAction, sidebar_projects};
+        let f = Fixture::new();
+        let home = f.tmp.path();
+        let owner = local_project_owner(home).unwrap().unwrap();
+        let desktop = Connection::open(home.join(".codex-global-state.sqlite")).unwrap();
+        desktop.execute_batch("PRAGMA user_version=1; CREATE TABLE settings(scope TEXT NOT NULL,key TEXT NOT NULL,value TEXT NOT NULL,PRIMARY KEY(scope,key)) WITHOUT ROWID;
+          INSERT INTO settings VALUES('atom','local-projects','{}'),('global','unrelated','42');").unwrap();
+        desktop
+            .execute(
+                "INSERT INTO settings VALUES('global','electron-renderer-content-owner',?1)",
+                [json!(owner).to_string()],
+            )
+            .unwrap();
+        let old_json = br#"{"local-projects":{"stale":{}}}"#;
+        fs::write(home.join(".codex-global-state.json"), old_json).unwrap();
+        for n in 1..=11 {
+            let project = format!("00000000-0000-4000-8000-{n:012}");
+            let root = home.join(format!("project-{n}")).display().to_string();
+            f.project(&project, &root, n);
+            for c in 0..if n <= 6 { 4 } else { 3 } {
+                f.thread(
+                    &format!("s-{n}-{c}"),
+                    &format!("{root}/src"),
+                    Some(&project),
+                );
+            }
+        }
+        f.db.execute(
+            "UPDATE projects SET metadata=?1",
+            [json!({"appearance.color":"blue"}).to_string()],
+        )
+        .unwrap();
+        let before = f.state();
+        assert_eq!(before.len(), 39);
+        let check = sidebar_projects(home, SidebarAction::Check).unwrap();
+        assert_eq!(
+            (
+                check.active_project_count,
+                check.planned_projects,
+                check.planned_threads
+            ),
+            (0, 11, 0)
+        );
+        let action = sidebar_projects(home, SidebarAction::Repair).unwrap();
+        assert_eq!((action.changed_count, action.grouped_thread_count), (11, 0));
+        assert!(
+            !sidebar_projects(home, SidebarAction::Check)
+                .unwrap()
+                .can_repair
+        );
+        assert_eq!(
+            fs::read(home.join(".codex-global-state.json")).unwrap(),
+            old_json
+        );
+        assert_eq!(f.state(), before);
+        sidebar_projects(home, SidebarAction::Undo).unwrap();
+        assert_eq!(
+            desktop
+                .query_row("SELECT count(*) FROM settings", [], |r| r
+                    .get::<_, usize>(0))
+                .unwrap(),
+            3
+        );
+        desktop
+            .execute(
+                "UPDATE settings SET value='\"other\"' WHERE key='electron-renderer-content-owner'",
+                [],
+            )
+            .unwrap();
+        assert!(
+            sidebar_projects(home, SidebarAction::Repair)
+                .unwrap_err()
+                .to_string()
+                .contains("活动账号")
+        );
+        desktop.execute_batch("PRAGMA user_version=2").unwrap();
+        assert!(
+            sidebar_projects(home, SidebarAction::Check)
+                .unwrap_err()
+                .to_string()
+                .contains("已提交结构")
+        );
+    }
+
+    #[test]
+    fn grouped_legacy_card_needs_confirmation_or_matching_owner_backup_and_refuses_foreign_projects()
+     {
+        use super::super::{SidebarAction, sidebar_projects, sidebar_projects_with_options};
+        let f = Fixture::new();
+        let home = f.tmp.path();
+        let owner = local_project_owner(home).unwrap().unwrap();
+        fs::write(home.join(".codex-global-state.json"), "{}").unwrap();
+        let backup = home.join(".codex-global-state.json.bak");
+        let put_backup = |account: &str, path: &str| {
+            fs::write(
+                &backup,
+                json!({
+                    "electron-account-renderer-state-v1":{"owner":account},
+                    "local-projects":{(OLD):{"id":OLD,"rootPaths":[path]}}
+                })
+                .to_string(),
+            )
+            .unwrap()
+        };
+        f.project(OLD, &f.root, 1);
+        f.thread("legacy", &f.root, Some(OLD));
+        f.db.execute(
+            "UPDATE threads SET creator_user_id=NULL,creator_account_id=NULL",
+            [],
+        )
+        .unwrap();
+        let other = format!("{}/separate", f.root);
+        f.project(OTHER, &other, 2);
+        f.thread("foreign", &other, Some(OTHER));
+        f.db.execute(
+            "UPDATE threads SET creator_account_id='another' WHERE id='foreign'",
+            [],
+        )
+        .unwrap();
+        let wrong = format!("{}-similarly-named", f.root);
+        f.project(HIDDEN, &wrong, 3);
+        f.thread("wrong-root", &format!("{wrong}123"), Some(HIDDEN));
+        f.project(NEW, &format!("{}/cloud", f.root), 4);
+        f.db.execute(
+            "UPDATE projects SET metadata=?1 WHERE id=?2",
+            params![json!({"codex.chatGptBacking":"remote"}).to_string(), NEW],
+        )
+        .unwrap();
+        let before = f.state();
+        for (account, root) in [("other", f.root.as_str()), (owner.as_str(), other.as_str())] {
+            put_backup(account, root);
+            let strict = sidebar_projects(home, SidebarAction::Check).unwrap();
+            assert!(!strict.can_repair);
+            assert!(
+                strict.detail.contains("有 1 个项目已有原分组")
+                    && strict.detail.contains("其他账号")
+                    && strict.detail.contains("目录不匹配 1 条")
+                    && strict.detail.contains("ChatGPT 云端账号")
+            );
+        }
+        assert_eq!(
+            sidebar_projects_with_options(home, SidebarAction::Repair, true)
+                .unwrap()
+                .changed_count,
+            1
+        );
+        assert_eq!(f.state(), before);
+        sidebar_projects(home, SidebarAction::Undo).unwrap();
+        put_backup(&owner, &f.root);
+        let checked = sidebar_projects(home, SidebarAction::Check).unwrap();
+        assert_eq!((checked.planned_projects, checked.planned_threads), (1, 0));
+        assert!(!checked.detail.contains("有 1 个项目已有原分组"));
+        f.db.execute(
+            "UPDATE threads SET creator_account_id='other' WHERE id='legacy'",
+            [],
+        )
+        .unwrap();
+        assert!(
+            !sidebar_projects_with_options(home, SidebarAction::Check, true)
+                .unwrap()
+                .can_repair
+        );
     }
 
     #[test]

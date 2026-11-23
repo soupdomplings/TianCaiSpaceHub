@@ -21,6 +21,10 @@ use tokio::sync::oneshot;
 pub(super) const WORK_GUIDE: &str = include_str!("guide.md");
 #[path = "client_downloads.rs"]
 mod client_downloads;
+#[path = "help_topics.rs"]
+mod help_topics;
+#[cfg(feature = "gui")]
+pub(crate) use help_topics::offline_help_topics;
 
 #[derive(Default)]
 pub(crate) struct ToolState {
@@ -316,12 +320,7 @@ pub(crate) fn definitions() -> Vec<Value> {
             json!({"page":{"type":"string","enum":["overview","squad","sources","client","settings","help","assistant","workbuddy-builtin-share"]},"client":{"type":"string"}}),
             &["page"],
         ),
-        spec(
-            "hub_help",
-            "读取 Hub 和天才小分队的当前功能帮助、操作入口及边界。",
-            json!({}),
-            &[],
-        ),
+        help_topics::definition(),
     ];
     definitions.extend(super::squad_tools::definitions());
     definitions.extend(super::usage_tools::definitions());
@@ -1852,8 +1851,11 @@ pub(crate) async fn call(state: &SharedState, name: &str, args: Value) -> Result
         "hub_query_requests" => super::usage_tools::requests(state, args).await?,
         "hub_client_downloads" => client_downloads::downloads(&args)?,
         "hub_open_page" => open_page(state, &args, std::time::Duration::from_secs(15)).await?,
-        "hub_help" => {
-            json!({"assistant":"天才搭档能帮你整理模型渠道、把模型配置到指定客户端、调整参数和删除明确配置，也能查用量、扣费与请求记录，选择或创建小分队 API 密钥并接入模型。需要安装客户端时，可提供官方下载入口和安装指引。",
+        "hub_help" => match help_topics::lookup(&args)? {
+            Some(topic) => topic,
+            None => {
+                json!({"assistant":"天才搭档能帮你整理模型渠道、把模型配置到指定客户端、调整参数和删除明确配置，也能查用量、扣费与请求记录，选择或创建小分队 API 密钥并接入模型。可问 Hub 怎么使用，或贴出报错关键行，获取对应入口和排查步骤。",
+            "topics":help_topics::catalog(),
             "capabilities":{"usage":"hub_query_usage：今天/近周月/自定日期，按模型、当前用户密钥/分组筛选；squad实际人民币账单，hub本机Token/请求统计","requests":"hub_query_requests：按来源、日期及模型等分页查询记录，默认不返回正文和凭据","configuration":"hub_read_configuration、hub_resolve_model、hub_read_channel_models、hub_save_channel、hub_add_model、hub_configure_client、hub_set_model_parameters、hub_delete_configurations","questions":"hub_ask_user：必要的目标和参数选择使用本机结构化选项，不代替删除授权或凭据表单","accountKeys":"hub_squad_list_api_keys、hub_squad_key_options、hub_squad_create_api_key、hub_squad_prepare_api_key","clientDownloads":"hub_client_downloads：提供当前可见客户端的官方下载安装入口和步骤；只提供链接，安装由用户在本机完成","navigation":"hub_open_page：等待桌面实际切页回执，opened=true才算已打开；只有用户要求看页面或工具确实无法完成时才打开，不替代已经支持的查询和配置"},
             "responseStyle":"用户问能做什么时，先用一至三句说明可做的事，可举一两个贴近问题的例子；不要主动罗列不能做的清单。只有用户提出具体未支持操作时，简短说明当前可提供的下一步。",
             "workGuide":WORK_GUIDE,
@@ -1864,7 +1866,8 @@ pub(crate) async fn call(state: &SharedState, name: &str, args: Value) -> Result
             "billing":"天才搭档模型由小分队管理员指定并承担费用；天工协助沿用其原模型来源。",
             "temporary":"收起保留对话；停止中断执行；清空删除临时内容；真正退出 Hub 结束后台并清理，已保存配置和主动另存成果保留。",
             "boundary":"按现有工具完成用户明确交办的操作；普通模式删除集中确认一次，完全访问按明确指令执行，模型有歧义时先询问。提供下载链接、打开页面、保存配置分别按实际结果说明，不把指引或排队当作已完成。具体操作暂未接入工具时，说明一个可行步骤或合适入口即可。用户模型API的后续费用沿站点原规则。"})
-        }
+            }
+        },
         _ => bail!("天才搭档不支持工具 {name}"),
     };
     redact(&mut result);
@@ -2625,6 +2628,56 @@ mod tests {
         assert_eq!(schema["inputSchema"]["additionalProperties"], false);
         let help = call(&state, "hub_help", json!({})).await.unwrap();
         assert!(help["capabilities"]["clientDownloads"].is_string());
+    }
+
+    #[tokio::test]
+    async fn help_topics_match_the_advertised_catalog_and_leave_navigation_idle() {
+        let (_temp, state) = fixture();
+        let schema = definitions()
+            .into_iter()
+            .find(|d| d["name"] == "hub_help")
+            .unwrap();
+        let overview = call(&state, "hub_help", json!({})).await.unwrap();
+        let catalog = overview["topics"].as_object().unwrap();
+        let keys = schema["inputSchema"]["properties"]["topic"]["enum"]
+            .as_array()
+            .unwrap();
+        assert_eq!(keys.len(), catalog.len());
+        #[cfg(feature = "gui")]
+        let offline = offline_help_topics();
+        for key in keys {
+            let answer = call(&state, "hub_help", json!({"topic":key}))
+                .await
+                .unwrap();
+            assert_eq!(answer["topic"], *key);
+            assert_eq!(answer["title"], catalog[key.as_str().unwrap()]);
+            assert!(!answer["guidance"].as_array().unwrap().is_empty());
+            assert!(answer.get("workGuide").is_none());
+            #[cfg(feature = "gui")]
+            {
+                let title = answer["title"].as_str().unwrap();
+                let guidance: Vec<_> = answer["guidance"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|part| part.as_str().unwrap())
+                    .collect();
+                let (_, body) = offline.iter().find(|(name, _)| *name == title).unwrap();
+                assert_eq!(body, &guidance.join("\n\n"));
+                assert!(
+                    !body.contains("hub_"),
+                    "GUI help must not expose model tool calls"
+                );
+            }
+        }
+        for args in [
+            json!({"topic":"missing"}),
+            json!({"topic":17}),
+            json!({"page":"settings"}),
+        ] {
+            assert!(call(&state, "hub_help", args).await.is_err());
+        }
+        assert!(public_status(&state).await["navigation"].is_null());
     }
 
     #[tokio::test]

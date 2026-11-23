@@ -1,5 +1,23 @@
 # 远程原生会话适配
 
+**V1.0.58 · 共用目标端显示设置**：远程 history 增加 `displayContent:{reasoning,tool,fileChange,artifact}`，每条 SSE 事件的 `data.displayContent` 带同一目标 Hub 在发送时的设置。实时思考、工具、文件变更还由目标端按选择过滤，事件重播仍不补历史过程；已登记文件和原生待办独立保留。网页与小程序据每条事件处理随后生成的内容，改勾选不要求重读历史或重建订阅。写入仅在目标端本机的「远程连接 → 设置」开放。协议见[契约](../development/remote-session-contract.md)，保存见[配置](../../src/remote_network/display.rs)。
+
+**V1.0.57 · 从助手答复下载交付文件**
+
+目标 Hub 在 Codex／ChatGPT 和天工的历史答复、实时完成答复中识别明确的 Markdown 文件链接。匹配到文件后，正文链接指向当前会话的下载地址，同一条消息携带文件名、大小和产物标识。已有附件或产物优先按本会话目录匹配。形如 `sandbox:/mnt/data/报告.pdf` 的链接，仅当当前会话已登记一个名称完全相同的文件时才能下载。
+
+历史答复首次出现尚未登记的成品时，Hub 使用原生会话自身的工作目录。Codex 按需从匹配会话 ID 的原生连接读取目录并在该连接内复用。允许的交付目录为工作目录下的 `target`、`dist`、`artifacts`、`outputs`、`output` 和 `deliverables`，仅接受目录的直接子文件。支持 MSI、ZIP、7Z、DMG、PKG、PDF、DOCX、PPTX、XLSX、CSV、TXT、MD、HTML、PNG、JPG／JPEG、WEBP、GIF、MP4、MP3 和 WAV。链接可使用工作目录相对路径、系统绝对路径、中文、空格和括号。源码行号、代码示例和无法确认的路径保留原文。
+
+文件登记沿用本会话原有目录，新增的真实路径与交付目录字段均可选。网页及手机按下载标识打开文件后，使用该文件句柄核对实际位置，再分别流式读取或分片读取。历史页只登记文件信息。回退目标端会恢复旧版处理方式，原生会话仍保存原文。实现见[交付链接与句柄核对](../../src/remote_sessions/delivery_links.rs)。
+
+**V1.0.56 · 桌面反馈的远程显示**　目标 Hub 在读取 Codex 历史及接收实时用户消息时，将桌面的结构化批注整理为引用、批注意见和请求正文。桌面附带的提问回复按原问题和答案显示。识别入口位于 [desktop_text.rs](../../src/remote_sessions/desktop_text.rs)。该处理仅生成远程显示文本，原生会话保存原文。无法完整识别的数据和用户在正文中举的协议示例按普通文本显示。无配置迁移，回退目标端版本即恢复原文显示。
+
+**V1.0.54 · 可选实时过程**　`/clients` 为目标端客户端增加 `capabilities.liveActivity`。支持的访问端使用现有 SSE `events?after=N&liveActivity=1`。新到的公开过程可附带 `data.liveActivity`，其中 `itemId` 是原条目标识，`category` 为 `reasoning`、`tool` 或 `fileChange`，`mode` 为 `started`、`append`、`entry` 或 `completed`，`text` 是当次可显示文本。访问端在收到事件时按本端偏好选取片段。已过滤事件继续使用原游标，注册文件仍经原条目传输。默认订阅、历史和事件回放不携带过程片段。
+
+Codex 提供可见思考摘要、进度、命令输出及文件变更增量，完成通知只取结束状态，避免之前隐藏的完整输出在切换后出现。天工依现有步骤提供单次摘要、工具名称、状态和变更路径。内部记录、桌面专属弹窗和审批继续沿各自原有规则。实现见[目标端事件投影](../../src/remote_sessions/transcript.rs)。没有持久配置迁移，访问端可退回原 SSE 协议。
+
+[V1.0.53](../releases/v1.0.53.md)：远程历史与实时/重播事件在目标端共用[消息显示规则](../../src/remote_sessions/transcript.rs)，省略过程数据而保留已登记文件和事件位置。天工原任务在等待确认时，打开或断线重连会核对 run 详情中的 pending_calls；错过原 confirm 事件也能恢复仍有效的同一组调用，不重复发卡。该版本未证实天工提供通用的结构化追问协议。
+
 维护日期：2026-11-15。关联 TC-025。源码基线 `main / 7c6d3d5`，功能实现 `e44b497`；用户随后要求统一生成 V1.0.32 Windows 本地测试包，实际构建和包身份见[交付记录](../releases/v1.0.32.md)，各模块不单独打包。
 
 实现状态：Codex／天工原生会话后端已接入，Windows GUI 编译检查及定向离线测试通过；真实双机和 Windows／macOS 桌面往返续聊均待用户验收。组网和网页分别见[远程连接总览](remote-connection.md)、[组网](remote-network.md)及[网页](remote-web.md)。
@@ -19,14 +37,19 @@
 ## Codex
 
 - 复用已接入 Hub 的桌面桥接和原 App Server。多连接按 connection epoch、client ID、stream ID 和 thread ID 分流，入口位于现有 IM 事件过滤之前；旧单连接兼容为 `codex:default`。
-- 会话列表用 `thread/list`，历史用 `thread/read` 元数据及 `thread/turns/list(itemsView:full)` 分页。仅明确返回方法不支持时兼容旧版完整历史读取，不因普通接口失败静默切换。
-- 首次打开和发送前使用指定原连接的 `thread/resume(excludeTurns:true)` 建立订阅。浏览器请求不改变 IM 的 thread／turn 选择，也不在连接重建后重放写操作。
-- 新建复用 Hub 的 `ThreadStartOptions`；模型及思考强度来自 `model/list`。运行权限沿用目标端，不生成另一套权限字段或提升权限。
+- 会话列表用 `thread/list`，历史用 `thread/read` 元数据及 `thread/turns/list(itemsView:full)` 分页。如果元数据报告找不到历史文件但同一原生会话的分页仍返回轮次，网页照常展示这些消息；也找不到轮次时显示中文提示。仅分页明确返回方法不支持时兼容旧版完整历史读取，不把其他会话的响应当作本会话。
+- 查看已有会话只读取历史；打开实时事件或发消息才在原连接上按需 `thread/resume(excludeTurns:true)`。渠道变化可能让 Codex 拒绝续聊，但不会挡住可读的旧消息。旧版回退读取完整历史时同样核对返回的原会话 ID。
+- 本次连接中由网页成功新建的会话已订阅；首条消息前刷新可以显示空会话，首发直接走 `turn/start`，不要求尚未生成的历史文件。首发已接受、结果不确定、桌面已开始执行或连接已更换后，恢复真实历史读取。普通旧会话缺少历史会显示错误，不会冒充新建空会话。以上操作不改变 IM 的会话选择。
+- 新建使用目标 Hub 明确添加的目录或当前 Codex 连接实际列出的会话目录，原始路径交给 `thread/start`。模型及思考强度来自 `model/list`，运行权限沿用目标端设置。
 - 停止先读取当前真实 turn，向相同 thread／turn 发送 `turn/interrupt`，再读回终态；原生尚未确认时只显示“停止中”。
 - 审批复用 Hub 既有原生决定映射，保留命令、文件、权限、MCP 授权和结构化追问。回复精确送回原 connection／stream／request，已重建连接的旧确认拒绝提交。
 - 事件提供用户／助手文字、思考、命令输出、工具、文件变更和终态。已存在的本机图片沿用原生图片输入；其他上传附件以目标文件引用附入原输入。
 
 App Server 协议依据官方[接口文档](https://learn.chatgpt.com/docs/app-server)；仅源码实现不代表当前用户的桌面版本已完成实机验收。
+
+**本轮远程网页确认与正文（待统一验证）**：Codex 命令、文件和权限审批沿用原生选项；结构化追问保留原来的选项及“其他”填写。MCP 普通表单（含省略 mode 的旧格式）逐字段展示文字、布尔、数值和枚举，按用户实际选择与原类型回复，不代填允许项。URL 流程、敏感追问及网页不能完整呈现的复杂表单请回目标 Codex 处理。授权只回复实际收到请求的原连接、会话及请求 ID；浏览器重开可恢复 Hub 已观察到的未决卡片。桌面私有弹窗不会自动共享：App Server 只上报等待标记而未把原请求送到 Hub 时，网页只提示回目标桌面处理，不凭状态重造确认，也不自动批准。本轮不更改 IM。
+
+原生历史与实时内容使用相同的分类：明确标记为 `agentMessage.phase=commentary` 的是进度；无阶段、`partial_answer` 与 `final_answer` 均保留为答复。Hook、上下文压缩及原生显式隐藏的内部记录不显示为聊天正文，不按用户输入的字词猜测。代码见[Codex 适配](../../src/remote_sessions/codex.rs)、[原生问答映射](../../src/remote_sessions/codex_prompts.rs)。依据[官方 App Server 审批与表单](https://learn.chatgpt.com/docs/app-server#approvals)，已只读核对本机桌面 26.1103.7773.0 的等待标记与消息阶段。新增合成表单、撤销、原流回复和消息类型回归；实机桌面与网页交叉操作仍待用户测试。
 
 ## 天工 Work
 

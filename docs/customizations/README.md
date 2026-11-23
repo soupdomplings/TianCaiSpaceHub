@@ -1,5 +1,40 @@
 # 二开功能总表
 
+V1.0.61 修正 ChatGPT / Codex 的会话移动确认、历史项目恢复和空模型清单的首次保存。三个入口与验收见[本次交付](../releases/v1.0.61.md)。
+
+V1.0.60 的桌面设置按外观、启动、网络和客户端分组，可选择当前 Windows 用户登录时打开 Hub。天才搭档提供五类操作与故障帮助，搭档页面也可离线查看。[桌面设置](../development/desktop-visual-system.md) · [开机启动](desktop-and-packaging.md) · [搭档问答](genius-buddy.md)
+
+TC-007 自 V1.0.59 起，Windows 文件占用页默认“关闭应用程序并继续安装”，正常退出超时后允许结束占用，安装后不自动重开 Hub；成功页仅主动点击“打开”才启动。[行为与回退](desktop-and-packaging.md#v1059-windows-升级时关闭-hub) · [本批验收](../releases/v1.0.59.md)
+
+TC-025／027 自 V1.0.58 起，将思考过程、工具执行、文件变更、产物四项勾选统一放到会话所在电脑（发送端）Hub「远程连接 → 设置 → 显示内容（本机发送）」。A 查看 B 的会话由 B 控制，网页与小程序逐条跟随发送端设置，旧本端偏好不再使用。[设置保存](remote-network.md) · [测试路径](../releases/v1.0.58.md)
+
+TC-025 自 V1.0.57 起可在远程网页点正文链接、文件卡上的下载按钮或「查看产物」清单，以原文件名保存目标电脑上的会话文件。旧会话也可找回仍在工作目录下指定交付位置的文件。[网页下载](remote-web.md) · [会话文件关联](remote-sessions.md)
+
+TC-025／027 自 V1.0.56 起按可读文字显示 Codex 桌面批注与填答。网页及小程序共用目标 Hub 的[会话适配](remote-sessions.md)。
+
+- TC-025 远程会话由目标 Hub 统一选择实时思考摘要、工具执行、文件变更和产物，网页及手机跟随，生成文件可在产物清单手动下载，历史分页沿用原有显示。[网页专题](remote-web.md)
+- TC-027 微信小程序复用目标端会话，手机配对与小分队财务分开授权。手机自有界面沿用 iPhone 设计。注册和联调进度见[小程序专题](wechat-mini.md)。
+
+2026-11-19 **TC-025／026 · V1.0.53**：[远程网页](remote-web.md)与[目标端](remote-sessions.md)配合隐藏过程卡片，识别原生待确认请求；[XshellB-MCP](xshellb-mcp.md) 支持批量填写巡检权限，修复功能区有多个同名「脚本」项时无法启动。
+
+2026-11-19 **TC-025／026 · V1.0.52**：[远程网页](remote-web.md) 不再显示工具执行、思考过程和文件变更卡片；[XshellB-MCP](xshellb-mcp.md) 的「启动脚本」可自动替换所选标签页的旧脚本。
+
+2026-11-19 **TC-026 · V1.0.51**：[XshellB-MCP](xshellb-mcp.md) 优先识别实时脚本菜单，列出已接入标签页，提供逐条巡检权限和可协商的客户端确认。
+
+2026-11-19 **TC-026 · V1.0.50**：[XshellB-MCP](xshellb-mcp.md) 支持预先同意内置巡检，免去逐条确认，取消后下一条恢复。
+
+2026-11-19 **TC-025／026 · V1.0.49**：[远程网页](remote-web.md) 首屏、目录和跨设备传输减负；[远程连接](remote-connection.md) 采用三个页签、区分发送和等待授权；[XshellB-MCP](xshellb-mcp.md) 匹配主窗口所拥有的核心子进程文件框。见[测试说明](../releases/v1.0.49.md)。
+
+2026-11-19 **TC-025／026 · V1.0.48**：[远程连接](remote-connection.md)记住设备授权，支持删除离线设备；[网页历史](remote-web.md)向上滚动分批读取；[XshellB-MCP](xshellb-mcp.md)直接接入所选标签页。见[验收说明](../releases/v1.0.48.md)。
+
+2026-11-19 **TC-026 · V1.0.47**：[XshellB-MCP](xshellb-mcp.md) 支持没有传统 Windows 菜单的 Xshell 8，可复制脚本路径。见[本机菜单核对与试用说明](../releases/v1.0.47.md)。
+
+2026-11-19 **TC-025／026 · V1.0.46**：[远程网页](remote-web.md)切回标签时恢复原会话；[XshellB-MCP](xshellb-mcp.md) 首次纳入同一份 [Windows 测试包](../releases/v1.0.46.md)。V1.0.45 的构建未包含 Xshell。
+
+2026-11-19 **TC-023／025 · V1.0.45**：[远程连接](remote-connection.md)改进本机网页、新会话和历史读取、目标端授权及工作目录选择；[桌面外壳](../development/desktop-visual-system.md)改为右下角悬浮入口与贴边滚动。见[测试交付](../releases/v1.0.45.md)。
+
+2026-11-19 **TC-026 · XshellB-MCP**：[XshellB-MCP](xshellb-mcp.md) 内置本机桥接，支持配置 ChatGPT / Codex、WorkBuddy、ZCode；由用户选择 Xshell 8 窗口与已登录标签页，确认接入及只读命令。Windows 实机待验收。
+
 2026-11-19 **V1.0.44 · 桌面导航精简**：天才小分队归入工作空间、请求日志归入共用能力；顶栏移除前进、返回、快捷分组与问号。概览入口与服务状态见[视觉专题](../development/desktop-visual-system.md)及[本地交付](../releases/v1.0.44.md)。
 
 2026-11-19 **V1.0.43 · 桌面工作空间**：新[原生导航与概览](../development/desktop-visual-system.md)、[模型和会话多选](codex-repair-center.md)、[操作提示](../development/operation-feedback.md)及[搭档浮窗](genius-buddy.md)纳入同一份 [Windows 测试交付](../releases/v1.0.43.md)。
@@ -85,6 +120,7 @@ TC-016 视觉呈现共用基线：页面间距/表面/字体/控件见 [桌面�
 
 | 编号 | 功能 | 当前实现与边界 | 专题 |
 | --- | --- | --- | --- |
+| TC-026 | XshellB-MCP | Windows 侧栏「聊天接入」上方；为 ChatGPT / Codex、WorkBuddy、ZCode 接入所选 Xshell 8 标签页，按设置执行只读巡检；支持客户端内确认，默认不写入客户端 | [XshellB-MCP](xshellb-mcp.md) |
 | TC-025 | Hub 远程连接与浏览器会话 | Codex／天工、Windows／macOS；默认关闭、确认准备、双向设备配对、隔离会话服务和两套网页布局。浏览器续读原会话，附件独立保留；Windows 本地测试包按 V32 单独登记，双机和 macOS 待验 | [远程连接](remote-connection.md)、[网络](remote-network.md)、[会话](remote-sessions.md)、[网页](remote-web.md) |
 | TC-024 | 天工 AI Gateway 本地账号与会话历史 | V31 增强工作区和新 IM 会话统一使用 `ai-gateway`；接入设置支持只读列表、多选迁入及恢复原归属，旧历史不自动迁移。调整时要求天工完全退出和 IM 释放会话，保留任务、模型、正文及迁移后上下文。当前适配已知 1.0.4，未来新版智能体待验 | [天工会话历史](tiangong-session-history.md) |
 | TC-023 | 天才搭档与共享 Server | V26 半宽最大化、点阵与等待省略号、短句实际测宽。默认停用；独立模块、右下角纯对话图标和 Hub 内临时对话浮层，框内无产品标题；经小分队登录取得单 GET 配置中的模型/API，配置与能力目录复用 Hub Codex 流程。内置指引要求先读、执行、回读，配置工具复用原保存接口；V26 接入三套性格、完全访问、选择填写追问、专用模型删除及实际导航回执，默认删除一次确认，完全访问后直接处理；外部凭据走本机表单，当前小分队密钥可脱敏列表选择或按要求创建，以引用准备并配置渠道/客户端。工具/摘要内置，不增专用推理/压缩接口。天工与搭档共用品牌运行包，确认后准备，均停用后可移除自管安装；真正退出清理临时内容，保留运行包/保存配置。V23配置及密钥流程有隔离真实模型验收，实际客户端加载、计费和macOS待验收 | [天才搭档](genius-buddy.md)、[配置契约](../contracts/assistant-server.md) |

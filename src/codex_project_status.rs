@@ -103,9 +103,20 @@ pub(crate) fn with_database<T>(
     dir: &Path,
     inspect: impl FnOnce(&Transaction<'_>) -> Result<T>,
 ) -> Result<T> {
-    let path = dir.join("state_5.sqlite");
-    let wal = dir.join("state_5.sqlite-wal");
-    let shm = dir.join("state_5.sqlite-shm");
+    with_readonly_database(&dir.join("state_5.sqlite"), inspect)
+}
+
+pub(crate) fn with_readonly_database<T>(
+    path: &Path,
+    inspect: impl FnOnce(&Transaction<'_>) -> Result<T>,
+) -> Result<T> {
+    let sidecar = |suffix: &str| {
+        let mut name = path.as_os_str().to_owned();
+        name.push(suffix);
+        PathBuf::from(name)
+    };
+    let wal = sidecar("-wal");
+    let shm = sidecar("-shm");
     let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
     let has_wal = wal.try_exists()?;
     // A normal read-only open of a checkpointed WAL database can still

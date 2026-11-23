@@ -33,3 +33,10 @@ use std::path::{Path, PathBuf};
 pub fn state_root(config_path: &Path) -> PathBuf {
     config_path.with_extension("desktop")
 }
+
+#[cfg(all(windows, feature = "gui"))]
+pub fn prepare_private_directory(path: &Path) -> anyhow::Result<()> {
+    transaction::reject_links(path)?;
+    std::fs::create_dir_all(path)?;
+    permissions::owner_only_inheriting(path)
+}

@@ -1,0 +1,54 @@
+.tools {
+  border-bottom: 1px solid var(--border);
+  padding: 0 14px;
+  background: var(--chrome);
+}
+.display-source {
+  padding: 6px 16px 10px;
+  background: var(--chrome);
+  flex-shrink: 0;
+}
+.messages {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 9px;
+  padding-top: 16px;
+  padding-bottom: 16px;
+}
+.bubble {
+  max-width: 92%;
+  box-sizing: border-box;
+  background: var(--surface);
+  padding: 11px 14px;
+  border-radius: 15px;
+}
+.bubble.user {
+  align-self: flex-end;
+  background: var(--tint);
+}
+.bubble.activity {
+  font-size: 0.91em;
+  border-left: 3px solid var(--blue);
+  border-radius: 5px 13px 13px 5px;
+}
+.pending {
+  max-height: 21vh;
+}
+.request {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  margin: 0 0 6px;
+}
+.compose {
+  display: flex;
+  align-items: flex-end;
+}
+.draft {
+  flex: 1;
+  min-width: 0;
+  max-height: 23vh;
+}
+.compose .control {
+  font-weight: 600;
+}

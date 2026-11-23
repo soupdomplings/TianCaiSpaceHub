@@ -1,0 +1,53 @@
+.tabs {
+  display: flex;
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 3;
+  padding-bottom: env(safe-area-inset-bottom);
+  background: var(--chrome);
+  border-top: 1px solid var(--border);
+}
+.tab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 5px;
+  min-height: 55px;
+  font-size: 12px;
+  color: var(--sub);
+  background: transparent;
+  border: 0;
+  line-height: 1.2;
+}
+.tab.selected {
+  color: var(--blue);
+}
+.symbol {
+  width: 20px;
+  height: 13px;
+  border: 2px solid currentColor;
+  border-radius: 4px;
+  position: relative;
+}
+.display::after {
+  content: "";
+  position: absolute;
+  width: 10px;
+  border-bottom: 2px solid currentColor;
+  left: 5px;
+  bottom: -5px;
+}
+.wallet::after {
+  content: "";
+  position: absolute;
+  width: 6px;
+  height: 4px;
+  border: 1.5px solid currentColor;
+  right: -2px;
+  top: 3px;
+  border-radius: 2px;
+}

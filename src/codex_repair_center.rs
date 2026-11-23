@@ -607,7 +607,16 @@ fn inspect_project_history(
         status.grouped_thread_count,
     ) {
         (ProjectState::Available, Some(p), Some(t)) => {
-            format!("本机历史库：共 {p} 条项目记录，{t} 条未归档会话已归组。")
+            let mut summary = format!(
+                "整份历史库共有 {p} 条项目记录，{t} 条未归档会话已归组。侧栏只列当前账户可恢复的项目。"
+            );
+            if let Some(other) = status
+                .other_provider_grouped_thread_count
+                .filter(|n| *n > 0)
+            {
+                summary.push_str(&format!("其中 {other} 条已归组会话使用其他模型来源。可在 Hub「Codex 会话管理」核对来源。"));
+            }
+            summary
         }
         (ProjectState::MissingDatabase, _, _) => "当前位置未找到历史库。".into(),
         (ProjectState::UnsupportedSchema, _, _) => {

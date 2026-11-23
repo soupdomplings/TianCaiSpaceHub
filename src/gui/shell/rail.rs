@@ -41,6 +41,8 @@ pub(super) fn entries() -> Vec<(PageId, Icon)> {
         (PageId::Logs, Icon::Logs),
         (PageId::Assistant, Icon::Chat),
         (PageId::Dumpling, Icon::Mcp),
+        #[cfg(windows)]
+        (PageId::XshellB, Icon::Mcp),
         (PageId::Chat, Icon::Chat),
         (PageId::Remote, Icon::Hub),
         (PageId::Settings, Icon::Settings),

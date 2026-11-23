@@ -4627,9 +4627,10 @@ dependencies = [
 
 [[package]]
 name = "tiancaispacehub"
-version = "1.0.44"
+version = "1.0.61"
 dependencies = [
  "aes",
+ "aes-gcm",
  "anyhow",
  "async-trait",
  "axum",
@@ -4678,6 +4679,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "windows",
  "windows-sys 0.59.0",
  "winreg 0.55.0",
  "wxdragon",

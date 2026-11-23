@@ -32,6 +32,9 @@ pub(super) enum ModelListRefresh {
     Queried,
     Disconnected,
     CcSwitchCatalog,
+    NeedsSetup,
+    CustomCatalog,
+    Incomplete,
     MissingFromRuntime(String),
     Failed(String),
 }
@@ -314,6 +317,9 @@ impl ApiClient {
                 response.missing_model,
             ) {
                 (false, Some("ccSwitchCatalog"), _) => ModelListRefresh::CcSwitchCatalog,
+                (false, Some("needsSetup"), _) => ModelListRefresh::NeedsSetup,
+                (false, Some("customCatalog"), _) => ModelListRefresh::CustomCatalog,
+                (false, Some("incompleteModelList"), _) => ModelListRefresh::Incomplete,
                 (false, Some("disconnected"), _) => ModelListRefresh::Disconnected,
                 (true, _, Some(id)) => ModelListRefresh::MissingFromRuntime(id),
                 (true, _, None) => ModelListRefresh::Queried,

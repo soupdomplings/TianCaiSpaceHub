@@ -90,8 +90,15 @@ impl ClientPage {
         let reload = header.reload;
         let open = header.launch;
         let buttons = header.tabs;
-        column.add(
+        let header_row = BoxSizer::builder(Orientation::Vertical).build();
+        header_row.add(
             &header.panel,
+            0,
+            SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right,
+            page.from_dip(theme::PAGE_GUTTER),
+        );
+        column.add_sizer(
+            &header_row,
             0,
             SizerFlag::Expand | SizerFlag::Bottom,
             page.from_dip(12),
@@ -109,7 +116,7 @@ impl ClientPage {
         visual::redraw_on_resize(graph);
         graph.set_background_color(t.bg_app);
         status_sizer.add(&graph, 0, SizerFlag::Expand, 0);
-        status_page.set_sizer(status_sizer, true);
+        super::shell::inset_page_content(&status_page, status_sizer);
         book.add_page(&status_page, "状态概览", true, None);
         let model_view = super::model_fields::ModelPage::new(&book, id);
         let add = model_view.add;
@@ -135,7 +142,7 @@ impl ClientPage {
             host.set_sizer(BoxSizer::builder(Orientation::Vertical).build(), true);
             let layout = BoxSizer::builder(Orientation::Vertical).build();
             layout.add(&host, 1, SizerFlag::Expand, 0);
-            viewport.set_sizer(layout, true);
+            super::shell::inset_page_content(&viewport, layout);
             book.add_page(&viewport, ["Skill", "MCP", "接入设置"][i], false, None);
             host
         });
@@ -168,7 +175,7 @@ impl ClientPage {
         let action_job = Rc::new(dialog_job::InlineJob::new(page, action_status));
         let model_loading = super::loading::LoadingIndicator::for_button(&page, reload);
         page.set_sizer(column, true);
-        shell.register(PageId::Client(id), &page);
+        shell.register_viewport(PageId::Client(id), &page);
         let ui = Self {
             page,
             launch: open,

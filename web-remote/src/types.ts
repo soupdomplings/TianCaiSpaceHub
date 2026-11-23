@@ -12,9 +12,12 @@ export interface RemoteDevice {
 export interface DevicesResponse {
   devices: RemoteDevice[];
   localDeviceId: string;
+  webEntry?: string;
+  hubVersion?: string;
 }
 
 export interface RemoteCapabilities {
+  liveActivity?: boolean;
   history?: boolean;
   create?: boolean;
   send?: boolean;
@@ -41,6 +44,7 @@ export interface RemoteClient {
   reason?: string;
   capabilities: RemoteCapabilities;
   models: RemoteModel[];
+  modelsDeferred?: boolean;
 }
 
 export interface RemoteProject {
@@ -76,7 +80,7 @@ export interface RemoteFile {
 export interface RemoteItem {
   id: string;
   role: 'user' | 'assistant' | 'tool' | 'system';
-  type: 'message' | 'tool' | 'fileChange' | 'reasoning';
+  type: 'message' | 'tool' | 'fileChange' | 'reasoning' | 'progress' | 'internal';
   text: string;
   status?: string;
   files?: RemoteFile[];
@@ -94,6 +98,8 @@ export interface RemoteQuestion {
   options?: RemoteChoice[];
   required?: boolean;
   multiple?: boolean;
+  allowOther?: boolean;
+  inputType?: 'text' | 'number' | 'integer';
 }
 
 export interface RemoteApproval {
@@ -103,15 +109,25 @@ export interface RemoteApproval {
   message?: string;
   choices?: RemoteChoice[];
   questions?: RemoteQuestion[];
+  desktopOnly?: boolean;
+  canDecline?: boolean;
 }
 
 export interface HistoryResponse {
+  displayContent?: DisplayContent;
   items: RemoteItem[];
   nextCursor?: string | null;
   turnId?: string | null;
   status: string;
   approvals: RemoteApproval[];
   cursor: number;
+}
+
+export interface DisplayContent {
+  reasoning: boolean;
+  tool: boolean;
+  fileChange: boolean;
+  artifact: boolean;
 }
 
 export interface SessionsResponse {
@@ -121,7 +137,7 @@ export interface SessionsResponse {
 
 export interface RemoteEvent {
   id: number;
-  type: 'message.delta' | 'item.updated' | 'turn.updated' | 'approval.requested' | 'approval.resolved' | 'reset' | 'error';
+  type: 'message.delta' | 'item.updated' | 'turn.updated' | 'approval.requested' | 'approval.resolved' | 'cursor.advanced' | 'reset' | 'error';
   clientId: string;
   sessionId: string;
   turnId?: string;

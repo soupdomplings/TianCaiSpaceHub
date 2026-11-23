@@ -659,6 +659,9 @@ pub(super) fn apply_pending_action(
             if matches!(
                 saved_models.refresh,
                 ModelListRefresh::CcSwitchCatalog
+                    | ModelListRefresh::NeedsSetup
+                    | ModelListRefresh::CustomCatalog
+                    | ModelListRefresh::Incomplete
                     | ModelListRefresh::MissingFromRuntime(_)
                     | ModelListRefresh::Failed(_)
             ) {
@@ -1224,7 +1227,7 @@ fn save_visible_models(
     })
 }
 
-fn prepare_visible_models(
+pub(super) fn prepare_visible_models(
     config: &mut AiGatewayConfig,
     mut models: Vec<String>,
     expected_models: Option<Vec<String>>,
@@ -1234,7 +1237,13 @@ fn prepare_visible_models(
     }
     let mut seen = std::collections::HashSet::new();
     models.retain(|id| seen.insert(id.to_ascii_lowercase()));
-    let changed = config.codex_visible_models != models;
+    // Saving a nonempty selection activates the gateway just like adding a
+    // model from a channel. Retry also repairs lists saved by older versions.
+    let enable_gateway = !models.is_empty() && !config.enabled;
+    let changed = config.codex_visible_models != models || enable_gateway;
+    if enable_gateway {
+        config.enabled = true;
+    }
     config.codex_visible_models = models;
     Ok(changed)
 }

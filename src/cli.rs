@@ -10,6 +10,10 @@ pub enum Command {
     On,
     Off,
     Status,
+    #[cfg(windows)]
+    XshellBridge,
+    #[cfg(windows)]
+    RemoveLoginStartup,
     ConfigureCodexApp {
         codex_home: Option<PathBuf>,
         provider_name: Option<String>,
@@ -88,6 +92,10 @@ impl Cli {
             Some("on") => Command::On,
             Some("off") => Command::Off,
             Some("status") => Command::Status,
+            #[cfg(windows)]
+            Some("xshellb-mcp") if remaining.len() == 1 => Command::XshellBridge,
+            #[cfg(windows)]
+            Some("remove-login-startup") if remaining.len() == 1 => Command::RemoveLoginStartup,
             Some("configure-codex-app") => parse_configure_codex_app(&remaining[1..])?,
             Some("uninstall-codex-app") => parse_uninstall_codex_app(&remaining[1..])?,
             Some("install-shim") | Some("uninstall-shim") | Some("shim") => anyhow::bail!(

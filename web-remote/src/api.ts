@@ -9,6 +9,9 @@ export class ApiError extends Error {
     this.name = 'ApiError';
   }
 }
+export function accessEnded(failure: unknown): boolean {
+  return failure instanceof ApiError && [401, 403, 410].includes(failure.status);
+}
 
 async function checked(response: Response): Promise<Response> {
   if (response.ok) return response;
@@ -98,17 +101,21 @@ export class RemoteApi {
   }
 
   clients(signal?: AbortSignal): Promise<{ clients: RemoteClient[] }> {
-    return this.json('/clients', signal);
+    return this.json('/clients?view=summary', signal);
+  }
+
+  models(clientId: string, signal?: AbortSignal): Promise<Pick<RemoteClient, 'models'> & {modelSelection:boolean; effortSelection:boolean}> {
+    return this.json(`/clients/${segment(clientId)}/models`, signal);
   }
 
   projects(clientId: string, cursor?: string | null, signal?: AbortSignal): Promise<ProjectsResponse> {
-    const query = new URLSearchParams({ limit: '40' });
+    const query = new URLSearchParams({ limit: '12' });
     if (cursor) query.set('cursor', cursor);
     return this.json(`/clients/${segment(clientId)}/projects?${query}`, signal);
   }
 
   sessions(clientId: string, cursor?: string | null, signal?: AbortSignal): Promise<SessionsResponse> {
-    const query = new URLSearchParams({ limit: '40' });
+    const query = new URLSearchParams({ limit: '16' });
     if (cursor) query.set('cursor', cursor);
     return this.json(`/clients/${segment(clientId)}/sessions?${query}`, signal);
   }
@@ -118,7 +125,7 @@ export class RemoteApi {
   }
 
   history(clientId: string, sessionId: string, cursor?: string | null, signal?: AbortSignal): Promise<HistoryResponse> {
-    const query = new URLSearchParams({ limit: '100' });
+    const query = new URLSearchParams({ limit: '3' });
     if (cursor) query.set('cursor', cursor);
     return this.json(`${this.sessionPath(clientId, sessionId)}/history?${query}`, signal);
   }
@@ -146,6 +153,9 @@ export class RemoteApi {
 
   async readFile(clientId: string, sessionId: string, fileId: string, download = false, signal?: AbortSignal): Promise<Blob> {
     const response = await this.request(`${this.sessionPath(clientId, sessionId)}/files/${segment(fileId)}${download ? '?download=1' : ''}`, { signal });
+    if (download && !/^attachment(?:\s*;|$)/i.test(response.headers.get('content-disposition') || '')) {
+      throw new ApiError(502, 'file_response_expected', '目标电脑没有返回下载文件，请重新打开会话核对。');
+    }
     return response.blob();
   }
 
@@ -153,8 +163,8 @@ export class RemoteApi {
     await this.request(`${this.sessionPath(clientId, sessionId)}/files/${segment(fileId)}`, { method: 'DELETE' });
   }
 
-  async events(clientId: string, sessionId: string, after: number, signal: AbortSignal, onEvent: (event: RemoteEvent) => void | Promise<void>, onOpen?: () => void): Promise<void> {
-    const response = await this.request(`${this.sessionPath(clientId, sessionId)}/events?after=${after}`, {
+  async events(clientId: string, sessionId: string, after: number, signal: AbortSignal, onEvent: (event: RemoteEvent) => void | Promise<void>, onOpen?: () => void, liveActivity = false): Promise<void> {
+    const response = await this.request(`${this.sessionPath(clientId, sessionId)}/events?after=${after}${liveActivity ? '&liveActivity=1' : ''}`, {
       signal, headers: { Accept: 'text/event-stream' }, cache: 'no-store',
     });
     if (!response.body) throw new ApiError(502, 'empty_stream', '事件连接没有返回内容');

@@ -1,8 +1,9 @@
 //! Handoff of CC Switch's static model catalog to the active Hub gateway.
 //! Its JSON file is owned by CC Switch. We only manage the root TOML reference.
 use super::{
-    AI_GATEWAY_PROVIDER_NAME, ManagedCodexAppBackupManifest, default_codex_home,
-    managed_provider_names_in_config, parse_config_toml_document,
+    AI_GATEWAY_PROVIDER_NAME, ManagedCodexAppBackupManifest, ai_gateway_base_url_from_backend_url,
+    backend_urls_equivalent, backup_existing, default_codex_home, managed_provider_names_in_config,
+    parse_config_toml_document, write_file_atomically,
 };
 use anyhow::{Result, anyhow};
 use std::{fs, io, path::Path};
@@ -35,27 +36,87 @@ pub(super) fn reference<'a>(home: &Path, doc: &'a DocumentMut) -> Option<&'a str
     same_path(&home.join(raw), &home.join(FILENAME)).then_some(raw)
 }
 
-/// Read-only check for model refresh, returning neither provider data nor TOML
-/// snippets (parse errors can include credentials on the offending line).
-pub(crate) fn active_hub_has_cc_switch_catalog(
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum CatalogConnection {
+    Ready,
+    NeedsSetup,
+    CcSwitch,
+    CustomCatalog,
+}
+
+/// Repair discovery only for an already active provider owned by this Hub.
+/// Never include TOML snippets in errors: they may contain credentials.
+pub(crate) fn prepare_model_catalog(
     codex_home: Option<&Path>,
     backend_url: &str,
-) -> Result<bool> {
+) -> Result<CatalogConnection> {
     let home = codex_home
         .map(Path::to_path_buf)
         .unwrap_or_else(default_codex_home);
     let path = home.join("config.toml");
     let raw = match fs::read_to_string(&path) {
         Ok(raw) => raw,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(CatalogConnection::NeedsSetup),
         Err(_) => return Err(anyhow!("无法读取 Codex 的 config.toml。")),
     };
-    let doc = parse_config_toml_document(&raw, &path)
+    let mut doc = parse_config_toml_document(&raw, &path)
         .map_err(|_| anyhow!("Codex 的 config.toml 语法无效。"))?;
-    Ok(reference(&home, &doc).is_some()
-        && active_gateway(&doc)
-        && managed_provider_names_in_config(&doc, backend_url, false)
-            .contains(AI_GATEWAY_PROVIDER_NAME))
+    if !active_gateway(&doc)
+        || !managed_provider_names_in_config(&doc, backend_url, false).contains(AI_GATEWAY_PROVIDER_NAME)
+    {
+        return Ok(CatalogConnection::NeedsSetup);
+    }
+    if reference(&home, &doc).is_some() {
+        return Ok(CatalogConnection::CcSwitch);
+    }
+    if doc.contains_key(KEY) {
+        return Ok(CatalogConnection::CustomCatalog);
+    }
+    let expected = format!("{}/models", ai_gateway_base_url_from_backend_url(backend_url));
+    let provider = &doc["model_providers"][AI_GATEWAY_PROVIDER_NAME];
+    let needs_url = match provider.get("model_catalog_url") {
+        None => true,
+        Some(item) if item.as_str().is_some_and(|url| backend_urls_equivalent(url, &expected)) => false,
+        Some(_) => return Ok(CatalogConnection::CustomCatalog),
+    };
+    // An explicit override belongs to Connection Settings. Only fill missing
+    // discovery settings when the user saves a list for the managed provider.
+    let discovery = match doc.get("features") {
+        None => None,
+        Some(item) => {
+            let Some(features) = item.as_table_like() else {
+                return Ok(CatalogConnection::NeedsSetup);
+            };
+            features.get("api_key_model_discovery")
+        }
+    };
+    let needs_discovery = match discovery {
+        None => true,
+        Some(item) if item.as_bool() == Some(true) => false,
+        Some(_) => return Ok(CatalogConnection::NeedsSetup),
+    };
+    if needs_url || needs_discovery {
+        let _access = if codex_home.is_none() {
+            Some(crate::codex_access::operation()?)
+        } else {
+            None
+        };
+        if needs_url {
+            doc["model_providers"][AI_GATEWAY_PROVIDER_NAME]["model_catalog_url"] = toml_edit::value(expected);
+        }
+        if needs_discovery {
+            if !doc.contains_key("features") {
+                doc["features"] = toml_edit::Item::Table(toml_edit::Table::new());
+            }
+            doc["features"]["api_key_model_discovery"] = toml_edit::value(true);
+        }
+        if fs::read_to_string(&path).ok().as_deref() != Some(raw.as_str()) {
+            return Err(anyhow!("Codex 配置已变化，请重新保存模型列表。"));
+        }
+        backup_existing(&path)?;
+        write_file_atomically(&path, doc.to_string().as_bytes())?;
+    }
+    Ok(CatalogConnection::Ready)
 }
 
 fn active_gateway(doc: &DocumentMut) -> bool {
@@ -110,6 +171,10 @@ pub(super) fn restore(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn active_hub_has_cc_switch_catalog(home: Option<&Path>, backend: &str) -> Result<bool> {
+        Ok(prepare_model_catalog(home, backend)? == CatalogConnection::CcSwitch)
+    }
     use crate::codex_app_config::{
         ensure_managed_backup, managed_backup_paths, managed_gateway_config_is_current,
         parse_existing_config_toml, tests::test_configure_options, uninstall_with_managed_state,

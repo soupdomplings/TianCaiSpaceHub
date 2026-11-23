@@ -71,7 +71,7 @@ impl ModelPage {
         } else {
             col.add(&legacy_host, 1, SizerFlag::Expand, 0);
         }
-        page.set_sizer(col, false);
+        super::shell::inset_page_content(&page, col);
         page.set_min_size(Size::new(0, 0));
         let ui = Self {
             page,

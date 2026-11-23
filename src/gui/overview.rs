@@ -131,7 +131,7 @@ impl Overview {
         status.hide();
         column.add(&status, 0, SizerFlag::Expand | SizerFlag::All, 10);
         page.set_sizer(column, true);
-        shell.register(PageId::Overview, &page);
+        shell.register_viewport(PageId::Overview, &page);
         let ui = Self {
             page,
             book,

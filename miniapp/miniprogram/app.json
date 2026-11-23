@@ -1,0 +1,35 @@
+{
+  "pages": [
+    "pages/devices/index",
+    "pages/squad/index",
+    "pages/sessions/index",
+    "pages/chat/index",
+    "pages/recharge/index"
+  ],
+  "window": {
+    "navigationBarTitleText": "天才 Hub",
+    "navigationBarBackgroundColor": "@nav",
+    "navigationBarTextStyle": "@text",
+    "backgroundColor": "@background",
+    "backgroundTextStyle": "@hint"
+  },
+  "darkmode": true,
+  "themeLocation": "theme.json",
+  "tabBar": {
+    "custom": true,
+    "color": "#666670",
+    "selectedColor": "#0064ce",
+    "list": [
+      {
+        "pagePath": "pages/devices/index",
+        "text": "远程连接"
+      },
+      {
+        "pagePath": "pages/squad/index",
+        "text": "天才小分队"
+      }
+    ]
+  },
+  "sitemapLocation": "sitemap.json",
+  "style": "v2"
+}

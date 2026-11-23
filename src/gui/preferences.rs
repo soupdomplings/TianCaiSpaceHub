@@ -1,4 +1,8 @@
-use super::controls::Button;
+mod layout;
+#[cfg(windows)]
+mod startup;
+
+use super::controls::{Button, ButtonKind};
 use super::{
     api::ApiClient,
     dialog_job,
@@ -7,6 +11,7 @@ use super::{
     theme::{self, ThemeMode},
 };
 use crate::gui::controls::{Choice, TextCtrl};
+use layout::{SettingsCard, caption};
 use serde_json::json;
 use wxdragon::dc::GraphicsDC;
 use wxdragon::prelude::*;
@@ -36,7 +41,7 @@ fn failed_motion_save_keeps_last_applied_preference() {
 }
 
 /// Keep the OS toggle's pressed state, Tab focus and Space action. Only its drawing is custom.
-fn motion_switch(page: &ScrolledWindow, frame: Frame) -> ToggleButton {
+fn motion_switch(page: &Panel, frame: Frame) -> ToggleButton {
     let switch = ToggleButton::builder(page)
         .with_label("减少界面动效")
         .with_style(ToggleButtonStyle::BorderNone | ToggleButtonStyle::ExactFit)
@@ -118,141 +123,19 @@ pub(super) fn create(
     resources: &super::resources::ResourceUi,
     export_diagnostics: std::rc::Rc<dyn Fn()>,
 ) -> CheckBox {
-    let page = ScrolledWindow::builder(&shell.book)
-        .with_style(ScrolledWindowStyle::VScroll)
-        .build();
-    page.set_scroll_rate(0, 12);
-    page.set_background_color(theme::theme().bg_card);
-    let column = BoxSizer::builder(Orientation::Vertical).build();
-    heading(&page, &column, "外观与语言");
-    let grid = FlexGridSizer::builder(0, 2)
-        .with_vgap(14)
-        .with_hgap(20)
-        .build();
-    grid.add_growable_col(1, 1);
-    let appearance = Choice::builder(&page)
-        .with_choices(vec!["跟随系统".into(), "浅色".into(), "深色".into()])
-        .build();
-    appearance.set_selection(match super::load_gui_theme() {
-        ThemeMode::System => 0,
-        ThemeMode::Light => 1,
-        ThemeMode::Dark => 2,
-    });
-    appearance.set_min_size(super::visual::dip_size(&appearance, 170, 36));
-    appearance.set_max_size(super::visual::dip_size(&appearance, 200, -1));
-    field(&page, &grid, "主题", &appearance);
-    let language = Choice::builder(&page)
-        .with_choices(vec!["简体中文".into(), "English".into()])
-        .build();
-    language.set_selection(if text.locale == GuiLocale::ZhCn { 0 } else { 1 });
-    language.set_min_size(super::visual::dip_size(&language, 170, 36));
-    language.set_max_size(super::visual::dip_size(&language, 200, -1));
-    field(&page, &grid, "语言", &language);
-    let motion = motion_switch(&page, frame);
-    field(&page, &grid, "减少界面动效", &motion);
-    let save = Button::builder(&page).with_label("保存外观设置").build();
-    grid.add_spacer(1);
-    grid.add(&save, 0, SizerFlag::default(), 0);
-    column.add_sizer(&grid, 0, SizerFlag::Expand | SizerFlag::All, 20);
-    save.on_click(move |_| {
-        let mode = match appearance.get_selection() {
-            Some(1) => ThemeMode::Light,
-            Some(2) => ThemeMode::Dark,
-            _ => ThemeMode::System,
-        };
-        let locale = if language.get_selection() == Some(1) {
-            GuiLocale::EnUs
-        } else {
-            GuiLocale::ZhCn
-        };
-        let result = super::save_gui_theme(mode).and_then(|_| super::save_gui_locale(locale));
-        match result {
-            Ok(()) => super::show_info(
-                &frame,
-                "外观设置已保存。主题及语言将在重新打开 Hub 后应用。",
-            ),
-            Err(e) => super::show_error(&frame, &e),
-        }
-    });
-    heading(&page, &column, "连接与网络");
-    let network = BoxSizer::builder(Orientation::Horizontal).build();
-    let proxy = Choice::builder(&page)
-        .with_choices(vec![
-            "系统代理".into(),
-            "直接连接".into(),
-            "自定义代理".into(),
-        ])
-        .build();
-    proxy.set_selection(match super::load_outbound_proxy_config().mode {
-        crate::config::OutboundProxyMode::System => 0,
-        crate::config::OutboundProxyMode::Direct => 1,
-        crate::config::OutboundProxyMode::Custom => 2,
-    });
-    let apply = Button::builder(&page).with_label("保存网络设置").build();
-    proxy.set_min_size(super::visual::dip_size(&proxy, 156, 36));
-    proxy.set_max_size(super::visual::dip_size(&proxy, 200, -1));
-    network.add(&proxy, 0, SizerFlag::Right, 12);
-    network.add(&apply, 0, SizerFlag::default(), 0);
-    column.add_sizer(&network, 0, SizerFlag::Expand | SizerFlag::All, 20);
-    let worker = api.clone();
-    apply.on_click(move |_| {
-        super::handle_outbound_proxy_selected(
-            &frame,
-            text,
-            &worker,
-            match proxy.get_selection() {
-                Some(1) => crate::config::OutboundProxyMode::Direct,
-                Some(2) => crate::config::OutboundProxyMode::Custom,
-                _ => crate::config::OutboundProxyMode::System,
-            },
-        )
-    });
-    let local = Button::builder(&page)
-        .with_label("切换本机连接兼容模式")
-        .build();
-    column.add(&local, 0, SizerFlag::Left | SizerFlag::Bottom, 20);
-    local.on_click(move |_| {
-        let mode = match super::load_local_connection_mode() {
-            crate::config::LocalConnectionMode::Standard => {
-                crate::config::LocalConnectionMode::VpnCompatible
-            }
-            _ => crate::config::LocalConnectionMode::Standard,
-        };
-        super::handle_local_connection_selected(&frame, text, mode);
-    });
-    heading(&page, &column, "客户端配置位置");
-    let custom = Button::builder(&page)
-        .with_label("添加其他配置位置")
-        .build();
-    column.add(&custom, 0, SizerFlag::All, 20);
-    let a = api.clone();
-    custom.on_click(move |_| target_editor(&frame, a.clone()));
-    resources.add_recovery_control(&page, &column);
-    heading(&page, &column, "可选功能");
-    let dumpling = CheckBox::builder(&page)
-        .with_label("显示 Dumpling-MCP 环境管理")
-        .with_value(super::load_dumpling_mcp_visibility())
-        .build();
-    column.add(&dumpling, 0, SizerFlag::All, 20);
-    heading(&page, &column, "系统集成");
-    let row = BoxSizer::builder(Orientation::Horizontal).build();
-    for (register, title) in [(true, "启用网页导入"), (false, "解除网页导入")] {
-        let b = Button::builder(&page).with_label(title).build();
-        row.add(&b, 0, SizerFlag::Right, 10);
-        b.on_click(move |_| {
-            let outcome = if register {
-                crate::external_import::registration::register()
-            } else {
-                crate::external_import::registration::unregister()
-            };
-            match outcome {
-                Ok(()) => super::show_info(&frame, "网页导入关联已更新"),
-                Err(e) => super::show_error(&frame, &e),
-            }
-        });
-    }
-    column.add_sizer(&row, 0, SizerFlag::All, 20);
-    page.set_sizer(column, true);
+    let (page, dumpling) = settings_page(
+        &shell.book,
+        frame,
+        api,
+        text,
+        SettingsValues {
+            theme: super::load_gui_theme(),
+            proxy: super::load_outbound_proxy_config().mode,
+            local: super::load_local_connection_mode(),
+            dumpling: super::load_dumpling_mcp_visibility(),
+        },
+        |panel, body| resources.add_recovery_control(panel, body),
+    );
     shell.register(PageId::Settings, &page);
     let help = ScrolledWindow::builder(&shell.book)
         .with_style(ScrolledWindowStyle::VScroll)
@@ -304,20 +187,284 @@ pub(super) fn create(
         .build();
     s.add(&about, 0, SizerFlag::All, 20);
     about.on_click(move |_| super::show_about_dialog(&frame));
-    help.set_sizer(s, true);
+    super::shell::inset_page_content(&help, s);
     shell.register(PageId::Help, &help);
     dumpling
 }
+struct SettingsValues {
+    theme: ThemeMode,
+    proxy: crate::config::OutboundProxyMode,
+    local: crate::config::LocalConnectionMode,
+    dumpling: bool,
+}
+
+fn settings_page(
+    parent: &impl WxWidget,
+    frame: Frame,
+    api: ApiClient,
+    text: GuiText,
+    values: SettingsValues,
+    add_recovery: impl FnOnce(&Panel, &BoxSizer),
+) -> (ScrolledWindow, CheckBox) {
+    let page = ScrolledWindow::builder(parent)
+        .with_style(ScrolledWindowStyle::VScroll)
+        .build();
+    page.set_scroll_rate(0, page.from_dip(12));
+    page.set_background_color(theme::theme().bg_app);
+    let column = BoxSizer::builder(Orientation::Vertical).build();
+    column.add_spacer(page.from_dip(theme::SPACE_LG));
+
+    let top = layout::card_pair(&page, &column);
+    let appearance_card = SettingsCard::new(&page, &top, "外观与语言");
+    let surface = appearance_card.panel;
+    let appearance = Choice::builder(&surface)
+        .with_choices(vec!["跟随系统".into(), "浅色".into(), "深色".into()])
+        .build();
+    appearance.set_selection(match values.theme {
+        ThemeMode::System => 0,
+        ThemeMode::Light => 1,
+        ThemeMode::Dark => 2,
+    });
+    appearance.set_min_size(super::visual::dip_size(
+        &appearance,
+        152,
+        theme::CONTROL_HEIGHT,
+    ));
+    appearance_card.row("主题", &appearance);
+    let language = Choice::builder(&surface)
+        .with_choices(vec!["简体中文".into(), "English".into()])
+        .build();
+    language.set_selection(if text.locale == GuiLocale::ZhCn { 0 } else { 1 });
+    language.set_min_size(super::visual::dip_size(
+        &language,
+        152,
+        theme::CONTROL_HEIGHT,
+    ));
+    appearance_card.row("界面语言", &language);
+    caption(
+        &surface,
+        &appearance_card.body,
+        "保存后，主题和语言在下次打开 Hub 时生效。",
+    );
+    let save = appearance_card.action("保存外观设置", ButtonKind::Primary);
+    let motion = motion_switch(&surface, frame);
+    appearance_card.row("减少界面动效", &motion);
+    save.on_click(move |_| {
+        let mode = match appearance.get_selection() {
+            Some(1) => ThemeMode::Light,
+            Some(2) => ThemeMode::Dark,
+            _ => ThemeMode::System,
+        };
+        let locale = if language.get_selection() == Some(1) {
+            GuiLocale::EnUs
+        } else {
+            GuiLocale::ZhCn
+        };
+        let result = super::save_gui_theme(mode).and_then(|_| super::save_gui_locale(locale));
+        match result {
+            Ok(()) => super::show_info(
+                &frame,
+                "外观设置已保存。主题及语言将在重新打开 Hub 后应用。",
+            ),
+            Err(e) => super::show_error(&frame, &e),
+        }
+    });
+    let integration = SettingsCard::new(&page, &top, "启动与集成");
+    #[cfg(windows)]
+    startup::add(&integration.panel, &integration.body, frame);
+    let actions = WrapSizer::builder(Orientation::Horizontal)
+        .with_flags(WrapSizerFlag::RemoveLeadingSpaces)
+        .build();
+    for (register, title) in [(true, "启用网页导入"), (false, "解除网页导入")] {
+        let button = Button::builder(&integration.panel)
+            .with_label(title)
+            .with_kind(ButtonKind::Secondary)
+            .build();
+        actions.add(
+            &button,
+            0,
+            SizerFlag::Right | SizerFlag::Bottom,
+            integration.panel.from_dip(theme::SPACE_SM),
+        );
+        button.on_click(move |_| {
+            let outcome = if register {
+                crate::external_import::registration::register()
+            } else {
+                crate::external_import::registration::unregister()
+            };
+            match outcome {
+                Ok(()) => super::show_info(&frame, "网页导入关联已更新"),
+                Err(e) => super::show_error(&frame, &e),
+            }
+        });
+    }
+    caption(
+        &integration.panel,
+        &integration.body,
+        "允许网站通过已注册的链接把配置导入 Hub。",
+    );
+    integration
+        .body
+        .add_sizer(&actions, 0, SizerFlag::Expand, 0);
+
+    let bottom = layout::card_pair(&page, &column);
+    let network = SettingsCard::new(&page, &bottom, "连接与网络");
+    let proxy = Choice::builder(&network.panel)
+        .with_choices(vec![
+            "系统代理".into(),
+            "直接连接".into(),
+            "自定义代理".into(),
+        ])
+        .build();
+    proxy.set_selection(match values.proxy {
+        crate::config::OutboundProxyMode::System => 0,
+        crate::config::OutboundProxyMode::Direct => 1,
+        crate::config::OutboundProxyMode::Custom => 2,
+    });
+    proxy.set_min_size(super::visual::dip_size(&proxy, 152, theme::CONTROL_HEIGHT));
+    network.row("出站代理", &proxy);
+    let apply = network.action("保存网络设置", ButtonKind::Primary);
+    let worker = api.clone();
+    apply.on_click(move |_| {
+        super::handle_outbound_proxy_selected(
+            &frame,
+            text,
+            &worker,
+            match proxy.get_selection() {
+                Some(1) => crate::config::OutboundProxyMode::Direct,
+                Some(2) => crate::config::OutboundProxyMode::Custom,
+                _ => crate::config::OutboundProxyMode::System,
+            },
+        )
+    });
+    let current_mode = values.local;
+    let local_title = |mode| format!("当前为{}", text.local_connection_label(mode));
+    let local_state = caption(&network.panel, &network.body, &local_title(current_mode));
+    let local = network.action("切换本机连接模式", ButtonKind::Secondary);
+    local.on_click(move |_| {
+        let mode = match super::load_local_connection_mode() {
+            crate::config::LocalConnectionMode::Standard => {
+                crate::config::LocalConnectionMode::VpnCompatible
+            }
+            _ => crate::config::LocalConnectionMode::Standard,
+        };
+        super::handle_local_connection_selected(&frame, text, mode);
+        local_state.set_label(&format!(
+            "当前为{}",
+            text.local_connection_label(super::load_local_connection_mode())
+        ));
+        network.panel.layout();
+    });
+    let clients = SettingsCard::new(&page, &bottom, "客户端与扩展");
+    caption(
+        &clients.panel,
+        &clients.body,
+        "使用非默认配置目录时，可为对应客户端添加位置。",
+    );
+    let custom = clients.action("添加其他配置位置", ButtonKind::Secondary);
+    let a = api.clone();
+    custom.on_click(move |_| target_editor(&frame, a.clone()));
+    add_recovery(&clients.panel, &clients.body);
+    let dumpling = CheckBox::builder(&clients.panel)
+        .with_label("显示 Dumpling-MCP 环境管理")
+        .with_value(values.dumpling)
+        .build();
+    dumpling.set_foreground_color(theme::theme().ink_primary);
+    dumpling.set_background_color(theme::theme().bg_card);
+    clients.body.add(
+        &dumpling,
+        0,
+        SizerFlag::Top,
+        clients.panel.from_dip(theme::SPACE_SM),
+    );
+    super::shell::inset_page_content(&page, column);
+    page.on_size(move |event| {
+        layout::resize_pairs(page, [top, bottom]);
+        event.skip(true);
+    });
+    (page, dumpling)
+}
+
 fn heading<W: WxWidget>(parent: &W, sizer: &BoxSizer, label: &str) {
     let title = StaticText::builder(parent).with_label(label).build();
     title.set_font(&theme::font(theme::TextRole::Title));
     title.set_foreground_color(theme::theme().ink_primary);
     sizer.add(&title, 0, SizerFlag::Left | SizerFlag::Top, 20);
 }
-fn field<W: WxWidget>(parent: &ScrolledWindow, grid: &FlexGridSizer, label: &str, control: &W) {
-    let name = StaticText::builder(parent).with_label(label).build();
-    grid.add(&name, 0, SizerFlag::AlignCenterVertical, 0);
-    grid.add(control, 1, SizerFlag::Expand, 0);
+
+#[cfg(all(test, windows))]
+#[test]
+fn settings_page_reflows_and_scrolls_without_recreating_controls() {
+    wxdragon::app::render_offscreen(|| {
+        theme::init(ThemeMode::Light);
+        let frame = Frame::builder()
+            .with_title("Windows preferences layout")
+            .build();
+        frame.set_font(&theme::font(theme::TextRole::Body));
+        let text = GuiText::new(GuiLocale::ZhCn);
+        let (page, dumpling) = settings_page(
+            &frame,
+            frame,
+            ApiClient::new(String::new(), text),
+            text,
+            SettingsValues {
+                theme: ThemeMode::System,
+                proxy: crate::config::OutboundProxyMode::System,
+                local: crate::config::LocalConnectionMode::Standard,
+                dumpling: true,
+            },
+            |_, _| {},
+        );
+        let outer = BoxSizer::builder(Orientation::Vertical).build();
+        outer.add(&page, 1, SizerFlag::Expand, 0);
+        frame.set_sizer(outer, false);
+        let theme_control = page.find_window_by_name("主题").unwrap().handle_ptr();
+        for (width, height, wide) in [(1040, 650, true), (500, 410, false)] {
+            frame.set_client_size(super::visual::dip_size(&frame, width, height));
+            frame.layout();
+            page.layout();
+            page.fit_inside();
+            let cards = ["外观与语言", "启动与集成", "连接与网络", "客户端与扩展"]
+                .map(|name| page.find_window_by_name(name).unwrap());
+            let pos = cards.each_ref().map(|card| card.get_position());
+            assert_eq!(
+                pos[0].y == pos[1].y,
+                wide,
+                "expected four settings sections to reflow"
+            );
+            assert_eq!(pos[0].x != pos[1].x, wide);
+            assert!(pos[2].y > pos[0].y);
+            for card in &cards {
+                let origin = card.get_position();
+                assert!(
+                    origin.x >= 0
+                        && origin.x + card.get_size().width <= page.get_client_size().width
+                );
+            }
+            assert_eq!(
+                page.find_window_by_name("主题").unwrap().handle_ptr(),
+                theme_control
+            );
+            assert!(dumpling.is_checked());
+            if !wide {
+                assert!(page.get_virtual_size().height > page.get_client_size().height);
+                page.scroll_coords(0, 10);
+                assert!(page.view_start().y > 0);
+                page.scroll_coords(0, 0);
+            }
+            super::native_model_review::capture(
+                &page,
+                if wide {
+                    "settings-wide"
+                } else {
+                    "settings-narrow"
+                },
+            );
+        }
+        assert!(!frame.is_shown());
+        frame.destroy();
+    })
+    .unwrap();
 }
 fn target_editor(frame: &Frame, api: ApiClient) {
     let dialog = Dialog::builder(frame, "其他客户端配置位置")

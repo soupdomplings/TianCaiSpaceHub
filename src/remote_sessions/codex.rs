@@ -1,6 +1,9 @@
+#[path = "codex_prompts.rs"]
+mod prompts;
+
 use super::{
     files,
-    service::ApprovalSource,
+    service::{ApprovalSource, ListedWorkspaces},
     types::{ApprovalDecision, CreateRequest, PageQuery, Scope, TurnRequest},
 };
 use crate::{
@@ -9,7 +12,10 @@ use crate::{
 };
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
-use std::{collections::HashSet, path::Path};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct CodexTarget {
@@ -62,6 +68,13 @@ pub(super) async fn targets(state: &SharedState) -> Vec<CodexTarget> {
             name: "Codex".into(),
         });
     }
+    // Drop disconnected/rotated sources before handing out the current snapshot.
+    state
+        .remote_sessions
+        .listed_workspaces
+        .lock()
+        .await
+        .keep_sources(&targets);
     targets.sort_by(|a, b| a.id.cmp(&b.id));
     targets
 }
@@ -96,14 +109,18 @@ pub(super) async fn models(state: &SharedState, target: &CodexTarget) -> Result<
         Some(json!({"id":id,"name":model["displayName"].as_str().unwrap_or(id),"efforts":efforts}))
     }).collect())
 }
-pub(super) async fn clients(state: &SharedState) -> Vec<Value> {
+pub(super) async fn clients(state: &SharedState, summary: bool) -> Vec<Value> {
     let mut result = Vec::new();
     for target in targets(state).await {
-        let (models, reason) = match models(state, &target).await {
-            Ok(m) => (m, None),
-            Err(e) => (Vec::new(), Some(e.to_string())),
+        let (models, reason) = if summary {
+            (Vec::new(), None)
+        } else {
+            match models(state, &target).await {
+                Ok(m) => (m, None),
+                Err(e) => (Vec::new(), Some(e.to_string())),
+            }
         };
-        result.push(json!({"id":target.id,"kind":"codex","name":target.name,"ready":true,"reason":reason,
+        result.push(json!({"id":target.id,"kind":"codex","name":target.name,"ready":true,"reason":reason,"modelsDeferred":summary,
             "capabilities":{"history":true,"create":true,"send":true,"stop":true,"approvals":true,"questions":true,
                 "attachments":true,"artifacts":true,"modelSelection":!models.is_empty(),"effortSelection":models.iter().any(|m|m["efforts"].as_array().is_some_and(|e|!e.is_empty()))},"models":models}));
     }
@@ -117,8 +134,7 @@ pub(super) async fn clients(state: &SharedState) -> Vec<Value> {
 }
 pub(super) async fn sessions(state: &SharedState, client: &str, page: &PageQuery) -> Result<Value> {
     let target = target(state, client).await?;
-    let mut params =
-        json!({"sortKey":"updated_at","archived":false,"limit":page.limit(),"useStateDbOnly":true});
+    let mut params = json!({"sortKey":"updated_at","archived":false,"limit":page.limit()});
     if let Some(cursor) = &page.cursor {
         params["cursor"] = cursor.as_str().into();
     }
@@ -126,6 +142,17 @@ pub(super) async fn sessions(state: &SharedState, client: &str, page: &PageQuery
     let rows = response["data"]
         .as_array()
         .context("Codex 会话列表格式不兼容")?;
+    state
+        .remote_sessions
+        .listed_workspaces
+        .lock()
+        .await
+        .remember(
+            &target,
+            rows.iter()
+                .filter(|row| row["id"].as_str().is_some_and(|id| !id.is_empty()))
+                .filter_map(|row| row["cwd"].as_str()),
+        );
     Ok(
         json!({"sessions":rows.iter().map(session_row).collect::<Vec<_>>(),"nextCursor":response["nextCursor"]}),
     )
@@ -141,13 +168,125 @@ pub(super) async fn projects(
     query: &PageQuery,
 ) -> Result<Value> {
     let page = sessions(state, client, query).await?;
+    let extra = if query.cursor.as_deref().unwrap_or("").is_empty() {
+        crate::remote_network::workspace_dirs(state).await?
+    } else {
+        Vec::new()
+    };
+    Ok(project_choices(&page, &extra))
+}
+
+fn project_choices(page: &Value, extra: &[String]) -> Value {
+    let paths = extra.iter().map(String::as_str).chain(
+        page["sessions"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|s| s["cwd"].as_str()),
+    );
     let mut seen = HashSet::new();
-    Ok(
-        json!({"projects":page["sessions"].as_array().into_iter().flatten().filter_map(|s| {
-        let path = s["cwd"].as_str().filter(|s|!s.is_empty())?;
-        seen.insert(path.to_owned()).then(|| json!({"id":path,"path":path,"name":Path::new(path).file_name().map(|s|s.to_string_lossy()).unwrap_or_else(||path.into())}))
-    }).collect::<Vec<_>>(),"nextCursor":page["nextCursor"]}),
-    )
+    let projects = paths.filter(|p| !p.is_empty() && seen.insert(*p))
+        .map(|path| json!({"id":path,"path":path,"name":Path::new(path).file_name().map(|s|s.to_string_lossy()).unwrap_or_else(||path.into())})).collect::<Vec<_>>();
+    json!({"projects":projects,"nextCursor":page["nextCursor"]})
+}
+
+#[cfg(test)]
+#[test]
+fn workspace_picker_merges_target_folders_without_losing_native_cursor() {
+    let page = json!({"sessions":[{"cwd":"/team/one"},{"cwd":"/team/two"}],"nextCursor":"p2"});
+    let value = project_choices(&page, &["/new".into(), "/team/one".into()]);
+    assert_eq!(value["nextCursor"], "p2");
+    assert_eq!(
+        value["projects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["/new", "/team/one", "/team/two"]
+    );
+}
+
+// Compare target-platform paths, not string prefixes; pass back the trusted original.
+// No canonicalize/stat on browser-supplied paths (including unlisted network shares).
+fn selected_workspace(
+    target: &CodexTarget,
+    requested: &Path,
+    added: &[String],
+    listed: &ListedWorkspaces,
+) -> Option<PathBuf> {
+    if !requested.is_absolute() {
+        return None;
+    }
+    added
+        .iter()
+        .map(Path::new)
+        .find(|p| *p == requested)
+        .or_else(|| listed.selected(target, requested))
+        .map(Path::to_owned)
+}
+
+#[cfg(test)]
+#[test]
+fn workspace_picker_create_accepts_only_exact_native_pages_or_local_grants_by_epoch() {
+    let target = CodexTarget {
+        id: "codex:test".into(),
+        epoch: 5,
+        key: "k".into(),
+        client_id: "c".into(),
+        stream_id: "s".into(),
+        name: "test".into(),
+    };
+    let base = if cfg!(windows) {
+        Path::new(r"C:\demo")
+    } else {
+        Path::new("/demo")
+    };
+    let (a, b, local) = (base.join("first"), base.join("later"), base.join("added"));
+    let mut listed = ListedWorkspaces::default();
+    for path in [&a, &b] {
+        listed.remember(&target, std::iter::once(path.to_str().unwrap()));
+    }
+    let grants = vec![local.to_str().unwrap().to_owned()];
+    for path in [&a, &b, &local] {
+        assert_eq!(
+            selected_workspace(&target, path, &grants, &listed).as_ref(),
+            Some(path)
+        );
+    }
+    for invalid in [
+        base.to_owned(),
+        b.join("sub"),
+        b.join("..").join("other"),
+        PathBuf::from("later"),
+    ] {
+        assert!(selected_workspace(&target, &invalid, &grants, &listed).is_none());
+    }
+    assert!(
+        selected_workspace(&target, &local, &[], &listed).is_none(),
+        "revoking a local grant takes effect without clearing history"
+    );
+    let peer = CodexTarget {
+        id: "codex:other".into(),
+        ..target.clone()
+    };
+    let stream = CodexTarget {
+        stream_id: "another".into(),
+        ..target.clone()
+    };
+    let next = CodexTarget {
+        epoch: 6,
+        ..target.clone()
+    };
+    for different in [&peer, &stream, &next] {
+        assert!(selected_workspace(different, &a, &grants, &listed).is_none());
+    }
+    listed.keep_sources(std::slice::from_ref(&next));
+    listed.remember(&next, std::iter::once(b.to_str().unwrap()));
+    listed.remember(&target, std::iter::once(a.to_str().unwrap())); // late old page
+    assert!(listed.selected(&next, &a).is_none() && listed.selected(&next, &b).is_some());
+    listed.keep_sources(&[]);
+    assert!(listed.selected(&next, &b).is_none());
 }
 pub(super) async fn create(
     state: &SharedState,
@@ -160,15 +299,21 @@ pub(super) async fn create(
         .as_deref()
         .or(options.project_id.as_deref())
         .context("请选择目标电脑上的项目目录")?;
-    ensure!(
-        Path::new(cwd).is_absolute() && Path::new(cwd).is_dir(),
-        "项目目录必须是目标电脑上已存在的绝对目录"
-    );
-    let mut params = remote_control_backend::ThreadStartOptions {
-        cwd: Some(cwd.into()),
-        ..Default::default()
-    }
-    .to_params();
+    let requested = Path::new(cwd);
+    let added = crate::remote_network::workspace_dirs(state).await?;
+    let cwd = selected_workspace(
+        &target,
+        requested,
+        &added,
+        &*state.remote_sessions.listed_workspaces.lock().await,
+    )
+    .context("此目录未获当前目标授权。请刷新工作目录，或在目标 Hub 的远程连接中添加目录。")?;
+    // Only query the filesystem for a path supplied by the target, never an unlisted input.
+    ensure!(cwd.is_dir(), "所选工作目录已移除或不可用，请刷新目录后重选");
+    // A selected folder name can end in whitespace on macOS. Keep the exact
+    // trusted spelling for both native fields; do not trim it like input text.
+    let cwd = cwd.to_str().context("目标目录格式无效")?;
+    let mut params = json!({"cwd":cwd, "runtimeWorkspaceRoots":[cwd]});
     if let Some(model) = options.model.as_deref().filter(|m| !m.is_empty()) {
         ensure!(
             models(state, &target)
@@ -183,11 +328,20 @@ pub(super) async fn create(
     let thread = response.get("thread").context("Codex 未返回新会话")?;
     let session = thread["id"].as_str().context("Codex 未返回新会话 ID")?;
     let scope = Scope::new(client, session);
-    state.remote_sessions.watch(&scope, Some(target)).await;
+    state
+        .remote_sessions
+        .watch(&scope, Some(target.clone()))
+        .await;
+    if let Some(feed) = state.remote_sessions.feeds.lock().await.get_mut(&scope)
+        && feed.source.as_ref() == Some(&target)
+    {
+        feed.subscribed = true; // thread/start subscribes this native connection.
+        feed.session_cwd = Some(PathBuf::from(cwd));
+        feed.awaiting_first_turn = feed.events.is_empty() && feed.approvals.is_empty();
+    }
     // Naming is a separate, idempotent native operation. Failure does not
     // replay thread/start or replace the successfully created conversation.
     if let Some(title) = options.title.as_deref().filter(|s| !s.trim().is_empty()) {
-        let target = self::target(state, client).await?;
         let _ = request(
             state,
             &target,
@@ -198,20 +352,57 @@ pub(super) async fn create(
     }
     Ok(json!({"session":session_row(thread)}))
 }
-async fn read_thread(state: &SharedState, target: &CodexTarget, session: &str) -> Result<Value> {
+async fn read_thread(
+    state: &SharedState,
+    target: &CodexTarget,
+    session: &str,
+    include_turns: bool,
+) -> Result<Value> {
     let response = request(
         state,
         target,
         "thread/read",
-        json!({"threadId":session,"includeTurns":false}),
+        json!({"threadId":session,"includeTurns":include_turns}),
     )
-    .await?;
+    .await
+    .map_err(read_error)?;
     let thread = response.get("thread").context("Codex 未返回会话内容")?;
     ensure!(
         thread["id"].as_str() == Some(session),
         "Codex 返回了其他会话，已停止读取"
     );
+    remember_cwd(state, &Scope::new(&target.id, session), target, thread).await;
     Ok(thread.clone())
+}
+
+fn native_cwd(thread: &Value) -> Option<PathBuf> {
+    thread["cwd"]
+        .as_str()
+        .map(Path::new)
+        .filter(|p| p.is_absolute())
+        .map(Path::to_owned)
+}
+async fn remember_cwd(state: &SharedState, scope: &Scope, target: &CodexTarget, thread: &Value) {
+    if let Some(path) = native_cwd(thread)
+        && let Some(feed) = state.remote_sessions.feeds.lock().await.get_mut(scope)
+        && feed.source.as_ref() == Some(target)
+    {
+        feed.session_cwd = Some(path);
+    }
+}
+async fn remembered_cwd(
+    state: &SharedState,
+    scope: &Scope,
+    target: &CodexTarget,
+) -> Option<PathBuf> {
+    state
+        .remote_sessions
+        .feeds
+        .lock()
+        .await
+        .get(scope)
+        .filter(|f| f.source.as_ref() == Some(target))
+        .and_then(|f| f.session_cwd.clone())
 }
 pub(super) async fn history(state: &SharedState, scope: &Scope, page: &PageQuery) -> Result<Value> {
     let target = target(state, &scope.client).await?;
@@ -219,34 +410,57 @@ pub(super) async fn history(state: &SharedState, scope: &Scope, page: &PageQuery
         .remote_sessions
         .watch(scope, Some(target.clone()))
         .await;
-    let snapshot_cursor = state.remote_sessions.snapshot(scope).await.3;
-    let thread = read_thread(state, &target, &scope.session).await?;
-    let subscribe = state
-        .remote_sessions
-        .feeds
-        .lock()
-        .await
-        .get(scope)
-        .is_some_and(|f| !f.subscribed);
-    if subscribe {
-        // Native resume establishes subscriptions and replays live requests;
-        // the pinned request deliberately does not set IM current_thread.
-        request(
-            state,
-            &target,
-            "thread/resume",
-            json!({"threadId":scope.session,"excludeTurns":true}),
-        )
-        .await?;
-        if let Some(feed) = state.remote_sessions.feeds.lock().await.get_mut(scope) {
-            feed.subscribed = true;
+    let snapshot_cursor = {
+        let feeds = state.remote_sessions.feeds.lock().await;
+        let feed = feeds.get(scope).context("会话连接已变化，请刷新")?;
+        ensure!(
+            feed.source.as_ref() == Some(&target),
+            "会话连接已变化，请刷新"
+        );
+        let cursor = feed.events.back().map_or(0, |event| event.id);
+        if feed.awaiting_first_turn
+            && feed.approvals.is_empty()
+            && feed.status != "waiting_approval"
+        {
+            return Ok(
+                json!({"items":[],"nextCursor":null,"turnId":null,"status":feed.status,
+                             "approvals":[],"cursor":cursor}),
+            );
         }
+        cursor
+    };
+    // A native turns page already belongs to this request and includes the
+    // latest turn's status. Only an empty first page needs a separate read to
+    // distinguish a genuinely empty conversation from an unavailable rollout.
+    let (turns, next_cursor, fallback_status) =
+        turn_page(state, &target, &scope.session, page).await?;
+    let summary_status = if page.cursor.is_none() && turns.is_empty() && fallback_status.is_none() {
+        Some(thread_status(
+            &read_thread(state, &target, &scope.session, false).await?,
+        ))
+    } else {
+        fallback_status
+    };
+    let mut cwd = remembered_cwd(state, scope, &target).await;
+    if cwd.is_none()
+        && turns
+            .iter()
+            .flat_map(|t| t["items"].as_array().into_iter().flatten())
+            .any(|item| {
+                item["type"] == "agentMessage"
+                    && item["phase"] != "commentary"
+                    && item["text"].as_str().is_some_and(files::has_local_link)
+            })
+    {
+        cwd = read_thread(state, &target, &scope.session, false)
+            .await
+            .ok()
+            .and_then(|thread| native_cwd(&thread));
     }
-    let (turns, next_cursor) = turn_page(state, &target, &scope.session, page).await?;
     let mut items = Vec::new();
     for turn in turns.iter().rev() {
         for item in turn["items"].as_array().into_iter().flatten() {
-            items.push(normalize_item(state, scope, item).await?);
+            items.push(normalize_item(state, scope, item, cwd.as_deref(), true).await?);
         }
     }
     let (mut status, mut turn_id, approvals, _) = state.remote_sessions.snapshot(scope).await;
@@ -258,7 +472,16 @@ pub(super) async fn history(state: &SharedState, scope: &Scope, page: &PageQuery
         if matches!(native_status, "inProgress" | "in_progress" | "running")
             || native_turn == turn_id.as_deref()
         {
-            status = normalize_status(native_status).into();
+            let still_waiting = matches!(native_status, "inProgress" | "in_progress" | "running")
+                && (!approvals.is_empty()
+                    || status == "waiting_approval"
+                    || summary_status == Some("waiting_approval"));
+            status = if still_waiting {
+                "waiting_approval"
+            } else {
+                normalize_status(native_status)
+            }
+            .into();
             turn_id = native_turn.map(str::to_owned);
             state
                 .remote_sessions
@@ -271,8 +494,11 @@ pub(super) async fn history(state: &SharedState, scope: &Scope, page: &PageQuery
                 .await;
         }
     }
-    if status == "idle" && thread_status(&thread) == "running" {
-        status = "running".into();
+    if page.cursor.is_none()
+        && status == "idle"
+        && let Some(native @ ("running" | "waiting_approval")) = summary_status
+    {
+        status = native.into();
     }
     Ok(json!({"items":items,"nextCursor":next_cursor,
         "turnId":turn_id,"status":status,"approvals":approvals,"cursor":snapshot_cursor}))
@@ -282,30 +508,37 @@ async fn turn_page(
     target: &CodexTarget,
     session: &str,
     page: &PageQuery,
-) -> Result<(Vec<Value>, Option<String>)> {
+) -> Result<(Vec<Value>, Option<String>, Option<&'static str>)> {
     let mut params =
         json!({"threadId":session,"limit":page.limit(),"sortDirection":"desc","itemsView":"full"});
     if let Some(cursor) = &page.cursor {
         params["cursor"] = cursor.clone().into();
     }
     match request(state, target, "thread/turns/list", params).await {
-        Ok(response) => Ok((
-            response["data"]
+        Ok(response) => {
+            let turns = response["data"]
                 .as_array()
-                .context("Codex 历史分页格式不兼容")?
-                .clone(),
-            response["nextCursor"].as_str().map(str::to_owned),
-        )),
+                .context("Codex 历史分页格式不兼容")?;
+            // The standard result is bound by the native request id; also
+            // validate any explicit thread identity returned by the runtime.
+            for entry in std::iter::once(&response).chain(turns) {
+                if let Some(id) = entry.get("threadId") {
+                    ensure!(
+                        id.as_str() == Some(session),
+                        "Codex 返回了其他会话，已停止读取"
+                    );
+                }
+            }
+            Ok((
+                turns.clone(),
+                response["nextCursor"].as_str().map(str::to_owned),
+                None,
+            ))
+        }
         Err(error) if unsupported_method(&error) => {
-            let response = request(
-                state,
-                target,
-                "thread/read",
-                json!({"threadId":session,"includeTurns":true}),
-            )
-            .await?;
-            let turns = response
-                .pointer("/thread/turns")
+            let thread = read_thread(state, target, session, true).await?;
+            let turns = thread
+                .get("turns")
                 .and_then(Value::as_array)
                 .context("此 Codex 版本未提供可读取的历史")?;
             let before = page
@@ -320,10 +553,25 @@ async fn turn_page(
             Ok((
                 turns[start..before].iter().rev().cloned().collect(),
                 (start > 0).then(|| start.to_string()),
+                Some(thread_status(&thread)),
             ))
         }
-        Err(error) => Err(error),
+        Err(error) => Err(read_error(error)),
     }
+}
+fn read_error(error: anyhow::Error) -> anyhow::Error {
+    if missing_rollout(&error) {
+        error.context("目标电脑上的 Codex 没有找到这条会话的历史记录。请先在目标电脑的 Codex 中打开同一条会话，再回到网页重试。（no rollout）")
+    } else {
+        error
+    }
+}
+fn missing_rollout(error: &anyhow::Error) -> bool {
+    error
+        .root_cause()
+        .to_string()
+        .to_ascii_lowercase()
+        .contains("no rollout")
 }
 fn unsupported_method(error: &anyhow::Error) -> bool {
     let error = error.to_string().to_ascii_lowercase();
@@ -331,6 +579,55 @@ fn unsupported_method(error: &anyhow::Error) -> bool {
         || error.contains("unknown method")
         || error.contains("method not found")
         || error.contains("unsupported-method")
+        || error.contains("unsupportedmethod")
+        || error.contains("unsupported method")
+}
+
+pub(super) async fn subscribe(
+    state: &SharedState,
+    scope: &Scope,
+    target: &CodexTarget,
+) -> Result<()> {
+    let subscribed = state
+        .remote_sessions
+        .feeds
+        .lock()
+        .await
+        .get(scope)
+        .is_some_and(|f| f.source.as_ref() == Some(target) && f.subscribed);
+    if !subscribed {
+        let response = request(
+            state,
+            target,
+            "thread/resume",
+            json!({"threadId":scope.session,"excludeTurns":true}),
+        )
+        .await?;
+        ensure!(
+            response.pointer("/thread/id").and_then(Value::as_str) == Some(scope.session.as_str()),
+            "Codex 未确认恢复所选会话，请刷新后重试"
+        );
+        if let Some(feed) = state.remote_sessions.feeds.lock().await.get_mut(scope)
+            && feed.source.as_ref() == Some(target)
+        {
+            feed.subscribed = true;
+            if let Some(cwd) = native_cwd(&response["thread"]) {
+                feed.session_cwd = Some(cwd);
+            }
+        }
+        if waiting(&response["thread"]["status"]) {
+            state
+                .remote_sessions
+                .publish(
+                    scope,
+                    "turn.updated",
+                    None,
+                    json!({"status":"waiting_approval"}),
+                )
+                .await;
+        }
+    }
+    Ok(())
 }
 pub(super) async fn send(state: &SharedState, scope: &Scope, input: &TurnRequest) -> Result<Value> {
     let target = target(state, &scope.client).await?;
@@ -347,11 +644,20 @@ pub(super) async fn send(state: &SharedState, scope: &Scope, input: &TurnRequest
             .is_none(),
         "此会话正在通过聊天接入执行，请先完成当前任务"
     );
-    let thread = read_thread(state, &target, &scope.session).await?;
-    ensure!(
-        thread_status(&thread) != "running",
-        "此会话正在目标客户端执行，请先完成或停止"
-    );
+    let fresh = state
+        .remote_sessions
+        .feeds
+        .lock()
+        .await
+        .get(scope)
+        .is_some_and(|f| f.source.as_ref() == Some(&target) && f.awaiting_first_turn);
+    if !fresh {
+        let thread = read_thread(state, &target, &scope.session, false).await?;
+        ensure!(
+            !matches!(thread_status(&thread), "running" | "waiting_approval"),
+            "此会话正在目标客户端执行，请先完成或停止"
+        );
+    }
     if let Some(model) = input.model.as_deref().filter(|m| !m.is_empty()) {
         let available = models(state, &target).await?;
         let selected = available
@@ -367,13 +673,7 @@ pub(super) async fn send(state: &SharedState, scope: &Scope, input: &TurnRequest
             );
         }
     }
-    request(
-        state,
-        &target,
-        "thread/resume",
-        json!({"threadId":scope.session,"excludeTurns":true}),
-    )
-    .await?;
+    subscribe(state, scope, &target).await?;
     let attachments = files::selected(state, scope, &input.attachment_ids).await?;
     let mut items = Vec::new();
     if !input.text.trim().is_empty() {
@@ -395,13 +695,19 @@ pub(super) async fn send(state: &SharedState, scope: &Scope, input: &TurnRequest
     }
     let pending_files = files::mark_sent(state, scope, &input.attachment_ids).await?;
     let response = match request(state, &target, "turn/start", params).await {
-        Ok(response) => response,
+        Ok(response) => {
+            clear_first_turn(state, scope, &target).await;
+            response
+        }
         Err(error) => {
             let error = super::unconfirmed(error);
             if error.downcast_ref::<super::UnconfirmedWrite>().is_none() {
                 files::restore_pending(state, scope, &pending_files)
                     .await
                     .context("请求被拒绝，附件状态未能恢复")?;
+            } else {
+                // The native write may have happened even without a receipt.
+                clear_first_turn(state, scope, &target).await;
             }
             return Err(error);
         }
@@ -418,13 +724,21 @@ pub(super) async fn send(state: &SharedState, scope: &Scope, input: &TurnRequest
         .await;
     Ok(reply)
 }
+
+async fn clear_first_turn(state: &SharedState, scope: &Scope, target: &CodexTarget) {
+    if let Some(feed) = state.remote_sessions.feeds.lock().await.get_mut(scope)
+        && feed.source.as_ref() == Some(target)
+    {
+        feed.awaiting_first_turn = false;
+    }
+}
 pub(super) async fn stop(
     state: &SharedState,
     scope: &Scope,
     requested: Option<&str>,
 ) -> Result<Value> {
     let target = target(state, &scope.client).await?;
-    let (turns, _) = turn_page(
+    let (turns, _, _) = turn_page(
         state,
         &target,
         &scope.session,
@@ -456,7 +770,7 @@ pub(super) async fn stop(
     )
     .await?;
     for _ in 0..20 {
-        let (turns, _) = turn_page(
+        let (turns, _, _) = turn_page(
             state,
             &target,
             &scope.session,
@@ -497,7 +811,18 @@ pub(super) async fn stop(
         .await;
     Ok(json!({"status":"stopping"}))
 }
-fn thread_status(thread: &Value) -> &str {
+fn waiting(status: &Value) -> bool {
+    status["type"] == "active"
+        && status["activeFlags"].as_array().is_some_and(|flags| {
+            flags
+                .iter()
+                .any(|f| matches!(f.as_str(), Some("waitingOnApproval" | "waitingOnUserInput")))
+        })
+}
+fn thread_status(thread: &Value) -> &'static str {
+    if waiting(&thread["status"]) {
+        return "waiting_approval";
+    }
     if thread["turns"].as_array().into_iter().flatten().any(|t| {
         matches!(
             t["status"].as_str(),
@@ -523,24 +848,45 @@ pub(super) fn normalize_status(status: &str) -> &str {
     }
 }
 
-async fn normalize_item(state: &SharedState, scope: &Scope, item: &Value) -> Result<Value> {
+async fn normalize_item(
+    state: &SharedState,
+    scope: &Scope,
+    item: &Value,
+    cwd: Option<&Path>,
+    completed: bool,
+) -> Result<Value> {
     let id = item["id"].as_str().unwrap_or("native-item");
     let native = item["type"].as_str().unwrap_or("unknown");
+    if matches!(
+        native,
+        "hookPrompt" | "contextCompaction" | "developerMessage" | "systemMessage"
+    ) || item.pointer("/metadata/is_visually_hidden_from_conversation")
+        == Some(&Value::Bool(true))
+        || item.pointer("/metadata/is_visually_hidden_reasoning_group") == Some(&Value::Bool(true))
+    {
+        return Ok(
+            json!({"id":id,"type":"internal","role":"system","text":"","data":{"nativeType":native}}),
+        );
+    }
     let (role, kind) = match native {
         "userMessage" => ("user", "message"),
+        "agentMessage" if item["phase"] == "commentary" => ("assistant", "progress"),
         "agentMessage" => ("assistant", "message"),
         "reasoning" => ("assistant", "reasoning"),
         "fileChange" => ("tool", "fileChange"),
         _ => ("tool", "tool"),
     };
-    let text = match native {
-        "userMessage" => item["content"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|p| p["text"].as_str())
-            .collect::<Vec<_>>()
-            .join("\n"),
+    let mut text: String = match native {
+        "userMessage" => super::desktop_text::user_message(
+            item["content"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|p| p["type"] == "text")
+                .filter_map(|p| p["text"].as_str())
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ),
         "agentMessage" => item["text"].as_str().unwrap_or_default().into(),
         "reasoning" => item["summary"]
             .as_array()
@@ -570,8 +916,9 @@ async fn normalize_item(state: &SharedState, scope: &Scope, item: &Value) -> Res
         if part["type"] == "localImage"
             && let Some(path) = part["path"].as_str()
         {
-            if let Some(file) =
-                files::associate(state, scope, Path::new(path), "attachment").await?
+            // A stale image or an unavailable file index must not hide the transcript.
+            if let Ok(Some(file)) =
+                files::associate(state, scope, Path::new(path), "attachment").await
             {
                 attached.push(file);
             }
@@ -579,14 +926,25 @@ async fn normalize_item(state: &SharedState, scope: &Scope, item: &Value) -> Res
     }
     for change in item["changes"].as_array().into_iter().flatten() {
         if let Some(path) = change["path"].as_str() {
-            if let Some(file) = files::associate(state, scope, Path::new(path), "artifact").await? {
+            if let Ok(Some(file)) =
+                files::associate(state, scope, Path::new(path), "artifact").await
+            {
+                attached.push(file);
+            }
+        }
+    }
+    if role == "assistant" && kind == "message" && completed {
+        let (projected, files) = files::project_links(state, scope, cwd, &text).await;
+        text = projected;
+        for file in files {
+            if !attached.iter().any(|f| f.id == file.id) {
                 attached.push(file);
             }
         }
     }
     Ok(
         json!({"id":id,"role":role,"type":kind,"text":text,"status":item["status"],"files":attached,
-        "data":{"nativeType":native,"command":item["command"],"exitCode":item["exitCode"],"tool":item["tool"],
+        "data":{"nativeType":native,"phase":item["phase"],"command":item["command"],"exitCode":item["exitCode"],"tool":item["tool"],
             "changes":item["changes"],"server":item["server"]}}),
     )
 }
@@ -614,6 +972,12 @@ pub(crate) async fn observe(
         .as_str()
         .or_else(|| params["thread_id"].as_str())
         .or_else(|| params.pointer("/thread/id").and_then(Value::as_str))
+        .or_else(|| params.pointer("/turn/threadId").and_then(Value::as_str))
+        .or_else(|| {
+            matches!(method, "execCommandApproval" | "applyPatchApproval")
+                .then(|| params["conversationId"].as_str())
+                .flatten()
+        })
     else {
         return;
     };
@@ -632,7 +996,7 @@ pub(crate) async fn observe(
             .find(|t| t.epoch == epoch && t.client_id == client_id && t.stream_id == stream_id)
         {
             let scope = Scope::new(&target.id, session);
-            let id = format!("codex-{epoch}-{}", request_id.to_string().trim_matches('"'));
+            let id = approval_id(epoch, request_id);
             public["id"] = id.clone().into();
             state
                 .remote_sessions
@@ -671,7 +1035,7 @@ pub(crate) async fn observe(
         if let Some(request_id) = message.get("id") {
             let public = public_approval(method, params);
             if let Some(mut public) = public {
-                let id = format!("codex-{epoch}-{}", request_id.to_string().trim_matches('"'));
+                let id = approval_id(epoch, request_id);
                 public["id"] = id.clone().into();
                 state
                     .remote_sessions
@@ -691,16 +1055,85 @@ pub(crate) async fn observe(
             continue;
         }
         match method {
+            "thread/closed" => {
+                if let Some(feed) = state.remote_sessions.feeds.lock().await.get_mut(&scope)
+                    && feed.source.as_ref() == Some(&target)
+                {
+                    feed.subscribed = false;
+                    feed.awaiting_first_turn = false;
+                }
+            }
+            "thread/status/changed"
+                if params.pointer("/status/type").and_then(Value::as_str) == Some("active") =>
+            {
+                clear_first_turn(state, &scope, &target).await;
+                let has_card = !state.remote_sessions.snapshot(&scope).await.2.is_empty();
+                state.remote_sessions.publish(&scope,"turn.updated",None,json!({
+                    "status":if has_card || waiting(&params["status"]) {"waiting_approval"} else {"running"}
+                })).await;
+            }
+            "thread/status/changed"
+                if params.pointer("/status/type").and_then(Value::as_str) == Some("idle") =>
+            {
+                // Only native request resolution or turn completion can dismiss an actionable card.
+                let (status, _, cards, _) = state.remote_sessions.snapshot(&scope).await;
+                if status == "waiting_approval" && cards.is_empty() {
+                    state
+                        .remote_sessions
+                        .publish(&scope, "turn.updated", None, json!({"status":"idle"}))
+                        .await;
+                }
+            }
             "item/agentMessage/delta"
             | "item/commandExecution/outputDelta"
+            | "item/fileChange/outputDelta"
             | "item/reasoning/summaryTextDelta" => {
                 let item = params["itemId"].as_str().map(str::to_owned);
-                state.remote_sessions.publish(&scope,"message.delta",item,json!({"text":params["delta"],
+                let kind = {
+                    let feeds = state.remote_sessions.feeds.lock().await;
+                    let prior = feeds.get(&scope).and_then(|feed| {
+                        feed.events.iter().rev().find(|event| {
+                            item.is_some()
+                                && event.item_id == item
+                                && matches!(event.kind.as_str(), "item.updated" | "message.delta")
+                        })
+                    });
+                    match prior
+                        .and_then(|e| e.data.pointer("/item/type").or_else(|| e.data.get("type")))
+                        .and_then(Value::as_str)
+                    {
+                        Some("internal") => continue,
+                        _ if method == "item/reasoning/summaryTextDelta" => "reasoning",
+                        _ if method == "item/fileChange/outputDelta" => "fileChange",
+                        _ if method == "item/commandExecution/outputDelta" => "tool",
+                        Some("progress") => "progress",
+                        _ if params["phase"] == "commentary" => "progress",
+                        _ => "message",
+                    }
+                };
+                state
+                    .remote_sessions
+                    .publish(
+                        &scope,
+                        "message.delta",
+                        item,
+                        json!({"text":params["delta"],
                     "role":if method.contains("commandExecution") {"tool"} else {"assistant"},
-                    "type":if method.contains("reasoning") {"reasoning"} else if method.contains("commandExecution") {"tool"} else {"message"}})).await;
+                    "type":kind}),
+                    )
+                    .await;
             }
             "item/started" | "item/completed" => {
-                if let Ok(item) = normalize_item(state, &scope, &params["item"]).await {
+                let cwd = remembered_cwd(state, &scope, &target).await;
+                if let Ok(item) = normalize_item(
+                    state,
+                    &scope,
+                    &params["item"],
+                    cwd.as_deref(),
+                    method == "item/completed",
+                )
+                .await
+                {
                     state
                         .remote_sessions
                         .publish(
@@ -713,6 +1146,7 @@ pub(crate) async fn observe(
                 }
             }
             "turn/started" | "turn/completed" => {
+                clear_first_turn(state, &scope, &target).await;
                 let status = if method == "turn/started" {
                     "running"
                 } else {
@@ -741,7 +1175,7 @@ pub(crate) async fn observe(
             }
             "serverRequest/resolved" => {
                 if let Some(id) = params.get("requestId") {
-                    let id = format!("codex-{epoch}-{}", id.to_string().trim_matches('"'));
+                    let id = approval_id(epoch, id);
                     state.remote_sessions.resolve_approval(&scope, &id).await;
                 }
             }
@@ -765,6 +1199,10 @@ pub(crate) async fn observe(
         }
     }
 }
+fn approval_id(epoch: u64, id: &Value) -> String {
+    // JSON-RPC string "42" and number 42 are different requests.
+    format!("codex-{epoch}-{id}")
+}
 fn notification(method: &str, params: &Value) -> crate::codex::CodexNotification {
     crate::codex::CodexNotification {
         method: method.into(),
@@ -776,10 +1214,8 @@ fn notification(method: &str, params: &Value) -> crate::codex::CodexNotification
     }
 }
 fn public_approval(method: &str, params: &Value) -> Option<Value> {
-    if method == "item/tool/requestUserInput" {
-        let questions = params["questions"].as_array()?.iter().map(|q|json!({"id":q["id"],"prompt":q["question"],"required":true,
-            "options":q["options"].as_array().map(|o|o.iter().map(|o|json!({"value":o["label"],"label":o["label"]})).collect::<Vec<_>>())})).collect::<Vec<_>>();
-        return Some(json!({"type":"question","title":"需要你补充","questions":questions}));
+    if let Some(card) = prompts::view(method, params) {
+        return Some(card);
     }
     let view = crate::codex::approval_request_view(&notification(method, params))?;
     Some(
@@ -802,29 +1238,8 @@ pub(super) async fn approve(
         current == *target,
         "原确认连接已变化，请刷新会话等待新的确认"
     );
-    let response = if method == "item/tool/requestUserInput" {
-        let mut answers = serde_json::Map::new();
-        for question in params["questions"].as_array().context("追问格式不兼容")? {
-            let key = question["id"].as_str().context("追问缺少标识")?;
-            let value = &decision.answers[key];
-            let entries = if let Some(text) = value.as_str() {
-                vec![text.to_owned()]
-            } else {
-                value
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(Value::as_str)
-                    .map(str::to_owned)
-                    .collect()
-            };
-            ensure!(
-                decision.decision != "accept" || !entries.is_empty(),
-                "请填写或选择所有必填问题"
-            );
-            answers.insert(key.into(), json!({"answers":entries}));
-        }
-        json!({"answers":answers})
+    let response = if prompts::input(method) || method == "mcpServer/elicitation/request" {
+        prompts::response(method, params, decision)?
     } else {
         let view = crate::codex::approval_request_view(&notification(method, params))
             .context("此原生确认类型已不再可用")?;
@@ -870,9 +1285,15 @@ pub(super) async fn approve(
     .await
     .map_err(super::unconfirmed)?;
     state.remote_sessions.resolve_approval(scope, id).await;
+    let remaining = state.remote_sessions.snapshot(scope).await.2;
     state
         .remote_sessions
-        .publish(scope, "turn.updated", None, json!({"status":"running"}))
+        .publish(
+            scope,
+            "turn.updated",
+            None,
+            json!({"status":if remaining.is_empty() {"running"} else {"waiting_approval"}}),
+        )
         .await;
     Ok(())
 }

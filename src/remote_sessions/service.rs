@@ -1,7 +1,8 @@
 use anyhow::{Result, ensure};
 use serde_json::{Value, json};
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
+    path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
 use tokio::sync::{Mutex, broadcast};
@@ -12,6 +13,50 @@ use super::{
 };
 
 const EVENT_WINDOW: usize = 512;
+
+// Only target thread/list responses populate this in-memory index. A display
+// name may change; the connection id, epoch and native stream must still match.
+#[derive(Default)]
+pub(super) struct ListedWorkspaces(HashMap<String, (CodexTarget, HashSet<PathBuf>)>);
+impl ListedWorkspaces {
+    fn same_source(a: &CodexTarget, b: &CodexTarget) -> bool {
+        a.id == b.id
+            && a.epoch == b.epoch
+            && a.key == b.key
+            && a.client_id == b.client_id
+            && a.stream_id == b.stream_id
+    }
+    pub fn keep_sources(&mut self, targets: &[CodexTarget]) {
+        self.0
+            .retain(|_, (source, _)| targets.iter().any(|t| Self::same_source(t, source)));
+    }
+    pub fn remember<'a>(&mut self, target: &CodexTarget, paths: impl Iterator<Item = &'a str>) {
+        let (current, listed) = self
+            .0
+            .entry(target.id.clone())
+            .or_insert_with(|| (target.clone(), HashSet::new()));
+        if target.epoch < current.epoch {
+            return;
+        }
+        if !Self::same_source(current, target) {
+            *current = target.clone();
+            listed.clear();
+        }
+        listed.extend(
+            paths
+                .map(Path::new)
+                .filter(|p| p.is_absolute())
+                .map(Path::to_owned),
+        );
+    }
+    pub fn selected(&self, target: &CodexTarget, cwd: &Path) -> Option<&Path> {
+        let (current, listed) = self.0.get(&target.id)?;
+        Self::same_source(current, target)
+            .then(|| listed.get(cwd))
+            .flatten()
+            .map(PathBuf::as_path)
+    }
+}
 
 #[derive(Clone)]
 pub(super) enum ApprovalSource {
@@ -39,10 +84,14 @@ pub(super) struct Feed {
     pub status: String,
     pub turn_id: Option<String>,
     pub source: Option<CodexTarget>,
+    pub session_cwd: Option<PathBuf>,
     pub approvals: HashMap<String, PendingApproval>,
     pub requests: VecDeque<(String, Value)>,
     pub observer_running: bool,
     pub subscribed: bool,
+    /// A confirmed thread/start on this live connection; its rollout may not
+    /// exist until the first turn. Never infer this state from a read error.
+    pub awaiting_first_turn: bool,
 }
 impl Default for Feed {
     fn default() -> Self {
@@ -53,15 +102,18 @@ impl Default for Feed {
             status: "idle".into(),
             turn_id: None,
             source: None,
+            session_cwd: None,
             approvals: HashMap::new(),
             requests: VecDeque::new(),
             observer_running: false,
             subscribed: false,
+            awaiting_first_turn: false,
         }
     }
 }
 pub(crate) struct SessionService {
     pub(super) feeds: Mutex<HashMap<Scope, Feed>>,
+    pub(super) listed_workspaces: Mutex<ListedWorkspaces>,
     next_event: AtomicU64,
     pub(super) file_gate: Mutex<()>,
     // Pending JSON-RPC requests are not message history. Keep only the small
@@ -73,6 +125,7 @@ impl Default for SessionService {
     fn default() -> Self {
         Self {
             feeds: Mutex::new(HashMap::new()),
+            listed_workspaces: Mutex::default(),
             next_event: AtomicU64::new((crate::types::now_ms() as u64).saturating_mul(1000)),
             file_gate: Mutex::new(()),
             pending_native: Mutex::new(VecDeque::new()),
@@ -109,6 +162,8 @@ impl SessionService {
                 feed.status = "idle".into();
                 feed.turn_id = None;
                 feed.subscribed = false;
+                feed.session_cwd = None;
+                feed.awaiting_first_turn = false;
             }
             feed.source = Some(source);
         }

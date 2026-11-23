@@ -1,0 +1,70 @@
+<view class="page" style="font-size:{{font}}px">
+  <view class="title">个人充值</view>
+  <block wx:if="{{order}}">
+    <view class="group pad">
+      <view class="sub">订单状态</view>
+      <view class="big">{{order.label}}</view>
+      <view class="sub">订单 {{order.id}}</view>
+      <view wx:if="{{order.credit!=null}}" class="section">
+        到账金额　¥{{order.credit}}
+      </view>
+    </view>
+    <block wx:if="{{order.state==='pending'}}">
+      <button class="primary" bindtap="status" disabled="{{working}}">
+        核对到账
+      </button>
+      <button
+        wx:if="{{canPay}}"
+        class="action"
+        bindtap="pay"
+        disabled="{{working}}"
+      >
+        继续原订单付款
+      </button>
+    </block>
+    <button wx:else class="primary" bindtap="done">完成</button>
+  </block>
+  <block wx:elif="{{uncertain}}">
+    <view class="note">上一次下单结果待核对。</view>
+    <button class="primary" bindtap="pay" disabled="{{working || !canPay}}">
+      恢复原订单
+    </button>
+    <button class="action" bindtap="done" disabled="{{working}}">
+      放弃未付款的报价，重新选金额
+    </button>
+  </block>
+  <block wx:else>
+    <view class="caption">选择金额</view>
+    <view class="group">
+      <button
+        class="row"
+        wx:for="{{amounts}}"
+        wx:key="*this"
+        data-index="{{index}}"
+        bindtap="select"
+        disabled="{{!canPay || working}}"
+      >
+        <text class="grow">¥{{item}}</text>
+        <text wx:if="{{amount===item}}" class="accent">✓</text>
+      </button>
+    </view>
+    <view class="note" wx:if="{{!canPay}}">此平台暂未开通小程序充值。</view>
+    <block wx:if="{{quote}}">
+      <view class="caption">本次充值</view>
+      <view class="group">
+        <view class="row">
+          <text class="grow">应付金额</text>
+          <text class="strong">¥{{quote.payable}}</text>
+        </view>
+        <view class="row">
+          <text class="grow">预计到账</text>
+          <text>¥{{quote.credit}}</text>
+        </view>
+      </view>
+      <button class="primary" bindtap="pay" disabled="{{!canPay || working}}">
+        {{preview?'模拟付款':'付款'}} ¥{{quote.payable}}
+      </button>
+    </block>
+  </block>
+  <view wx:if="{{error}}" class="error">{{error}}</view>
+</view>

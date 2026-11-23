@@ -298,16 +298,19 @@ async fn refresh_models_in_home(
             config.ai_gateway.codex_visible_models.clone(),
         )
     };
-    match codex_app_config::active_hub_has_cc_switch_catalog(home, &backend_url) {
-        Ok(true) => {
+    use codex_app_config::CatalogConnection;
+    match codex_app_config::prepare_model_catalog(home, &backend_url) {
+        Ok(CatalogConnection::CcSwitch) => {
             let message = "当前 Codex 仍使用 CC Switch 模型目录。请到接入设置更新 Hub 配置。";
             state
                 .push_event("warn", "codex_app_models_cc_switch_catalog", message)
                 .await;
             return skipped(false, "ccSwitchCatalog", message);
         }
-        Err(err) => return skipped(false, "configReadFailed", &err.to_string()),
-        Ok(false) => {}
+        Ok(CatalogConnection::NeedsSetup) => return skipped(false, "needsSetup", ""),
+        Ok(CatalogConnection::CustomCatalog) => return skipped(false, "customCatalog", ""),
+        Err(err) => return skipped(false, "catalogConfigFailed", &err.to_string()),
+        Ok(CatalogConnection::Ready) => {}
     }
     let cache_removed =
         match codex_app_config::clear_codex_models_cache(home.map(ToOwned::to_owned)) {
@@ -349,6 +352,11 @@ async fn refresh_models_in_home(
                 );
             };
             let count = models.len();
+            let missing = match check_runtime_selection(&selected, models, &value["nextCursor"]) {
+                RuntimeSelection::Incomplete => return skipped(cache_removed, "incompleteModelList", ""),
+                RuntimeSelection::Missing(id) => Some(id),
+                RuntimeSelection::Confirmed => None,
+            };
             state
                 .push_event(
                     "info",
@@ -358,7 +366,7 @@ async fn refresh_models_in_home(
                 .await;
             Json(
                 json!({ "ok": true, "cacheRemoved": cache_removed, "modelListRefreshed": true,
-                "count": count, "missingModel": first_missing_model(&selected, models, &value["nextCursor"]) }),
+                "count": count, "missingModel": missing }),
             )
         }
         Err(err) => {
@@ -376,14 +384,21 @@ async fn refresh_models_in_home(
 
 // Compare only a complete, identifiable page. Include both protocol ID forms;
 // neither the runtime nor Hub can observe a desktop picker's rendered contents here.
-fn first_missing_model<'a>(
+#[derive(Debug, PartialEq, Eq)]
+enum RuntimeSelection<'a> {
+    Confirmed,
+    Missing(&'a str),
+    Incomplete,
+}
+
+fn check_runtime_selection<'a>(
     selected: &'a [String],
     models: &[serde_json::Value],
     cursor: &serde_json::Value,
-) -> Option<&'a str> {
+) -> RuntimeSelection<'a> {
     use std::collections::HashSet;
-    if selected.is_empty() || models.is_empty() || !cursor.is_null() {
-        return None;
+    if !cursor.is_null() {
+        return RuntimeSelection::Incomplete;
     }
     let mut known = HashSet::new();
     for row in models {
@@ -393,13 +408,15 @@ fn first_missing_model<'a>(
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .peekable();
-        ids.peek()?;
+        if ids.peek().is_none() {
+            return RuntimeSelection::Incomplete;
+        }
         known.extend(ids.map(str::to_ascii_lowercase));
     }
     selected
         .iter()
         .find(|id| !known.contains(&id.to_ascii_lowercase()))
-        .map(String::as_str)
+        .map_or(RuntimeSelection::Confirmed, |id| RuntimeSelection::Missing(id))
 }
 
 #[cfg(test)]
@@ -408,30 +425,31 @@ mod refresh_tests {
 
     #[test]
     fn runtime_missing_models_require_a_complete_identifiable_page() {
+        use RuntimeSelection::*;
         let selected = vec!["first".into(), "second".into()];
         let rows = [json!({"id":"opaque", "model":"FIRST"})];
         assert_eq!(
-            first_missing_model(&selected, &rows, &json!(null)),
-            Some("second")
+            check_runtime_selection(&selected, &rows, &json!(null)), Missing("second")
         );
-        assert_eq!(first_missing_model(&selected, &rows, &json!("next")), None);
+        assert_eq!(check_runtime_selection(&selected, &rows, &json!("next")), Incomplete);
         assert_eq!(
-            first_missing_model(
+            check_runtime_selection(
                 &selected,
                 &[rows[0].clone(), json!({"displayName":"Second"})],
                 &json!(null)
             ),
-            None
+            Incomplete
         );
         assert_eq!(
-            first_missing_model(
+            check_runtime_selection(
                 &selected,
                 &[rows[0].clone(), json!({"id":"second"})],
                 &json!(null)
             ),
-            None
+            Confirmed
         );
-        assert_eq!(first_missing_model(&selected, &[], &json!(null)), None);
+        assert_eq!(check_runtime_selection(&selected, &[], &json!(null)), Missing("first"));
+        assert_eq!(check_runtime_selection(&[], &[], &json!(null)), Confirmed);
     }
 
     #[tokio::test]
@@ -478,6 +496,58 @@ http_headers = { x-openai-actor-authorization = "codexhub-local" }
         assert_eq!(result["cacheRemoved"], true);
         assert!(!cache.exists());
         assert_eq!(std::fs::read_to_string(catalog).unwrap(), "external list");
+    }
+
+    #[tokio::test]
+    async fn saved_catalog_retries_failed_client_config_and_serves_selection_from_disk() {
+        use axum::{body::{Body, to_bytes}, http::Request};
+        use tower::ServiceExt;
+        let fixture = tempfile::tempdir().unwrap();
+        let home = fixture.path().join("client");
+        std::fs::create_dir(&home).unwrap();
+        let hub_path = fixture.path().join("hub.toml");
+        let mut config = crate::config::AppConfig {
+            bind: "127.0.0.1:3847".into(), state_path: fixture.path().join("state.json"),
+            ..Default::default()
+        };
+        config.ai_gateway.enabled = true;
+        config.ai_gateway.codex_visible_models = vec!["gpt-6.2-astra".into(), "gpt-6.2-sol".into()];
+        config.save(&hub_path).unwrap();
+        let state = crate::app_state::AppState::new(
+            hub_path.clone(), crate::config::AppConfig::load_or_default(&hub_path).unwrap(), None, None
+        );
+        let client_file = home.join("config.toml");
+        let backup = home.join("config.toml.bak");
+        let original = r#"model_provider = "ai-gateway"
+model = "keep-my-default"
+[model_providers.ai-gateway]
+name = "ai-gateway"
+base_url = "http://127.0.0.1:3847/ai-gateway/v1"
+wire_api = "responses"
+requires_openai_auth = false
+http_headers = { x-openai-actor-authorization = "codexhub-local" }
+"#;
+        std::fs::write(&client_file, original).unwrap();
+        std::fs::create_dir(&backup).unwrap(); // Make the existing atomic backup writer fail.
+        let Json(failed) = refresh_models_in_home(&state, Some(&home)).await;
+        assert_eq!(failed["reason"], "catalogConfigFailed");
+        assert_eq!(failed["modelListRefreshed"], false);
+        assert_eq!(std::fs::read_to_string(&client_file).unwrap(), original);
+        std::fs::remove_dir(&backup).unwrap();
+        let Json(retried) = refresh_models_in_home(&state, Some(&home)).await;
+        assert_eq!(retried["reason"], "disconnected");
+        let saved: toml::Value = toml::from_str(&std::fs::read_to_string(&client_file).unwrap()).unwrap();
+        assert_eq!(saved["model"].as_str(), Some("keep-my-default"));
+        assert_eq!(saved["features"]["api_key_model_discovery"].as_bool(), Some(true));
+        let url = saved["model_providers"]["ai-gateway"]["model_catalog_url"].as_str().unwrap();
+        let path = url.strip_prefix("http://127.0.0.1:3847").unwrap();
+        let app = axum::Router::new().nest("/ai-gateway", crate::ai_gateway::router()).with_state(state);
+        let response = app.oneshot(Request::get(path).body(Body::empty()).unwrap()).await.unwrap();
+        assert!(response.status().is_success());
+        let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let catalog: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let ids: Vec<_> = catalog["models"].as_array().unwrap().iter().map(|m| m["slug"].as_str().unwrap()).collect();
+        assert_eq!(ids, ["gpt-6.2-astra", "gpt-6.2-sol"]);
     }
 }
 

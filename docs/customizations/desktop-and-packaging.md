@@ -1,5 +1,25 @@
 # 天才空间品牌、桌面行为与交付
 
+## V1.0.60 Windows 开机启动
+
+在 Hub「设置 → 启动与集成」勾选「开机启动 Hub」，当前 Windows 账户下次登录时会打开桌面主界面。初次安装默认关闭。开关立即写入并重新读取当前用户的 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\TianCaiSpaceHub`。命令使用带双引号的完整程序路径和 `gui` 参数，可识别路径中的中文与空格。Hub 直接从 Windows 读取状态，设置文件无需迁移。[Microsoft 登录启动项说明](https://learn.microsoft.com/en-us/windows/win32/setupapi/run-and-runonce-registry-keys)
+
+按原路径升级后开关沿用原状态。移动程序后，设置页提示启动项仍指向旧位置，勾选可更新路径。用户在 Windows 启动应用中禁用 Hub 后，回到 Hub 会看到系统停用提示。可在 Windows「设置 → 应用 → 启动」重新开启。读取或写入失败时，界面显示具体原因。[注册及范围核对](../../src/windows_startup.rs) · [设置控件](../../src/gui/preferences/startup.rs)
+
+取消勾选可撤销此用户的选项。正式卸载时，MSI 在移除 EXE 前清理卸载账户中指向该 EXE 的同名项。升级跳过这一步。其他 Windows 账户管理各自的登录启动项。测试在临时注册表子键模拟默认状态、路径变更、系统停用及卸载归属。Windows 实际注销登录和安装卸载由用户验收。
+
+## V1.0.59 Windows 升级时关闭 Hub
+
+2026-11-20（北京时间），用户反馈安装器的“关闭应用程序，然后尝试将其重新启动”始终不能关闭 Hub。该文字来自 WiX 默认的 `MsiRMFilesInUse`，本身不能证明出现了重启循环；原包未设置退出超时兜底或禁止重启属性。Hub 的 GUI 和通过同一 EXE 启动的无窗口 `daemon` 都会占用安装文件，单纯隐藏主窗口不能释放占用。
+
+当前 Windows MSI 使用 `MSIRMSHUTDOWN=1`：Restart Manager 先发正常退出通知，超时后可以结束仍不响应的文件占用进程；`MSIDISABLERMRESTART=1` 禁止安装后由 Restart Manager 自动重开。作用范围由 Windows 按实际安装文件占用判断，不新增按同名进程扫描／批量 taskkill。保留 Hub 已有的系统结束会话处理：允许 query，确认结束时设置 closing、停止自有后台；普通 × 仍隐藏到托盘。
+
+文件占用页明确写“关闭应用程序并继续安装”，默认选中关闭，保留“暂不关闭”和取消；暂不关闭时仍可能需要重启电脑。开始页提醒先保存尚未保存的编辑；安装成功页的“完成”只结束安装，只有主动点击“打开 TianCaiSpaceHub”才打开新版。Restart Manager 不可用、被系统策略禁用、权限不足或跨 Windows 登录会话时仍由系统报告未释放占用，不能把静态检查当作所有现场条件已验证。
+
+关键入口：[WXS](../../packaging/windows/TianCaiSpaceHub.wxs)、[中文文案](../../packaging/windows/installer.zh-CN.wxl)、[MSI 表核验](../../scripts/verify-windows-msi.ps1)、[GUI 结束会话](../../src/gui.rs)、[自有后台退出](../../src/gui/daemon.rs)。复用 WiX 标准文件占用窗口，通过 `-loc` 覆盖文案；本地脚本和正式 Windows Actions 共用该 WXS、本地化文件与核验脚本。本批实际 MSI 的关闭属性、中文选项、进程列表绑定、默认选择及按钮事件检查已通过；既有升级、版本及五项载荷检查同样通过，真实升级仍待用户验收。
+
+本次不改用户配置、配对或客户端状态。回退安装器源码会恢复旧的关闭与重启策略；若用旧包安装，先从托盘“退出”旧 Hub。官方语义参考：[MSIRMSHUTDOWN](https://learn.microsoft.com/en-us/windows/win32/msi/msirmshutdown)、[MSIDISABLERMRESTART](https://learn.microsoft.com/en-us/windows/win32/msi/msidisablermrestart)、[RM_APP_TYPE](https://learn.microsoft.com/en-us/windows/win32/api/restartmanager/ne-restartmanager-rm_app_type)。本批 release、唯一新 MSI 及用户实际升级结果分别见 [V1.0.59 交付](../releases/v1.0.59.md)；macOS 不涉及 Windows Installer，本轮未构建或验收。
+
 ## V1.0.36 ChatGPT / Codex 模型测试
 
 Windows 数字文件版本为 1.0.36.0，沿用原安装目录与 UpgradeCode，支持从 V1.0.35 覆盖升级。该批只有一个本地 x64 MSI，未发布到自动更新渠道。包身份和测试清单见 [V36 交付](../releases/v1.0.36.md)。

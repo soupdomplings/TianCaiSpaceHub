@@ -58,7 +58,7 @@ V1.0.11 模型操作固定底部，可选字段按客户端/路线展示，WebSt
 
 七端“添加模型”在当前已有列表末尾创建唯一“新建模型”内存草稿，直接使用本端完整配置编辑；保存才创建独立条目，切换不自动保存，放弃不写文件。WB/天工沿原参数编辑器，Codex 同列表选择已有可见模型或新建项，保留渠道勾选；新四端仍用共用参数表单。来源同步显式选择，草稿 revision 独立于后台刷新，切回保留全部未保存输入。具体字段与原接口见 [客户端专题](desktop-client-adapters.md)。统计短窗默认趋势、可切分布，无整页滚动和请求按钮；图表、分布及原日志下钻保留。
 
-Dumpling-MCP 保持环境、NVWA 三种认证、prepare/apply/detect/restore 和原授权；通用 MCP 不把它简化为任意地址表单。维护代码：`src/gui/{overview,clients,resources,mcp_editor}.rs`、`src/desktop/`、`src/web/desktop*.rs`。兼容/撤销/平台边界见实施记录。
+Dumpling-MCP 保持环境、NVWA 三种认证、prepare/apply/detect/restore 和原授权；通用 MCP 不把它简化为任意地址表单。Windows 侧栏「共用能力」中，[XshellB-MCP](xshellb-mcp.md) 位于「聊天接入」正上方，可为所选本机客户端配置，并将内置脚本启动到已登录的 Xshell 8 标签页。维护代码：`src/gui/{overview,clients,resources,mcp_editor}.rs`、`src/desktop/`、`src/web/desktop*.rs`。兼容/撤销/平台边界见实施记录。
 
 ## V1.0.6 模型与公共 Skill
 

@@ -101,11 +101,16 @@ try {
         ProductLanguage = '1033'
         ProductVersion = $expectedProductVersion
         REINSTALLMODE = 'emus'
+        MSIRMSHUTDOWN = '1'
+        MSIDISABLERMRESTART = '1'
     }
     foreach ($name in $expectedProperties.Keys) {
         if ($properties[$name] -cne $expectedProperties[$name]) {
             $problems.Add("MSI property '$name' must be '$($expectedProperties[$name])'; got '$($properties[$name])'.")
         }
+    }
+    if ($properties['MSIRESTARTMANAGERCONTROL'] -in @('Disable', 'DisableShutdown')) {
+        $problems.Add('MSI must retain Restart Manager shutdown for installed-file holders.')
     }
 
     $files = @(Read-MsiTable $database 'File' @('File', 'FileName', 'FileSize', 'Version'))
@@ -159,6 +164,7 @@ try {
     foreach ($expectedDialog in @(
         @{ Id = $readyDialogId; Default = 'Install'; Cancel = 'Cancel' },
         @{ Id = $successDialogId; Default = 'Finish'; Cancel = 'Finish' }
+        @{ Id = 'MsiRMFilesInUse'; Default = 'OK'; Cancel = 'Cancel' }
     )) {
         $matchingDialogs = @($dialogs | Where-Object { $_.Dialog -ceq $expectedDialog.Id })
         if ($matchingDialogs.Count -ne 1 -or
@@ -168,18 +174,35 @@ try {
         }
     }
 
-    $controls = @(Read-MsiTable $database 'Control' @('Dialog_', 'Control', 'Type'))
+    $controls = @(Read-MsiTable $database 'Control' @('Dialog_', 'Control', 'Type', 'Property', 'Text'))
     $expectedButtons = @(
         @{ Dialog = $readyDialogId; Control = 'Install' },
         @{ Dialog = $readyDialogId; Control = 'Cancel' },
         @{ Dialog = $successDialogId; Control = 'Open' },
         @{ Dialog = $successDialogId; Control = 'Finish' }
+        @{ Dialog = 'MsiRMFilesInUse'; Control = 'OK' }
+        @{ Dialog = 'MsiRMFilesInUse'; Control = 'Cancel' }
     )
     foreach ($button in $expectedButtons) {
         $matchingControls = @($controls | Where-Object { $_.Dialog_ -ceq $button.Dialog -and $_.Control -ceq $button.Control })
         if ($matchingControls.Count -ne 1 -or $matchingControls[0].Type -cne 'PushButton') {
             $problems.Add("MSI '$($button.Dialog)/$($button.Control)' must exist once as a PushButton.")
         }
+    }
+    $rmList = @($controls | Where-Object { $_.Dialog_ -ceq 'MsiRMFilesInUse' -and $_.Control -ceq 'List' })
+    $rmOptions = @($controls | Where-Object { $_.Dialog_ -ceq 'MsiRMFilesInUse' -and $_.Control -ceq 'ShutdownOption' })
+    $rmText = @($controls | Where-Object { $_.Dialog_ -ceq 'MsiRMFilesInUse' -and $_.Control -ceq 'Text' })
+    if ($rmList.Count -ne 1 -or $rmList[0].Type -cne 'ListBox' -or $rmList[0].Property -cne 'FileInUseProcess' -or
+        $rmOptions.Count -ne 1 -or $rmOptions[0].Type -cne 'RadioButtonGroup' -or $rmOptions[0].Property -cne 'WixUIRMOption' -or
+        $properties['WixUIRMOption'] -cne 'UseRM' -or
+        $rmText.Count -ne 1 -or $rmText[0].Text -notlike '*不会自动重新打开*') {
+        $problems.Add('MSI files-in-use dialog must list registered holders, select close by default and describe no automatic relaunch.')
+    }
+    $rmButtons = @(Read-MsiTable $database 'RadioButton' @('Property', 'Value', 'Text') | Where-Object { $_.Property -ceq 'WixUIRMOption' })
+    if ($rmButtons.Count -ne 2 -or
+        @($rmButtons | Where-Object { $_.Value -ceq 'UseRM' -and $_.Text -ceq '关闭应用程序并继续安装(&C)。' }).Count -ne 1 -or
+        @($rmButtons | Where-Object { $_.Value -ceq 'DontUseRM' -and $_.Text -ceq '暂不关闭，文件替换可能需要重启电脑(&D)。' }).Count -ne 1) {
+        $problems.Add('MSI files-in-use options must match the close-only policy and retain the explicit do-not-close alternative.')
     }
 
     $uiSequence = @(Read-MsiTable $database 'InstallUISequence' @('Action', 'Condition', 'Sequence'))
@@ -218,6 +241,9 @@ try {
         @{ Dialog_ = $successDialogId; Control_ = 'Open'; Event = 'DoAction'; Argument = 'OpenTianCaiSpaceHub'; Condition = $successCondition; Ordering = '1' },
         @{ Dialog_ = $successDialogId; Control_ = 'Open'; Event = 'EndDialog'; Argument = 'Return'; Condition = '1'; Ordering = '2' },
         @{ Dialog_ = $successDialogId; Control_ = 'Finish'; Event = 'EndDialog'; Argument = 'Return'; Condition = '1'; Ordering = '1' }
+        @{ Dialog_ = 'MsiRMFilesInUse'; Control_ = 'OK'; Event = 'EndDialog'; Argument = 'Return'; Condition = '1'; Ordering = '1' }
+        @{ Dialog_ = 'MsiRMFilesInUse'; Control_ = 'OK'; Event = 'RMShutdownAndRestart'; Argument = '0'; Condition = 'WixUIRMOption~="UseRM"'; Ordering = '2' }
+        @{ Dialog_ = 'MsiRMFilesInUse'; Control_ = 'Cancel'; Event = 'EndDialog'; Argument = 'Exit'; Condition = '1'; Ordering = '1' }
     )
     foreach ($expectedEvent in $expectedEvents) {
         $matchingEvents = @($events | Where-Object {
@@ -237,17 +263,38 @@ try {
     }
     foreach ($button in $expectedButtons) {
         $buttonEvents = @($events | Where-Object { $_.Dialog_ -ceq $button.Dialog -and $_.Control_ -ceq $button.Control })
-        $expectedCount = if ($button.Control -ceq 'Open') { 2 } else { 1 }
+        $expectedCount = if ($button.Control -ceq 'Open' -or ($button.Dialog -ceq 'MsiRMFilesInUse' -and $button.Control -ceq 'OK')) { 2 } else { 1 }
         if ($buttonEvents.Count -ne $expectedCount) {
             $problems.Add("MSI '$($button.Dialog)/$($button.Control)' contains unexpected additional or missing events.")
         }
     }
     $launchEvents = @($events | Where-Object { $_.Event -ceq 'DoAction' -and $_.Argument -ceq 'OpenTianCaiSpaceHub' })
-    $executeSequence = @(Read-MsiTable $database 'InstallExecuteSequence' @('Action'))
+    $executeSequence = @(Read-MsiTable $database 'InstallExecuteSequence' @('Action', 'Condition', 'Sequence'))
     if ($launchEvents.Count -ne 1 -or $launchEvents[0].Dialog_ -cne $successDialogId -or $launchEvents[0].Control_ -cne 'Open' -or
         @($uiSequence | Where-Object { $_.Action -ceq 'OpenTianCaiSpaceHub' }).Count -ne 0 -or
         @($executeSequence | Where-Object { $_.Action -ceq 'OpenTianCaiSpaceHub' }).Count -ne 0) {
         $problems.Add('MSI launcher must run only when the user clicks Open on the successful completion page, never automatically in a sequence.')
+    }
+
+    $startupActionId = 'RemoveUserLoginStartup'
+    $startupActions = @(Read-MsiTable $database 'CustomAction' @('Action', 'Type', 'Source', 'Target') | Where-Object { $_.Action -ceq $startupActionId })
+    # Installed-file EXE (18), deferred (1024), ignore return (64), with user impersonation.
+    if ($startupActions.Count -ne 1 -or $startupActions[0].Type -cne '1106' -or
+        $startupActions[0].Source -cne 'TianCaiSpaceHubExe' -or $startupActions[0].Target -cne 'remove-login-startup') {
+        $problems.Add('MSI login-startup cleanup must invoke the installed EXE once, deferred and impersonated, without failing uninstall on its return code.')
+    }
+    $startupSequence = @($executeSequence | Where-Object { $_.Action -ceq $startupActionId })
+    $removeFilesSequence = @($executeSequence | Where-Object { $_.Action -ceq 'RemoveFiles' })
+    $initializeSequence = @($executeSequence | Where-Object { $_.Action -ceq 'InstallInitialize' })
+    if ($startupSequence.Count -ne 1 -or $removeFilesSequence.Count -ne 1 -or $initializeSequence.Count -ne 1 -or
+        $startupSequence[0].Condition -cne 'Installed AND REMOVE~="ALL" AND NOT UPGRADINGPRODUCTCODE' -or
+        [int]$startupSequence[0].Sequence -le [int]$initializeSequence[0].Sequence -or
+        [int]$startupSequence[0].Sequence -ge [int]$removeFilesSequence[0].Sequence) {
+        $problems.Add('MSI login-startup cleanup must run within the transaction before RemoveFiles, only on full uninstall and never during major upgrade.')
+    }
+    if (@($uiSequence | Where-Object { $_.Action -ceq $startupActionId }).Count -ne 0 -or
+        @($events | Where-Object { $_.Event -ceq 'DoAction' -and $_.Argument -ceq $startupActionId }).Count -ne 0) {
+        $problems.Add('MSI login-startup cleanup must not execute from the UI sequence or dialog events.')
     }
 } finally {
     try {
@@ -260,4 +307,4 @@ try {
 if ($problems.Count -gt 0) {
     throw ("Windows MSI static verification failed:`n - " + ($problems -join "`n - "))
 }
-Write-Output "Windows MSI static verification passed: TianCaiSpaceHub $fullVersion; EXE $expectedFileVersion; MSI $expectedProductVersion; legacy upgrade matching and confirmation/completion UI enabled."
+Write-Output "Windows MSI static verification passed: TianCaiSpaceHub $fullVersion; EXE $expectedFileVersion; MSI $expectedProductVersion; legacy upgrades, close-only Restart Manager policy, files-in-use, confirmation/completion UI and impersonated uninstall-only startup cleanup before RemoveFiles verified."

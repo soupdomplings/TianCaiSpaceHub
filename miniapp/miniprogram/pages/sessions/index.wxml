@@ -1,0 +1,71 @@
+<view class="page" style="font-size:{{font}}px">
+  <view class="title">{{name}}</view>
+  <view class="caption">客户端</view>
+  <view class="group">
+    <button
+      class="row"
+      wx:for="{{clients}}"
+      wx:key="id"
+      data-index="{{index}}"
+      bindtap="change"
+    >
+      <text class="grow">{{item.name}}</text>
+      <text class="sub">{{item.ready?'就绪':'未就绪'}}</text>
+      <text class="accent" wx:if="{{client.id===item.id}}">✓</text>
+    </button>
+  </view>
+  <view wx:if="{{client && !client.ready}}" class="note">
+    {{client.reason || '请在目标电脑启动客户端'}}
+  </view>
+  <block wx:if="{{client.ready}}">
+    <view class="caption">会话</view>
+    <view class="group">
+      <button
+        wx:for="{{sessions}}"
+        wx:key="id"
+        data-index="{{index}}"
+        class="row"
+        bindtap="open"
+      >
+        <text class="grow">{{item.title || '未命名会话'}}</text>
+        <text class="chev">›</text>
+      </button>
+      <view wx:if="{{!sessions.length}}" class="row sub">
+        {{loading?'正在读取…':'暂无会话'}}
+      </view>
+      <button class="action" wx:if="{{nextCursor}}" bindtap="more">
+        更早的会话
+      </button>
+    </view>
+    <button
+      class="primary"
+      wx:if="{{client.capabilities.create}}"
+      bindtap="projects"
+    >
+      新建会话
+    </button>
+  </block>
+  <view wx:if="{{createOpen}}" class="group section">
+    <view class="row strong">选择项目</view>
+    <button
+      class="row"
+      wx:for="{{projects}}"
+      wx:key="id"
+      data-index="{{index}}"
+      bindtap="create"
+    >
+      {{item.name || item.path}}
+    </button>
+    <view wx:if="{{!projects.length}}" class="row sub">
+      请先在目标电脑添加项目目录
+    </view>
+    <button wx:if="{{projectCursor}}" class="action" bindtap="moreProjects">
+      更多项目
+    </button>
+    <button class="action" bindtap="cancel">取消</button>
+  </view>
+  <view class="error" wx:if="{{error}}">
+    {{error}}
+    <button class="control" bindtap="refresh">重试</button>
+  </view>
+</view>

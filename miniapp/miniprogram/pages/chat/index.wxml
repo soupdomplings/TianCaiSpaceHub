@@ -1,0 +1,167 @@
+<view
+  class="screen"
+  style="font-size:{{font}}px;padding-bottom:{{keyHeight}}px"
+>
+  <view class="head tools">
+    <text class="sub">{{connection}}</text>
+    <button class="control" bindtap="showArtifacts">本会话产物</button>
+  </view>
+  <view class="display-source sub">{{displayManaged?'显示内容由会话所在电脑 Hub（发送端）的「远程连接 → 设置」统一管理。':'请更新会话所在电脑 Hub（发送端），在「远程连接 → 设置」管理显示内容。'}}</view>
+  <scroll-view
+    class="thread"
+    scroll-y
+    enhanced
+    scroll-into-view="{{anchor}}"
+    bindscroll="scroll"
+    bindscrolltolower="bottom"
+  >
+    <view class="page messages">
+      <button wx:if="{{nextCursor}}" class="control" bindtap="older">
+        更早的消息
+      </button>
+      <view
+        wx:for="{{items}}"
+        wx:key="id"
+        wx:for-index="row"
+        id="r{{row}}"
+        class="bubble {{item.role}}"
+      >
+        <view wx:if="{{item.title}}" class="sub">{{item.title}}</view>
+        <text selectable class="bodytext">{{item.text}}</text>
+        <button
+          wx:for="{{item.files}}"
+          wx:for-item="file"
+          wx:for-index="idx"
+          wx:key="id"
+          class="control"
+          data-row="{{row}}"
+          data-idx="{{idx}}"
+          bindtap="file"
+        >
+          下载 {{file.name}}
+        </button>
+      </view>
+      <view wx:if="{{waiting}}" class="note">请回目标电脑处理当前请求。</view>
+      <view wx:if="{{error}}" class="error">{{error}}</view>
+      <view id="end"></view>
+    </view>
+  </scroll-view>
+  <view class="bar">
+    <scroll-view scroll-y class="pending" wx:if="{{approvals.length}}">
+      <button
+        wx:for="{{approvals}}"
+        wx:key="id"
+        class="row request"
+        data-index="{{index}}"
+        bindtap="openForm"
+      >
+        <view class="grow">
+          <view class="sub">{{item.type==='question'?'待回答':'待审批'}}</view>
+          <view class="strong">{{item.title}}</view>
+        </view>
+        <text class="chev">›</text>
+      </button>
+    </scroll-view>
+    <view class="compose">
+      <textarea
+        class="input draft"
+        placeholder="发送消息"
+        maxlength="-1"
+        auto-height
+        adjust-position="{{false}}"
+        show-confirm-bar="{{false}}"
+        bindkeyboardheightchange="keyboard"
+        value="{{text}}"
+        bindinput="type"
+        aria-label="消息"
+      />
+      <button
+        wx:if="{{busy}}"
+        class="control"
+        bindtap="stop"
+        disabled="{{writing || !caps.stop || connection!=='已连接'}}"
+      >
+        停止
+      </button>
+      <button
+        wx:else
+        class="control"
+        bindtap="send"
+        disabled="{{!text || writing || !caps.send || connection!=='已连接'}}"
+      >
+        发送
+      </button>
+    </view>
+  </view>
+  <view wx:if="{{sheet}}" class="sheet-mask" bindtap="dismiss">
+    <view class="sheet" catchtap="noop">
+      <view class="head">
+        <text class="strong">
+          {{sheet==='artifacts'?'本会话产物':activeForm.title}}
+        </text>
+        <button class="control" bindtap="dismiss">收起</button>
+      </view>
+      <scroll-view class="sheet-scroll" scroll-y>
+        <block wx:if="{{sheet==='artifacts'}}">
+          <button class="row" wx:for="{{artifacts}}" wx:key="id" data-file-id="{{item.id}}" bindtap="file"><text class="grow">{{item.name}}</text><text class="accent">下载</text></button>
+          <view wx:if="{{!artifacts.length}}" class="note">当前已读取的消息没有产物。</view>
+        </block>
+        <block wx:elif="{{activeForm}}">
+          <view wx:if="{{activeForm.message}}" class="bodytext pad">
+            {{activeForm.message}}
+          </view>
+          <view wx:if="{{activeForm.desktopOnly}}" class="note">
+            请回目标电脑处理这项请求。
+          </view>
+          <view wx:elif="{{activeForm.submitted}}" class="note">
+            已提交，正在同步目标电脑。
+          </view>
+          <block wx:else>
+            <view
+              wx:for="{{activeForm.questions}}"
+              wx:for-index="q"
+              wx:for-item="question"
+              wx:key="id"
+              class="pad"
+            >
+              <view class="strong">{{question.prompt}}</view>
+              <button
+                wx:for="{{question.options}}"
+                wx:key="value"
+                wx:for-item="option"
+                wx:for-index="o"
+                data-q="{{q}}"
+                data-o="{{o}}"
+                class="row"
+                bindtap="choose"
+              >
+                <text class="grow">{{option.label}}</text>
+                <text wx:if="{{option.selected}}" class="accent">✓</text>
+              </button>
+              <input
+                wx:if="{{question.custom}}"
+                class="input"
+                value="{{question.typed}}"
+                data-q="{{q}}"
+                bindinput="custom"
+                placeholder="{{question.options.length?'或填写其他回答':'你的回答'}}"
+                aria-label="{{question.prompt}}"
+              />
+            </view>
+            <button
+              wx:for="{{activeForm.actions}}"
+              wx:key="value"
+              class="action"
+              data-index="{{index}}"
+              bindtap="respond"
+              disabled="{{answering || item.disabled}}"
+            >
+              {{item.label}}
+            </button>
+          </block>
+          <view wx:if="{{formError}}" class="error">{{formError}}</view>
+        </block>
+      </scroll-view>
+    </view>
+  </view>
+</view>

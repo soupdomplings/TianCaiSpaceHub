@@ -20,6 +20,8 @@
 
 ## 会话 API（camelCase JSON）
 
+V1.0.58：history 响应增加可选 `displayContent:{reasoning:bool,tool:bool,fileChange:bool,artifact:bool}`，SSE 每条事件的 `data.displayContent` 提供目标 Hub 在事件发出时的同一四项状态。缺失时客户端按全关处理，不沿用浏览器或手机本地偏好。实时 `liveActivity` 仍需订阅方声明能力，且目标端只附加被本机设置允许的分类；重播不包含过程片段。设置仅通过本机 `POST /api/remote-network/display-content` 写入，远程会话路由和手机 RPC 都不开放该写操作。保存后下一条实时事件生效，既有游标、分页、待办、文件下载与历史显示规则保持。
+
 统一错误 `{error:{code,message}}`，正文包含可读原因。`clientId` 是稳定运行端标识，`kind` 是 `codex` / `tiangong`。
 
 | 方法与路径 | 请求／响应 |
@@ -29,7 +31,8 @@
 | GET `/clients/{clientId}/projects?cursor=&limit=` | `{projects:[{id,name,path}],nextCursor?}`；客户端按项目 id 合并多页 |
 | GET `/clients/{clientId}/sessions?cursor=&limit=` | `{sessions:[{id,title,projectId?,cwd?,updatedAt,status,model?}],nextCursor?}` |
 | POST `/clients/{clientId}/sessions` | `{title?,projectId?,cwd?,model?}` → `{session}` |
-| GET `/clients/{clientId}/sessions/{sessionId}/history?cursor=&limit=` | `{items:[],nextCursor?,turnId?,status,approvals:[],cursor}`；items 按时间正序 |
+| GET `/clients/{clientId}/sessions/{sessionId}/history?cursor=&limit=` | `{items:[],nextCursor?,turnId?,status,approvals:[],cursor}`；items 按时间正序，网页每页请求 3 个原生轮次或消息 |
+| GET `/clients?view=summary`、GET `/clients/{clientId}/models` | 前者仅返回客户端能力与就绪状态并标记 `modelsDeferred`；后者按需返回该端的模型与模型／思考强度选择能力。旧网页的 `GET /clients` 保留原返回格式。 |
 | POST `/clients/{clientId}/sessions/{sessionId}/turns` | `{text,attachmentIds:[],model?,effort?,requestId}` → `{turnId,status}` |
 | POST `/clients/{clientId}/sessions/{sessionId}/stop` | `{turnId?}` → `{status}`；调用原生停止，不能以断订阅冒充 |
 | POST `/clients/{clientId}/sessions/{sessionId}/approvals/{approvalId}` | `{decision:accept\|decline\|cancel\|option:N,answers?:{}}` → `{status}`；优先使用返回 choices 的 value |
@@ -42,19 +45,25 @@
 
 `RemoteFile`: `{id,name,size,mimeType,url?,kind?:attachment|artifact}`；所有 url 为该会话下 API 相对路径。
 
-`RemoteApproval`: `{id,type:approval|question,title,message?,choices?:[{value,label}],questions?:[{id,prompt,options?:[{value,label}],required?}]}`。
+`RemoteApproval`: `{id,type:approval|question,title,message?,choices?:[{value,label}],questions?:[{id,prompt,options?:[{value,label}],required?,allowOther?,inputType?}]}`。问题及选项保留原请求标识；网页明确提交才答复对应原生请求。只有等待状态、没有送到 Hub 的原请求时，提示回目标客户端处理。
 
 能力键：`history,create,send,stop,approvals,questions,attachments,artifacts,modelSelection,effortSelection`（布尔值）。模型 `{id,name,efforts?:string[]}`，只采用运行端真实目录。
 
-`RemoteEvent`: `{id,type,clientId,sessionId,turnId?,itemId?,data}`；type：`message.delta`（data.text 增量、role/type 指明内容种类）、`item.updated`（data.item 完整项，data.completed 标明原生终项）、`turn.updated`（data.status/turnId）、`approval.requested`（data.approval）、`approval.resolved`（data.id）、`reset`（客户端重新获取快照）、`error`（data.code/message）。不自动重放发送请求。
+`RemoteEvent`: `{id,type,clientId,sessionId,turnId?,itemId?,data}`；type：`message.delta`（data.text 正文增量）、`item.updated`（data.item 完整项，data.completed 标明原生终项）、`turn.updated`（data.status/turnId）、`approval.requested`（data.approval）、`approval.resolved`（data.id）、`reset`（客户端重新获取快照）、`error`（data.code/message）、`cursor.advanced`（隐藏了过程，无显示内容；仍消费游标）。不自动重放发送请求。
+
+自 V1.0.53 起，目标端对远程 history 和 SSE（含重播）统一省略工具、思考、文件变更与已识别的过程状态。带已登记文件的过程项仅发可下载的文件信息，原生历史不变。没有可显示正文的一页仍保留 nextCursor、approvals 和运行状态。
 
 历史响应的事件 cursor 在开始读取原生内容前取得，避免跳过读取期间到达的事件。原生增量没有统一字符偏移，因此网页将快照中已有的 item id 作为基线：对这些项不直接重加 delta，而是合并刷新原生绝对内容；新项继续实时追加，原生终项直接替换。后台刷新保留期间收到的完整项、实时游标和已分页历史，不重新建立 SSE。发送和审批在接纳后由目标 Hub 独立任务执行，浏览器连接中断不取消执行或丢失结果记账。
 
 ## 管理 API
 
+V1.0.45：`POST /api/remote-network/workspace` 接受 `{path,remove?:bool}`，返回 `{workspaceDirs:string[]}`；`status` 同时返回该字段。仅目标端本机管理路由可写，移除只改清单。Codex 的 projects 首页合并本机添加目录和当前页原生 cwd，后续页沿用原生游标。新建仅接受本机添加或当前连接列出的目录。远程浏览器不枚举磁盘。历史 GET 与实时订阅独立；订阅失败不丢弃已读取的正文。
+
 网络模块在现有受信本地管理路由增加 `/api/remote-network`：GET `/status`；POST `/settings`（必填 enabled，及可选 deviceName、relayUrl）、`/create`、`/join`（code）、`/pair/approve`（requestId）、`/pair/reject`（requestId）、`/revoke`（deviceId）、`/open`（deviceId?，返回 url）。状态返回 enabled/runtimeReady/runtimeEmbedded/runtimeInstalled/runtimeVersion/networkReady/connected/networkName/deviceName/deviceId/relayUrl/devices/pendingPairings/pairing/browserUrl/lastError；create 另返回 code。
 
 `runtimeReady`／`runtimeEmbedded` 表示当前平台具有编译内置能力，不读取运行包或下载记录；`runtimeInstalled` 仅表示旧版 Hub 外置副本存在，不是内置启动条件。`networkReady` 是内置网络运行域及会话服务就绪，`connected` 是实际节点连接。设备的 online 和 connectionType 来自内置核心真实 PeerManager／路由，不能从启用或已配对推断。`browserUrl` 仅为本机基址，必须通过 `/open` 获取带入口票据的地址；票据在浏览器换成 HttpOnly Cookie 后从网址移除。
+
+V1.0.48：新浏览器首次打开的票据两分钟内可用一次，同一浏览器之后可收藏无票据地址。已有设备授权不设 TTL。浏览器本机端口和专用恢复凭据跨 Hub 重启保留；当前运行期 Cookie 失效后，合法本机 GET 可经专用路径续期并转回原请求。变更请求不会通过跳转自动重放。撤销已授权设备沿用 `POST /api/remote-network/revoke {deviceId}`，支持设备离线。
 
 旧 POST `/prepare` 保留兼容，接收旧 JSON 但不再要求 confirmed:true；仅已启用时返回内置能力和启动状态，不下载或写运行包。旧 POST `/uninstall` 仅停用后可清理所有权匹配的旧版外置副本，内置能力仍可用；新界面不调用这两个入口。
 

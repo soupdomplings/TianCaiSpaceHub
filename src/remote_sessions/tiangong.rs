@@ -7,7 +7,9 @@ use super::{
 };
 use crate::{
     app_state::SharedState,
-    gmclaw_desktop::{DesktopClient, DesktopMessage, DesktopSessionMetadata, DesktopTask},
+    gmclaw_desktop::{
+        DesktopClient, DesktopMessage, DesktopMessagePage, DesktopSessionMetadata, DesktopTask,
+    },
     gmclaw_runtime,
 };
 use anyhow::{Context, Result, ensure};
@@ -152,16 +154,15 @@ fn directory(task: &DesktopTask) -> String {
 }
 async fn context(state: &SharedState, session: &str) -> Result<ContextData> {
     let (desktop, run) = connection(state).await?;
-    let task = desktop
-        .list_tasks()
-        .await?
+    // Independent read-only queries; neither grants access until the owner
+    // returned by the task and the original session metadata agree below.
+    let (tasks, metadata) =
+        tokio::try_join!(desktop.list_tasks(), desktop.get_session_metadata(session))?;
+    let task = tasks
         .into_iter()
         .find(|t| t.session_id == session)
         .context("天工原会话已不存在或当前账号无法访问")?;
-    let metadata = desktop
-        .get_session_metadata(session)
-        .await?
-        .context("原会话缺少账号和项目元数据，请先在天工打开该会话")?;
+    let metadata = metadata.context("原会话缺少账号和项目元数据，请先在天工打开该会话")?;
     ensure!(
         task.owner_id
             .as_deref()
@@ -198,24 +199,27 @@ async fn model_catalog() -> Result<Vec<Value>> {
     })
     .await?
 }
-pub(super) async fn client(state: &SharedState) -> Value {
+pub(super) async fn models_for_client(state: &SharedState) -> Result<Vec<Value>> {
+    connection(state).await?;
+    model_catalog().await
+}
+pub(super) async fn client(state: &SharedState, summary: bool) -> Value {
     match connection(state).await {
         Ok((desktop, run)) => {
             // Probe a read-only run list to distinguish a legacy /v2/chat-only
             // host. Unsupported capabilities are never advertised as working.
-            let native = desktop.list_tasks().await;
-            let first = native
-                .as_ref()
-                .ok()
-                .and_then(|tasks| tasks.first())
-                .map(|t| t.session_id.clone())
-                .unwrap_or_else(|| "hub-capability-probe".into());
-            let runs_ready = run.active(&first).await.is_ok();
-            let models = model_catalog().await.unwrap_or_default();
+            let (native, runs) =
+                tokio::join!(desktop.list_projects(), run.active("hub-capability-probe"));
+            let runs_ready = native.is_ok() && runs.is_ok();
+            let models = if summary {
+                Vec::new()
+            } else {
+                model_catalog().await.unwrap_or_default()
+            };
             let create = runs_ready && gmclaw_runtime::gateway_workspace_active().await;
             json!({"id":CLIENT_ID,"kind":"tiangong","name":"天工 Work","ready":native.is_ok(),
-                "reason":native.err().map(|e|e.to_string()),"models":models,"capabilities":{
-                    "history":true,"create":create,"send":runs_ready,"stop":runs_ready,"approvals":runs_ready,
+                "modelsDeferred":summary && native.is_ok(),"reason":native.as_ref().err().map(|e|e.to_string()),"models":models,"capabilities":{
+                    "history":native.is_ok(),"create":create,"send":runs_ready,"stop":runs_ready,"approvals":runs_ready,
                     "questions":false,"attachments":runs_ready,"artifacts":true,"modelSelection":false,"effortSelection":false}})
         }
         Err(error) => {
@@ -372,31 +376,46 @@ fn native_project_id(project_id: &str) -> &str {
         project_id
     }
 }
-pub(super) async fn history(state: &SharedState, scope: &Scope, page: &PageQuery) -> Result<Value> {
-    let context = context(state, &scope.session).await?;
-    state.remote_sessions.watch(scope, None).await;
-    let snapshot_cursor = state.remote_sessions.snapshot(scope).await.3;
-    let newest = page.cursor.is_none();
+async fn history_page(
+    desktop: &DesktopClient,
+    task: &str,
+    page: &PageQuery,
+) -> Result<(DesktopMessagePage, Option<String>)> {
     let before = page
         .cursor
         .as_deref()
         .map(str::parse::<i64>)
         .transpose()
         .context("历史分页位置无效")?;
-    let page = context
-        .desktop
-        .messages(&context.task.task_id, before)
-        .await?;
-    let next = page
-        .has_more
-        .then(|| {
-            page.messages
-                .iter()
-                .map(|m| m.id)
-                .min()
-                .map(|id| id.to_string())
-        })
-        .flatten();
+    let limit = page.limit();
+    let mut rows = desktop.messages_page(task, before, limit).await?;
+    // DataServer's exclusive 'before' is an integer message ID, not a timestamp
+    // or an offset from the newest row. Appends cannot shift this boundary.
+    ensure!(
+        before.is_none_or(|edge| rows.messages.iter().all(|m| m.id < edge)),
+        "天工返回的旧消息没有越过分页位置，请重新打开会话"
+    );
+    rows.messages.sort_by_key(|m| m.id);
+    rows.messages.dedup_by_key(|m| m.id);
+    if rows.messages.len() > limit {
+        // Older versions may return their fixed-size native page.
+        rows.messages = rows.messages.split_off(rows.messages.len() - limit);
+        rows.has_more = true;
+    }
+    let next = rows
+        .messages
+        .first()
+        .filter(|_| rows.has_more)
+        .map(|m| m.id.to_string());
+    Ok((rows, next))
+}
+
+pub(super) async fn history(state: &SharedState, scope: &Scope, page: &PageQuery) -> Result<Value> {
+    let context = context(state, &scope.session).await?;
+    state.remote_sessions.watch(scope, None).await;
+    let snapshot_cursor = state.remote_sessions.snapshot(scope).await.3;
+    let newest = page.cursor.is_none();
+    let (page, next) = history_page(&context.desktop, &context.task.task_id, page).await?;
     let mut items = Vec::new();
     for message in &page.messages {
         let mut attachments = Vec::new();
@@ -419,8 +438,25 @@ pub(super) async fn history(state: &SharedState, scope: &Scope, page: &PageQuery
                 }
             }
         }
+        let text = if message.role == "assistant" {
+            let (text, linked) = files::project_links(
+                state,
+                scope,
+                Some(Path::new(&context.directory)),
+                &message.content,
+            )
+            .await;
+            for file in linked {
+                if !attachments.iter().any(|f| f.id == file.id) {
+                    attachments.push(file);
+                }
+            }
+            text
+        } else {
+            message.content.clone()
+        };
         items.push(json!({"id":message.id.to_string(),"role":if message.role == "system" {"assistant"} else {message.role.as_str()},
-            "type":"message","text":message.content,"files":attachments}));
+            "type":"message","text":text,"files":attachments}));
         let steps = history_steps(message);
         for (index, step) in steps.iter().enumerate() {
             items.push(json!({"id":step["id"].as_str().or_else(||step["call_id"].as_str()).map(str::to_owned).unwrap_or_else(||format!("{}-step-{index}",message.id)),"role":"tool","type":"tool",
@@ -452,6 +488,7 @@ pub(super) async fn history(state: &SharedState, scope: &Scope, page: &PageQuery
                     replay_until: baseline,
                     replaying: baseline > 0,
                     replay_pending: None,
+                    verified_decisions_through: None,
                 }),
             )
             .await?;
@@ -535,6 +572,7 @@ struct OwnedReply {
     replay_until: u64,
     replaying: bool,
     replay_pending: Option<(u64, Value)>,
+    verified_decisions_through: Option<u64>,
 }
 async fn prepare_turn(
     state: &SharedState,
@@ -651,6 +689,7 @@ async fn prepare_turn(
             replay_until: 0,
             replaying: false,
             replay_pending: None,
+            verified_decisions_through: None,
         },
     ))
 }
@@ -659,7 +698,7 @@ async fn observe_run(
     scope: &Scope,
     context: &ContextData,
     run: Value,
-    owned: Option<OwnedReply>,
+    mut owned: Option<OwnedReply>,
 ) -> Result<()> {
     validate_run(&run, &scope.session, None)?;
     let should_start = {
@@ -675,6 +714,20 @@ async fn observe_run(
     if !should_start {
         return Ok(());
     }
+    // Work 1.1's active list reads persisted rows. Only GET /runs/{id}
+    // augments a live waiting row with the currently actionable call IDs.
+    let id = run["run_id"].as_str().expect("validated run ID");
+    let detail = if run["status"] == "waiting_confirmation" {
+        context
+            .run
+            .request(Method::GET, id, None)
+            .await
+            .ok()
+            .filter(|current| validate_run(current, &scope.session, Some(id)).is_ok())
+    } else {
+        None
+    };
+    let run = detail.unwrap_or(run);
     let status = normalize_status(run["status"].as_str().unwrap_or("running"));
     state
         .remote_sessions
@@ -685,6 +738,7 @@ async fn observe_run(
             json!({"status":status,"turnId":run["run_id"]}),
         )
         .await;
+    restore_confirmation(state, scope, context, &run, &mut owned).await;
     let state = state.clone();
     let scope = scope.clone();
     let context = context.clone();
@@ -740,6 +794,7 @@ async fn run_worker(
                     break;
                 }
                 run = current;
+                restore_confirmation(state, scope, &context, &run, &mut owned).await;
                 let status = run["status"].as_str().unwrap_or("unknown");
                 if terminal(status) {
                     state
@@ -775,8 +830,7 @@ async fn run_worker(
             state.remote_sessions.publish(scope,"error",None,json!({"code":"native_history_save_failed","message":format!("回复未能保存到天工原会话：{error}")})).await;
         }
         let completed = !super::types::busy(&state.remote_sessions.snapshot(scope).await.0);
-        state.remote_sessions.publish(scope,"item.updated",Some(item_id.clone()),json!({"item":{"id":item_id,"role":"assistant",
-            "type":"message","text":owned.text,"status":if completed {"completed"} else {"running"}},"completed":completed})).await;
+        publish_reply(state, scope, &context, &item_id, &owned.text, completed).await;
         if owned.persist_to_native {
             gmclaw_runtime::queue_desktop_refresh(
                 &context.task.task_id,
@@ -900,12 +954,15 @@ async fn process_line(
             *after = seq;
             if seq >= observed.replay_until {
                 observed.replaying = false;
-                if let Some((pending_seq, pending)) = observed.replay_pending.take() {
+                if let Some((pending_seq, pending)) = observed.replay_pending.take()
+                    && observed
+                        .verified_decisions_through
+                        .is_none_or(|baseline| pending_seq > baseline)
+                {
                     if pending["status"] == "waiting" {
                         publish_waiting(state, scope, context, run_id, pending_seq).await;
                     } else {
-                        publish_confirmation(state, scope, context, run_id, pending_seq, &pending)
-                            .await?;
+                        publish_confirmation(state, scope, context, run_id, &pending).await?;
                     }
                 }
                 state
@@ -940,7 +997,7 @@ async fn process_line(
             }
         }
         "confirm"=>{
-            publish_confirmation(state,scope,context,run_id,seq,&data).await?;
+            publish_confirmation(state,scope,context,run_id,&data).await?;
         }
         "subagent" if native_kind == "confirm"=>{
             state.remote_sessions.publish(scope,"error",None,json!({"code":"child_approval_on_desktop","message":"子 Agent 需要确认，请在目标天工窗口处理。"})).await;
@@ -952,8 +1009,7 @@ async fn process_line(
                 *after=seq;
                 if let Some(owned) = owned.as_mut() {
                     persist(context,owned).await?;
-                    state.remote_sessions.publish(scope,"item.updated",Some(item_id.into()),json!({"item":{"id":item_id,"role":"assistant",
-                        "type":"message","text":owned.text,"status":"completed"},"completed":true})).await;
+                    publish_reply(state,scope,context,item_id,&owned.text,true).await;
                 }
                 state.remote_sessions.publish(scope,"turn.updated",None,json!({"status":status,"turnId":run_id})).await;
                 return Ok(true);
@@ -989,7 +1045,7 @@ async fn process_line(
             state.remote_sessions.publish(scope,"item.updated",Some(id.clone()),json!({"item":{"id":id,"role":"tool",
                 "type":if kind == "file_write" {"fileChange"} else if kind == "think" {"reasoning"} else {"tool"},
                 "text":text,"files":attached,"status":if matches!(kind,"tool_start"|"tool_input") {"running"} else {"completed"},"data":public},
-                "completed":!matches!(kind,"tool_start"|"tool_input")})).await;
+                "completed":!matches!(kind,"tool_start"|"tool_input"),"activityStep":kind})).await;
         }
         "error"=>state.remote_sessions.publish(scope,"error",None,json!({"code":"native_error",
             "message":data["message"].as_str().or_else(||data["error"].as_str()).unwrap_or("天工执行出错，请查看原会话")})).await,
@@ -1016,6 +1072,32 @@ fn checked_event(data: &Value, run: &str, session: &str, after: u64) -> Result<O
     let seq = data["seq"].as_u64().context("天工事件缺少续读序号")?;
     Ok((seq > after).then_some(seq))
 }
+async fn publish_reply(
+    state: &SharedState,
+    scope: &Scope,
+    context: &ContextData,
+    id: &str,
+    text: &str,
+    completed: bool,
+) {
+    let (text, files) = if completed {
+        files::project_links(state, scope, Some(Path::new(&context.directory)), text).await
+    } else {
+        (text.to_owned(), Vec::new())
+    };
+    state
+        .remote_sessions
+        .publish(
+            scope,
+            "item.updated",
+            Some(id.into()),
+            json!({
+        "item":{"id":id,"role":"assistant","type":"message","text":text,"files":files,
+                "status":if completed {"completed"} else {"running"}},"completed":completed}),
+        )
+        .await;
+}
+
 async fn persist(context: &ContextData, owned: &mut OwnedReply) -> Result<()> {
     if !owned.persist_to_native {
         owned.last_saved = Instant::now();
@@ -1034,25 +1116,75 @@ async fn persist(context: &ContextData, owned: &mut OwnedReply) -> Result<()> {
     owned.last_saved = Instant::now();
     Ok(())
 }
+async fn restore_confirmation(
+    state: &SharedState,
+    scope: &Scope,
+    context: &ContextData,
+    run: &Value,
+    owned: &mut Option<OwnedReply>,
+) {
+    if run["status"] == "waiting_confirmation"
+        && run["session_id"] == scope.session
+        && let Some(id) = run["run_id"].as_str()
+        && run["pending_calls"].is_array()
+    {
+        // A missing/malformed snapshot grants nothing. The native event
+        // stream remains the fallback for builds that omit these details.
+        if publish_confirmation(state, scope, context, id, run)
+            .await
+            .is_ok()
+            && let Some(observed) = owned.as_mut().filter(|o| o.replaying)
+        {
+            observed.verified_decisions_through = run["last_seq"].as_u64();
+        }
+    }
+}
+
 async fn publish_confirmation(
     state: &SharedState,
     scope: &Scope,
     context: &ContextData,
     run_id: &str,
-    seq: u64,
     data: &Value,
 ) -> Result<()> {
-    let call_ids = data["pending_calls"]
+    use sha2::{Digest, Sha256};
+    let calls = data["pending_calls"]
         .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|c| c["call_id"].as_str())
-        .map(str::to_owned)
+        .context("天工确认事件缺少待处理工具")?;
+    let mut call_ids = calls
+        .iter()
+        .map(|call| {
+            call["call_id"]
+                .as_str()
+                .filter(|id| !id.trim().is_empty())
+                .map(str::to_owned)
+        })
+        .collect::<Option<Vec<_>>>()
+        .context("天工确认事件缺少工具调用标识")?;
+    call_ids.sort_unstable();
+    ensure!(
+        !call_ids.is_empty() && !call_ids.windows(2).any(|ids| ids[0] == ids[1]),
+        "天工确认事件中的调用标识为空或重复"
+    );
+    // Events and GET snapshots have different sequence numbers for the same
+    // native decision. Both must map to one card and one click.
+    let id = format!(
+        "tiangong-{run_id}-{:x}",
+        Sha256::digest(serde_json::to_vec(&call_ids)?)
+    );
+    let names = calls
+        .iter()
+        .filter_map(|call| call["tool_name"].as_str())
+        .take(5)
+        .map(|name| name.chars().take(80).collect::<String>())
         .collect::<Vec<_>>();
-    ensure!(!call_ids.is_empty(), "天工确认事件缺少工具调用标识");
-    let id = format!("tiangong-{run_id}-{seq}");
+    let message = if names.is_empty() {
+        "允许执行当前工具操作？".into()
+    } else {
+        format!("允许执行 {}？", names.join("、"))
+    };
     let public = json!({"id":id,"type":"approval","title":"天工需要确认",
-        "message":data["prompt"].as_str().or_else(||data["content"].as_str()).unwrap_or("允许执行当前工具操作？"),
+        "message":data["prompt"].as_str().or_else(||data["content"].as_str()).unwrap_or(&message),
         "choices":[{"value":"accept","label":"允许"},{"value":"decline","label":"拒绝"}]});
     state
         .remote_sessions
@@ -1308,6 +1440,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn history_pages_use_native_limits_and_stable_ids_across_live_appends() {
+        use axum::{Json, Router, extract::Query, routing::get};
+        use std::{
+            collections::HashMap,
+            sync::{Arc, Mutex},
+        };
+        let ids = Arc::new(Mutex::new(vec![1_i64, 5, 8, 12]));
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let (server_ids, requests) = (ids.clone(), calls.clone());
+        let app = Router::new().route("/data/tasks/task/messages", get(move |Query(q): Query<HashMap<String, i64>>| {
+            let (ids, reqs) = (server_ids.clone(), requests.clone());
+            async move {
+                let before = q.get("before").copied();
+                let limit = q["limit"] as usize;
+                reqs.lock().unwrap().push((limit, before));
+                let all: Vec<i64> = ids.lock().unwrap().iter().copied().filter(|id| before.is_none_or(|edge| *id < edge)).collect();
+                let start = all.len().saturating_sub(limit);
+                let messages = all[start..].iter().map(|id| json!({"id":id,"task_id":"task","role":"user","content":"same","created_at":"2026-11-19T00:00:00Z"})).collect::<Vec<_>>();
+                Json(json!({"messages":messages,"has_more":start > 0}))
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let client = DesktopClient::fixture(&format!("http://{}", listener.local_addr().unwrap()));
+        let service = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let mut query = PageQuery {
+            limit: Some(2),
+            cursor: None,
+        };
+        let page_ids =
+            |p: DesktopMessagePage| p.messages.into_iter().map(|m| m.id).collect::<Vec<_>>();
+        let (first, next) = history_page(&client, "task", &query).await.unwrap();
+        assert_eq!(page_ids(first), [8, 12]);
+        assert_eq!(next.as_deref(), Some("8"));
+        assert_eq!(calls.lock().unwrap().as_slice(), &[(2, None)]);
+        ids.lock().unwrap().push(15);
+        query.cursor = next;
+        let (second, next) = history_page(&client, "task", &query).await.unwrap();
+        assert_eq!(page_ids(second), [1, 5]);
+        assert!(next.is_none());
+        assert_eq!(calls.lock().unwrap().as_slice(), &[(2, None), (2, Some(8))]);
+        service.abort();
+    }
+
+    #[tokio::test]
     async fn work_v110_wrapped_child_frames_do_not_replace_parent_or_approve_child() {
         let (directory, state) = super::super::test_state();
         let context = context_fixture(directory.path());
@@ -1429,6 +1605,7 @@ mod tests {
             replay_until: baseline,
             replaying: baseline > 0,
             replay_pending: None,
+            verified_decisions_through: None,
         }
     }
     #[tokio::test]
@@ -1499,6 +1676,45 @@ mod tests {
         assert_eq!(feeds[&scope].status, "completed");
         assert_eq!(context.metadata.user_id, "original-account");
     }
+    #[tokio::test]
+    async fn native_confirmation_snapshot_recovers_missed_event_without_repeating_approval() {
+        let (dir, state) = super::super::test_state();
+        let context = context_fixture(dir.path());
+        let scope = Scope::new("tiangong", "session");
+        let mut owned = Some(observed(7, 3));
+        let base = json!({"run_id":"run","session_id":"session","status":"waiting_confirmation","last_seq":3});
+        let mut detail = base.clone();
+        detail["pending_calls"] = json!([{"call_id":"a","tool_name":"write_file"},{"call_id":"b","tool_name":"read_file"}]);
+        state.remote_sessions.watch(&scope, None).await;
+        restore_confirmation(&state, &scope, &context, &base, &mut owned).await;
+        assert!(state.remote_sessions.snapshot(&scope).await.2.is_empty());
+        let mut wrong = detail.clone();
+        wrong["session_id"] = json!("other");
+        restore_confirmation(&state, &scope, &context, &wrong, &mut owned).await;
+        assert!(state.remote_sessions.snapshot(&scope).await.2.is_empty());
+        restore_confirmation(&state, &scope, &context, &detail, &mut owned).await;
+        let cards = state.remote_sessions.snapshot(&scope).await.2;
+        assert_eq!(cards.len(), 1);
+        assert!(cards[0]["message"].as_str().unwrap().contains("write_file"));
+        let mut after = 0;
+        process_line(&state,&scope,&context,"run","7",br#"confirm|{"session_id":"session","run_id":"run","seq":2,"pending_calls":[{"call_id":"obsolete"}]}"#,&mut after,&mut owned).await.unwrap();
+        process_line(&state,&scope,&context,"run","7",br#"run_status|{"session_id":"session","run_id":"run","seq":3,"status":"waiting_confirmation"}"#,&mut after,&mut owned).await.unwrap();
+        detail["pending_calls"].as_array_mut().unwrap().reverse();
+        publish_confirmation(&state, &scope, &context, "run", &detail)
+            .await
+            .unwrap();
+        assert_eq!(state.remote_sessions.snapshot(&scope).await.2, cards);
+        let feeds = state.remote_sessions.feeds.lock().await;
+        assert_eq!(
+            feeds[&scope]
+                .events
+                .iter()
+                .filter(|e| e.kind == "approval.requested")
+                .count(),
+            1
+        );
+    }
+
     #[tokio::test]
     async fn replay_restores_only_live_native_confirmation_and_original_run() {
         let (directory, state) = super::super::test_state();

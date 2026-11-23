@@ -1,0 +1,40 @@
+<view class="page with-tabs" style="font-size:{{font}}px">
+  <view class="title">远程连接</view>
+  <view class="caption">我的电脑</view>
+  <view class="group">
+    <button
+      class="row"
+      wx:for="{{devices}}"
+      wx:key="bindingId"
+      bindtap="open"
+      data-index="{{index}}"
+    >
+      <view class="grow">
+        <view class="strong">{{item.name || '我的电脑'}}</view>
+        <view class="sub">
+          {{item.state==='pending'?'等待电脑确认':!item.keyPresent?'请用此手机重新扫码':item.online?'在线':'离线'}}
+          <text wx:if="{{item.last.title}}">· {{item.last.title}}</text>
+        </view>
+      </view>
+      <text
+        wx:if="{{item.online && item.keyPresent && item.state==='active'}}"
+        class="chev"
+      >
+        ›
+      </text>
+    </button>
+    <view wx:if="{{!devices.length}}" class="row sub">
+      {{loading?'正在读取设备…':error?'设备暂未载入':'还没有配对的电脑'}}
+    </view>
+  </view>
+  <button class="primary" bindtap="scan" disabled="{{preview}}">
+    {{preview?'本地演示 · 远程连接':'扫码配对电脑'}}
+  </button>
+  <view class="note">
+    {{preview?'打开演示工作电脑，体验会话、追问和审批。':'在电脑 Hub 的「远程连接」中打开「配对手机」。'}}
+  </view>
+  <view wx:if="{{error}}" class="error">
+    {{error}}
+    <button class="control" bindtap="load">重试</button>
+  </view>
+</view>

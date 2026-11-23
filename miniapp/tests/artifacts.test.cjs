@@ -1,0 +1,22 @@
+const {test}=require('node:test');
+const assert=require('node:assert/strict');
+const {snapshot,reduce}=require('../miniprogram/lib/conversation');
+test('artifact visibility is fixed at first encounter while its download remains available',()=>{
+ const old={id:'history',type:'message',role:'assistant',text:'旧报告',files:[{id:'a',name:'old.pdf',kind:'artifact'}]};
+ const user={id:'user',type:'message',role:'user',text:'请分析',files:[{id:'b',kind:'attachment'}]};
+ const fresh={id:'now',type:'message',role:'assistant',text:'新报告',files:[{id:'c',name:'diagram.png',kind:'artifact'}]};
+ const later={id:'f',type:'message',role:'assistant',text:'完成',files:[{id:'d',name:'new.pdf',kind:'artifact'}]};
+ const packet=(id,item)=>({id,type:'item.updated',data:{item}});
+ let state=snapshot({items:[old],cursor:1});
+ state=reduce(state,packet(2,user),{artifacts:false});
+ state=reduce(state,packet(3,fresh),{artifacts:false});
+ state=reduce(state,packet(4,fresh),{artifacts:true});
+ state=reduce(state,packet(5,later),{artifacts:true});
+ state=reduce(state,packet(6,later),{artifacts:false});
+ assert.deepEqual(state.items.map(i=>i.files.map(f=>f.id)),[['a'],['b'],[],['d']]);
+ assert.deepEqual([...state.registry.files.keys()],['a','c','d']);
+ assert.deepEqual(snapshot({items:[old,user,fresh,later]},state.registry).items.map(i=>i.files.map(f=>f.id)),[['a'],['b'],[],['d']]);
+ const fileOnly={...fresh,text:'',files:[{id:'e',kind:'artifact'}],id:'file-only'};
+ const hidden=reduce(state,packet(7,fileOnly),{artifacts:false});
+ assert.equal(hidden.items.some(x=>x.id==='file-only'),false);assert.equal(hidden.registry.files.has('e'),true);
+});

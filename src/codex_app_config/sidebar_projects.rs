@@ -7,7 +7,7 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json, value::RawValue};
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
 };
@@ -22,6 +22,9 @@ const MIGRATION: &str = "app-server-projects-migration-by-host";
 const ORDER: &str = "project-order";
 const DELETIONS: &str = "app-server-pending-project-deletions-by-host";
 type State = BTreeMap<String, Box<RawValue>>;
+#[path = "sidebar_store.rs"]
+mod sidebar_store;
+use sidebar_store::Store;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SidebarAction {
@@ -59,6 +62,8 @@ pub(crate) struct ProjectlessChoice {
 #[serde(rename_all = "camelCase")]
 struct Receipt {
     version: u32,
+    #[serde(default)]
+    store: Store,
     owner: String,
     db_dir: PathBuf,
     cards_before: Option<Box<RawValue>>,
@@ -101,9 +106,71 @@ fn read_key<T: DeserializeOwned + Default>(state: &State, key: &str) -> Result<T
 fn current_cards(state: &State) -> Result<BTreeMap<String, Value>> {
     read_key(state, CARDS)
 }
+fn has_cloud_link(card: &Value) -> bool {
+    [
+        "chatGptBacking",
+        "retiredChatGptBacking",
+        "chatGptBackingCreation",
+    ]
+    .iter()
+    .any(|key| !card[*key].is_null())
+}
+// Only the active same-owner slice of the sibling backup is admissible.
+// It can corroborate an existing native project binding, never supply rows for import.
+fn matching_backup_cards(home: &Path, owner: &str) -> Option<HashMap<String, String>> {
+    let path = home.join(".codex-global-state.json.bak");
+    if !fs::symlink_metadata(&path).ok()?.is_file() {
+        return None;
+    }
+    let state: State = serde_json::from_slice(&fs::read(path).ok()?).ok()?;
+    if !state.contains_key(ACCOUNT_SCOPE) && !state.contains_key(sidebar_store::OWNER) {
+        return None;
+    }
+    verify_owner(&state, owner).ok()?;
+    let mapping: BTreeMap<String, String> = local_map(&state, SERVER_IDS, home).ok()?;
+    let deletions: BTreeMap<String, Value> = local_map(&state, DELETIONS, home).ok()?;
+    let deleted: HashSet<_> = deletions
+        .iter()
+        .flat_map(|(id, row)| {
+            [
+                Some(mapping.get(id).unwrap_or(id).as_str()),
+                row["projectId"].as_str(),
+            ]
+            .into_iter()
+            .flatten()
+        })
+        .collect();
+    let mut result = HashMap::new();
+    let mut duplicates = HashSet::new();
+    for (id, card) in current_cards(&state).ok()? {
+        let native = mapping.get(&id).unwrap_or(&id);
+        if card["id"].as_str() != Some(id.as_str())
+            || deleted.contains(native.as_str())
+            || has_cloud_link(&card)
+        {
+            continue;
+        }
+        let Some([root]) = card["rootPaths"].as_array().map(Vec::as_slice) else {
+            continue;
+        };
+        if let Some(path) = root.as_str() {
+            if result.insert(native.clone(), path.to_owned()).is_some() {
+                duplicates.insert(native.clone());
+            }
+        }
+    }
+    result.retain(|id, _| !duplicates.contains(id));
+    Some(result)
+}
 fn verify_owner(state: &State, owner: &str) -> Result<()> {
     // Electron stores only the active globals at the top level. Inactive slots
     // are saved separately and must never be read as an alternative source.
+    if let Some(raw) = state.get(sidebar_store::OWNER) {
+        ensure!(
+            serde_json::from_str::<String>(raw.get()).ok().as_deref() == Some(owner),
+            "Codex 当前侧栏属于其他账户或尚未确定账户。请用原账户打开一次再退出。"
+        );
+    }
     if let Some(raw) = state.get(ACCOUNT_SCOPE) {
         #[derive(Deserialize)]
         struct Scope {
@@ -189,9 +256,6 @@ fn edit_map(state: &mut State, change: &MapChange, undo: bool) -> Result<()> {
         state.insert(SERVER_IDS.into(), serde_json::value::to_raw_value(&groups)?);
     }
     Ok(())
-}
-fn write_state(home: &Path, state: &State) -> Result<()> {
-    write_file_atomically(&home.join(STATE_FILE), &serde_json::to_vec(state)?)
 }
 fn store_previous(path: &Path, previous: Option<&RawValue>) -> Result<()> {
     if let Some(raw) = previous {
@@ -293,21 +357,19 @@ fn inspect_or_repair(
         can_undo: path.is_file(),
         ..Default::default()
     };
-    let state_bytes = match fs::read(home.join(STATE_FILE)) {
-        Ok(b) => b,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            ensure!(selected.is_empty(), "侧栏项目已改变，请重新检查。");
-            report.detail = "尚未找到 Codex 的桌面项目设置。".into();
-            return Ok(report);
-        }
-        Err(e) => return Err(e.into()),
-    };
-    let mut state: State = serde_json::from_slice(&state_bytes)?;
     let Some(owner) = local_project_owner(home)? else {
         ensure!(selected.is_empty(), "当前身份已改变，请重新检查。");
-        report.detail = "当前不是 Hub 本机账户，未处理项目。".into();
+        report.detail = "当前身份无法核实为 Hub 本机账户。请在原先使用的 Codex 账号中查看项目；如果原来使用 Hub 本机身份，请切回后重新检查。".into();
         return Ok(report);
     };
+    let Some((store, before_state)) = Store::read(home, &owner)? else {
+        ensure!(selected.is_empty(), "侧栏项目已改变，请重新检查。");
+        report.detail =
+            "尚未找到 Codex 的桌面项目设置。请用原账号打开一次 Codex，再完全退出并重新检查。"
+                .into();
+        return Ok(report);
+    };
+    let mut state = before_state.clone();
     verify_owner(&state, &owner)?;
     let cards = current_cards(&state)?;
     let mapping: BTreeMap<String, String> = local_map(&state, SERVER_IDS, home)?;
@@ -329,8 +391,9 @@ fn inspect_or_repair(
     let remote: HashSet<_> = remote.iter().filter_map(|p| p["id"].as_str()).collect();
     let deletions: BTreeMap<String, Value> = local_map(&state, DELETIONS, home)?;
     let visible: Vec<_> = cards
-        .keys()
-        .map(|id| mapping.get(id).unwrap_or(id).clone())
+        .iter()
+        .filter(|(_, card)| !has_cloud_link(card))
+        .map(|(id, _)| mapping.get(id).unwrap_or(id).clone())
         .collect();
     let deleting: HashSet<_> = deletions
         .iter()
@@ -357,12 +420,19 @@ fn inspect_or_repair(
     for (thread, entry) in explicit {
         if let Some(id) = entry["projectId"].as_str()
             && entry["projectKind"] == "local"
-            && cards.contains_key(id)
+            && cards.get(id).is_some_and(|card| !has_cloud_link(card))
         {
             anchors.insert(
                 thread,
                 mapping.get(id).cloned().unwrap_or_else(|| id.to_owned()),
             );
+        } else if entry["projectKind"] != "local"
+            || entry["projectId"]
+                .as_str()
+                .and_then(|id| cards.get(id))
+                .is_some_and(has_cloud_link)
+        {
+            anchors.insert(thread, String::new());
         }
     }
     for id in projectless.into_iter().chain(
@@ -374,12 +444,18 @@ fn inspect_or_repair(
     }
     // Inspect both sets read-only, then narrow by desktop membership before
     // presenting the exact opt-in count or passing any updates to SQLite.
+    let backup_cards = if cards.is_empty() {
+        matching_backup_cards(home, &owner).unwrap_or_default()
+    } else {
+        HashMap::new()
+    };
     let (mut candidates, mut evidence) = super::project_membership::inspect_with_standalone(
         home,
         &visible,
         &anchors,
         true,
         &standalone,
+        &backup_cards,
     )?;
     // An existing desktop card can have an unmapped legacy ID. Never synthesize
     // a second one at that root on the assumption that its ID is a native ID.
@@ -396,6 +472,7 @@ fn inspect_or_repair(
         let accept = !deleting.contains(p.id.as_str())
             && !remote.contains(id.as_str())
             && legacy.next().is_none()
+            && !cards.get(id).is_some_and(has_cloud_link)
             && mapping.get(id).is_none_or(|native| native == &p.id)
             && same_root.is_none_or(|owners| owners.len() == 1 && owners[0] == id)
             && (!cards.contains_key(id) || same_root.is_some());
@@ -406,6 +483,13 @@ fn inspect_or_repair(
         }
         accept
     });
+    let optional_cards = candidates
+        .iter()
+        .filter(|p| evidence.legacy_cards.contains(&p.id) && !cards.contains_key(&ids[&p.id]))
+        .count();
+    if !include_legacy {
+        candidates.retain(|p| !evidence.legacy_cards.contains(&p.id));
+    }
     for candidate in &mut candidates {
         candidate.pending_assignments.retain(|a| {
             !a.previous_project_id
@@ -530,6 +614,32 @@ fn inspect_or_repair(
         assignments.len(),
         detail_tail
     );
+    if !apply {
+        if !include_legacy && optional_cards > 0 {
+            report.detail.push_str(&format!("\n有 {optional_cards} 个项目已有原分组和匹配目录，但旧会话未记录账号。确认这些旧会话属于自己后，勾选上方旧会话选项并重新检查，可补回项目卡片。"));
+        }
+        if let Some(reason) = evidence.unavailable {
+            report.detail.push_str(&format!("\n{reason}"));
+        }
+        if evidence.conflicting_projects > 0 {
+            report.detail.push_str(&format!("\n{} 个项目包含其他账号、身份不完整或来源无法核实的记录。请在原账号的 Codex 中打开这些项目。", evidence.conflicting_projects));
+        }
+        if evidence.backed_projects > 0 {
+            report.detail.push_str(&format!(
+                "\n{} 条项目目录记录带有 ChatGPT 云端账号关联。请在原 ChatGPT 账号中查看对应项目。",
+                evidence.backed_projects
+            ));
+        }
+        if evidence.invalid_projects > 0
+            || evidence.ambiguous_roots > 0
+            || evidence.mismatched_grouped_paths > 0
+        {
+            report.detail.push_str(&format!("\n未能核对的记录：项目字段或本机目录不符合要求 {} 个，同目录目标不唯一 {} 条，已分组会话的目录不匹配 {} 条。可在 Codex 打开原项目目录并手动将确认属于它的会话移入，再退出后检查。", evidence.invalid_projects, evidence.ambiguous_roots, evidence.mismatched_grouped_paths));
+        }
+        if evidence.unverified_projects > 0 && !report.can_repair {
+            report.detail.push_str(&format!("\n{} 个项目缺少对应的本机用户会话证据。请先用原账号在 Codex 核对项目和“分项目显示”；若使用过另一模型来源，可到 Hub「Codex 会话管理」核对。", evidence.unverified_projects));
+        }
+    }
     if !apply || !report.can_repair {
         return Ok(report);
     }
@@ -578,7 +688,8 @@ fn inspect_or_repair(
         state.insert(CARDS.into(), serde_json::value::to_raw_value(&all)?);
     }
     let receipt = Receipt {
-        version: 5,
+        version: if store == Store::Json { 5 } else { 6 },
+        store,
         owner,
         db_dir: crate::codex_project_status::sqlite_dir(home)?.canonicalize()?,
         cards_before,
@@ -598,14 +709,14 @@ fn inspect_or_repair(
     fs::create_dir_all(sidebar_receipt_dir(home))?;
     write_file_atomically(&path, &serde_json::to_vec(&receipt)?)?;
     if desktop_changed {
-        if let Err(e) = write_state(home, &state) {
+        if let Err(e) = store.replace(home, &receipt.owner, &before_state, &state) {
             store_previous(&path, receipt.previous.as_deref())?;
             return Err(e);
         }
     }
     if let Err(e) = repair_thread_memberships(home, &candidates) {
         if desktop_changed {
-            write_file_atomically(&home.join(STATE_FILE), &state_bytes)?;
+            store.replace(home, &receipt.owner, &state, &before_state)?;
         }
         store_previous(&path, receipt.previous.as_deref())?;
         return Err(e);
@@ -640,7 +751,7 @@ fn receipt_for_undo(home: &Path) -> Result<(Receipt, SidebarUndoPreview)> {
     let bytes = fs::read(receipt_path(home)).context("项目修复记录已不存在，请刷新备份列表。")?;
     let receipt: Receipt = serde_json::from_slice(&bytes)?;
     ensure!(
-        matches!(receipt.version, 3..=5)
+        matches!(receipt.version, 3..=6)
             && Some(&receipt.owner) == local_project_owner(home)?.as_ref()
             && receipt.db_dir == crate::codex_project_status::sqlite_dir(home)?.canonicalize()?,
         "恢复记录不属于当前账户或历史库。"
@@ -657,7 +768,12 @@ fn receipt_for_undo(home: &Path) -> Result<(Receipt, SidebarUndoPreview)> {
 
 pub(crate) fn preview_sidebar_undo(home: &Path) -> Result<SidebarUndoPreview> {
     let (receipt, summary) = receipt_for_undo(home)?;
-    let state: State = serde_json::from_slice(&fs::read(home.join(STATE_FILE))?)?;
+    let (store, state) =
+        Store::read(home, &receipt.owner)?.context("当前侧栏项目设置已不存在。")?;
+    ensure!(
+        store == receipt.store,
+        "侧栏存储位置已变化，未撤销。请检查当前项目。"
+    );
     verify_owner(&state, &receipt.owner)?;
     Ok(summary)
 }
@@ -672,8 +788,13 @@ pub(crate) fn apply_sidebar_undo(
         current_batch.fingerprint == confirmed.fingerprint,
         "项目修复记录已变化，未撤销。请重新查看要撤销的批次。"
     );
-    let current = fs::read(home.join(STATE_FILE))?;
-    let mut state: State = serde_json::from_slice(&current)?;
+    let (store, current) =
+        Store::read(home, &receipt.owner)?.context("当前侧栏项目设置已不存在。")?;
+    ensure!(
+        store == receipt.store,
+        "侧栏存储位置已变化，未撤销。请检查当前项目。"
+    );
+    let mut state = current.clone();
     verify_owner(&state, &receipt.owner)?;
     let current_cards: Option<Value> = state
         .get(CARDS)
@@ -727,11 +848,11 @@ pub(crate) fn apply_sidebar_undo(
         }
     }
     if desktop_changed {
-        write_state(home, &state)?;
+        store.replace(home, &receipt.owner, &current, &state)?;
     }
     if let Err(e) = undo_thread_memberships(home, &receipt.assignments) {
         if desktop_changed {
-            write_file_atomically(&home.join(STATE_FILE), &current)?;
+            store.replace(home, &receipt.owner, &state, &current)?;
         }
         return Err(e);
     }

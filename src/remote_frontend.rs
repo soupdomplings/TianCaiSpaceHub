@@ -13,6 +13,11 @@ mod embedded {
     include!(concat!(env!("OUT_DIR"), "/remote_web_assets.rs"));
 }
 
+pub(crate) fn entry_script() -> Option<&'static str> {
+    embedded::ASSETS.iter().find_map(|(name, _)| {
+        (name.starts_with("assets/index-") && name.ends_with(".js")).then_some(*name)
+    })
+}
 pub(crate) fn router() -> Router<SharedState> {
     Router::new()
         .route("/remote", get(|| async { Redirect::temporary("/remote/") }))
@@ -40,7 +45,16 @@ fn serve(path: &str) -> Response {
     let mut response = Response::new(Body::from(*bytes));
     let headers = response.headers_mut();
     headers.insert(header::CONTENT_TYPE, mime.as_ref().parse().unwrap());
-    headers.insert(header::CACHE_CONTROL, "no-cache".parse().unwrap());
+    headers.insert(
+        header::CACHE_CONTROL,
+        if path == "index.html" {
+            "no-store"
+        } else {
+            "no-cache"
+        }
+        .parse()
+        .unwrap(),
+    );
     headers.insert(header::X_CONTENT_TYPE_OPTIONS, "nosniff".parse().unwrap());
     headers.insert(header::REFERRER_POLICY, "no-referrer".parse().unwrap());
     headers.insert(header::CONTENT_SECURITY_POLICY,
@@ -61,6 +75,19 @@ mod tests {
         assert_eq!(
             serve("index.html").headers()[header::X_CONTENT_TYPE_OPTIONS],
             "nosniff"
+        );
+        assert_eq!(
+            serve("index.html").headers()[header::CACHE_CONTROL],
+            "no-store"
+        );
+        let (_, html) = embedded::ASSETS
+            .iter()
+            .find(|(name, _)| *name == "index.html")
+            .unwrap();
+        assert!(
+            std::str::from_utf8(html)
+                .unwrap()
+                .contains(entry_script().unwrap())
         );
     }
 

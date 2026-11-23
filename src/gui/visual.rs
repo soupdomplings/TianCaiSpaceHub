@@ -551,7 +551,7 @@ pub(super) fn runtime_surface(parent: &dyn WxWidget) -> (ScrolledWindow, Panel) 
     graph.set_min_size(dip_size(&graph, 620, 300));
     let col = BoxSizer::builder(Orientation::Vertical).build();
     col.add(&graph, 1, SizerFlag::Expand, 0);
-    scroll.set_sizer(col, true);
+    super::shell::inset_page_content(&scroll, col);
     (scroll, graph)
 }
 pub(super) fn runtime_height(clients: usize, routes: usize, mcps: usize) -> i32 {

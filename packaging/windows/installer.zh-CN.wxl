@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WixLocalization Culture="zh-CN" xmlns="http://wixtoolset.org/schemas/v4/wxl">
+  <String Id="MsiRMFilesInUseTitle" Value="{\WixUI_Font_Title}关闭正在使用的程序" />
+  <String Id="MsiRMFilesInUseText" Value="以下程序正在使用需要更新的文件。选择关闭后将继续安装，不会自动重新打开。安装成功后可选择打开新版 Hub。" />
+  <String Id="MsiRMFilesInUseUseRM" Value="关闭应用程序并继续安装(&amp;C)。" />
+  <String Id="MsiRMFilesInUseDontUseRM" Value="暂不关闭，文件替换可能需要重启电脑(&amp;D)。" />
+</WixLocalization>

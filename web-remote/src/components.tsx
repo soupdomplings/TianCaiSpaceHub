@@ -1,11 +1,14 @@
 import { memo, useEffect, useId, useRef, useState } from 'react';
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
-import { Check, CheckCircle2, ChevronDown, Copy, Download, File, FileCode2, FileImage, FileText, LoaderCircle, Terminal, X, XCircle } from 'lucide-react';
+import { Check, CheckCircle2, Copy, Download, File, FileCode2, FileImage, FileText, LoaderCircle, X, XCircle } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { isTranscriptMessage } from './session-state';
 import { errorMessage, isBusy } from './types';
 import type { ApprovalDecision, QuestionAnswers, RemoteApproval, RemoteFile, RemoteItem } from './types';
 import type { RemoteApi } from './api';
+import { resolveMessageLink } from './file-download';
+import type { SessionFiles } from './file-download';
 
 export function IconButton({ label, children, className = '', ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { label: string; children: ReactNode }) {
   return <button {...props} type="button" className={`icon-button ${className}`} aria-label={label} title={label}>{children}</button>;
@@ -54,10 +57,33 @@ export function CopyButton({ text, label = '复制' }: { text: string; label?: s
 
 const gfm = [remarkGfm];
 
-export function Markdown({ text }: { text: string }) {
+export function Markdown({ text, hiddenUrls, files }: { text: string; hiddenUrls?: ReadonlySet<string>; files?: SessionFiles }) {
+  const hidden = (url?: string) => {
+    if (!url || !hiddenUrls?.size) return false;
+    try {
+      const target = new URL(url, location.href);
+      return target.origin === location.origin && hiddenUrls.has(target.pathname);
+    } catch { return false; }
+  };
+  const link = (url: string | undefined, caption: ReactNode) => {
+    if (hidden(url)) return null;
+    const target = resolveMessageLink(url, files);
+    if (target.kind === 'external') return <a href={target.url} target="_blank" rel="noreferrer noopener">{caption}</a>;
+    if (target.kind === 'file') {
+      if (hidden(target.file.url)) return null;
+      return <button type="button" className="file-download-link" title={`下载 ${target.file.name}`} onClick={() => files?.download(target.file)}>{caption || target.file.name}</button>;
+    }
+    return <span className="unavailable-link">{caption}<small>（当前会话未提供可下载链接）</small></span>;
+  };
   return <div className="markdown"><ReactMarkdown remarkPlugins={gfm} components={{
-    a: ({ children, href }) => <a href={href} target="_blank" rel="noreferrer noopener">{children}</a>,
-    img: ({ alt, src }) => <a href={src} target="_blank" rel="noreferrer noopener">{alt || '查看图片链接'}</a>,
+    a: ({ children, href, node }) => {
+      const [only] = node?.children || [];
+      // An image wrapped in a link has just one interactive destination.
+      const caption = node?.children.length === 1 && only?.type === 'element' && only.tagName === 'img'
+        ? String(only.properties.alt || '查看图片') : children;
+      return link(href, caption);
+    },
+    img: ({ alt, src }) => link(src, alt || '查看图片链接'),
     pre: ({ children }) => <div className="code-block"><pre>{children}</pre></div>,
     table: ({ children }) => <div className="table-scroll"><table>{children}</table></div>,
   }}>{text}</ReactMarkdown></div>;
@@ -75,47 +101,23 @@ export function fileSize(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export function FileChip({ file, onOpen, onRemove }: { file: RemoteFile; onOpen?: () => void; onRemove?: () => void }) {
+export function FileChip({ file, onOpen, onRemove, onDownload }: { file: RemoteFile; onOpen?: () => void; onRemove?: () => void; onDownload?: (file: RemoteFile) => void }) {
   return <div className="file-chip">
-    <button type="button" className="file-chip-main" onClick={onOpen} disabled={!onOpen}>
+    <button type="button" className="file-chip-main" aria-label={`预览 ${file.name}`} title={`预览 ${file.name}`} onClick={onOpen} disabled={!onOpen}>
       {fileIcon(file)}<span><strong>{file.name}</strong><small>{fileSize(file.size)}{file.kind === 'artifact' ? ' · 产物' : ''}</small></span>
     </button>
+    {onDownload && <IconButton label={`下载 ${file.name}`} onClick={() => onDownload(file)}><Download size={16} /></IconButton>}
     {onRemove && <IconButton label={`移除附件 ${file.name}`} onClick={onRemove}><X size={14} /></IconButton>}
   </div>;
 }
 
-function ToolItem({ item, onFile }: { item: RemoteItem; onFile: (file: RemoteFile) => void }) {
-  const busy = isBusy(item.status || '');
-  const title = String(item.data?.title || item.data?.name || item.data?.toolName || item.data?.tool || (item.type === 'fileChange' ? '文件变更' : item.type === 'reasoning' ? '思考过程' : '工具执行'));
-  const command = typeof item.data?.command === 'string' ? item.data.command : '';
-  const diff = typeof item.data?.diff === 'string' ? item.data.diff : '';
-  const changes = Array.isArray(item.data?.changes) ? item.data.changes as { path?: string; kind?: string; diff?: string }[] : [];
-  return <details className={`tool-card ${busy ? 'is-running' : ''}`}>
-    <summary>{busy ? <Spinner label="工具执行中" /> : item.type === 'fileChange' ? <FileCode2 size={16} /> : <Terminal size={16} />}
-      <strong>{title}</strong><span className="tool-state">{busy ? '执行中' : ['failed', 'error'].includes(item.status || '') ? '失败' : '查看详情'}</span><ChevronDown size={15} />
-    </summary>
-    <div className="tool-body">
-      {command && <pre className="command">{command}</pre>}
-      {diff && <pre className="diff">{diff}</pre>}
-      {changes.map((change, index) => <div className="file-change" key={`${change.path || ''}-${index}`}>
-        <div className="file-change-name"><FileCode2 size={14} /><span>{change.path || '文件变更'}</span>{change.kind && <small>{change.kind}</small>}</div>
-        {change.diff && <pre className="diff">{change.diff}</pre>}
-      </div>)}
-      {typeof item.data?.exitCode === 'number' && <p className="muted tool-exit">退出码：{item.data.exitCode}</p>}
-      {item.text && <Markdown text={item.text} />}
-      {!item.text && !command && !diff && !changes.length && <p className="muted">运行端尚未提供详细内容。</p>}
-      {!!item.files?.length && <div className="file-list">{item.files.map(file => <FileChip key={file.id} file={file} onOpen={() => onFile(file)} />)}</div>}
-    </div>
-  </details>;
-}
-
-export const MessageItem = memo(function MessageItem({ item, clientName, onFile }: { item: RemoteItem; clientName: string; onFile: (file: RemoteFile) => void }) {
-  if (item.type !== 'message' || item.role === 'tool') return <ToolItem item={item} onFile={onFile} />;
-  return <article className={`message ${item.role}`}>
+export const MessageItem = memo(function MessageItem({ item, clientName, onFile, hiddenUrls, sessionFiles }: { item: RemoteItem; clientName: string; onFile: (file: RemoteFile) => void; hiddenUrls?: ReadonlySet<string>; sessionFiles?: SessionFiles }) {
+  if (!isTranscriptMessage(item)) return null;
+  return <article data-history-item={item.id} className={`message ${item.role}`}>
     <div className="message-meta"><span>{item.role === 'user' ? '你' : item.role === 'system' ? '系统' : clientName}</span><CopyButton text={item.text} label="复制消息" /></div>
     <div className="message-content">
-      {item.role === 'user' ? <p className="user-text">{item.text}</p> : <Markdown text={item.text} />}
-      {!!item.files?.length && <div className="file-list">{item.files.map(file => <FileChip key={file.id} file={file} onOpen={() => onFile(file)} />)}</div>}
+      {item.role === 'user' ? <p className="user-text">{item.text}</p> : <Markdown text={item.text} hiddenUrls={hiddenUrls} files={sessionFiles} />}
+      {!!item.files?.length && <div className="file-list">{item.files.map(file => <FileChip key={file.id} file={file} onOpen={() => onFile(file)} onDownload={sessionFiles?.download} />)}</div>}
       {isBusy(item.status || '') && <Dots />}
     </div>
   </article>;
@@ -128,22 +130,28 @@ export function ApprovalCard({ approval, canRespond, onRespond }: {
   const [answers, setAnswers] = useState<QuestionAnswers>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [submitted, setSubmitted] = useState(false);
+  const sending = useRef(false);
   const id = useId();
   const respond = async (decision: ApprovalDecision) => {
-    if (busy || !canRespond) return;
+    if (sending.current || approval.desktopOnly || !canRespond) return;
+    sending.current = true;
     setBusy(true); setError('');
-    try { await onRespond(decision, answers); }
-    catch (failure) { setError(errorMessage(failure)); }
+    try { await onRespond(decision, decision === 'accept' ? answers : {}); setSubmitted(true); }
+    catch (failure) { sending.current = false; setError(errorMessage(failure)); }
     finally { setBusy(false); }
   };
   const unanswered = approval.questions?.some(question => {
     const value = answers[question.id];
-    return question.required !== false && (!value || (Array.isArray(value) ? !value.length : !value.trim()));
+    if (!value || (Array.isArray(value) ? !value.length : !value.trim())) return question.required !== false;
+    if (question.inputType === 'integer') return typeof value !== 'string' || !Number.isInteger(Number(value));
+    if (question.inputType === 'number') return typeof value !== 'string' || !Number.isFinite(Number(value));
+    return false;
   });
   return <section className="approval-card" aria-label={approval.title}>
     <div className="approval-heading"><span className="approval-indicator" /><strong>{approval.title || (approval.type === 'question' ? '需要你补充信息' : '需要你的确认')}</strong></div>
     {approval.message && <Markdown text={approval.message} />}
-    {approval.questions?.map((question, index) => <fieldset key={question.id} className="question">
+    {approval.questions?.map((question, index) => <fieldset key={question.id} className="question" disabled={busy || submitted || !canRespond || approval.desktopOnly}>
       <legend>{question.prompt}</legend>
       {!!question.options?.length && <div className="answer-options">{question.options.map(option => {
         const value = answers[question.id];
@@ -158,17 +166,22 @@ export function ApprovalCard({ approval, canRespond, onRespond }: {
           <span>{option.label}</span>{checked && <Check size={15} />}
         </label>;
       })}</div>}
-      <label className="answer-custom" htmlFor={`${id}-${index}`}>{question.options?.length ? '或填写你的回答' : '你的回答'}</label>
-      <textarea id={`${id}-${index}`} rows={2} value={Array.isArray(answers[question.id]) ? '' : answers[question.id] || ''} disabled={busy || !canRespond} onChange={event => setAnswers(previous => ({ ...previous, [question.id]: event.target.value }))} />
+      {(!question.options?.length || question.allowOther !== false) && <>
+        <label className="answer-custom" htmlFor={`${id}-${index}`}>{question.options?.length ? '或填写你的回答' : '你的回答'}</label>
+        {question.inputType === 'number' || question.inputType === 'integer'
+          ? <input id={`${id}-${index}`} type="number" step={question.inputType === 'integer' ? 1 : 'any'} value={answers[question.id] || ''} onChange={event => setAnswers(previous => ({ ...previous, [question.id]: event.target.value }))} />
+          : <textarea id={`${id}-${index}`} rows={2} value={Array.isArray(answers[question.id]) ? '' : answers[question.id] || ''} onChange={event => setAnswers(previous => ({ ...previous, [question.id]: event.target.value }))} />}
+      </>}
     </fieldset>)}
     {error && <p className="inline-error" role="alert">{error}</p>}
-    {!canRespond && <p className="muted">当前运行端未开放此操作，请在目标电脑处理。</p>}
-    <div className="approval-actions">
+    {approval.desktopOnly ? <p className="muted">这项请求需在目标客户端处理。</p> : !canRespond && <p className="muted">当前运行端未开放此操作，请在目标电脑处理。</p>}
+    {submitted ? <p role="status">已提交，正在同步目标端。</p> : !approval.desktopOnly && <div className="approval-actions">
       {approval.type !== 'question' && approval.choices?.length ? approval.choices.map((choice, index) => <button key={choice.value} type="button" className={`button ${index === 0 ? 'primary' : 'secondary'}`} disabled={busy || !canRespond} onClick={() => void respond(choice.value)}>{busy && index === 0 && <Spinner />}{choice.label}</button>) : <>
         <button type="button" className="button secondary" disabled={busy || !canRespond} onClick={() => void respond(approval.type === 'question' ? 'cancel' : 'decline')}>{approval.type === 'question' ? '取消' : '拒绝'}</button>
+        {approval.type === 'question' && approval.canDecline && <button type="button" className="button secondary" disabled={busy || !canRespond} onClick={() => void respond('decline')}>拒绝</button>}
         <button type="button" className="button primary" disabled={busy || !canRespond || !!unanswered} onClick={() => void respond('accept')}>{busy && <Spinner />}{approval.type === 'question' ? '提交回答' : '允许执行'}</button>
       </>}
-    </div>
+    </div>}
   </section>;
 }
 
@@ -196,9 +209,9 @@ export function Modal({ title, children, close }: { title: string; children: Rea
   </div>;
 }
 
-export function FilePreview({ api, clientId, sessionId, file, close, notify }: {
+export function FilePreview({ api, clientId, sessionId, file, close, download }: {
   api: RemoteApi; clientId: string; sessionId: string; file: RemoteFile; close: () => void;
-  notify: (text: string, tone?: 'success' | 'error') => void;
+  download: (file: RemoteFile) => Promise<void>;
 }) {
   const [url, setUrl] = useState('');
   const [text, setText] = useState<string | null>(null);
@@ -226,16 +239,12 @@ export function FilePreview({ api, clientId, sessionId, file, close, notify }: {
     return () => { abort.abort(); if (objectUrl) URL.revokeObjectURL(objectUrl); };
   }, [api, clientId, sessionId, file.id, file.name, file.mimeType]);
 
-  const download = async () => {
+  const save = async () => {
     if (downloading) return;
     setDownloading(true);
     try {
-      const blob = await api.readFile(clientId, sessionId, file.id, true);
-      const objectUrl = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = objectUrl; link.download = file.name; document.body.append(link); link.click(); link.remove();
-      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 30000);
-    } catch (failure) { notify(errorMessage(failure), 'error'); }
+      await download(file);
+    }
     finally { setDownloading(false); }
   };
   return <Modal title={file.name} close={close}>
@@ -246,6 +255,6 @@ export function FilePreview({ api, clientId, sessionId, file, close, notify }: {
         url && mime === 'application/pdf' ? <iframe className="pdf-preview" title={file.name} src={url} /> :
         <div className="preview-empty"><File size={40} /><p>此格式可下载后查看</p></div>}
     </div>
-    <div className="modal-footer"><span className="muted">{fileSize(file.size)}</span><button type="button" className="button primary" onClick={() => void download()} disabled={downloading}>{downloading ? <Spinner /> : <Download size={16} />}下载文件</button></div>
+    <div className="modal-footer"><span className="muted">{fileSize(file.size)}</span><button type="button" className="button primary" onClick={() => void save()} disabled={downloading}>{downloading ? <Spinner /> : <Download size={16} />}下载文件</button></div>
   </Modal>;
 }

@@ -1,10 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
-import { ApiError, RemoteApi } from './api';
-import { applyEvent, emptyChat, fromHistory, prependHistory } from './session-state';
+import { accessEnded, ApiError, RemoteApi } from './api';
+import { applyEvent, emptyChat, fromHistory, isCompletedItem, isTranscriptMessage, prependHistory } from './session-state';
 import type { ChatState } from './session-state';
 import { errorMessage, isBusy } from './types';
 import type { ConnectionState, HistoryResponse, RemoteClient } from './types';
+import { onPageResume } from './page-resume';
+import { activityPreferences, captureActivity, defaultActivity } from './live-activity';
+import type { ActivityRow } from './live-activity';
+import { ArtifactDisplay } from './artifact-display';
+import type { RemoteItem } from './types';
 
 function wait(milliseconds: number, signal: AbortSignal): Promise<void> {
   return new Promise(resolve => {
@@ -18,7 +23,13 @@ function wait(milliseconds: number, signal: AbortSignal): Promise<void> {
 /** Keep already paged history when reconnecting to the newest native snapshot. */
 export function mergeSnapshot(previous: ChatState, history: HistoryResponse): ChatState {
   const next = fromHistory(history);
-  if (!history.items.length) return next;
+  if (!history.items.length) {
+    // A current target can omit an entire activity-only page. Its stable
+    // pagination boundary still anchors the older transcript already fetched.
+    return history.nextCursor && history.nextCursor === previous.snapshotNextCursor
+      ? { ...next, items: previous.items, snapshotItemIds: previous.snapshotItemIds, nextCursor: previous.nextCursor }
+      : next;
+  }
   const anchor = previous.items.findIndex(item => item.id === history.items[0].id);
   if (anchor <= 0) return next;
   const prefix = previous.items.slice(0, anchor);
@@ -57,18 +68,37 @@ export function useSession(api: RemoteApi | null, client: RemoteClient | null, s
   }, []);
   const [connection, setConnection] = useState<ConnectionState>('connecting');
   const [loading, setLoading] = useState(false);
+  const [hasSnapshot, setHasSnapshot] = useState(false);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [error, setError] = useState('');
   const [revision, setRevision] = useState(0);
+  const olderRequest = useRef<AbortController | null>(null);
+  const blocked = useRef(false);
   const identityRef = useRef('');
   const generation = useRef(0);
   const clientId = client?.id;
+  const supportsActivity = client?.capabilities.liveActivity === true;
+  const preferenceRef = useRef({ ...defaultActivity });
+  const [displayManaged, setDisplayManaged] = useState(false);
+  const [activityRows, setActivityRows] = useState<ActivityRow[]>([]);
+  const artifactDisplay = useRef(new ArtifactDisplay());
+  const receivedInitialPage = useRef(false);
+  const receiveDisplay = useCallback((raw: unknown) => {
+    const next = activityPreferences(raw);
+    if (next.artifact && !preferenceRef.current.artifact) artifactDisplay.current.markEnable();
+    preferenceRef.current = next;
+    setDisplayManaged(!!raw && typeof raw === 'object');
+  }, []);
   const canRead = !!client?.ready && !!client?.capabilities.history;
   const refresh = useCallback(() => setRevision(value => value + 1), []);
+  // Waking a frozen tab does not guarantee that its old event stream receives
+  // more bytes or even closes. Re-read the same thread without remounting it.
+  useEffect(() => onPageResume(() => { if (!blocked.current) refresh(); }), [refresh]);
 
   useEffect(() => {
     const identity = `${api?.deviceId}\0${clientId}\0${sessionId}`;
     const changed = identityRef.current !== identity;
+    blocked.current = false;
     identityRef.current = identity;
     const currentGeneration = ++generation.current;
     const abort = new AbortController();
@@ -76,7 +106,13 @@ export function useSession(api: RemoteApi | null, client: RemoteClient | null, s
     let snapshotInFlight = false;
     let snapshotDirty = false;
     let streamEpoch = 0;
-    if (changed) setChat(emptyChat);
+    if (changed) {
+      artifactDisplay.current = new ArtifactDisplay();
+      preferenceRef.current = { ...defaultActivity };
+      setDisplayManaged(false);
+      receivedInitialPage.current = false;
+      setChat(emptyChat); setActivityRows([]); setHasSnapshot(false);
+    }
     setError('');
     setLoadingEarlier(false);
     if (!api || !clientId || !sessionId || !canRead) {
@@ -84,7 +120,7 @@ export function useSession(api: RemoteApi | null, client: RemoteClient | null, s
       setConnection('offline');
       return () => abort.abort();
     }
-    setLoading(changed);
+    setLoading(changed || !chatRef.current.items.length);
     setConnection(changed ? 'connecting' : 'reconnecting');
     // Coalesce ambiguous deltas into absolute native refreshes, without
     // interrupting the established SSE subscription or replaying any turn.
@@ -100,6 +136,9 @@ export function useSession(api: RemoteApi | null, client: RemoteClient | null, s
         const requestCursor = chatRef.current.cursor;
         void api.history(clientId, sessionId, null, abort.signal).then(snapshot => {
           if (abort.signal.aborted || generation.current !== currentGeneration || scheduledEpoch !== streamEpoch) return;
+          // A background read may contain the entire turn. An unobserved
+          // artifact in that snapshot has no trustworthy generation boundary.
+          artifactDisplay.current.record(snapshot.items, false);
           setChat(previous => mergeLiveSnapshot(previous, snapshot, requestCursor));
         }).catch(failure => {
           if (!abort.signal.aborted && scheduledEpoch === streamEpoch) setError(errorMessage(failure));
@@ -118,8 +157,16 @@ export function useSession(api: RemoteApi | null, client: RemoteClient | null, s
         try {
           const snapshot = await api.history(clientId, sessionId, null, abort.signal);
           if (abort.signal.aborted) return;
+          receiveDisplay(snapshot.displayContent);
           let cursor = snapshot.cursor || 0;
+          // A resumed item's initial text may already contain queued deltas.
+          // Reconcile it once mid-stream, then use native completion / the
+          // end-of-turn snapshot instead of polling history as tokens arrive.
+          const reconciled = new Set<string>();
+          artifactDisplay.current.record(snapshot.items, !receivedInitialPage.current);
+          receivedInitialPage.current = true;
           setChat(previous => mergeSnapshot(previous, snapshot));
+          setHasSnapshot(true);
           setLoading(false);
           setError('');
           // This is set to live only when the SSE response has actually arrived.
@@ -129,7 +176,29 @@ export function useSession(api: RemoteApi | null, client: RemoteClient | null, s
             if (event.type === 'reset') throw new RefreshSnapshot();
             if (event.id <= cursor) return;
             cursor = event.id;
-            if (event.type === 'message.delta' && event.itemId && chatRef.current.snapshotItemIds.has(event.itemId)) scheduleSnapshot();
+            receiveDisplay(event.data.displayContent);
+            if (event.type === 'item.updated') {
+              const item = event.data.item as RemoteItem | undefined;
+              if (item?.id) {
+                const fresh = !isCompletedItem(event) || artifactDisplay.current.allowComplete(item);
+                artifactDisplay.current.record([item], preferenceRef.current.artifact && fresh);
+              }
+            } else if (event.type === 'message.delta' && event.itemId) artifactDisplay.current.bindLinks(event.itemId);
+            if (supportsActivity && event.data.liveActivity) {
+              const choicesAtReceipt = preferenceRef.current;
+              if (choicesAtReceipt.reasoning || choicesAtReceipt.tool || choicesAtReceipt.fileChange) {
+                const items = chatRef.current.items;
+                let anchor: string | undefined;
+                for (let i = items.length - 1; i >= 0; i--) {
+                  if (isTranscriptMessage(items[i])) { anchor = items[i].id; break; }
+                }
+                setActivityRows(rows => captureActivity(rows, event, choicesAtReceipt, anchor));
+              }
+            }
+            if (event.type === 'message.delta' && event.itemId && chatRef.current.snapshotItemIds.has(event.itemId) && !reconciled.has(event.itemId)) {
+              reconciled.add(event.itemId);
+              scheduleSnapshot();
+            }
             if (event.type === 'turn.updated') {
               const status = String(event.data.status || chatRef.current.status);
               if (!isBusy(status) && status !== chatRef.current.status) scheduleSnapshot();
@@ -138,7 +207,7 @@ export function useSession(api: RemoteApi | null, client: RemoteClient | null, s
             setChat(previous => applyEvent(previous, event, clientId, sessionId));
           }, () => {
             if (!abort.signal.aborted) { failures = 0; setConnection('live'); }
-          });
+          }, supportsActivity);
           if (abort.signal.aborted) return;
           setConnection('reconnecting');
           setError('连接已断开，正在重新连接。目标端任务会继续运行。');
@@ -147,7 +216,8 @@ export function useSession(api: RemoteApi | null, client: RemoteClient | null, s
           setLoading(false);
           if (failure instanceof RefreshSnapshot) continue;
           setError(errorMessage(failure));
-          if (failure instanceof ApiError && [401, 403, 404, 409, 422, 501].includes(failure.status)) {
+          if (failure instanceof ApiError && [401, 403, 404, 409, 410, 422, 501].includes(failure.status)) {
+            blocked.current = accessEnded(failure);
             setConnection('offline');
             return;
           }
@@ -157,23 +227,40 @@ export function useSession(api: RemoteApi | null, client: RemoteClient | null, s
         await wait(Math.min(1000 * 2 ** Math.min(failures - 1, 4), 10000), abort.signal);
       }
     })();
-    return () => { abort.abort(); if (snapshotTimer !== null) clearTimeout(snapshotTimer); };
-  }, [api, clientId, sessionId, canRead, revision, setChat]);
+    return () => { abort.abort(); olderRequest.current?.abort(); olderRequest.current = null; if (snapshotTimer !== null) clearTimeout(snapshotTimer); };
+  }, [api, clientId, sessionId, canRead, revision, setChat, supportsActivity, receiveDisplay]);
 
-  const earlier = useCallback(async () => {
-    if (!api || !clientId || !sessionId || !chat.nextCursor || loadingEarlier) return false;
+  const earlier = useCallback(async (beforePrepend: () => void) => {
+    let cursor = chatRef.current.nextCursor;
+    if (!api || !clientId || !sessionId || !cursor || olderRequest.current) return false;
     const current = generation.current;
+    const request = new AbortController();
+    olderRequest.current = request;
     setLoadingEarlier(true);
     try {
-      const page = await api.history(clientId, sessionId, chat.nextCursor);
-      if (current === generation.current) { setChat(previous => prependHistory(previous, page)); return true; }
+      // A native page can contain only hidden activity. Advance through a small
+      // batch; longer runs keep the earlier button instead of draining history.
+      const visited = new Set<string>();
+      while (cursor && visited.size < 3 && !visited.has(cursor)) {
+        visited.add(cursor);
+        const page = await api.history(clientId, sessionId, cursor, request.signal);
+        if (request.signal.aborted || current !== generation.current || chatRef.current.nextCursor !== cursor) break;
+        const knownIds = chatRef.current.snapshotItemIds;
+        artifactDisplay.current.record(page.items, true);
+        const visible = page.items.some(i => isTranscriptMessage(i) && !knownIds.has(i.id));
+        beforePrepend();
+        setChat(previous => prependHistory(previous, page.nextCursor && visited.has(page.nextCursor) ? { ...page, nextCursor: null } : page));
+        if (visible || !chatRef.current.nextCursor) return true;
+        cursor = chatRef.current.nextCursor;
+      }
     } catch (failure) {
-      if (current === generation.current) setError(errorMessage(failure));
+      if (!request.signal.aborted && current === generation.current) setError(errorMessage(failure));
     } finally {
+      if (olderRequest.current === request) olderRequest.current = null;
       if (current === generation.current) setLoadingEarlier(false);
     }
     return false;
-  }, [api, clientId, sessionId, chat.nextCursor, loadingEarlier, setChat]);
+  }, [api, clientId, sessionId, setChat]);
 
-  return { chat, setChat, connection, loading, loadingEarlier, error, refresh, earlier };
+  return { chat, setChat, connection, loading, hasSnapshot, loadingEarlier, error, refresh, earlier, activityRows, displayManaged, artifactDisplay: artifactDisplay.current };
 }

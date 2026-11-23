@@ -338,8 +338,8 @@ fn show(parent: &Frame, en: bool) {
     let legacy = CheckBox::builder(&panel)
         .with_label(tr(
             en,
-            "同时归类未记录账号的旧会话",
-            "Also group older conversations with no recorded account",
+            "包含我确认属于自己的旧会话（未记录账号）",
+            "Include older chats without a recorded account that I recognize as mine",
         ))
         .build();
     sizer.add(&legacy, 0, SizerFlag::All, 16);
@@ -364,7 +364,7 @@ fn show(parent: &Frame, en: bool) {
     );
     let detail = TextCtrl::builder(&panel)
         .with_style(TextCtrlStyle::MultiLine | TextCtrlStyle::ReadOnly)
-        .with_size(Size::new(-1, panel.from_dip(84)))
+        .with_size(Size::new(-1, panel.from_dip(112)))
         .build();
 
     let pick_label = StaticText::builder(&panel)
@@ -568,6 +568,8 @@ fn show(parent: &Frame, en: bool) {
                                 update_action();
                                 status.set_label(if result.applied {
                                     tr(en, "修复已执行，请按下方说明验证", "Repair applied — follow the validation notes below")
+                                } else if project_counts == Some((0, 0)) && picks.get_count() == 0 {
+                                    tr(en, "当前没有可应用的项目修复，请查看检查结果", "No project repair to apply. See the inspection details.")
                                 } else { tr(en, "检查处理已结束", "Inspection completed") });
                                 detail.change_value(&result.message);
                             }

@@ -67,6 +67,48 @@ fn integrated_shell_keeps_native_hit_targets_controls_and_vetoable_close() {
                     assert_eq!(path.get_label().as_deref(), Some(expected));
                 }
                 shell.navigate(shell::PageId::Overview);
+                let content = shell.assistant_host;
+                let book_client = || {
+                    let at = content.screen_to_client(shell.book.client_to_screen(Point::new(0, 0)));
+                    let size = shell.book.get_size();
+                    Rect::new(at.x, at.y, size.width, size.height)
+                };
+                let normal = book_client();
+                let remote_page = Panel::builder(&shell.book).build();
+                shell.register_viewport(shell::PageId::Remote, &remote_page);
+                shell.navigate(shell::PageId::Remote);
+                let remote = book_client();
+                let content_size = content.get_client_size();
+                assert_eq!(remote.x, 0);
+                assert_eq!(remote.width, content_size.width);
+                assert_eq!(remote.y + remote.height, content_size.height);
+                shell.set_assistant_ready(true);
+                assert_eq!(book_client(), remote, "the launcher must not take a layout row");
+                let button = shell.assistant_launcher;
+                assert_eq!(button.get_parent().unwrap().handle_ptr(), content.handle_ptr());
+                assert_eq!(button.get_size(), visual::dip_size(&button, 44, 44));
+                let at = button.get_position();
+                assert!(at.x + button.get_size().width <= content_size.width - button.from_dip(20));
+                assert!(at.y + button.get_size().height <= content_size.height - button.from_dip(20));
+                shell.set_assistant_ready(false);
+                assert_eq!(book_client(), remote);
+                let settings = ScrolledWindow::builder(&shell.book)
+                    .with_style(ScrolledWindowStyle::VScroll).build();
+                settings.set_scroll_rate(0, settings.from_dip(10));
+                let body = BoxSizer::builder(Orientation::Vertical).build();
+                let body_item = Panel::builder(&settings).build();
+                body_item.set_min_size(visual::dip_size(&body_item, 80, 1200));
+                body.add(&body_item, 0, SizerFlag::Expand, 0);
+                shell::inset_page_content(&settings, body);
+                shell.register(shell::PageId::Settings, &settings);
+                shell.navigate(shell::PageId::Settings);
+                settings.layout();
+                settings.fit_inside();
+                assert_eq!(book_client(), remote, "page-wide scrollbars belong at the edge");
+                assert!(settings.get_virtual_size().height > settings.get_client_size().height);
+                assert_eq!(body_item.get_position().x, normal.x, "inset the content, not the scrollbar");
+                shell.navigate(shell::PageId::Overview);
+                assert_eq!(book_client(), normal, "restore the normal page gutter");
                 update_service_badge(&shell.service, true, false);
                 assert_eq!(shell.service.get_label(), "本机服务");
                 assert_eq!(shell.service.get_foreground_color(), theme::theme().ok);

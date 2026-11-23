@@ -22,6 +22,10 @@
     <!-- Earlier packages used ProductLanguage=0. Match their UpgradeCode regardless of language. -->
     <!-- Equal-version rebuilds must replace the EXE; higher file versions still win. -->
     <Property Id="REINSTALLMODE" Value="emus" />
+    <!-- The GUI and its windowless daemon both hold the installed EXE. Let RM
+         finish closing unresponsive holders, without restarting them afterwards. -->
+    <Property Id="MSIRMSHUTDOWN" Value="1" />
+    <Property Id="MSIDISABLERMRESTART" Value="1" />
 
     <!-- zh-CN resources control the UI text; MajorUpgrade also detects legacy neutral-language packages. -->
     <!-- A user-selected launch belongs only to the successful full-UI exit page. -->
@@ -34,6 +38,13 @@
       Return="ignore" />
 
     <!-- New installs and major upgrades share confirmation, progress and explicit completion. -->
+    <CustomAction Id="RemoveUserLoginStartup" FileRef="TianCaiSpaceHubExe"
+                  ExeCommand="remove-login-startup" Execute="deferred"
+                  Impersonate="yes" Return="ignore" />
+    <InstallExecuteSequence>
+      <Custom Action="RemoveUserLoginStartup" Before="RemoveFiles"
+              Condition='Installed AND REMOVE~="ALL" AND NOT UPGRADINGPRODUCTCODE' />
+    </InstallExecuteSequence>
     <UIRef Id="WixUI_Common" />
     <UI Id="TianCaiSpaceHubUI">
       <TextStyle Id="WixUI_Font_Normal" FaceName="Microsoft YaHei UI" Size="9" />
@@ -50,7 +61,7 @@
       <Dialog Id="TianCaiSpaceHubReadyDlg" Width="370" Height="220" Title="[ProductName] 安装程序">
         <Control Id="Title" Type="Text" X="20" Y="20" Width="330" Height="25" NoPrefix="yes" Text="{\WixUI_Font_Bigger}安装 / 升级 TianCaiSpaceHub" />
         <Control Id="Description" Type="Text" X="20" Y="60" Width="330" Height="45" NoPrefix="yes" Text="将安装 TianCaiSpaceHub；检测到旧版本时，会替换为本次版本并保留已有配置。" />
-        <Control Id="ExitReminder" Type="Text" X="20" Y="110" Width="330" Height="50" NoPrefix="yes" Text="开始前请从托盘菜单“退出”Hub，关闭窗口只会隐藏。完成后可选择打开新版程序或结束安装。" />
+        <Control Id="ExitReminder" Type="Text" X="20" Y="110" Width="330" Height="50" NoPrefix="yes" Text="请先保存 Hub 中尚未保存的编辑。若提示文件正在使用，可选择“关闭应用程序并继续安装”；安装成功后再选择是否打开新版 Hub。" />
         <Control Id="BottomLine" Type="Line" X="0" Y="175" Width="370" Height="0" />
         <Control Id="Install" Type="PushButton" X="120" Y="190" Width="170" Height="20" Default="yes" ElevationShield="yes" Text="开始安装 / 升级">
           <Publish Event="EndDialog" Value="Return" />

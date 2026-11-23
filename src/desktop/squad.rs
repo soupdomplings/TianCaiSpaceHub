@@ -280,7 +280,7 @@ impl Squad {
             .json(&body)
             .send()
             .await
-            .map_err(|_| anyhow::anyhow!("天才搭档模型 API 连接中断，请稍后重试"))?;
+            .map_err(crate::assistant::model_transport_error)?;
         self.assistant_account(expected)?;
         Ok(response)
     }

@@ -6,7 +6,7 @@ use anyhow::{Context, Result, ensure};
 use axum::{
     Json, Router,
     body::Body,
-    extract::{Path, Request, State},
+    extract::{OriginalUri, Path, Request, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -25,7 +25,6 @@ use crate::app_state::SharedState;
 
 pub(super) struct Transport {
     pub browser_base: String,
-    pub browser_ticket: String,
     target_handle: axum_server::Handle,
     target_task: JoinHandle<()>,
     local_task: JoinHandle<()>,
@@ -41,6 +40,25 @@ impl Drop for Transport {
         self.target_task.abort();
         self.local_task.abort();
     }
+}
+
+async fn browser_listener(
+    state: &SharedState,
+    preferred: u16,
+) -> Result<(tokio::net::TcpListener, String)> {
+    let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, preferred))
+        .await
+        .with_context(|| format!("无法打开本机网页端口 {preferred}，请关闭占用该端口的程序"))?;
+    let port = listener.local_addr()?.port();
+    let mut inner = state.remote_network.inner.lock().await;
+    if inner.config.browser_port != port || inner.secrets.browser_key.is_empty() {
+        inner.config.browser_port = port;
+        if inner.secrets.browser_key.is_empty() {
+            inner.secrets.browser_key = super::random_token();
+        }
+        super::persist(state, &inner)?;
+    }
+    Ok((listener, inner.secrets.browser_key.clone()))
 }
 
 pub(super) async fn start(
@@ -61,11 +79,8 @@ pub(super) async fn start(
     let target_listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, SERVICE_PORT))
         .context("远程会话端口 3861 被占用，请关闭占用程序后重新启用")?;
     target_listener.set_nonblocking(true)?;
-    let local_listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
-        .await
-        .context("无法打开本机网页入口")?;
+    let (local_listener, remember_key) = browser_listener(&state, config.browser_port).await?;
     let browser_base = format!("http://127.0.0.1:{}", local_listener.local_addr()?.port());
-    let browser_ticket = super::random_token();
     let target_handle = axum_server::Handle::new();
     let server = axum_server::from_tcp_rustls(target_listener, tls).handle(target_handle.clone());
     let target_routes = target_router(state.clone()).with_state(state.clone());
@@ -83,15 +98,12 @@ pub(super) async fn start(
     let guard = BrowserGuard {
         state: state.clone(),
         base: browser_base.clone(),
-        ticket: browser_ticket.clone(),
+        session: super::random_token(),
+        remember_path: remember_path(&remember_key),
+        remember_key,
         cookie_name: format!("tch_remote_{}", local_listener.local_addr()?.port()),
     };
-    let routes = Router::new()
-        .route("/api/remote/v1/devices", get(devices))
-        .route("/api/remote/v1/{*path}", any(proxy))
-        .merge(crate::remote_frontend::router())
-        .layer(middleware::from_fn_with_state(guard, local_guard))
-        .with_state(state);
+    let routes = browser_router(state, guard);
     let (tx, rx) = oneshot::channel();
     let local_task = tokio::spawn(async move {
         let _ = axum::serve(local_listener, routes)
@@ -102,7 +114,6 @@ pub(super) async fn start(
     });
     Ok(Transport {
         browser_base,
-        browser_ticket,
         target_handle,
         target_task,
         local_task,
@@ -119,6 +130,65 @@ pub(super) async fn stop(mut transport: Transport) {
     let _ = tokio::time::timeout(Duration::from_secs(2), &mut transport.local_task).await;
 }
 
+fn browser_router(state: SharedState, guard: BrowserGuard) -> Router {
+    Router::new()
+        .route("/api/remote/v1/devices", get(devices))
+        // Strip the static prefix without adding a wildcard to the session
+        // handler's Path(client, session, ...) parameters.
+        .nest_service("/api/remote/v1", any(proxy).with_state(state.clone()))
+        .merge(crate::remote_frontend::router())
+        .layer(middleware::from_fn_with_state(guard, local_guard))
+        .with_state(state)
+}
+
+#[derive(Default)]
+pub(super) struct PeerClients(std::collections::HashMap<String, PeerRoute>);
+
+struct PeerRoute {
+    socks: u16,
+    address: String,
+    certificate: String,
+    client: std::sync::Arc<once_cell::sync::OnceCell<reqwest::Client>>,
+}
+
+impl PeerClients {
+    // Obtain the slot while the pairing/runtime snapshot is locked. TLS
+    // setup and all I/O run after releasing that lock.
+    fn slot(
+        &mut self,
+        target: &DeviceIdentity,
+        socks: u16,
+    ) -> std::sync::Arc<once_cell::sync::OnceCell<reqwest::Client>> {
+        let route = self.0.entry(target.id.clone());
+        let init = || PeerRoute {
+            socks,
+            address: target.ipv4.clone(),
+            certificate: target.certificate_pem.clone(),
+            client: Default::default(),
+        };
+        let route = match route {
+            std::collections::hash_map::Entry::Occupied(entry) => {
+                let value = entry.into_mut();
+                if value.socks != socks
+                    || value.address != target.ipv4
+                    || value.certificate != target.certificate_pem
+                {
+                    *value = init();
+                }
+                value
+            }
+            std::collections::hash_map::Entry::Vacant(entry) => entry.insert(init()),
+        };
+        route.client.clone()
+    }
+    pub(super) fn clear(&mut self) {
+        self.0.clear();
+    }
+    pub(super) fn remove(&mut self, id: &str) {
+        self.0.remove(id);
+    }
+}
+
 pub(super) fn peer_client(device: &DeviceIdentity, socks: u16) -> Result<reqwest::Client> {
     let certificate = reqwest::Certificate::from_pem(device.certificate_pem.as_bytes())
         .context("配对设备证书不可用，请重新配对")?;
@@ -128,6 +198,7 @@ pub(super) fn peer_client(device: &DeviceIdentity, socks: u16) -> Result<reqwest
         .tls_built_in_root_certs(false)
         .add_root_certificate(certificate)
         .redirect(reqwest::redirect::Policy::none())
+        .retry(reqwest::retry::never())
         .connect_timeout(Duration::from_secs(8))
         .build()
         .context("无法创建配对设备的加密连接")
@@ -140,7 +211,7 @@ fn target_router(state: SharedState) -> Router<SharedState> {
         .route("/network/pair/{request_id}", get(pair_status))
         .nest(
             "/api/remote/v1",
-            crate::remote_sessions::router()
+            super::wire::compress_json(crate::remote_sessions::router())
                 .layer(middleware::from_fn_with_state(state, authorize)),
         )
 }
@@ -308,8 +379,80 @@ fn bind_inbound_response(
 struct BrowserGuard {
     state: SharedState,
     base: String,
-    ticket: String,
+    session: String,
+    remember_key: String,
+    remember_path: String,
     cookie_name: String,
+}
+
+fn remember_path(key: &str) -> String {
+    use sha2::{Digest, Sha256};
+    format!(
+        "/remote/browser/{}",
+        hex::encode(&Sha256::digest(key.as_bytes())[..16])
+    )
+}
+
+fn has_cookie(request: &Request, name: &str, expected: &str) -> bool {
+    request
+        .headers()
+        .get(header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|value| {
+            value
+                .split(';')
+                .filter_map(|item| item.trim().split_once('='))
+                .any(|(n, v)| n == name && v == expected)
+        })
+}
+
+fn local_redirect(path: &str) -> Response {
+    let Ok(location) = HeaderValue::from_str(path) else {
+        return failure(StatusCode::BAD_REQUEST, "invalid_entry", "网页入口无效");
+    };
+    let mut response = StatusCode::SEE_OTHER.into_response();
+    response.headers_mut().insert(header::LOCATION, location);
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response.headers_mut().insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("no-referrer"),
+    );
+    response
+}
+
+fn browser_login(guard: &BrowserGuard, path: &str) -> Response {
+    let mut response = local_redirect(path);
+    // A cookie on 127.0.0.1 is not isolated by port. Only a per-run session
+    // cookie is sent on regular requests; the persistent credential is scoped
+    // to this installation's dedicated recovery path.
+    for value in [
+        format!(
+            "{}={}; HttpOnly; SameSite=Strict; Path=/",
+            guard.cookie_name, guard.session
+        ),
+        remembered_cookie(guard),
+    ] {
+        response.headers_mut().append(
+            header::SET_COOKIE,
+            HeaderValue::from_str(&value).expect("generated cookie"),
+        );
+    }
+    response
+}
+
+fn remembered_cookie(guard: &BrowserGuard) -> String {
+    format!(
+        "{}_remember={}; HttpOnly; SameSite=Strict; Path={}; Max-Age=34560000",
+        guard.cookie_name, guard.remember_key, guard.remember_path
+    )
+}
+
+fn local_read_path(path: &str) -> bool {
+    (path == "/remote" || path.starts_with("/remote/") || path.starts_with("/api/remote/v1/"))
+        && !path.starts_with("/remote/browser/")
+        && !path.contains(['\\', '#', '\r', '\n'])
 }
 
 async fn local_guard(State(guard): State<BrowserGuard>, request: Request, next: Next) -> Response {
@@ -347,11 +490,30 @@ async fn local_guard(State(guard): State<BrowserGuard>, request: Request, next: 
         url::form_urlencoded::parse(request.uri().query().unwrap_or("").as_bytes())
             .into_owned()
             .collect();
-    if request.uri().path() == "/remote/"
-        && query
-            .iter()
-            .any(|(key, value)| key == "ticket" && value == &guard.ticket)
+    if !guard.state.remote_network.inner.lock().await.config.enabled {
+        return failure(StatusCode::GONE, "remote_disabled", "远程连接已停用");
+    }
+    let read = request.method() == axum::http::Method::GET;
+    if read
+        && request.uri().path() == "/remote/"
+        && let Some((_, ticket)) = query.iter().find(|(key, _)| key == "ticket")
     {
+        if !guard
+            .state
+            .remote_network
+            .inner
+            .lock()
+            .await
+            .browser_launches
+            .remove(ticket)
+            .is_some_and(|until| until > now_ms())
+        {
+            return failure(
+                StatusCode::UNAUTHORIZED,
+                "launch_expired",
+                "打开网页的链接已用过或已过期，请从 Hub 重新打开",
+            );
+        }
         let mut serializer = url::form_urlencoded::Serializer::new(String::new());
         for (key, value) in query.iter().filter(|(key, _)| key != "ticket") {
             serializer.append_pair(key, value);
@@ -362,40 +524,44 @@ async fn local_guard(State(guard): State<BrowserGuard>, request: Request, next: 
         } else {
             format!("/remote/?{query}")
         };
-        let cookie = format!(
-            "{}={}; HttpOnly; SameSite=Strict; Path=/",
-            guard.cookie_name, guard.ticket
-        );
-        let mut response = StatusCode::SEE_OTHER.into_response();
-        if let (Ok(location), Ok(cookie)) = (
-            HeaderValue::from_str(&location),
-            HeaderValue::from_str(&cookie),
-        ) {
-            response.headers_mut().insert(header::LOCATION, location);
-            response.headers_mut().insert(header::SET_COOKIE, cookie);
-        }
-        return response;
+        return browser_login(&guard, &location);
     }
-    let allowed = request
-        .headers()
-        .get(header::COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|cookies| {
-            cookies.split(';').any(|pair| {
-                pair.trim()
-                    .split_once('=')
-                    .is_some_and(|(name, value)| name == guard.cookie_name && value == guard.ticket)
-            })
-        });
-    if !allowed {
+    if read && request.uri().path() == guard.remember_path {
+        if has_cookie(
+            &request,
+            &format!("{}_remember", guard.cookie_name),
+            &guard.remember_key,
+        ) {
+            let dest = query
+                .iter()
+                .find(|(k, v)| k == "next" && local_read_path(v))
+                .map(|(_, v)| v.as_str())
+                .unwrap_or("/remote/");
+            return browser_login(&guard, dest);
+        }
+        return failure(
+            StatusCode::UNAUTHORIZED,
+            "browser_session_required",
+            "请在本机 Hub 的远程连接中打开一次网页",
+        );
+    }
+    if !has_cookie(&request, &guard.cookie_name, &guard.session) {
+        let dest = request
+            .uri()
+            .path_and_query()
+            .map(|v| v.as_str())
+            .unwrap_or("/");
+        if read && local_read_path(dest) {
+            let query = url::form_urlencoded::Serializer::new(String::new())
+                .append_pair("next", dest)
+                .finish();
+            return local_redirect(&format!("{}?{query}", guard.remember_path));
+        }
         return failure(
             StatusCode::UNAUTHORIZED,
             "browser_session_required",
             "网页入口已失效，请在 Hub 的远程连接中重新打开",
         );
-    }
-    if !guard.state.remote_network.inner.lock().await.config.enabled {
-        return failure(StatusCode::GONE, "remote_disabled", "远程连接已停用");
     }
     let mut response = next.run(request).await;
     response
@@ -416,10 +582,15 @@ async fn local_guard(State(guard): State<BrowserGuard>, request: Request, next: 
 
 async fn devices(State(state): State<SharedState>) -> Json<Value> {
     let inner = state.remote_network.inner.lock().await;
-    Json(json!({"devices":device_rows(&inner),"localDeviceId":inner.config.device_id}))
+    Json(json!({"devices":device_rows(&inner),"localDeviceId":inner.config.device_id,
+        "webEntry":crate::remote_frontend::entry_script(),"hubVersion":env!("CARGO_PKG_VERSION")}))
 }
 
-async fn proxy(State(state): State<SharedState>, mut request: Request) -> Response {
+async fn proxy(
+    State(state): State<SharedState>,
+    OriginalUri(original_uri): OriginalUri,
+    mut request: Request,
+) -> Response {
     let receiver = state.remote_network.revocations.subscribe();
     let target_id = request
         .headers()
@@ -435,25 +606,6 @@ async fn proxy(State(state): State<SharedState>, mut request: Request) -> Respon
         .device_id
         .clone();
     if target_id.as_ref().is_none_or(|id| id == &local_id) {
-        let Some(path) = request
-            .uri()
-            .path_and_query()
-            .and_then(|v| v.as_str().strip_prefix("/api/remote/v1"))
-        else {
-            return failure(
-                StatusCode::BAD_REQUEST,
-                "invalid_remote_path",
-                "远程会话地址无效",
-            );
-        };
-        let Ok(uri) = path.parse() else {
-            return failure(
-                StatusCode::BAD_REQUEST,
-                "invalid_remote_path",
-                "远程会话地址无效",
-            );
-        };
-        *request.uri_mut() = uri;
         request.headers_mut().remove(header::AUTHORIZATION);
         request.headers_mut().remove("x-hub-device");
         return crate::remote_sessions::router()
@@ -464,24 +616,35 @@ async fn proxy(State(state): State<SharedState>, mut request: Request) -> Respon
     }
     let target_id = target_id.unwrap_or_default();
     let snapshot = {
-        let inner = state.remote_network.inner.lock().await;
-        inner
+        let mut inner = state.remote_network.inner.lock().await;
+        let peer = inner
             .config
             .paired
             .iter()
             .find(|device| device.id == target_id)
             .cloned()
-            .zip(inner.secrets.peers.get(&target_id).cloned())
-            .zip(inner.running.as_ref().map(|v| v.socks_port))
+            .zip(inner.secrets.peers.get(&target_id).cloned());
+        let route = peer.as_ref().and_then(|(target, _)| {
+            let socks = inner.running.as_ref()?.socks_port;
+            Some((socks, inner.proxy_clients.slot(target, socks)))
+        });
+        (peer, route)
     };
-    let Some(((target, credentials), socks)) = snapshot else {
+    let (Some((target, credentials)), route) = snapshot else {
         return failure(
             StatusCode::UNAUTHORIZED,
             "device_not_paired",
-            "目标设备尚未配对或已离线，请在 Hub 查看连接状态",
+            "目标设备尚未配对或授权已删除，请在 Hub 查看连接状态",
         );
     };
-    let client = match peer_client(&target, socks) {
+    let Some((socks, slot)) = route else {
+        return failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "network_reconnecting",
+            "个人网络正在重连，设备授权仍然有效",
+        );
+    };
+    let client = match slot.get_or_try_init(|| peer_client(&target, socks)) {
         Ok(client) => client,
         Err(error) => {
             return failure(
@@ -494,8 +657,7 @@ async fn proxy(State(state): State<SharedState>, mut request: Request) -> Respon
     let url = format!(
         "https://{}:{SERVICE_PORT}{}",
         target.ipv4,
-        request
-            .uri()
+        original_uri
             .path_and_query()
             .map(|v| v.as_str())
             .unwrap_or("/")
@@ -584,6 +746,115 @@ fn failure(status: StatusCode, code: &str, message: &str) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn browser_reads_reuse_one_socks_tls_connection_and_drop_it_after_revocation() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let rcgen::CertifiedKey { cert, key_pair } =
+            rcgen::generate_simple_self_signed(vec!["127.0.0.1".into()]).unwrap();
+        let pem = cert.pem();
+        let tls = axum_server::tls_rustls::RustlsConfig::from_pem(
+            pem.clone().into_bytes(),
+            key_pair.serialize_pem().into_bytes(),
+        )
+        .await
+        .unwrap();
+        let origin = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        origin.set_nonblocking(true).unwrap();
+        let target_addr = origin.local_addr().unwrap();
+        let target = tokio::spawn(async move {
+            axum_server::from_tcp_rustls(origin, tls)
+                .serve(
+                    Router::new()
+                        .route("/read", get(|| async { "ok" }))
+                        .into_make_service(),
+                )
+                .await
+        });
+        let proxy = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let proxy_port = proxy.local_addr().unwrap().port();
+        let tunnels = Arc::new(AtomicUsize::new(0));
+        let count = tunnels.clone();
+        let socks = tokio::spawn(async move {
+            while let Ok((mut stream, _)) = proxy.accept().await {
+                count.fetch_add(1, Ordering::SeqCst);
+                tokio::spawn(async move {
+                    let mut greeting = [0; 2];
+                    stream.read_exact(&mut greeting).await.unwrap();
+                    let mut methods = vec![0; greeting[1] as usize];
+                    stream.read_exact(&mut methods).await.unwrap();
+                    stream.write_all(&[5, 0]).await.unwrap();
+                    let mut request = [0; 4];
+                    stream.read_exact(&mut request).await.unwrap();
+                    assert_eq!(request, [5, 1, 0, 1]);
+                    let mut addr_port = [0; 6];
+                    stream.read_exact(&mut addr_port).await.unwrap();
+                    let mut remote = tokio::net::TcpStream::connect(target_addr).await.unwrap();
+                    stream
+                        .write_all(&[5, 0, 0, 1, 127, 0, 0, 1, 0, 0])
+                        .await
+                        .unwrap();
+                    let _ = tokio::io::copy_bidirectional(&mut stream, &mut remote).await;
+                });
+            }
+        });
+        let device = DeviceIdentity {
+            id: "fixture".into(),
+            name: "fixture".into(),
+            ipv4: "127.0.0.1".into(),
+            certificate_pem: pem,
+        };
+        let mut clients = PeerClients::default();
+        tokio::time::timeout(Duration::from_secs(6), async {
+            for i in 0..3 {
+                if i == 2 {
+                    clients.remove(&device.id);
+                }
+                let slot = clients.slot(&device, proxy_port);
+                let http = slot
+                    .get_or_try_init(|| peer_client(&device, proxy_port))
+                    .unwrap();
+                assert_eq!(
+                    http.get(format!("https://{target_addr}/read"))
+                        .send()
+                        .await
+                        .unwrap()
+                        .text()
+                        .await
+                        .unwrap(),
+                    "ok"
+                );
+                assert_eq!(tunnels.load(Ordering::SeqCst), if i == 2 { 2 } else { 1 });
+            }
+        })
+        .await
+        .unwrap();
+        socks.abort();
+        target.abort();
+    }
+    #[test]
+    fn a_new_cert_or_network_instance_cannot_reuse_the_old_tls_pool() {
+        use std::sync::Arc;
+        let mut clients = PeerClients::default();
+        let mut device = DeviceIdentity {
+            id: "peer".into(),
+            name: "same peer".into(),
+            ipv4: "10.0.0.2".into(),
+            certificate_pem: "old".into(),
+        };
+        let previous = clients.slot(&device, 9800);
+        device.certificate_pem = "new".into();
+        let rotated = clients.slot(&device, 9800);
+        assert!(!Arc::ptr_eq(&previous, &rotated));
+        clients.clear(); // Replacement worker may bind the same SOCKS port.
+        assert!(!Arc::ptr_eq(&rotated, &clients.slot(&device, 9800)));
+    }
     #[test]
     fn device_tokens_and_bearer_values_are_exact() {
         assert!(valid_token(&"a".repeat(64)));
@@ -596,9 +867,50 @@ mod tests {
         assert_eq!(bearer(&headers), Some("fixture"));
     }
 
+    #[tokio::test]
+    async fn worker_recovery_does_not_turn_a_paired_browser_into_an_unauthorized_one() {
+        let (_directory, state) = super::super::tests::fixture();
+        let target = "paired-id";
+        {
+            let mut inner = state.remote_network.inner.lock().await;
+            let mut peer = inner.config.identity();
+            peer.id = target.into();
+            inner.config.paired.push(peer);
+            inner.secrets.peers.insert(
+                target.into(),
+                crate::remote_network::PeerTokens {
+                    inbound: "fixture-in".into(),
+                    outbound: "fixture-out".into(),
+                },
+            );
+        }
+        let get = || {
+            proxy(
+                State(state.clone()),
+                OriginalUri("/api/remote/v1/clients".parse().unwrap()),
+                Request::builder()
+                    .uri("/clients")
+                    .header("x-hub-target", target)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+        };
+        assert_eq!(get().await.status(), StatusCode::SERVICE_UNAVAILABLE);
+        state
+            .remote_network
+            .inner
+            .lock()
+            .await
+            .secrets
+            .peers
+            .remove(target);
+        assert_eq!(get().await.status(), StatusCode::UNAUTHORIZED);
+    }
+
     fn browser_fixture(state: SharedState) -> Router {
         Router::new()
             .route("/remote/", get(|| async { "fixture" }))
+            .route("/remote/browser/{scope}", get(|| async { "fixture" }))
             .route(
                 "/api/remote/v1/fixture",
                 get(|| async {
@@ -614,11 +926,115 @@ mod tests {
                 BrowserGuard {
                     state,
                     base: "http://127.0.0.1:12345".into(),
-                    ticket: "fixture-ticket".into(),
+                    session: "fixture-session".into(),
+                    remember_key: "fixture-browser-key".into(),
+                    remember_path: "/remote/browser/fixture".into(),
                     cookie_name: "fixture-cookie".into(),
                 },
                 local_guard,
             ))
+    }
+
+    #[tokio::test]
+    async fn local_browser_lists_clients_projects_sessions_and_reads_original_history() {
+        let (_directory, state) = super::super::tests::fixture();
+        // Keep all runtime traffic in-process. The normal browser API should
+        // carry encoded client/thread IDs and the pagination query to Codex.
+        state.config.lock().await.gmclaw_bridge.enabled = false;
+        let local_id = {
+            let mut net = state.remote_network.inner.lock().await;
+            net.config.enabled = true;
+            net.config.device_id.clone()
+        };
+        let mut desktop = crate::remote_sessions::codex_fixture::Desktop::connect(&state).await;
+        let router = browser_router(
+            state.clone(),
+            BrowserGuard {
+                state: state.clone(),
+                base: "http://127.0.0.1:12345".into(),
+                session: "fixture-session".into(),
+                remember_key: "fixture-browser-key".into(),
+                remember_path: "/remote/browser/fixture".into(),
+                cookie_name: "fixture-cookie".into(),
+            },
+        );
+        let session_id = "original/thread";
+        let get = |path: &'static str| {
+            let request = Request::builder()
+                .uri(path)
+                .header(header::HOST, "127.0.0.1:12345")
+                .header(header::COOKIE, "fixture-cookie=fixture-session")
+                .header("x-hub-target", &local_id)
+                .body(Body::empty())
+                .unwrap();
+            let router = router.clone();
+            async move {
+                let response = router.oneshot(request).await.unwrap();
+                assert_eq!(response.status(), StatusCode::OK, "{path}");
+                let bytes = axum::body::to_bytes(response.into_body(), 65536)
+                    .await
+                    .unwrap();
+                serde_json::from_slice::<Value>(&bytes).unwrap()
+            }
+        };
+        let native =
+            async {
+                for method in [
+                    "model/list",
+                    "thread/list",
+                    "thread/list",
+                    "thread/turns/list",
+                    "thread/read",
+                ] {
+                    desktop.reply(method, |params| {
+                let thread =
+                    json!({"id":session_id,"cwd":"fixture/project","name":"Route fixture"});
+                let reply = match method {
+                    "model/list" => json!({"data":[]}),
+                    "thread/list" => {
+                        assert_eq!(params["cursor"], "next+page");
+                        assert_eq!(params["limit"], 40);
+                        json!({"data":[thread],"nextCursor":null})
+                    }
+                    _ => {
+                        assert_eq!(params["threadId"], session_id);
+                        match method {
+                            "thread/read" => json!({"thread":thread}),
+                            _ => json!({"data":[],"nextCursor":null}),
+                        }
+                    }
+                };
+                Ok(reply)
+                }).await;
+                }
+            };
+        let browser = async {
+            assert_eq!(
+                get("/api/remote/v1/devices").await["localDeviceId"],
+                local_id
+            );
+            assert_eq!(
+                get("/api/remote/v1/clients").await["clients"][0]["id"],
+                "codex:default"
+            );
+            assert_eq!(
+                get("/api/remote/v1/clients/codex%3Adefault/projects?limit=40&cursor=next%2Bpage")
+                    .await["projects"][0]["id"],
+                "fixture/project"
+            );
+            assert_eq!(
+                get("/api/remote/v1/clients/codex%3Adefault/sessions?limit=40&cursor=next%2Bpage")
+                    .await["sessions"][0]["id"],
+                session_id
+            );
+            let history = get("/api/remote/v1/clients/codex%3Adefault/sessions/original%2Fthread/history?limit=100").await;
+            assert_eq!(history["items"], json!([]));
+        };
+        tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(browser, native);
+        })
+        .await
+        .expect("browser requests must reach the synthetic runtime");
     }
 
     #[tokio::test]
@@ -653,7 +1069,16 @@ mod tests {
     #[tokio::test]
     async fn browser_ticket_becomes_http_only_cookie_and_is_removed_from_url() {
         let (_directory, state) = super::super::tests::fixture();
-        let response = browser_fixture(state)
+        {
+            let mut inner = state.remote_network.inner.lock().await;
+            inner.config.enabled = true;
+            inner
+                .browser_launches
+                .insert("fixture-ticket".into(), now_ms() + 120_000);
+        }
+        let router = browser_fixture(state);
+        let response = router
+            .clone()
             .oneshot(
                 Request::builder()
                     .uri("/remote/?ticket=fixture-ticket&device=fixture-device")
@@ -674,6 +1099,17 @@ mod tests {
                 .unwrap()
                 .contains("HttpOnly; SameSite=Strict")
         );
+        let reused = router
+            .oneshot(
+                Request::builder()
+                    .uri("/remote/?ticket=fixture-ticket")
+                    .header(header::HOST, "127.0.0.1:12345")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(reused.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
@@ -687,7 +1123,7 @@ mod tests {
                 Request::builder()
                     .uri("/api/remote/v1/fixture")
                     .header("host", "127.0.0.1:12345")
-                    .header("cookie", "fixture-cookie=fixture-ticket")
+                    .header("cookie", "fixture-cookie=fixture-session")
                     .header("origin", "https://unrelated.example")
                     .body(Body::empty())
                     .unwrap(),
@@ -700,7 +1136,7 @@ mod tests {
                 Request::builder()
                     .uri("/api/remote/v1/fixture")
                     .header("host", "127.0.0.1:12345")
-                    .header("cookie", "fixture-cookie=fixture-ticket")
+                    .header("cookie", "fixture-cookie=fixture-session")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -711,6 +1147,86 @@ mod tests {
             response.headers()["content-security-policy"],
             "sandbox; default-src 'none'"
         );
+    }
+
+    #[tokio::test]
+    async fn returning_browser_restores_expired_runtime_cookie_without_replaying_writes() {
+        let (_directory, state) = super::super::tests::fixture();
+        state.remote_network.inner.lock().await.config.enabled = true;
+        let router = browser_fixture(state);
+        let read = |uri: &str, cookie: &str| {
+            let router = router.clone();
+            let request = Request::builder()
+                .uri(uri)
+                .header("host", "127.0.0.1:12345")
+                .header("cookie", cookie)
+                .body(Body::empty())
+                .unwrap();
+            async move { router.oneshot(request).await.unwrap() }
+        };
+        let dest = "/api/remote/v1/fixture?cursor=old%2Bturn";
+        let first = read(dest, "fixture-cookie=old-process").await;
+        assert_eq!(first.status(), StatusCode::SEE_OTHER);
+        let unlock = first.headers()[header::LOCATION].to_str().unwrap();
+        assert_eq!(read(unlock, "").await.status(), StatusCode::UNAUTHORIZED);
+        let restored = read(unlock, "fixture-cookie_remember=fixture-browser-key").await;
+        assert_eq!(restored.status(), StatusCode::SEE_OTHER);
+        assert_eq!(restored.headers()[header::LOCATION], dest);
+        let cookies: Vec<_> = restored
+            .headers()
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .map(|v| v.to_str().unwrap())
+            .collect();
+        assert!(
+            cookies
+                .iter()
+                .any(|v| v.contains("fixture-session") && !v.contains("Max-Age"))
+        );
+        assert!(
+            cookies
+                .iter()
+                .any(|v| v.contains("Path=/remote/browser/fixture; Max-Age="))
+        );
+        assert_eq!(
+            read(dest, "fixture-cookie=fixture-session").await.status(),
+            StatusCode::OK
+        );
+        let write = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(dest)
+                    .header("host", "127.0.0.1:12345")
+                    .header("cookie", "fixture-cookie=old-process")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(write.status(), StatusCode::UNAUTHORIZED);
+        assert!(!write.headers().contains_key(header::LOCATION));
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn browser_origin_and_recovery_key_survive_a_fresh_hub_state() {
+        let (_directory, state) = super::super::tests::fixture();
+        super::super::ensure_loaded(&state).await.unwrap();
+        let (first, key) = browser_listener(&state, 0).await.unwrap();
+        let expected = first.local_addr().unwrap();
+        let config = state.config.lock().await.clone();
+        let fresh = crate::app_state::AppState::new(state.config_path.clone(), config, None, None);
+        drop(first);
+        super::super::ensure_loaded(&fresh).await.unwrap();
+        let port = fresh.remote_network.inner.lock().await.config.browser_port;
+        let (second, key2) = browser_listener(&fresh, port).await.unwrap();
+        assert_eq!(expected, second.local_addr().unwrap());
+        assert_eq!(key, key2);
+        super::super::secret_store(&fresh.config_path)
+            .unwrap()
+            .delete(super::super::SECRETS_KEY)
+            .unwrap();
     }
 
     #[tokio::test]

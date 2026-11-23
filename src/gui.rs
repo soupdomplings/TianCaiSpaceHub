@@ -180,6 +180,8 @@ mod im_accounts;
 mod loading;
 mod local_assistance;
 mod mcp_editor;
+#[cfg(windows)]
+mod xshellb;
 mod model_fields;
 mod model_list;
 mod motion;
@@ -875,7 +877,7 @@ fn build_ui(
         SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Top,
         10,
     );
-    ai_gw_page.set_sizer(ai_gw_sizer, true);
+    shell::inset_page_content(&ai_gw_page, ai_gw_sizer);
     ai_gw_page.set_scroll_rate(0, 10);
     ai_gw_page.layout();
     ai_gw_page.fit_inside();
@@ -1070,7 +1072,7 @@ fn build_ui(
         SizerFlag::Expand | SizerFlag::All,
         8,
     );
-    feishu_page.set_sizer(feishu_sizer, true);
+    shell::inset_page_content(&feishu_page, feishu_sizer);
     feishu_page.set_scroll_rate(0, 10);
     feishu_page.layout();
     feishu_page.fit_inside();
@@ -1305,6 +1307,8 @@ fn build_ui(
 
     use shell::PageId;
     shell.register(PageId::Sources, &ai_gw_page);
+    #[cfg(windows)]
+    let open_xshellb = xshellb::register(&shell);
     shell.register(PageId::Chat, &feishu_page);
     shell.register(PageId::Logs, &request_logs_page);
     shell.register(PageId::Dumpling, &nvwa_tab.page);
@@ -1902,6 +1906,10 @@ fn build_ui(
             squad_ui.enter(page);
             assistant_ui.enter(page);
             remote_ui.enter(page);
+            #[cfg(windows)]
+            if page == PageId::XshellB {
+                open_xshellb();
+            }
             request_browser.enter(page == PageId::Logs);
             resource_ui.enter(page);
             for client in &client_pages {

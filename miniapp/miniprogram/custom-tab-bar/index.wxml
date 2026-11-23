@@ -1,0 +1,20 @@
+<view class="tabs">
+  <button
+    class="tab {{selected===0?'selected':''}}"
+    data-i="0"
+    bindtap="go"
+    aria-label="远程连接"
+  >
+    <view aria-hidden="true" class="symbol display"></view>
+    <text>远程连接</text>
+  </button>
+  <button
+    class="tab {{selected===1?'selected':''}}"
+    data-i="1"
+    bindtap="go"
+    aria-label="天才小分队"
+  >
+    <view aria-hidden="true" class="symbol wallet"></view>
+    <text>天才小分队</text>
+  </button>
+</view>

@@ -964,9 +964,19 @@ impl DesktopClient {
         task_id: &str,
         before: Option<i64>,
     ) -> Result<DesktopMessagePage> {
+        self.messages_page(task_id, before, 100).await
+    }
+
+    pub(crate) async fn messages_page(
+        &self,
+        task_id: &str,
+        before: Option<i64>,
+        limit: usize,
+    ) -> Result<DesktopMessagePage> {
         validate_id(task_id)?;
         ensure!(before.is_none_or(|id| id > 0), "天工消息分页身份无效");
-        let mut query = vec![("limit", "100".to_owned())];
+        ensure!((1..=100).contains(&limit), "天工消息分页大小无效");
+        let mut query = vec![("limit", limit.to_string())];
         if let Some(before) = before {
             query.push(("before", before.to_string()));
         }

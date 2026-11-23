@@ -1214,7 +1214,7 @@ pub(super) fn create(parent: &dyn WxWidget, text: GuiText) -> NvwaTab {
         SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Bottom,
         16,
     );
-    page.set_sizer(root, true);
+    super::shell::inset_page_content(&page, root);
     page.set_scroll_rate(0, 12);
     page.layout();
     page.fit_inside();

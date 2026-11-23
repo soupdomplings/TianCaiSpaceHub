@@ -803,25 +803,19 @@ impl GuiText {
 
     pub(super) fn session_target_provider_title(self) -> &'static str {
         match self.locale {
-            GuiLocale::ZhCn => "选择 Provider",
-            GuiLocale::EnUs => "Choose Provider",
+            GuiLocale::ZhCn => "移动会话",
+            GuiLocale::EnUs => "Move sessions",
         }
     }
 
     pub(super) fn session_target_provider_prompt(self, count: usize) -> String {
         match self.locale {
-            GuiLocale::ZhCn => {
-                if count <= 1 {
-                    "把选中的会话移动到：".to_string()
-                } else {
-                    format!("把选中的 {count} 个会话移动到：")
-                }
-            }
+            GuiLocale::ZhCn => format!("将选中的 {count} 条会话移动到"),
             GuiLocale::EnUs => {
                 if count <= 1 {
-                    "Move the selected session to:".to_string()
+                    "Move 1 selected session to".to_string()
                 } else {
-                    format!("Move {count} selected sessions to:")
+                    format!("Move {count} selected sessions to")
                 }
             }
         }
@@ -829,8 +823,8 @@ impl GuiText {
 
     pub(super) fn move_sessions_confirm(self) -> &'static str {
         match self.locale {
-            GuiLocale::ZhCn => "移动",
-            GuiLocale::EnUs => "Move",
+            GuiLocale::ZhCn => "确认移动",
+            GuiLocale::EnUs => "Confirm move",
         }
     }
 
@@ -897,6 +891,12 @@ impl GuiText {
     ) -> String {
         use super::api::ModelListRefresh::*;
         let mut message = match (self.locale, refresh) {
+            (GuiLocale::ZhCn, NeedsSetup) => "模型已保存到 Hub。请在「接入设置」初始化或更新 ChatGPT / Codex 配置，再打开客户端模型菜单。".to_owned(),
+            (GuiLocale::EnUs, NeedsSetup) => "Saved in Hub. Initialize or update ChatGPT / Codex in Connection Settings, then open the client model picker.".to_owned(),
+            (GuiLocale::ZhCn, CustomCatalog) => "模型已保存到 Hub。Codex 当前使用自定义模型目录，请在客户端配置中核对目录来源。".to_owned(),
+            (GuiLocale::EnUs, CustomCatalog) => "Saved in Hub. Codex uses a custom model catalog. Check the catalog source in the client configuration.".to_owned(),
+            (GuiLocale::ZhCn, Incomplete) => "模型已保存到 Hub。Codex 返回的清单不完整，暂时无法确认所选模型，请在客户端模型菜单核对。".to_owned(),
+            (GuiLocale::EnUs, Incomplete) => "Saved in Hub. Codex returned an incomplete list. Check the client model picker to confirm your selection.".to_owned(),
             (GuiLocale::ZhCn, CcSwitchCatalog) => "Hub 已保存；Codex 仍使用 CC Switch 模型目录。请在「接入设置」更新配置，再增强启动。".to_owned(),
             (GuiLocale::EnUs, CcSwitchCatalog) => "Saved in Hub. Codex still uses the CC Switch catalog. Update the configuration in Connection Settings, then launch in enhanced mode.".to_owned(),
             (GuiLocale::ZhCn, Disconnected) => "Hub 已保存；Codex 尚未连接。请增强启动后查看模型列表。".to_owned(),

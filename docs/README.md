@@ -1,5 +1,39 @@
 # TianCaiSpaceHub 文档总入口
 
+[V1.0.61 会话移动、项目修复和首次保存模型](releases/v1.0.61.md) · [会话移动](customizations/codex-history-recovery.md) · [项目恢复](customizations/codex-partial-project-recovery.md) · [可见模型](dynamic-codex-models.zh-CN.md)。
+
+[V1.0.60 桌面设置与天才搭档使用帮助](releases/v1.0.60.md) · [设置页面布局](development/desktop-visual-system.md) · [Windows 登录启动](customizations/desktop-and-packaging.md) · [搭档常见问题](customizations/genius-buddy.md)。
+
+[V1.0.59 安装升级时关闭 Hub](releases/v1.0.59.md) · [安装器关闭策略](customizations/desktop-and-packaging.md#v1059-windows-升级时关闭-hub)。
+
+[V1.0.58 Hub 统一管理显示内容](releases/v1.0.58.md) · [网页与手机同步规则](customizations/remote-web.md) · [小程序演示与真机测试](customizations/wechat-mini.md)。
+
+[V1.0.57 远程会话文件下载](releases/v1.0.57.md) · [网页下载入口](customizations/remote-web.md) · [目标电脑如何关联旧会话文件](customizations/remote-sessions.md)。
+
+[V1.0.56 桌面批注和问答显示](releases/v1.0.56.md) · [如何处理远程待办](customizations/remote-web.md)。
+
+[V1.0.55 手机配对与实时产物](releases/v1.0.55.md) · [微信小程序与手机配对](customizations/wechat-mini.md) · [远程会话显示规则](customizations/remote-web.md) · [V1.0.54 网页实时显示](releases/v1.0.54.md)。
+
+[V1.0.53 Windows 本地测试](releases/v1.0.53.md)：远程会话的正文、追问和授权，Xshell 批量巡检权限和重复菜单启动修复。
+
+[V1.0.52 Windows 本地测试](releases/v1.0.52.md)：Xshell 一键替换接入脚本；远程网页隐藏工具、思考和文件变更消息卡片。
+
+[V1.0.51 Windows 本地测试](releases/v1.0.51.md)：Xshell 启动菜单、已接入标签页、逐条巡检权限及 Agent 内确认。
+
+[V1.0.50 Windows 本地测试](releases/v1.0.50.md)：XshellB-MCP 可记住内置巡检授权。
+
+[V1.0.49 Windows 本地测试](releases/v1.0.49.md)：远程网页首屏、分页及传输优化，设备／配对／设置页签，以及 Xshell 多进程文件选择框识别。
+
+[V1.0.48 Windows 本地测试](releases/v1.0.48.md)：Xshell 一键接入、远程设备重连与删除、长会话向上分批读取。
+
+[V1.0.47 Windows 本地测试](releases/v1.0.47.md)：修复 Xshell 8 工具菜单识别；加入手动启动时的脚本路径复制按钮。
+
+[V1.0.46 Windows 本地测试](releases/v1.0.46.md)：XshellB-MCP 首次随 MSI 交付，远程会话网页切回标签时恢复连接和正文。
+
+[V1.0.45 Windows 本地测试](releases/v1.0.45.md)：远程新建和读取 Codex 会话、授权位置、目标目录选择及 Hub 浮层滚动。
+
+[XshellB-MCP](customizations/xshellb-mcp.md)：在 Windows Hub 为本机客户端配置桥接，接入已登录的 Xshell 8 标签页；实机待验收。
+
 [V1.0.44 Windows 本地试用](releases/v1.0.44.md)：概览取消「工作台」页签；顶栏只显示实际位置、本机服务、账户及系统按钮。
 
 [V1.0.43 原生工作空间试用](releases/v1.0.43.md) · [原生界面范围与维护](development/desktop-visual-system.md) · [桌面交互样稿](design/hub-desktop-preview/README.md)。样稿使用虚构数据，Windows 测试版使用本机真实数据。

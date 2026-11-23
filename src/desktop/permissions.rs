@@ -10,6 +10,16 @@ pub fn owner_only(path: &Path) -> Result<()> {
 }
 #[cfg(windows)]
 pub fn owner_only(path: &Path) -> Result<()> {
+    owner_only_windows(path, "")
+}
+
+#[cfg(all(windows, feature = "gui"))]
+pub(super) fn owner_only_inheriting(path: &Path) -> Result<()> {
+    owner_only_windows(path, "OICI")
+}
+
+#[cfg(windows)]
+fn owner_only_windows(path: &Path, inheritance: &str) -> Result<()> {
     use std::{
         os::windows::{
             ffi::OsStrExt,
@@ -65,7 +75,7 @@ pub fn owner_only(path: &Path) -> Result<()> {
         }
         let sid_text = String::from_utf16_lossy(std::slice::from_raw_parts(sid, length));
         LocalFree(sid.cast());
-        let sddl = format!("D:P(A;;FA;;;{sid_text})")
+        let sddl = format!("D:P(A;{inheritance};FA;;;{sid_text})")
             .encode_utf16()
             .chain(Some(0))
             .collect::<Vec<_>>();
